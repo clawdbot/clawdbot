@@ -26,6 +26,7 @@ export function parseArgs(argv: unknown): {
   skipTelegram: boolean;
   telegramProviderMode: string;
   tag: string;
+  targetSha: string;
   workflowRef: string;
   fullReleaseRunId: string;
   npmPreflightRunId: string;
@@ -34,6 +35,10 @@ export function parseArgs(argv: unknown): {
   outputDir: string;
 };
 export function releaseBranchForTag(tag: string): string;
+export function assertPlannedReleaseTagIsAbsent(
+  tag: string,
+  checkRemoteTagExists: (tag: string) => boolean,
+): void;
 export function run(command: unknown, args: unknown, options?: Record<string, unknown>): string;
 export function buildReleaseCandidateState(
   options: unknown,

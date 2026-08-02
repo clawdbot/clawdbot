@@ -58,6 +58,16 @@ on:
         required: false
         default: false
         type: boolean
+    secrets:
+      OPENAI_API_KEY:
+        description: OpenAI API key used by live QA scenarios
+        required: false
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Convex credential broker URL
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Convex CI credential
+        required: false
   workflow_dispatch:
     inputs:
       ref:
@@ -470,7 +480,47 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Resolve Buzz QA runner
+        id: resolve_buzz
+        env:
+          SELECTED_REVISION: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/buzz-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${output_dir}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          OUTPUT_DIR="${output_dir}" node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const manifestPath = "extensions/buzz/openclaw.plugin.json";
+          const manifest = fs.existsSync(manifestPath)
+            ? JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+            : {};
+          const available =
+            Array.isArray(manifest.qaRunners) &&
+            manifest.qaRunners.some((runner) => runner?.commandName === "buzz");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `available=${available}\n`);
+          if (!available) {
+            fs.writeFileSync(
+              `${process.env.OUTPUT_DIR}/skipped.json`,
+              `${JSON.stringify(
+                {
+                  status: "skipped",
+                  reason: "selected ref does not declare the Buzz QA runner",
+                  revision: process.env.SELECTED_REVISION,
+                },
+                null,
+                2,
+              )}\n`,
+            );
+          }
+          NODE
+
       - name: Validate required Buzz QA credential env
+        if: steps.resolve_buzz.outputs.available == 'true'
         env:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
@@ -486,11 +536,13 @@ jobs:
           done
 
       - name: Build private QA runtime
+        if: steps.resolve_buzz.outputs.available == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=12288
         run: pnpm build
 
       - name: Run Buzz live lane
+        if: steps.resolve_buzz.outputs.available == 'true'
         id: run_lane
         shell: bash
         env:
@@ -503,7 +555,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          output_dir=".artifacts/qa-e2e/buzz-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          output_dir="${{ steps.resolve_buzz.outputs.output_dir }}"
           scenario_args=()
 
           if [[ -n "${INPUT_SCENARIO// }" ]]; then
@@ -531,7 +583,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ inputs.expected_sha != '' && format('release-qa-live-buzz-{0}-{1}', inputs.expected_sha, github.run_attempt) || format('qa-live-buzz-{0}-{1}', github.run_id, github.run_attempt) }}
-          path: ${{ steps.run_lane.outputs.output_dir }}
+          path: ${{ steps.resolve_buzz.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: error
 

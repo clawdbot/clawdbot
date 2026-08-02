@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import type { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import type { RealtimeVoiceAgentControlResult } from "../talk/agent-run-control.js";
 import type {
   RealtimeVoiceBrowserAudioContract,
@@ -93,6 +95,8 @@ export type RelaySession = {
   provider: string;
   activeAgentToolCalls: Map<string, string>;
   completedAgentToolCalls: Set<string>;
+  providerToolCallIds: Map<string, string>;
+  relayToolCallIdsByProviderId: Map<string, string>;
   // Cancelled calls retain their original turn long enough to terminally satisfy
   // late browser results without creating a replacement turn or owner success event.
   cancelledAgentToolCalls: Map<string, string>;
@@ -112,7 +116,9 @@ export type RelaySession = {
   voiceConfig?: OpenClawConfig;
   voiceSessionCreated: boolean;
   voiceTranscriptSeq: number;
-  voiceTranscriptWrites: Promise<void>;
+  voiceTranscriptQueue: BoundedSerialQueue;
+  voiceSessionClose?: Promise<void>;
+  failVoiceTranscriptPersistence: (message: string) => void;
   pendingVoiceTranscripts: Array<{ role: "user" | "assistant"; text: string }>;
 };
 
@@ -142,6 +148,32 @@ export type TalkRealtimeRelaySessionResult = {
 };
 
 export const relaySessions = new Map<string, RelaySession>();
+// Closed relays leave the active map immediately so late provider/client events
+// are ignored, but their accepted transcript prefix still owns bounded memory
+// until durable close settles. Session limits count both maps.
+export const drainingRelaySessions = new Set<RelaySession>();
+
+export function adoptRelayProviderToolCallId(
+  session: RelaySession,
+  providerCallId: string,
+): string {
+  const current = session.relayToolCallIdsByProviderId.get(providerCallId);
+  if (current) {
+    return current;
+  }
+  const relayCallId = session.completedAgentToolCalls.has(providerCallId)
+    ? `relay-${randomUUID()}`
+    : providerCallId;
+  session.completedProviderToolResults.delete(providerCallId);
+  session.completedAgentToolCalls.delete(relayCallId);
+  session.providerToolCallIds.set(relayCallId, providerCallId);
+  session.relayToolCallIdsByProviderId.set(providerCallId, relayCallId);
+  return relayCallId;
+}
+
+export function resolveRelayProviderToolCallId(session: RelaySession, relayCallId: string): string {
+  return session.providerToolCallIds.get(relayCallId) ?? relayCallId;
+}
 
 export function broadcastToOwner(
   context: GatewayRequestContext,

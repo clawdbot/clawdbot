@@ -6,11 +6,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS } from "./operator-approval-store.js";
-import {
-  canonicalizeSpawnedByForAgent,
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-} from "./session-store-key.js";
+import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 
 // The walker cap must never exceed the store cap: insertOperatorApproval
 // throws past OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS, which would fail
@@ -123,7 +119,11 @@ function createRuntimeApprovalSessionAudienceSources(
         return canonicalizeApprovalSourceStreamKey(cfg, sessionKey, sourceAgentId);
       }
       const relativeAgentId = resolveSessionStoreAgentId(cfg, relativeToSessionKey);
-      const canonical = canonicalizeSpawnedByForAgent(cfg, relativeAgentId, sessionKey);
+      const canonical = resolveSessionStoreKey({
+        cfg,
+        sessionKey,
+        storeAgentId: relativeAgentId,
+      });
       return canonical ? resolveApprovalSourceStreamKey(canonical, relativeAgentId) : canonical;
     },
     getLatestSubagentLineage: (sessionKey) => subagentRuns.getLatestSubagentRun(sessionKey),

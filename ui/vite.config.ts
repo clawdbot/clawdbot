@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import type { Plugin, UserConfig } from "vite";
 import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
+import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -305,6 +306,7 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
+    sourcePackageAlias("normalization-core", "json-schema"),
     sourcePackageAlias("normalization-core", "number-coercion"),
     sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
@@ -468,6 +470,7 @@ export default function controlUiViteConfig(): UserConfig {
       strictPort: true,
     },
     plugins: [
+      controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
       controlUiPrecompressedAssetsPlugin(),
       controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId),

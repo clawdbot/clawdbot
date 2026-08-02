@@ -65,7 +65,11 @@ export function execCommandFromToolProgressPrompt(prompt: string) {
   );
 }
 
-export function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
+export function buildMockFunctionCall(
+  name: string,
+  args: Record<string, unknown>,
+  namespace?: string,
+) {
   const serialized = JSON.stringify(args);
   const callSuffix = createHash("sha256")
     .update(name)
@@ -82,6 +86,7 @@ export function buildMockFunctionCall(name: string, args: Record<string, unknown
     id: itemId,
     call_id: callId,
     name,
+    ...(namespace ? { namespace } : {}),
     arguments: serialized,
   };
   return {
@@ -96,8 +101,9 @@ export function buildMockFunctionCall(name: string, args: Record<string, unknown
 export function buildToolCallEventsWithArgs(
   name: string,
   args: Record<string, unknown>,
+  namespace?: string,
 ): StreamEvent[] {
-  const call = buildMockFunctionCall(name, args);
+  const call = buildMockFunctionCall(name, args, namespace);
   return [
     {
       type: "response.output_item.added",
@@ -106,6 +112,7 @@ export function buildToolCallEventsWithArgs(
         id: call.itemId,
         call_id: call.callId,
         name,
+        ...(namespace ? { namespace } : {}),
         arguments: "",
       },
     },

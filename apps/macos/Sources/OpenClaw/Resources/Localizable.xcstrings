@@ -28561,6 +28561,142 @@
         }
       }
     },
+    "Connect / Set up": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect / Set up"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接 / 设置"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "連接／設定"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conectar / Configurar"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinden / Einrichten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conectar / Configurar"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続 / セットアップ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결 / 설정"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecter / Configurer"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "कनेक्ट करें / सेट अप करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "الاتصال / الإعداد"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connetti / Configura"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bağlan / Kur"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Підключити / Налаштувати"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sambungkan / Siapkan"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Połącz / Skonfiguruj"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เชื่อมต่อ / ตั้งค่า"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kết nối / Thiết lập"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinden / Instellen"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اتصال / راه‌اندازی"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключить / Настроить"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anslut / Konfigurera"
+          }
+        }
+      }
+    },
     "Connect Discord, Slack, Telegram, WhatsApp, …": {
       "localizations": {
         "en": {
@@ -28693,6 +28829,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Anslut Discord, Slack, Telegram, WhatsApp, …"
+          }
+        }
+      }
+    },
+    "Connect a local model service, or prepare a model on this Gateway.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect a local model service, or prepare a model on this Gateway."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接本地模型服务，或在此 Gateway 上准备模型。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "連接本地模型服務，或在此 Gateway 上準備模型。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conecte um serviço de modelo local ou prepare um modelo neste Gateway."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinden Sie einen lokalen Modelldienst oder bereiten Sie ein Modell auf diesem Gateway vor."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conecta un servicio de modelo local o prepara un modelo en este Gateway."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローカルモデルサービスを接続するか、この Gateway でモデルを準備します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로컬 모델 서비스를 연결하거나 이 Gateway에서 모델을 준비하세요."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connectez un service de modèle local, ou préparez un modèle sur ce Gateway."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "एक स्थानीय मॉडल सेवा कनेक्ट करें, या इस Gateway पर एक मॉडल तैयार करें।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اتصل بخدمة نموذج محلي، أو جهّز نموذجًا على هذا الـ Gateway."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connetti un servizio di modello locale o prepara un modello su questo Gateway."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yerel bir model hizmeti bağlayın veya bu Gateway üzerinde bir model hazırlayın."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Підключіть локальну службу моделей або підготуйте модель на цьому Gateway."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sambungkan layanan model lokal, atau siapkan model di Gateway ini."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Połącz lokalną usługę modelu lub przygotuj model na tym Gateway."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เชื่อมต่อบริการโมเดลในเครื่อง หรือเตรียมโมเดลบน Gateway นี้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kết nối dịch vụ mô hình cục bộ, hoặc chuẩn bị một mô hình trên Gateway này."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbind een lokale modelservice of bereid een model voor op deze Gateway."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "یک سرویس مدل محلی متصل کنید یا مدلی را روی این Gateway آماده کنید."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключите локальный сервис модели или подготовьте модель на этом Gateway."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anslut en lokal modelltjänst eller förbered en modell på den här Gateway."
           }
         }
       }
@@ -44333,142 +44605,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Klar på %@"
-          }
-        }
-      }
-    },
-    "Download or prepare a local model on this Gateway.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Download or prepare a local model on this Gateway."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在此 Gateway 上下载或准备本地模型。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在此 Gateway 上下載或準備本機模型。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Baixe ou prepare um modelo local neste Gateway."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Laden Sie ein lokales Modell auf diesem Gateway herunter oder bereiten Sie es vor."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Descarga o prepara un modelo local en este Gateway."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "この Gateway でローカルモデルをダウンロードまたは準備します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "이 Gateway에서 로컬 모델을 다운로드하거나 준비합니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Téléchargez ou préparez un modèle local sur ce Gateway."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "इस Gateway पर एक लोकल मॉडल डाउनलोड या तैयार करें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "نزّل أو جهّز نموذجًا محليًا على هذا الـ Gateway."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scarica o prepara un modello locale su questo Gateway."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bu Gateway'de yerel bir model indirin veya hazırlayın."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Завантажте або підготуйте локальну модель на цьому Gateway."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unduh atau siapkan model lokal di Gateway ini."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pobierz lub przygotuj model lokalny na tym Gateway."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ดาวน์โหลดหรือเตรียมโมเดลในเครื่องบน Gateway นี้"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tải xuống hoặc chuẩn bị một mô hình cục bộ trên Gateway này."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Download of bereid een lokaal model voor op deze Gateway."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "دانلود یا آماده‌سازی یک مدل محلی روی این Gateway."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Загрузите или подготовьте локальную модель на этом Gateway."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ladda ner eller förbered en lokal modell på denna Gateway."
           }
         }
       }
@@ -91801,6 +91937,142 @@
         }
       }
     },
+    "OpenClaw will detect and verify the prepared model before using it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw will detect and verify the prepared model before using it."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw 会在使用前检测并验证已准备好的模型。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw 會在使用前偵測並驗證已準備的模型。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O OpenClaw detectará e verificará o modelo preparado antes de usá-lo."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw erkennt und überprüft das vorbereitete Modell, bevor es verwendet wird."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw detectará y verificará el modelo preparado antes de usarlo."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw は使用する前に、準備されたモデルを検出して検証します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw는 준비된 모델을 사용하기 전에 이를 감지하고 검증합니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw détectera et vérifiera le modèle préparé avant de l'utiliser."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw उपयोग करने से पहले तैयार किए गए मॉडल का पता लगाएगा और सत्यापित करेगा।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سيكتشف OpenClaw النموذج المُجهّز ويتحقق منه قبل استخدامه."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw rileverà e verificherà il modello preparato prima di utilizzarlo."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw, hazırlanan modeli kullanmadan önce algılayıp doğrulayacaktır."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw виявить і перевірить підготовлену модель перед її використанням."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw akan mendeteksi dan memverifikasi model yang disiapkan sebelum menggunakannya."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw wykryje i zweryfikuje przygotowany model przed jego użyciem."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw จะตรวจจับและตรวจสอบโมเดลที่เตรียมไว้ก่อนใช้งาน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw sẽ phát hiện và xác minh mô hình đã chuẩn bị trước khi sử dụng."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw detecteert en verifieert het voorbereide model voordat het wordt gebruikt."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw قبل از استفاده، مدل آماده‌شده را شناسایی و تأیید می‌کند."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw обнаружит и проверит подготовленную модель перед её использованием."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw upptäcker och verifierar den förberedda modellen innan den används."
+          }
+        }
+      }
+    },
     "OpenClaw — setup helper": {
       "localizations": {
         "en": {
@@ -122401,142 +122673,6 @@
         }
       }
     },
-    "Set up / Download model": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Set up / Download model"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "设置 / 下载模型"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "設定／下載模型"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Configurar / Baixar modelo"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Modell einrichten / herunterladen"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Configurar / Descargar modelo"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "モデルのセットアップ / ダウンロード"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "모델 설정 / 다운로드"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Configurer / Télécharger le modèle"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "मॉडल सेट अप / डाउनलोड करें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "إعداد / تنزيل النموذج"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Configura / Scarica modello"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Modeli kur / indir"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Налаштувати / Завантажити модель"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Siapkan / Unduh model"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skonfiguruj / Pobierz model"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ตั้งค่า / ดาวน์โหลดโมเดล"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Thiết lập / Tải xuống mô hình"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model instellen / downloaden"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "راه‌اندازی / دانلود مدل"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Настроить / Загрузить модель"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Konfigurera / Ladda ner modell"
-          }
-        }
-      }
-    },
     "Set up a local model": {
       "localizations": {
         "en": {
@@ -142117,142 +142253,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Den hanterade körningsmiljön matchar inte den uppdaterade Mac-appen."
-          }
-        }
-      }
-    },
-    "The model is downloaded and prepared on this Gateway.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The model is downloaded and prepared on this Gateway."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "模型已在此 Gateway 上下载并准备就绪。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "模型已在此 Gateway 上下載並準備完成。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O modelo foi baixado e preparado neste Gateway."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Das Modell wurde auf diesem Gateway heruntergeladen und vorbereitet."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El modelo se ha descargado y preparado en este Gateway."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "モデルはこの Gateway でダウンロードされ、準備されています。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "이 Gateway에서 모델이 다운로드되고 준비되었습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Le modèle est téléchargé et préparé sur ce Gateway."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "मॉडल इस Gateway पर डाउनलोड और तैयार किया गया है।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تم تنزيل النموذج وتجهيزه على هذا الـ Gateway."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Il modello è scaricato e preparato su questo Gateway."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model bu Gateway'de indirildi ve hazırlandı."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Модель завантажено та підготовлено на цьому Gateway."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model diunduh dan disiapkan di Gateway ini."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model został pobrany i przygotowany na tym Gateway."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ดาวน์โหลดและเตรียมโมเดลบน Gateway นี้แล้ว"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mô hình đã được tải xuống và chuẩn bị trên Gateway này."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Het model is gedownload en voorbereid op deze Gateway."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "مدل روی این Gateway دانلود و آماده شده است."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Модель загружена и подготовлена на этом Gateway."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Modellen har laddats ner och förberetts på denna Gateway."
           }
         }
       }

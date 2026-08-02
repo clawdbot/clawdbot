@@ -4,7 +4,7 @@
  * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
  */
 import { getAgentRunContext } from "../infra/agent-events.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
@@ -23,7 +23,6 @@ import {
   getSubagentRunsSnapshotForRead,
 } from "./subagent-registry-state.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export {
   getSubagentSessionRuntimeMs,
@@ -73,9 +72,12 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
 
 /** Returns whether a registry entry still has a live agent run context. */
 export function isSubagentRunLive(
-  entry: Pick<SubagentRunRecord, "runId" | "endedAt"> | null | undefined,
+  entry:
+    | { runId: string; execution: Pick<SubagentRunRecord["execution"], "endedAt"> }
+    | null
+    | undefined,
 ): boolean {
-  if (!entry || typeof entry.endedAt === "number") {
+  if (!entry || typeof entry.execution.endedAt === "number") {
     return false;
   }
   return Boolean(getAgentRunContext(entry.runId));
@@ -90,15 +92,10 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
     return null;
   }
 
-  let latestInMemory: SubagentRunRecord | null = null;
-  for (const entry of subagentRuns.values()) {
-    if (entry.childSessionKey !== key) {
-      continue;
-    }
-    if (!latestInMemory || compareSubagentRunGeneration(entry, latestInMemory) > 0) {
-      latestInMemory = entry;
-    }
-  }
+  const latestInMemory = getLatestSubagentRunByChildSessionKeyFromRuns(
+    getSubagentRunsForChildSession(key),
+    key,
+  );
   // Fresh in-memory terminal state is more accurate than an older active snapshot row.
   return (
     latestInMemory ??

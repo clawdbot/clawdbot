@@ -96,6 +96,19 @@ async function writeStore(entries: Record<string, unknown>, agentId = "main"): P
   return target;
 }
 
+function insertRawSessionEntry(sessionKey: string, entry: SessionEntry, agentId = "main"): void {
+  const database = new DatabaseSync(sqliteStorePath(agentId));
+  try {
+    database
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(sessionKey, entry.sessionId, JSON.stringify(entry), entry.updatedAt ?? 0);
+  } finally {
+    database.close();
+  }
+}
+
 function readStoreEntries(target: string, agentId = "main"): Record<string, SessionEntry> {
   return Object.fromEntries(
     listSessionEntries({ agentId, storePath: target }).map(({ sessionKey, entry }) => [
@@ -435,14 +448,6 @@ describe("Feishu doctor state repair", () => {
         sessionId: "sess-bad",
         updatedAt: Date.now(),
       },
-      "agent:codex:acp:binding:feishu:default:abc123": {
-        sessionId: "sess-acp-bad",
-        sessionFile: "sess-acp-bad.jsonl",
-        updatedAt: Date.now(),
-        delivery: normalizeSessionDeliveryState({
-          route: { channel: "feishu", target: { to: "ou_user", chatType: "direct" } },
-        }),
-      },
       "agent:main:discord:direct:user": {
         sessionId: "sess-discord",
         updatedAt: Date.now(),
@@ -453,6 +458,14 @@ describe("Feishu doctor state repair", () => {
       sessionKey,
       storePath: targetStorePath,
       contents: ["", "", ""],
+    });
+    insertRawSessionEntry("agent:codex:acp:binding:feishu:default:abc123", {
+      sessionId: "sess-acp-bad",
+      sessionFile: "sess-acp-bad.jsonl",
+      updatedAt: Date.now(),
+      delivery: normalizeSessionDeliveryState({
+        route: { channel: "feishu", target: { to: "ou_user", chatType: "direct" } },
+      }),
     });
 
     const result = await runFeishuDoctorSequence({

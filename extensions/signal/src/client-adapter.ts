@@ -56,11 +56,11 @@ export async function signalRpcRequest<T = unknown>(
 export async function signalCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
-  options: { transportKind?: SignalTransportKind } = {},
+  options: { transportKind?: SignalTransportKind; account?: string } = {},
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   try {
     return usesContainer(options.transportKind)
-      ? await containerCheck(baseUrl, timeoutMs)
+      ? await containerCheck(baseUrl, timeoutMs, options.account)
       : await nativeCheck(baseUrl, timeoutMs);
   } catch (error) {
     return { ok: false, status: null, error: formatErrorMessage(error) };

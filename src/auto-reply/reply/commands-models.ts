@@ -170,6 +170,7 @@ export async function buildModelsProviderData(
 
   const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg,
+    agentId,
     view: options.view ?? "default",
     loadCatalog: ({ readOnly }) =>
       loadPreparedModelCatalogSnapshot({

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
   Filter,
@@ -37,6 +38,48 @@ import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } f
 import type { MatrixVerificationSummary } from "./verification-manager.js";
 
 type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
+
+export type MatrixMessageWireDispatch = {
+  roomId: string;
+  eventType: "m.room.message" | "m.room.encrypted";
+  transactionId: string;
+  requestPath: string;
+};
+
+type MatrixMessageWireDispatchGuard = (dispatch: MatrixMessageWireDispatch) => Promise<void>;
+
+function resolveMessageWireDispatch(
+  resource: RequestInfo | URL,
+  init?: RequestInit,
+): MatrixMessageWireDispatch | null {
+  const method = (
+    init?.method ?? (resource instanceof Request ? resource.method : "GET")
+  ).toUpperCase();
+  if (method !== "PUT") {
+    return null;
+  }
+  const rawUrl =
+    typeof resource === "string"
+      ? resource
+      : resource instanceof URL
+        ? resource.href
+        : resource.url;
+  const segments = new URL(rawUrl).pathname.split("/").filter(Boolean);
+  const roomsIndex = segments.lastIndexOf("rooms");
+  if (roomsIndex < 0 || segments[roomsIndex + 2] !== "send" || segments.length !== roomsIndex + 5) {
+    return null;
+  }
+  const eventType = decodeURIComponent(segments[roomsIndex + 3] ?? "");
+  if (eventType !== "m.room.message" && eventType !== "m.room.encrypted") {
+    return null;
+  }
+  return {
+    roomId: decodeURIComponent(segments[roomsIndex + 1] ?? ""),
+    eventType,
+    transactionId: decodeURIComponent(segments[roomsIndex + 4] ?? ""),
+    requestPath: new URL(rawUrl).pathname,
+  };
+}
 
 let loadedMatrixCryptoRuntime: MatrixCryptoRuntime | null = null;
 
@@ -93,6 +136,12 @@ export abstract class MatrixClientBase {
   protected stopPersistPromise: Promise<void> | null = null;
   protected verificationSummaryListenerBound = false;
   protected currentSyncState: MatrixSyncState | null = null;
+  protected readonly transactionScopeHomeserver: string;
+  protected readonly transactionScopeAccessTokenHash: string;
+  protected transactionScopeDeviceId: string | null;
+  protected transactionScopeId: string | null = null;
+  protected transactionScopePromise: Promise<string> | null = null;
+  private readonly messageWireDispatchGuards = new Map<string, MatrixMessageWireDispatchGuard>();
 
   readonly dms = {
     update: async (): Promise<boolean> => {
@@ -123,6 +172,9 @@ export abstract class MatrixClientBase {
       dispatcherPolicy?: PinnedDispatcherPolicy;
     } = {},
   ) {
+    this.transactionScopeHomeserver = homeserver;
+    this.transactionScopeAccessTokenHash = createHash("sha256").update(accessToken).digest("hex");
+    this.transactionScopeDeviceId = opts.deviceId?.trim() || null;
     this.httpClient = new MatrixAuthedHttpClient({
       homeserver,
       accessToken,
@@ -146,6 +198,10 @@ export abstract class MatrixClientBase {
     const cryptoCallbacks = this.encryptionEnabled
       ? this.recoveryKeyStore.buildCryptoCallbacks()
       : undefined;
+    const guardedFetch = createMatrixGuardedFetch({
+      ssrfPolicy: opts.ssrfPolicy,
+      dispatcherPolicy: opts.dispatcherPolicy,
+    });
     this.client = createMatrixJsClient({
       baseUrl: homeserver,
       accessToken,
@@ -153,10 +209,13 @@ export abstract class MatrixClientBase {
       deviceId: opts.deviceId,
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
-      fetchFn: createMatrixGuardedFetch({
-        ssrfPolicy: opts.ssrfPolicy,
-        dispatcherPolicy: opts.dispatcherPolicy,
-      }),
+      fetchFn: (async (resource: RequestInfo | URL, init?: RequestInit) => {
+        const dispatch = resolveMessageWireDispatch(resource, init);
+        if (dispatch) {
+          await this.messageWireDispatchGuards.get(dispatch.transactionId)?.(dispatch);
+        }
+        return await guardedFetch(resource, init);
+      }) as typeof fetch,
       store: this.syncStore,
       cryptoCallbacks: cryptoCallbacks as never,
       verificationMethods: [
@@ -166,6 +225,25 @@ export abstract class MatrixClientBase {
         VerificationMethod.Reciprocate,
       ],
     });
+  }
+
+  protected async withMessageWireDispatchGuard<T>(params: {
+    transactionId?: string;
+    guard?: MatrixMessageWireDispatchGuard;
+    run: () => Promise<T>;
+  }): Promise<T> {
+    if (!params.transactionId || !params.guard) {
+      return await params.run();
+    }
+    if (this.messageWireDispatchGuards.has(params.transactionId)) {
+      throw new Error(`Matrix transaction ${params.transactionId} already has a dispatch guard`);
+    }
+    this.messageWireDispatchGuards.set(params.transactionId, params.guard);
+    try {
+      return await params.run();
+    } finally {
+      this.messageWireDispatchGuards.delete(params.transactionId);
+    }
   }
 
   on<TEvent extends keyof MatrixClientEventMap>(

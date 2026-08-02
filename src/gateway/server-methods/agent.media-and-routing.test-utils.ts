@@ -10,6 +10,7 @@ import {
 } from "../../infra/gateway-suspend-coordinator.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -421,6 +422,13 @@ describe("gateway agent handler", () => {
 
   it("forwards trusted delegated policy handoffs only from internal client metadata", async () => {
     primeMainAgentRun();
+    const handoffId = registerSubagentCompletionToolHandoff({
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceSessionId: "child-session-id",
+      targetSessionKey: "agent:main:main",
+      targetSessionId: "existing-session-id",
+      idempotencyKey: "delegated-policy-handoff",
+    });
 
     await invokeAgent(
       {
@@ -432,18 +440,46 @@ describe("gateway agent handler", () => {
           sourceSessionKey: "agent:main:subagent:child",
           sourceTool: "subagent_announce",
         },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:main:subagent:child",
+            childSessionId: "child-session-id",
+            announceType: "subagent task",
+            taskLabel: "work",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child completed",
+            replyInstruction: "Continue from this result.",
+          },
+        ],
       },
       {
         client: {
           internal: {
-            delegatedToolPolicyHandoff: true,
+            delegatedToolPolicyHandoffId: handoffId,
           },
         } as never,
       },
     );
 
-    const call = await waitForAgentCommandCall<{ trustedInternalHandoff?: boolean }>();
-    expect(call.trustedInternalHandoff).toBe(true);
+    const call = await waitForAgentCommandCall<{
+      trustedInternalHandoff?: {
+        kind: string;
+        sourceSessionKey: string;
+        sourceSessionId?: string;
+        targetSessionKey: string;
+        targetSessionId: string;
+      };
+    }>();
+    expect(call.trustedInternalHandoff).toMatchObject({
+      kind: "subagent-completion",
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceSessionId: "child-session-id",
+      targetSessionKey: "agent:main:main",
+      targetSessionId: "existing-session-id",
+    });
   });
 
   it("does not claim stale pre-existing sessions for plugin runtime cleanup", async () => {
@@ -1075,9 +1111,12 @@ describe("gateway agent handler", () => {
       task: "initial task",
       cleanup: "keep" as const,
       createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" as const },
+      execution: {
+        status: "terminal" as const,
+        startedAt: 2,
+        endedAt: 3,
+        outcome: { status: "ok" as const },
+      },
     };
 
     mocks.loadSessionEntry.mockReturnValue({

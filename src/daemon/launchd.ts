@@ -19,6 +19,7 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
+import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import {
   execLaunchctl,
@@ -558,17 +559,29 @@ export async function disableCurrentOpenClawUpdateLaunchdJob(
   });
 }
 
-async function resolveLaunchAgentGatewayPort(env: GatewayServiceEnv): Promise<number | null> {
+async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): Promise<{
+  port: number | null;
+  probeHosts: readonly string[];
+}> {
   const command = await readLaunchAgentProgramArguments(env).catch(() => null);
   const fromArgs = parseTcpPortFromArgs(command?.programArguments);
   if (fromArgs !== null) {
-    return fromArgs;
+    return {
+      port: fromArgs,
+      probeHosts: await resolveGatewayServiceProbeHosts({ env, command }),
+    };
   }
   const fromServiceEnv = parseTcpPort(command?.environment?.OPENCLAW_GATEWAY_PORT ?? "");
   if (fromServiceEnv !== null) {
-    return fromServiceEnv;
+    return {
+      port: fromServiceEnv,
+      probeHosts: await resolveGatewayServiceProbeHosts({ env, command }),
+    };
   }
-  return parseTcpPort(env.OPENCLAW_GATEWAY_PORT ?? "");
+  return {
+    port: parseTcpPort(env.OPENCLAW_GATEWAY_PORT ?? ""),
+    probeHosts: await resolveGatewayServiceProbeHosts({ env, command }),
+  };
 }
 
 function resolveGuiDomain(): string {
@@ -943,8 +956,11 @@ export async function uninstallLaunchAgent({
   await execLaunchctl(["unload", plistPath]);
 
   try {
-    await fs.access(plistPath);
-  } catch {
+    await fs.lstat(plistPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw createLaunchAgentRemovalError(error);
+    }
     stdout.write(`LaunchAgent not found at ${plistPath}\n`);
     return;
   }
@@ -956,9 +972,27 @@ export async function uninstallLaunchAgent({
     await fs.mkdir(trashDir, { recursive: true });
     await fs.rename(plistPath, dest);
     stdout.write(`${formatLine("Moved LaunchAgent to Trash", dest)}\n`);
-  } catch {
-    stdout.write(`LaunchAgent remains at ${plistPath} (could not move)\n`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        await fs.lstat(plistPath);
+      } catch (accessError) {
+        if ((accessError as NodeJS.ErrnoException).code === "ENOENT") {
+          stdout.write(`LaunchAgent not found at ${plistPath}\n`);
+          return;
+        }
+        throw createLaunchAgentRemovalError(accessError);
+      }
+    }
+    throw createLaunchAgentRemovalError(error);
   }
+}
+
+function createLaunchAgentRemovalError(error: unknown): Error {
+  const code = (error as NodeJS.ErrnoException).code;
+  return new Error(
+    `LaunchAgent removal failed${code ? ` (${code})` : ""}. Check permissions and retry.`,
+  );
 }
 
 function isUnsupportedGuiDomain(detail: string): boolean {
@@ -1040,11 +1074,14 @@ async function waitForLaunchAgentStopped(serviceTarget: string): Promise<LaunchA
   return lastUnknown ?? { state: "running" };
 }
 
-async function waitForGatewayPortRelease(port: number): Promise<boolean> {
+async function waitForGatewayPortRelease(
+  port: number,
+  probeHosts: readonly string[],
+): Promise<boolean> {
   const deadline = Date.now() + LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await sleep(Math.min(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS, deadline - Date.now()));
-    const status = await probePortUsage(port);
+    const status = await probePortUsage(port, probeHosts);
     if (status === "free") {
       return true;
     }
@@ -1053,16 +1090,18 @@ async function waitForGatewayPortRelease(port: number): Promise<boolean> {
 }
 
 async function assertGatewayPortReleasedAfterStop(env: GatewayServiceEnv): Promise<void> {
-  const port = await resolveLaunchAgentGatewayPort(env);
+  const { port, probeHosts } = await resolveLaunchAgentGatewayContext(env);
   if (port === null) {
     return;
   }
   cleanStaleGatewayProcessesSync(port);
-  const diagnostics = await inspectPortUsage(port).catch(() => null);
+  const diagnostics = await inspectPortUsage(port, {
+    probeHosts,
+  }).catch(() => null);
   if (diagnostics?.status !== "busy") {
     return;
   }
-  if (await waitForGatewayPortRelease(port)) {
+  if (await waitForGatewayPortRelease(port, probeHosts)) {
     return;
   }
   throw new Error(
@@ -1468,14 +1507,16 @@ export async function restartLaunchAgent({
     return { outcome: "scheduled" };
   }
 
-  const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
+  const { port: cleanupPort, probeHosts } = await resolveLaunchAgentGatewayContext(serviceEnv);
   if (cleanupPort !== null) {
     cleanStaleGatewayProcessesSync(cleanupPort, {
       // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
       // during enumeration must be protected before candidate filtering/signals.
       resolveProtectedPid: () => readLaunchAgentPidForCleanupSync(serviceTarget),
     });
-    const diagnostics = await inspectPortUsage(cleanupPort).catch(() => null);
+    const diagnostics = await inspectPortUsage(cleanupPort, {
+      probeHosts,
+    }).catch(() => null);
     if (diagnostics?.status === "busy") {
       const runtime = await readLaunchAgentRuntime(serviceEnv);
       const managedPid = runtime.pid;

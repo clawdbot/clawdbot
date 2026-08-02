@@ -174,6 +174,8 @@ function createXaiRealtimeTranscriptionSession(
           return;
         }
         if (!speechStarted) {
+          // Dedupe final/terminal echoes within one utterance, not identical later turns.
+          lastTranscript = undefined;
           speechStarted = true;
           config.onSpeechStart?.();
         }

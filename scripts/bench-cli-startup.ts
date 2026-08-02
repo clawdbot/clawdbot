@@ -12,6 +12,7 @@ type CommandCase = {
   name: string;
   args: string[];
   presets: readonly string[];
+  stateScope?: "case" | "sample";
   expectedExitCodes?: readonly number[];
   expectedNonzeroOutputIncludes?: readonly string[];
   firstOutputBudgetMs?: number;
@@ -445,6 +446,19 @@ const COMMAND_CASES: readonly CommandCase[] = [
     expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
   },
   {
+    id: "gatewayHealthJsonConnected",
+    name: "gateway health --json (connected)",
+    args: ["gateway", "health", "--json"],
+    presets: [],
+    stateScope: "case",
+  },
+  {
+    id: "gatewayHealthJsonFirstDevice",
+    name: "gateway health --json (first device)",
+    args: ["gateway", "health", "--json"],
+    presets: [],
+  },
+  {
     id: "configGetGatewayPort",
     name: "config get gateway.port",
     args: ["config", "get", "gateway.port"],
@@ -649,6 +663,8 @@ function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> |
   if (
     commandCase.id !== "configGetGatewayPort" &&
     commandCase.id !== "gatewayHealthJson" &&
+    commandCase.id !== "gatewayHealthJsonConnected" &&
+    commandCase.id !== "gatewayHealthJsonFirstDevice" &&
     commandCase.id !== "health" &&
     commandCase.id !== "healthJson"
   ) {
@@ -717,8 +733,10 @@ async function runSample(params: {
   cpuProfDir?: string;
   heapProfDir?: string;
   rssHookPath: string;
+  runRoot?: string;
 }): Promise<Sample> {
-  const runRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
+  const runRoot = params.runRoot ?? mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
+  const ownsRunRoot = params.runRoot == null;
   const stateDir = path.join(runRoot, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   const configFixture = buildConfigFixture(params.commandCase);
@@ -849,7 +867,9 @@ async function runSample(params: {
       });
     });
   } finally {
-    rmSync(runRoot, { recursive: true, force: true });
+    if (ownsRunRoot) {
+      rmSync(runRoot, { recursive: true, force: true });
+    }
   }
 }
 
@@ -939,14 +959,24 @@ async function runCase(params: {
 }): Promise<Sample[]> {
   const samples: Sample[] = [];
   const totalRuns = params.warmup + params.runs;
-  for (let i = 0; i < totalRuns; i += 1) {
-    const sample = await runSample(params);
-    if (i < params.warmup) {
-      continue;
+  const caseRunRoot =
+    params.commandCase.stateScope === "case"
+      ? mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"))
+      : undefined;
+  try {
+    for (let i = 0; i < totalRuns; i += 1) {
+      const sample = await runSample({ ...params, runRoot: caseRunRoot });
+      if (i < params.warmup) {
+        continue;
+      }
+      samples.push(sample);
     }
-    samples.push(sample);
+    return samples;
+  } finally {
+    if (caseRunRoot) {
+      rmSync(caseRunRoot, { recursive: true, force: true });
+    }
   }
-  return samples;
 }
 
 function tailLines(value: string, maxLines: number): string {

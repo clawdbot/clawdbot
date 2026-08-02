@@ -15,11 +15,14 @@ import {
   createTalkSessionController,
 } from "../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import { formatError } from "./server-utils.js";
 import { decodeTalkRelayAudioBase64 } from "./talk-relay-audio-base64.js";
 import {
   closeExpiredTalkRelaySessions,
+  closeTalkRelaySessionsForConnection,
   requireActiveTalkRelaySession,
 } from "./talk-relay-session-lifecycle.js";
+import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
 
 /**
  * Gateway-owned relay for streaming speech-to-text providers used by Talk.
@@ -181,17 +184,37 @@ function closeTranscriptionSession(
   }
   session.closed = true;
   transcriptionSessions.delete(session.id);
+  forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
-  session.sttSession.close();
-  broadcastToOwner(session.context, session.connId, {
-    transcriptionSessionId: session.id,
-    type: "close",
-    reason,
-    talkEvent: session.talk.emit({
-      type: "session.closed",
-      payload: { reason },
-      final: true,
-    }),
+  try {
+    session.sttSession.close();
+  } finally {
+    // Provider teardown may throw, but the owner-visible terminal event must
+    // still complete so disconnect cleanup cannot leave ambiguous state.
+    broadcastToOwner(session.context, session.connId, {
+      transcriptionSessionId: session.id,
+      type: "close",
+      reason,
+      talkEvent: session.talk.emit({
+        type: "session.closed",
+        payload: { reason },
+        final: true,
+      }),
+    });
+  }
+}
+
+/** Releases every transcription relay owned by a disconnected gateway connection. */
+export function closeTalkTranscriptionRelaySessionsForConnection(connId: string): void {
+  closeTalkRelaySessionsForConnection({
+    sessions: transcriptionSessions.values(),
+    connId,
+    closeSession: (session) => closeTranscriptionSession(session, "completed"),
+    onCloseError: (error, session) => {
+      session.context.logGateway.warn(
+        `failed to close transcription relay session after connection disconnect: ${formatError(error)}`,
+      );
+    },
   });
 }
 
@@ -251,18 +274,26 @@ export function createTalkTranscriptionRelaySession(
     });
   };
   const relayRef: { current?: TranscriptionRelaySession } = {};
-  const ensureTurnId = (): string => {
+  const getActiveRelay = (): TranscriptionRelaySession | undefined => {
     const relay = relayRef.current;
-    return relay ? ensureTranscriptionTurn(relay) : "turn-1";
+    return relay && transcriptionSessions.get(relay.id) === relay ? relay : undefined;
   };
   const sttSession = params.provider.createSession({
     cfg: params.context.getRuntimeConfig(),
     providerConfig: params.providerConfig,
     onSpeechStart: () => {
-      ensureTurnId();
+      const relay = getActiveRelay();
+      if (!relay) {
+        return;
+      }
+      ensureTranscriptionTurn(relay);
     },
     onPartial: (text) => {
-      const turnId = ensureTurnId();
+      const relay = getActiveRelay();
+      if (!relay) {
+        return;
+      }
+      const turnId = ensureTranscriptionTurn(relay);
       emit(
         { transcriptionSessionId, type: "partial", text },
         {
@@ -273,7 +304,11 @@ export function createTalkTranscriptionRelaySession(
       );
     },
     onTranscript: (text) => {
-      const turnId = ensureTurnId();
+      const relay = getActiveRelay();
+      if (!relay) {
+        return;
+      }
+      const turnId = ensureTranscriptionTurn(relay);
       emit(
         { transcriptionSessionId, type: "transcript", text, final: true },
         {
@@ -283,21 +318,22 @@ export function createTalkTranscriptionRelaySession(
           final: true,
         },
       );
-      const relay = relayRef.current;
-      if (relay) {
-        const ended = relay.talk.endTurn({ turnId, payload: {} });
-        if (ended.ok) {
-          broadcastToOwner(relay.context, relay.connId, {
-            transcriptionSessionId,
-            type: "transcript",
-            text: "",
-            final: true,
-            talkEvent: ended.event,
-          });
-        }
+      const ended = relay.talk.endTurn({ turnId, payload: {} });
+      if (ended.ok) {
+        broadcastToOwner(relay.context, relay.connId, {
+          transcriptionSessionId,
+          type: "transcript",
+          text: "",
+          final: true,
+          talkEvent: ended.event,
+        });
       }
     },
     onError: (error) => {
+      const relay = getActiveRelay();
+      if (!relay) {
+        return;
+      }
       emit(
         { transcriptionSessionId, type: "error", message: error.message },
         {
@@ -306,10 +342,7 @@ export function createTalkTranscriptionRelaySession(
           final: true,
         },
       );
-      const relay = relayRef.current;
-      if (relay) {
-        closeTranscriptionSession(relay, "error");
-      }
+      closeTranscriptionSession(relay, "error");
     },
   });
   const relay: TranscriptionRelaySession = {
@@ -334,9 +367,16 @@ export function createTalkTranscriptionRelaySession(
   sttSession
     .connect()
     .then(() => {
+      if (transcriptionSessions.get(transcriptionSessionId) !== relay) {
+        return;
+      }
       emit({ transcriptionSessionId, type: "ready" }, { type: "session.ready", payload: null });
     })
     .catch((error: unknown) => {
+      const active = transcriptionSessions.get(transcriptionSessionId);
+      if (active !== relay) {
+        return;
+      }
       emit(
         {
           transcriptionSessionId,
@@ -349,10 +389,7 @@ export function createTalkTranscriptionRelaySession(
           final: true,
         },
       );
-      const active = transcriptionSessions.get(transcriptionSessionId);
-      if (active) {
-        closeTranscriptionSession(active, "error");
-      }
+      closeTranscriptionSession(active, "error");
     });
 
   return {

@@ -368,6 +368,7 @@ async function runQaParityPreflight(params: {
   process.stdout.write(`QA parity preflight summary: ${result.summaryPath}\n`);
   const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
     result.summaryPath,
+    { requireExecutedScenario: params.allowFailures === true },
   );
   if (blockingScenarioCount > 0) {
     if (params.allowFailures === true) {
@@ -978,19 +979,18 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     process.stdout.write(`QA Multipass summary: ${result.summaryPath}\n`);
     process.stdout.write(`QA Multipass host log: ${result.hostLogPath}\n`);
     process.stdout.write(`QA Multipass bootstrap log: ${result.bootstrapLogPath}\n`);
-    if (!allowFailures) {
-      const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-        result.summaryPath,
-        {
-          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
-            scenarioIds,
-            explicitScenarioSelection: opts.explicitScenarioSelection,
-          }),
-        },
-      );
-      if (blockingScenarioCount > 0) {
-        process.exitCode = 1;
-      }
+    const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+      result.summaryPath,
+      {
+        optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+          scenarioIds,
+          explicitScenarioSelection: opts.explicitScenarioSelection,
+        }),
+        requireExecutedScenario: allowFailures,
+      },
+    );
+    if (!allowFailures && blockingScenarioCount > 0) {
+      process.exitCode = 1;
     }
     return result;
   }
@@ -1051,19 +1051,18 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       process.stdout.write(`QA suite report: ${result.reportPath}\n`);
       process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
       process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-      if (!allowFailures) {
-        const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-          result.summaryPath,
-          {
-            optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
-              scenarioIds,
-              explicitScenarioSelection: opts.explicitScenarioSelection,
-            }),
-          },
-        );
-        if (blockingScenarioCount > 0) {
-          process.exitCode = 1;
-        }
+      const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+        result.summaryPath,
+        {
+          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+            scenarioIds,
+            explicitScenarioSelection: opts.explicitScenarioSelection,
+          }),
+          requireExecutedScenario: allowFailures,
+        },
+      );
+      if (!allowFailures && blockingScenarioCount > 0) {
+        process.exitCode = 1;
       }
       return result;
     }
@@ -1080,6 +1079,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
             scenarioIds,
             explicitScenarioSelection: opts.explicitScenarioSelection,
           }),
+          requireExecutedScenario: allowFailures,
         },
       );
       if (!allowFailures && blockingScenarioCount > 0) {

@@ -34,6 +34,109 @@ describe("CLI startup benchmark script spawners", () => {
     );
   });
 
+  it("reuses warmed state for gateway health while isolating first-device samples", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-state-scope-test-"));
+    try {
+      const fixturePath = path.join(tmpDir, "record-home.mjs");
+      const homeLogPath = path.join(tmpDir, "homes.log");
+      fs.writeFileSync(
+        fixturePath,
+        [
+          'import { appendFileSync } from "node:fs";',
+          "appendFileSync(process.env.OPENCLAW_BENCH_HOME_LOG, `${process.env.HOME}\\n`);",
+          "console.log('{\"ok\":true}');",
+          "",
+        ].join("\n"),
+      );
+
+      const runCase = (caseId: string) => {
+        fs.rmSync(homeLogPath, { force: true });
+        execFileSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/bench-cli-startup.ts",
+            "--entry",
+            fixturePath,
+            "--case",
+            caseId,
+            "--runs",
+            "2",
+            "--warmup",
+            "1",
+          ],
+          {
+            cwd: process.cwd(),
+            env: {
+              ...process.env,
+              OPENCLAW_BENCH_HOME_LOG: homeLogPath,
+            },
+            stdio: "pipe",
+          },
+        );
+        return fs.readFileSync(homeLogPath, "utf8").trim().split("\n");
+      };
+
+      const warmedHomes = runCase("gatewayHealthJsonConnected");
+      expect(warmedHomes).toHaveLength(3);
+      expect(new Set(warmedHomes).size).toBe(1);
+      expect(warmedHomes.every((home) => !fs.existsSync(home))).toBe(true);
+
+      for (const caseId of ["gatewayHealthJson", "gatewayHealthJsonFirstDevice"]) {
+        const sampleHomes = runCase(caseId);
+        expect(sampleHomes).toHaveLength(3);
+        expect(new Set(sampleHomes).size).toBe(3);
+        expect(sampleHomes.every((home) => !fs.existsSync(home))).toBe(true);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires connected gateway health probes to exit successfully", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-connected-test-"));
+    try {
+      const fixturePath = path.join(tmpDir, "transport-error.mjs");
+      fs.writeFileSync(
+        fixturePath,
+        [
+          'console.log(\'{"ok":false,"gateway_transport_error":"closed"}\');',
+          "process.exitCode = 1;",
+          "",
+        ].join("\n"),
+      );
+
+      const runCase = (caseId: string) =>
+        spawnSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/bench-cli-startup.ts",
+            "--entry",
+            fixturePath,
+            "--case",
+            caseId,
+            "--runs",
+            "1",
+            "--warmup",
+            "0",
+          ],
+          { cwd: process.cwd(), encoding: "utf8" },
+        );
+
+      expect(runCase("gatewayHealthJson").status).toBe(0);
+      for (const caseId of ["gatewayHealthJsonConnected", "gatewayHealthJsonFirstDevice"]) {
+        const result = runCase(caseId);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(`${caseId} sample 1: exited with code 1`);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not require unrelated fixture cases for a narrowed preset", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-budget-test-"));
     try {

@@ -123,6 +123,25 @@ describe("realtime Talk microphone inputs", () => {
     });
   });
 
+  it("settles microphone cancellation before browser permission resolves", async () => {
+    const stop = vi.fn();
+    let resolveMedia: (stream: MediaStream) => void = () => undefined;
+    const pending = new Promise<MediaStream>((resolve) => {
+      resolveMedia = resolve;
+    });
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia: vi.fn(() => pending) },
+    });
+    const controller = new AbortController();
+
+    const opening = openRealtimeTalkInput(undefined, { signal: controller.signal });
+    controller.abort();
+
+    await expect(opening).rejects.toMatchObject({ name: "AbortError" });
+    resolveMedia({ getTracks: () => [{ stop }] } as unknown as MediaStream);
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+  });
+
   it("acquires camera separately so camera errors cannot stop microphone input", async () => {
     const audio = { getTracks: () => [] } as unknown as MediaStream;
     const camera = { getTracks: () => [] } as unknown as MediaStream;
@@ -172,10 +191,10 @@ describe("realtime Talk microphone inputs", () => {
     const opening = openRealtimeTalkCamera(undefined, { signal: controller.signal });
     await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
     controller.abort();
-    resolveCamera(camera);
 
     await expect(opening).rejects.toMatchObject({ name: "AbortError" });
-    expect(videoStop).toHaveBeenCalledOnce();
+    resolveCamera(camera);
+    await vi.waitFor(() => expect(videoStop).toHaveBeenCalledOnce());
   });
 
   it("enables voice processing with the system default microphone", async () => {

@@ -78,7 +78,7 @@ import { runIMessageCatchup } from "./catchup-bridge.js";
 import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
 import { combineIMessagePayloads } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
-import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
+import { createIMessageEchoCachingSend, deliverIMessageReply } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
 import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
@@ -1163,15 +1163,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             },
           }
         : false,
-      deliver: async (payload: Parameters<typeof deliverReplies>[0]["replies"][number]) => {
+      observeMessageSent: true,
+      deliver: async (payload: Parameters<typeof deliverIMessageReply>[0]["payload"]) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
-          return;
+          return {
+            visibleReplySent: false,
+            suppression: { reason: "no_visible_result" },
+          } as const;
         }
-        await deliverReplies({
+        return await deliverIMessageReply({
           cfg,
-          replies: [payload],
+          payload,
           target,
           accountId: accountInfo.accountId,
           runtime,

@@ -49,6 +49,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
+internal fun sidebarSearchLabel(): String = nativeString("Search sessions")
+
+@Composable
 internal fun SidebarSearchField(
   query: String,
   onQueryChange: (String) -> Unit,
@@ -60,7 +63,7 @@ internal fun SidebarSearchField(
     onValueChange = onQueryChange,
     modifier = modifier.fillMaxWidth().testTag("sidebar-search"),
     singleLine = true,
-    label = { Text(nativeString("Search sessions")) },
+    label = { Text(sidebarSearchLabel()) },
     leadingIcon = {
       Icon(
         imageVector = Icons.Default.Search,

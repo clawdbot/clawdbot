@@ -8,7 +8,7 @@ import {
   toTranscriptReadScope,
   type ReadRecentSessionMessagesResult,
 } from "./session-transcript-readers.js";
-import { readSessionMessagesAroundIdWithStatsAsync as readSessionMessagesAroundIdWithStatsAsyncFile } from "./session-utils.fs-anchor.js";
+import { ArchivedTranscriptReader } from "./session-utils.fs.js";
 
 type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
   found: boolean;
@@ -31,13 +31,12 @@ export async function readSessionMessagesAroundIdWithStatsAsync(
   const page = readSessionTranscriptMessageAnchorPage(toTranscriptReadScope(target), opts);
   if (!page.found) {
     if (opts.allowResetArchiveFallback === true) {
-      return await readSessionMessagesAroundIdWithStatsAsyncFile(
-        target.sessionId,
-        target.storePath,
+      return await new ArchivedTranscriptReader({
+        agentId: target.agentId,
         sessionFile,
-        opts,
-        target.agentId,
-      );
+        sessionId: target.sessionId,
+        storePath: target.storePath,
+      }).readAroundId({ ...opts, resetArchiveOnly: true });
     }
     return {
       found: false,

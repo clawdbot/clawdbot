@@ -205,7 +205,7 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
       JSON.stringify({
         type: "event",
         event: "connect.challenge",
-        payload: { nonce: "browser-copilot-e2e-nonce" },
+        payload: { nonce: "browser-copilot-e2e-nonce", ts: 1_777_777_777_000 },
       }),
     );
     socket.on("message", (data) => {

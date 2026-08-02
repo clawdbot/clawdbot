@@ -117,21 +117,6 @@ vi.mock("./groups.js", () => ({
   buildDirectChatContext: vi.fn().mockReturnValue(""),
   buildGroupIntro: vi.fn().mockReturnValue(""),
   buildGroupChatContext: vi.fn().mockReturnValue(""),
-  resolveGroupSilentReplyBehavior: vi.fn(
-    (params: {
-      sessionEntry?: SessionEntry;
-      defaultActivation: "always" | "mention";
-      silentReplyPolicy?: "allow" | "disallow";
-    }) => {
-      const activation = params.sessionEntry?.groupActivation ?? params.defaultActivation;
-      const canUseSilentReply = params.silentReplyPolicy !== "disallow";
-      return {
-        activation,
-        canUseSilentReply,
-        allowEmptyAssistantReplyAsSilent: params.silentReplyPolicy === "allow",
-      };
-    },
-  ),
 }));
 
 vi.mock("./inbound-meta.js", () => ({
@@ -477,6 +462,13 @@ describe("runPreparedReply media-only handling", () => {
     expect(resolveThinkingCatalog).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
     expect(call.followupRun.run.thinkLevel).toBe("off");
+    expect(call.followupRun.run.thinkingCatalog).toEqual([
+      {
+        provider: "openai",
+        id: "chat-latest",
+        reasoning: false,
+      },
+    ]);
   });
 
   it("reports unsupported explicit one-turn thinking overrides", async () => {

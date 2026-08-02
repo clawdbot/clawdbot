@@ -14,12 +14,16 @@ import {
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "./subagent-test-fixtures.test-helpers.js";
 
-function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
+function makeRun(overrides: Partial<SubagentRunRecordOverrides>): SubagentRunRecord {
   const runId = overrides.runId ?? "run-default";
   const childSessionKey = overrides.childSessionKey ?? `agent:main:subagent:${runId}`;
   const requesterSessionKey = overrides.requesterSessionKey ?? "agent:main:main";
-  return {
+  return createSubagentRunRecord({
     runId,
     childSessionKey,
     controllerSessionKey: overrides.controllerSessionKey,
@@ -29,7 +33,7 @@ function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
     cleanup: "keep",
     createdAt: overrides.createdAt ?? Date.now(),
     ...overrides,
-  };
+  });
 }
 
 function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {

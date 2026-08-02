@@ -4871,8 +4871,8 @@ describe("chat welcome", () => {
       canSend: false,
       disabledBanner: {
         kind: "composer-replacement",
-        text: "OpenClaw couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
-        actionLabel: "Configure a provider",
+        text: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
+        actionLabel: "Connect an AI provider",
         onAction: () => undefined,
       },
       modelSetupRequired: true,
@@ -5350,6 +5350,45 @@ describe("chat model controls", () => {
       "1.1M context",
     );
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
+  });
+
+  it("marks chat-only models in the active control and picker", () => {
+    const { state } = createChatHeaderState({
+      model: "qwen3-8b",
+      modelProvider: "lmstudio",
+      models: [
+        {
+          id: "qwen3-8b",
+          name: "Qwen3 8B",
+          provider: "lmstudio",
+          contextWindow: 32_768,
+          supportsTools: false,
+        },
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          supportsTools: true,
+        },
+      ],
+    });
+    const container = renderModelControls(state);
+    const trigger = getChatModelSelect(container);
+
+    expect(trigger.dataset.chatModelTools).toBe("unavailable");
+    expect(
+      trigger.querySelector(".chat-controls__model-capability-badge")?.textContent?.trim(),
+    ).toBe("Chat only");
+    expect(trigger.getAttribute("aria-label")).toContain("Chat only");
+    expect(
+      container
+        .querySelector('[data-chat-model-option="lmstudio/qwen3-8b"]')
+        ?.querySelector(".chat-controls__model-option-meta")
+        ?.textContent?.trim(),
+    ).toBe("32.8k context · Chat only");
+    expect(
+      container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
+    ).not.toContain("Chat only");
   });
 
   it("shows canonical OpenAI model names instead of command aliases", () => {

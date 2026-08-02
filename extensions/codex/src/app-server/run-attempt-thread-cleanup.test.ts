@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { CodexAppServerClient } from "./client.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt } from "./run-attempt.js";
 import {
@@ -16,9 +17,14 @@ import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
-import type { CodexAppServerClientFactory } from "./shared-client.js";
+import {
+  resetSharedCodexAppServerClientForTests,
+  retainSharedCodexAppServerClientIfCurrent,
+  type CodexAppServerClientFactory,
+} from "./shared-client.js";
 import {
   adaptCodexTestClientFactory,
+  createClientHarness,
   createCodexTestModel,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
@@ -135,6 +141,26 @@ function turnStartResult(turnId = "turn-1") {
   };
 }
 
+async function waitForHarnessRequest(
+  harness: ReturnType<typeof createClientHarness>,
+  method: string,
+): Promise<{ id: number | string }> {
+  let request: { id?: number | string; method?: string } | undefined;
+  await vi.waitFor(
+    () => {
+      request = harness.writes
+        .map((write) => JSON.parse(write) as { id?: number | string; method?: string })
+        .find((message) => message.method === method);
+      expect(request?.id).toBeDefined();
+    },
+    { interval: 1, timeout: 5_000 },
+  );
+  if (request?.id === undefined) {
+    throw new Error(`Codex harness did not write ${method}`);
+  }
+  return { id: request.id };
+}
+
 function getMockServerVersion() {
   return CODEX_APP_SERVER_VERSION;
 }
@@ -153,6 +179,7 @@ function mockClientRuntimeMethods() {
 
 describe("Codex app-server main thread cleanup", () => {
   beforeEach(async () => {
+    resetSharedCodexAppServerClientForTests();
     resetCodexTestBindingStore();
     vi.useRealTimers();
     resetAgentEventsForTest();
@@ -164,6 +191,7 @@ describe("Codex app-server main thread cleanup", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    resetSharedCodexAppServerClientForTests();
     resetAgentEventsForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -337,59 +365,151 @@ describe("Codex app-server main thread cleanup", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
-  it("retires a Codex client when a failed turn cannot unsubscribe its thread", async () => {
+  it("keeps an interrupted shared turn subscribed until its exact terminal arrives", async () => {
+    const sessionFile = path.join(tempDir, "cancelled-session.jsonl");
+    const workspaceDir = path.join(tempDir, "cancelled-workspace");
+    const sessionKey = "agent:main:dashboard:incognito-cancelled-turn";
+    const harness = createClientHarness();
+    const abort = new AbortController();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
+
+    const params = createParams(sessionFile, workspaceDir, sessionKey);
+    params.abortSignal = abort.signal;
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: testCodexAppServerBindingStore,
+    }).finally(() => {
+      settled = true;
+    });
+    const initialize = await waitForHarnessRequest(harness, "initialize");
+    harness.send({
+      id: initialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+    });
+    const threadStart = await waitForHarnessRequest(harness, "thread/start");
+    harness.send({ id: threadStart.id, result: threadStartResult() });
+    const turnStart = await waitForHarnessRequest(harness, "turn/start");
+    harness.send({ id: turnStart.id, result: turnStartResult() });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    abort.abort("cancelled");
+    const interrupt = await waitForHarnessRequest(harness, "turn/interrupt");
+    harness.send({ id: interrupt.id, result: {} });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(settled).toBe(false);
+    expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
+      "thread/unsubscribe",
+    );
+
+    harness.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-unrelated", status: "interrupted" },
+      },
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(settled).toBe(false);
+
+    harness.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "interrupted" },
+      },
+    });
+    const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
+    harness.send({ id: unsubscribe.id, result: {} });
+
+    expect(readAttemptTerminal(await run)).toMatchObject({ aborted: true, timedOut: false });
+  });
+
+  it("gracefully retires a shared Codex client when a failed turn cannot unsubscribe", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionKey = "agent:main:dashboard:incognito-failed-unsubscribe";
-    const requests: string[] = [];
-    const request = vi.fn(async (method: string) => {
-      requests.push(method);
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        throw new Error("turn start exploded");
-      }
-      if (method === "thread/unsubscribe") {
-        throw new Error("thread unsubscribe failed");
-      }
-      return {};
+    const contaminated = createClientHarness();
+    const replacement = createClientHarness();
+    const startClient = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(contaminated.client)
+      .mockReturnValueOnce(replacement.client);
+
+    const failedRun = runCodexAppServerAttempt(
+      createParams(sessionFile, workspaceDir, sessionKey),
+      { bindingStore: testCodexAppServerBindingStore },
+    );
+    const observedFailure = failedRun.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const initialize = await waitForHarnessRequest(contaminated, "initialize");
+    contaminated.send({
+      id: initialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
     });
-    const createClient = vi.fn(async () => {
-      return {
-        ...mockClientRuntimeMethods(),
-        request,
-        close: vi.fn(),
-        addNotificationHandler: () => () => undefined,
-        addRequestHandler: () => () => undefined,
-        addCloseHandler: () => () => undefined,
-      } as never;
+    const threadStart = await waitForHarnessRequest(contaminated, "thread/start");
+    contaminated.send({ id: threadStart.id, result: threadStartResult() });
+
+    const turnStart = await waitForHarnessRequest(contaminated, "turn/start");
+    const releaseSiblingLease = retainSharedCodexAppServerClientIfCurrent(contaminated.client);
+    if (!releaseSiblingLease) {
+      throw new Error("Codex harness did not acquire the real shared client");
+    }
+    contaminated.send({
+      id: turnStart.id,
+      error: { code: -32000, message: "turn start exploded" },
     });
-    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(createClient);
+    const unsubscribe = await waitForHarnessRequest(contaminated, "thread/unsubscribe");
+    contaminated.send({
+      id: unsubscribe.id,
+      error: { code: -32000, message: "thread unsubscribe failed" },
+    });
 
-    await expect(
-      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
-        bindingStore: testCodexAppServerBindingStore,
-        clientFactory,
-      }),
-    ).rejects.toThrow("turn start exploded");
-
-    await expect(
-      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
-        bindingStore: testCodexAppServerBindingStore,
-        clientFactory,
-      }),
-    ).rejects.toThrow("turn start exploded");
-
-    expect(requests).toEqual([
-      "thread/start",
-      "turn/start",
-      "thread/unsubscribe",
-      "thread/start",
-      "turn/start",
-      "thread/unsubscribe",
-    ]);
-    expect(createClient).toHaveBeenCalledTimes(2);
+    const turnStartError = await observedFailure;
+    expect(turnStartError).toBeInstanceOf(Error);
+    expect(turnStartError).toMatchObject({ message: "turn start exploded" });
+    expect(contaminated.stdinDestroyed).toBe(false);
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+
+    const replacementRun = runCodexAppServerAttempt(
+      createParams(sessionFile, workspaceDir, sessionKey),
+      { bindingStore: testCodexAppServerBindingStore },
+    );
+    const replacementInitialize = await waitForHarnessRequest(replacement, "initialize");
+    replacement.send({
+      id: replacementInitialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+    });
+    const replacementThread = await waitForHarnessRequest(replacement, "thread/start");
+    replacement.send({ id: replacementThread.id, result: threadStartResult("thread-2") });
+    const replacementTurn = await waitForHarnessRequest(replacement, "turn/start");
+    replacement.send({ id: replacementTurn.id, result: turnStartResult("turn-2") });
+    replacement.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        turn: { id: "turn-2", status: "completed" },
+      },
+    });
+
+    expect(readAttemptTerminal(await replacementRun)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+    });
+    expect(startClient).toHaveBeenCalledTimes(2);
+    expect(contaminated.stdinDestroyed).toBe(false);
+    releaseSiblingLease();
+    await vi.waitFor(() => expect(contaminated.stdinDestroyed).toBe(true), {
+      interval: 1,
+      timeout: 5_000,
+    });
   });
 });

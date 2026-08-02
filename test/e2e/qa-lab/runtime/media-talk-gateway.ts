@@ -51,8 +51,8 @@ const SCENARIOS = {
     codeRefs: [
       SOURCE_PATH,
       "packages/speech-core/src/tts.ts",
-      "src/gateway/server-methods/chat.ts",
-      "src/gateway/control-ui.ts",
+      "src/gateway/managed-image-attachments.ts",
+      "src/gateway/server-methods/artifacts.ts",
     ],
   },
   "active-talk-agent-run-status": {
@@ -246,11 +246,13 @@ function collectRecords(value: unknown, records: Record<string, unknown>[] = [])
   return records;
 }
 
-function findAudioAttachmentSource(value: unknown): string | undefined {
-  return collectRecords(value)
-    .filter((record) => record.kind === "audio")
-    .map((record) => record.url)
-    .find((url): url is string => typeof url === "string" && url.length > 0);
+function findAudioAttachment(value: unknown) {
+  return collectRecords(value).find(
+    (record) =>
+      (record.type === "audio" || record.kind === "audio") &&
+      typeof record.url === "string" &&
+      record.url.length > 0,
+  );
 }
 
 async function readJsonLines(filePath: string): Promise<Record<string, unknown>[]> {
@@ -295,13 +297,13 @@ async function waitForWebchatAudio(params: {
       sessionKey: params.sessionKey,
       limit: 20,
     });
-    const source = findAudioAttachmentSource(params.events) ?? findAudioAttachmentSource(history);
-    if (source) {
-      return { history, source };
+    const attachment = findAudioAttachment(params.events) ?? findAudioAttachment(history);
+    if (attachment) {
+      return { attachment, history };
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  return { history, source: undefined };
+  return { attachment: undefined, history };
 }
 
 async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string> {
@@ -322,19 +324,17 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
       runtimeEnvPatch: {
         OPENCLAW_QA_SPEECH_CALLS_PATH: fixture.speechCallsPath,
         OPENCLAW_QA_REALTIME_CALLS_PATH: fixture.realtimeCallsPath,
+        OPENCLAW_TTS_PREFS: path.join(fixtureRoot, "tts-prefs.json"),
       },
       mutateConfig: (config) => {
         const withPlugin = withFixturePlugin(config, fixture.pluginDir);
         return {
           ...withPlugin,
-          messages: {
-            ...withPlugin.messages,
-            tts: {
-              auto: "always",
-              mode: "final",
-              provider: FIXTURE_SPEECH_PROVIDER_ID,
-              prefsPath: path.join(fixtureRoot, "tts-prefs.json"),
-            },
+          tts: {
+            ...withPlugin.tts,
+            auto: "always",
+            mode: "final",
+            provider: FIXTURE_SPEECH_PROVIDER_ID,
           },
         };
       },
@@ -355,8 +355,8 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
       idempotencyKey: runId,
     });
     await waitForChatFinal(events, runId);
-    const { history, source } = await waitForWebchatAudio({ client, events, sessionKey });
-    if (!source) {
+    const { attachment, history } = await waitForWebchatAudio({ client, events, sessionKey });
+    if (!attachment) {
       const speechCalls = await readJsonLines(fixture.speechCallsPath);
       throw new Error(
         `WebChat history did not contain an audio attachment; speech=${JSON.stringify(speechCalls)}; gateway=${gateway.logs()}; history=${JSON.stringify(history)}`,
@@ -366,25 +366,26 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
     if (speechCalls.length !== 1) {
       throw new Error(`expected one final-tail TTS synthesis, received ${speechCalls.length}`);
     }
-    const route = `${gateway.baseUrl}/__openclaw__/assistant-media`;
-    const sourceParam = encodeURIComponent(source);
-    const metadata = await fetch(`${route}?meta=1&source=${sourceParam}`, {
-      headers: { Authorization: `Bearer ${gateway.token}` },
+    const artifactId = attachment.artifactId;
+    const source = attachment.url;
+    if (typeof artifactId !== "string" || typeof source !== "string") {
+      throw new Error(`WebChat audio attachment was not managed: ${JSON.stringify(attachment)}`);
+    }
+    const download = await client.request<{ url?: string }>("artifacts.download", {
+      sessionKey,
+      artifactId,
     });
-    if (!metadata.ok) {
-      throw new Error(`media metadata failed with ${metadata.status}: ${await metadata.text()}`);
+    if (!download.url?.includes("mediaTicket=")) {
+      throw new Error(
+        `artifact download did not mint a scoped ticket: ${JSON.stringify(download)}`,
+      );
     }
-    const ticket = (await metadata.json()) as { available?: boolean; mediaTicket?: string };
-    if (ticket.available !== true || !ticket.mediaTicket?.startsWith("v1.")) {
-      throw new Error(`media metadata did not mint a scoped ticket: ${JSON.stringify(ticket)}`);
-    }
-    const withoutTicket = await fetch(`${route}?source=${sourceParam}`);
+    const sourceUrl = new URL(source, gateway.baseUrl);
+    const withoutTicket = await fetch(sourceUrl);
     if (withoutTicket.status !== 401) {
       throw new Error(`media route without ticket returned ${withoutTicket.status}, expected 401`);
     }
-    const ticketed = await fetch(
-      `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(ticket.mediaTicket)}`,
-    );
+    const ticketed = await fetch(new URL(download.url, gateway.baseUrl));
     const body = Buffer.from(await ticketed.arrayBuffer());
     if (!ticketed.ok || !ticketed.headers.get("content-type")?.includes("audio/wav")) {
       throw new Error(`ticketed media failed with ${ticketed.status}`);

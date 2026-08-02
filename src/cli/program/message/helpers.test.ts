@@ -309,6 +309,29 @@ describe("runMessageAction", () => {
     expect(exitMock).not.toHaveBeenCalledWith(0);
   });
 
+  it("rejects conflicting poll visibility flags before loading channel plugins", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("poll", {
+        channel: "telegram",
+        target: "123",
+        pollQuestion: "Ship it?",
+        pollOption: ["Yes", "No"],
+        pollAnonymous: true,
+        pollPublic: true,
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(errorMock).toHaveBeenCalledWith(
+      "Error: --poll-anonymous and --poll-public are mutually exclusive.",
+    );
+    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(messageCommandMock).not.toHaveBeenCalled();
+    expect(exitMock).toHaveBeenCalledWith(1);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
+  });
+
   it.each([
     [
       "poll duration hours",

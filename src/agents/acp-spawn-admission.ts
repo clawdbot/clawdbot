@@ -26,7 +26,9 @@ export function countUntrackedActiveAcpRunsForOwner(ownerKey: string | undefined
     tasks.flatMap((task) => {
       const childSessionKey = normalizeOptionalString(task.childSessionKey);
       const trackedRun = childSessionKey ? getSubagentRunByChildSessionKey(childSessionKey) : null;
-      const hasActiveRegistryRun = Boolean(trackedRun && typeof trackedRun.endedAt !== "number");
+      const hasActiveRegistryRun = Boolean(
+        trackedRun && typeof trackedRun.execution.endedAt !== "number",
+      );
       return task.runtime === "acp" &&
         isActiveTaskStatus(task.status) &&
         childSessionKey !== undefined &&

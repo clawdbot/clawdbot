@@ -212,6 +212,16 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
       activation: { onStartup: true },
     },
     {
+      id: "source-external-startup",
+      enabledByDefault: true,
+      activation: { onStartup: true },
+      channels: ["source-external-channel"],
+      providers: ["source-external-provider"],
+      packageManifest: {
+        build: { bundledDist: false },
+      },
+    },
+    {
       id: "demo-config-startup",
       enabledByDefault: true,
       activation: {
@@ -314,6 +324,7 @@ function createInstalledPluginRecordFixture(
     origin: record.origin,
     enabled: true,
     ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
+    ...(record.packageManifest?.build ? { packageBuild: record.packageManifest.build } : {}),
     startup: {
       sidecar: record.activation?.onStartup === true,
       memory,
@@ -1426,6 +1437,72 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("does not ambient-start source-discovered external plugins from onStartup alone", () => {
+    expectStartupPluginIds({
+      config: createStartupConfig({
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["browser"],
+    });
+  });
+
+  it.each([
+    [
+      "plugins.entries",
+      createStartupConfig({
+        enabledPluginIds: ["source-external-startup"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      ["browser", "source-external-startup"],
+    ],
+    [
+      "plugins.allow",
+      createStartupConfig({
+        allowPluginIds: ["source-external-startup"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      ["source-external-startup"],
+    ],
+  ])(
+    "starts source-discovered external plugins explicitly selected through %s",
+    (_name, config, expected) => {
+      expectStartupPluginIds({
+        config,
+        expected,
+      });
+    },
+  );
+
+  it.each([
+    [
+      "configured channel",
+      {
+        channels: {
+          "source-external-channel": { enabled: true },
+        },
+        plugins: {
+          slots: { memory: "none" },
+        },
+      } as OpenClawConfig,
+    ],
+    [
+      "selected provider",
+      createStartupConfig({
+        modelId: "source-external-provider/demo-model",
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+    ],
+  ])("preserves %s activation for source-discovered external plugins", (_name, config) => {
+    expectStartupPluginIds({
+      config,
+      expected: ["browser", "source-external-startup"],
     });
   });
 

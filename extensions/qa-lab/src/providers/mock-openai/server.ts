@@ -33,6 +33,7 @@ import {
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
   QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
+  QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
   QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE,
   QA_STRANDED_FINAL_RECOVERY_PROMPT_RE,
@@ -43,9 +44,13 @@ import {
   QA_TELEGRAM_LONG_FINAL_PROMPT_RE,
   QA_WHATSAPP_LONG_FINAL_PROMPT_RE,
   QA_SLACK_CHART_PRESENTATION_PROMPT_RE,
+  QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
+  QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
+  buildSlackMpimHistoryBotReply,
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE,
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
+  QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
   buildStrandedFinalRecoveryText,
   buildStrandedFinalRetryFailureText,
   isStrandedFinalRetryFailureRequest,
@@ -126,6 +131,7 @@ import {
   extractLatestToolOutput,
   extractAllToolOutputText,
   extractUserTextAfterLatestToolOutput,
+  extractSlackMpimRetainedBotNonce,
   extractAllUserTexts,
   extractAllInputTexts,
   extractInstructionsText,
@@ -146,7 +152,7 @@ import {
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
   buildCustomToolCallEventsWithInput,
-  buildToolCallEventsWithArgs,
+  buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
   extractOrbitCode,
   extractToolSearchTarget,
   buildQaToolSearchArgs,
@@ -159,6 +165,7 @@ const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
   /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
 const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
+const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -193,6 +200,257 @@ function extractLatestScenarioFamilyPrompt(texts: string[]) {
   return latestIndex < 0 ? "" : envelope.slice(latestIndex);
 }
 
+function stringifyScenarioToolOutput(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === undefined) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function encodeCodeModeTarget(name: string, args: Record<string, unknown>) {
+  return Buffer.from(JSON.stringify({ name, args }), "utf8").toString("base64url");
+}
+
+function decodeCodeModeTarget(code: string | undefined) {
+  const marker = code
+    ?.split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.startsWith(`// ${QA_CODE_MODE_TARGET_MARKER}`));
+  if (!marker) {
+    return null;
+  }
+  try {
+    const encoded = marker.slice(`// ${QA_CODE_MODE_TARGET_MARKER}`.length).trim();
+    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (
+      typeof record.name !== "string" ||
+      !record.args ||
+      typeof record.args !== "object" ||
+      Array.isArray(record.args)
+    ) {
+      return null;
+    }
+    return {
+      name: record.name,
+      args: record.args as Record<string, unknown>,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function findNamedToolDefinition(
+  value: unknown,
+  name: string,
+  depth = 0,
+): Record<string, unknown> | null {
+  if (depth > 6 || !value || typeof value !== "object") {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const match = findNamedToolDefinition(item, name, depth + 1);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.name === name || record.tool === name || record.functionName === name) {
+    return record;
+  }
+  for (const item of Object.values(record)) {
+    const match = findNamedToolDefinition(item, name, depth + 1);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
+function hasCodeModeExecSurface(body: Record<string, unknown>) {
+  const tools = [
+    ...(Array.isArray(body.tools) ? body.tools : []),
+    ...(Array.isArray(body.dynamicTools) ? body.dynamicTools : []),
+  ];
+  const execDefinition = findNamedToolDefinition(tools, "exec");
+  if (!execDefinition || !hasToolDefinition(body, "wait")) {
+    return false;
+  }
+  const schema =
+    (execDefinition.input_schema as Record<string, unknown> | undefined) ??
+    (execDefinition.parameters as Record<string, unknown> | undefined);
+  if (!schema) {
+    return false;
+  }
+  const properties = schema.properties;
+  const required = schema.required;
+  return (
+    properties !== null &&
+    typeof properties === "object" &&
+    !Array.isArray(properties) &&
+    Object.hasOwn(properties, "code") &&
+    Array.isArray(required) &&
+    required.includes("code")
+  );
+}
+
+function resolveCurrentToolDeclarationSurface(
+  body: Record<string, unknown>,
+  input: ResponsesInputItem[],
+) {
+  const additionalTools = input.flatMap((item) =>
+    item.type === "additional_tools" && item.role === "developer" && Array.isArray(item.tools)
+      ? item.tools
+      : [],
+  );
+  return additionalTools.length === 0
+    ? body
+    : {
+        ...body,
+        tools: [...(Array.isArray(body.tools) ? body.tools : []), ...additionalTools],
+      };
+}
+
+function findToolCallByCallId(input: ResponsesInputItem[], callId: string) {
+  return input.toReversed().find((item) => {
+    const type = item.type;
+    return (type === "function_call" || type === "custom_tool_call") && item.call_id === callId;
+  });
+}
+
+function parseToolCallArguments(toolCall: ResponsesInputItem) {
+  if (typeof toolCall.arguments !== "string") {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(toolCall.arguments) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isGeneratedCodeModeExecCall(toolCall: ResponsesInputItem | undefined) {
+  if (!toolCall || toolCall.name !== "exec") {
+    return false;
+  }
+  const args = parseToolCallArguments(toolCall);
+  return typeof args?.code === "string" && decodeCodeModeTarget(args.code) !== null;
+}
+
+function isGeneratedCodeModeWaitCall(input: ResponsesInputItem[], toolCall: ResponsesInputItem) {
+  if (toolCall.name !== "wait") {
+    return false;
+  }
+  const runId = parseToolCallArguments(toolCall)?.runId;
+  if (typeof runId !== "string") {
+    return false;
+  }
+  return input.some((item) => {
+    if (
+      (item.type !== "function_call_output" && item.type !== "custom_tool_call_output") ||
+      typeof item.call_id !== "string"
+    ) {
+      return false;
+    }
+    const output = stringifyScenarioToolOutput(item.output);
+    const parsed = parseToolOutputJson(output);
+    return (
+      parsed?.status === "waiting" &&
+      parsed.runId === runId &&
+      isGeneratedCodeModeExecCall(findToolCallByCallId(input, item.call_id))
+    );
+  });
+}
+
+function isCodeModeControlToolOutput(body: Record<string, unknown>, input: ResponsesInputItem[]) {
+  if (!hasCodeModeExecSurface(body)) {
+    return false;
+  }
+  const toolOutputCallId = extractToolOutputCallId(input);
+  if (!toolOutputCallId) {
+    return false;
+  }
+  const toolCall = findToolCallByCallId(input, toolOutputCallId);
+  return (
+    isGeneratedCodeModeExecCall(toolCall) ||
+    (toolCall ? isGeneratedCodeModeWaitCall(input, toolCall) : false)
+  );
+}
+
+function buildScenarioToolCallEvents(
+  body: Record<string, unknown>,
+  name: string,
+  args: Record<string, unknown>,
+) {
+  // Code Mode hides catalog capabilities behind exec/wait. Route through that
+  // visible surface while retaining the nested capability as debug evidence.
+  if (
+    name === "exec" ||
+    name === "wait" ||
+    hasToolDefinition(body, name) ||
+    !hasCodeModeExecSurface(body)
+  ) {
+    const declaration = [
+      ...(Array.isArray(body.tools) ? body.tools : []),
+      ...(Array.isArray(body.dynamicTools) ? body.dynamicTools : []),
+    ].find((tool) => findNamedToolDefinition(tool, name));
+    // Codex registers namespaced tools by their complete wire identity;
+    // emitting only the nested name makes direct-only lifecycle tools unusable.
+    const namespace =
+      declaration &&
+      typeof declaration === "object" &&
+      declaration.type === "namespace" &&
+      typeof declaration.name === "string"
+        ? declaration.name
+        : undefined;
+    return buildRawToolCallEventsWithArgs(name, args, namespace);
+  }
+  const encodedTarget = encodeCodeModeTarget(name, args);
+  return buildRawToolCallEventsWithArgs("exec", {
+    language: "javascript",
+    code: [
+      `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
+      `const targetName = ${JSON.stringify(name)};`,
+      `const targetArgs = ${JSON.stringify(args)};`,
+      "const target = ALL_TOOLS.find((entry) => entry.name === targetName);",
+      "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
+      "const value = await tools.callValue(target.id, targetArgs);",
+      'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
+      "  return { ...value, content: value.content.slice(0, 2048) };",
+      "}",
+      "return value;",
+    ].join("\n"),
+  });
+}
+
+function extractScenarioPlannedTool(events: StreamEvent[]) {
+  const wireName = extractPlannedToolName(events);
+  const wireArgs = extractPlannedToolArgs(events);
+  if (wireName !== "exec" || typeof wireArgs?.code !== "string") {
+    return { name: wireName, args: wireArgs, wireName };
+  }
+  const target = decodeCodeModeTarget(wireArgs.code);
+  return target
+    ? { name: target.name, args: target.args, wireName }
+    : { name: wireName, args: wireArgs, wireName };
+}
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
@@ -201,8 +459,18 @@ async function buildResponsesPayload(
     typeof body.model === "string" ? body.model : undefined,
   );
   const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
+  const toolDeclarationBody = resolveCurrentToolDeclarationSurface(body, input);
   const prompt = extractLastUserText(input);
-  const toolOutput = extractToolOutput(input);
+  const rawToolOutput = extractToolOutput(input);
+  const codeModeControlJson = isCodeModeControlToolOutput(toolDeclarationBody, input)
+    ? parseToolOutputJson(rawToolOutput)
+    : null;
+  const toolOutput =
+    codeModeControlJson?.status === "completed" && Object.hasOwn(codeModeControlJson, "value")
+      ? stringifyScenarioToolOutput(codeModeControlJson.value)
+      : rawToolOutput;
+  const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
+    buildScenarioToolCallEvents(toolDeclarationBody, name, args);
   const allInputText = extractAllRequestTexts(input, body);
   const scenarioToolOutput =
     toolOutput ||
@@ -212,6 +480,13 @@ async function buildResponsesPayload(
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  if (
+    codeModeControlJson?.status === "waiting" &&
+    typeof codeModeControlJson.runId === "string" &&
+    hasToolDefinition(toolDeclarationBody, "wait")
+  ) {
+    return buildRawToolCallEventsWithArgs("wait", { runId: codeModeControlJson.runId });
+  }
   const memoryToolUnavailable =
     toolJson?.unavailable === true ||
     toolJson?.disabled === true ||
@@ -255,17 +530,11 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
-  const canCallMockSubagentTool =
-    QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText) ||
-    /subagent fanout synthesis check/i.test(allInputText) ||
-    /forked subagent context qa check/i.test(allInputText) ||
-    /delegate (?:one |a )bounded qa task/i.test(allInputText) ||
-    /subagent handoff/i.test(allInputText) ||
-    buildExplicitSessionsSpawnArgs(prompt) !== null;
-  const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn") || canCallMockSubagentTool;
+  const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
+  const canCallSessionsSpawn =
+    hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
   const canCallSessionsYield =
-    hasDeclaredTool(body, "sessions_yield") ||
-    QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText);
+    hasToolDefinition(toolDeclarationBody, "sessions_yield") || hasCallableCodeMode;
   const toolProgressTurn = extractLastMatchingUserTurn(input, /tool progress(?: error)? qa check/i);
   // Progress scenarios share full session transcripts. Scope completion to
   // the selected prompt so an older turn's tool output cannot finish this one.
@@ -422,6 +691,11 @@ async function buildResponsesPayload(
       );
     }
   }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
+    return buildAssistantEvents(QA_SUBAGENT_DIRECT_FALLBACK_MARKER);
+  }
+  // Protected completion context is excluded from the current user prompt;
+  // ignoring it replays the historical kickoff and recursively spawns workers.
   if (
     allInputText.includes(QA_SUBAGENT_DIRECT_FALLBACK_MARKER) &&
     /Internal task completion event/i.test(allInputText)
@@ -444,7 +718,7 @@ async function buildResponsesPayload(
     }
   }
   if (/remember this fact/i.test(prompt)) {
-    return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
+    return buildAssistantEvents(buildAssistantText(input, body));
   }
   if (isActiveEmptyResponseSideEffectRecovery) {
     if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
@@ -763,6 +1037,18 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents("");
   }
+  if (QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE.test(allInputText)) {
+    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-MSTEAMS-THREAD-DEDUPE-OK";
+    const target = /msteams message target:\s*`([^`]+)`/iu.exec(prompt)?.[1]?.trim();
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: marker,
+        ...(target ? { target } : {}),
+      });
+    }
+    return buildAssistantEvents(marker);
+  }
   if (QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(
       exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-FALLBACK-OK",
@@ -776,6 +1062,20 @@ async function buildResponsesPayload(
   }
   if (whatsAppStickerMarker) {
     return buildAssistantEvents(whatsAppStickerMarker);
+  }
+  const slackMpimHistoryRecall = QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE.exec(prompt);
+  if (slackMpimHistoryRecall) {
+    const [, botReplyPrefix, recalledMarker, missingMarker] = slackMpimHistoryRecall;
+    const nonce = botReplyPrefix
+      ? extractSlackMpimRetainedBotNonce(prompt, botReplyPrefix)
+      : undefined;
+    return buildAssistantEvents(
+      nonce && recalledMarker ? `${recalledMarker}_${nonce}` : (missingMarker ?? ""),
+    );
+  }
+  const slackMpimHistorySeed = QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE.exec(prompt)?.[1];
+  if (slackMpimHistorySeed) {
+    return buildAssistantEvents(buildSlackMpimHistoryBotReply(slackMpimHistorySeed));
   }
   if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
     return buildAssistantEvents(promptExactMarkerDirective);
@@ -1204,7 +1504,7 @@ async function buildResponsesPayload(
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
     !toolOutput &&
-    hasToolDefinition(body, "image_generate")
+    (hasToolDefinition(body, "image_generate") || hasCodeModeExecSurface(body))
   ) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
@@ -1212,7 +1512,53 @@ async function buildResponsesPayload(
       size: "1024x1024",
     });
   }
-  if (canCallSessionsSpawn && /subagent fanout synthesis check/i.test(allInputText)) {
+  const isSubagentFanoutPrompt = /subagent fanout synthesis check/i.test(allInputText);
+  const currentFanoutInstructions = extractAllRequestTexts(
+    input.filter((item) => item.role === "system" || item.role === "developer"),
+    body,
+  );
+  const fanoutRequiresFinalMessage =
+    /visible source replies are not automatically delivered for this run\.\s*use `?message\(action=send\)`?[\s\S]*set `?final=true`?/i.test(
+      currentFanoutInstructions,
+    );
+  // Delivery mode belongs to this turn's instructions, not earlier transcript
+  // turns whose private-reply policy may no longer apply.
+  const fanoutHasPrivateSourceReply =
+    isSubagentFanoutPrompt &&
+    (fanoutRequiresFinalMessage ||
+      /visible reply must use `?message\(action=send\)`?;\s*final text is private/i.test(
+        currentFanoutInstructions,
+      ));
+  const fanoutRequiresMessageTool =
+    fanoutHasPrivateSourceReply &&
+    (hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode);
+  if (scenarioState.subagentFanoutPhase === 3 && fanoutRequiresMessageTool && toolOutput) {
+    return buildAssistantEvents("");
+  }
+  const completeSubagentFanout = () => {
+    scenarioState.subagentFanoutPhase = 3;
+    const message = "subagent-1: ok\nsubagent-2: ok";
+    return fanoutRequiresMessageTool
+      ? buildToolCallEventsWithArgs("message", {
+          action: "send",
+          message,
+          ...(fanoutRequiresFinalMessage ? { final: true } : {}),
+        })
+      : buildAssistantEvents(message);
+  };
+  if (
+    !toolOutput &&
+    /subagent fanout synthesis check/i.test(prompt) &&
+    scenarioState.subagentFanoutPhase !== 0
+  ) {
+    scenarioState.subagentFanoutPhase = 0;
+    scenarioState.subagentFanoutCompletedWorkers.clear();
+  }
+  // A later requester-settle wake must replay the completed synthesis without spawning again.
+  if (isSubagentFanoutPrompt && scenarioState.subagentFanoutPhase === 3) {
+    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
+  }
+  if (canCallSessionsSpawn && isSubagentFanoutPrompt) {
     if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
       scenarioState.subagentFanoutPhase = 1;
       return buildToolCallEventsWithArgs("sessions_spawn", {
@@ -1230,12 +1576,37 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
-    scenarioState.subagentFanoutPhase = 3;
-    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
+  if (scenarioState.subagentFanoutPhase === 2) {
+    if (/\bALPHA-OK\b/i.test(allInputText)) {
+      scenarioState.subagentFanoutCompletedWorkers.add("alpha");
+    }
+    if (/\bBETA-OK\b/i.test(allInputText)) {
+      scenarioState.subagentFanoutCompletedWorkers.add("beta");
+    }
+    // A frozen child envelope may deny message. Its private final cannot be
+    // published; keep the batch for the requester-owned all-settled wake.
+    if (fanoutHasPrivateSourceReply && !fanoutRequiresMessageTool) {
+      return buildAssistantEvents("");
+    }
+    if (scenarioState.subagentFanoutCompletedWorkers.size === 2) {
+      return completeSubagentFanout();
+    }
+    if (canCallSessionsYield) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: "Waiting for both QA fanout workers to finish.",
+      });
+    }
+    if (fanoutRequiresMessageTool) {
+      // Restricted completion turns cannot yield; stay silent until both
+      // workers settle instead of advancing past the sole visible reply.
+      return buildAssistantEvents("");
+    }
+    if (toolOutput) {
+      return completeSubagentFanout();
+    }
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(prompt);
-  if (explicitSessionsSpawnArgs && !toolOutput) {
+  if (explicitSessionsSpawnArgs && canCallSessionsSpawn && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
   if (canCallSessionsSpawn && /forked subagent context qa check/i.test(prompt) && !toolOutput) {
@@ -1369,7 +1740,7 @@ async function buildResponsesPayload(
   if (QA_NATIVE_STOP_DELAY_PROMPT_RE.test(prompt)) {
     await sleep(QA_NATIVE_STOP_DELAY_MS);
   }
-  return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
+  return buildAssistantEvents(buildAssistantText(input, body));
 }
 
 export async function startQaMockOpenAiServer(params?: {
@@ -1382,6 +1753,7 @@ export async function startQaMockOpenAiServer(params?: {
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const scenarioState: MockScenarioState = {
     anthropicThinkingErrorScenarioKeys: new Set<string>(),
+    subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
     subagentFanoutPhase: 0,
     subagentHandoffSpawned: false,
     toolLoopReadAttempts: 0,
@@ -1422,6 +1794,7 @@ export async function startQaMockOpenAiServer(params?: {
       inflightRequests.delete(inflightRequestId);
     }
     const resolvedModel = typeof request.body.model === "string" ? request.body.model : "";
+    const plannedTool = extractScenarioPlannedTool(events);
     recordRequest({
       raw: request.raw,
       body: request.body,
@@ -1433,8 +1806,11 @@ export async function startQaMockOpenAiServer(params?: {
       providerVariant: resolveProviderVariant(resolvedModel),
       imageInputCount: countImageInputs(input),
       plannedToolCallId: extractPlannedToolCallId(events),
-      plannedToolName: extractPlannedToolName(events),
-      plannedToolArgs: extractPlannedToolArgs(events),
+      plannedToolName: plannedTool.name,
+      ...(plannedTool.wireName && plannedTool.wireName !== plannedTool.name
+        ? { plannedWireToolName: plannedTool.wireName }
+        : {}),
+      plannedToolArgs: plannedTool.args,
       toolOutputCallId: extractToolOutputCallId(input) || undefined,
       ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
     });
@@ -1642,6 +2018,7 @@ export async function startQaMockOpenAiServer(params?: {
           streamEvents,
           model: normalizedModel,
         } = await buildMessagesPayload(body, scenarioState, buildResponsesPayload);
+        const plannedTool = extractScenarioPlannedTool(events);
         // Record the adapted request snapshot so /debug/requests gives the QA
         // suite the same plannedToolName / allInputText / toolOutput signals
         // on the Anthropic route that the OpenAI route already exposes. This
@@ -1658,8 +2035,11 @@ export async function startQaMockOpenAiServer(params?: {
           providerVariant: resolveProviderVariant(normalizedModel),
           imageInputCount: countImageInputs(input),
           plannedToolCallId: extractPlannedToolCallId(events),
-          plannedToolName: extractPlannedToolName(events),
-          plannedToolArgs: extractPlannedToolArgs(events),
+          plannedToolName: plannedTool.name,
+          ...(plannedTool.wireName && plannedTool.wireName !== plannedTool.name
+            ? { plannedWireToolName: plannedTool.wireName }
+            : {}),
+          plannedToolArgs: plannedTool.args,
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
           ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
         });

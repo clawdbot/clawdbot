@@ -254,17 +254,20 @@ private func detectedSetupResponse(
               "id": "ollama",
               "brandId": "ollama",
               "label": "Ollama",
-              "hint": "Connect to an Ollama server and select a cloud or local model"
+              "hint": "Connect to an Ollama server and select a cloud or local model",
+              "actionLabel": "Choose connection"
             }, {
               "id": "llama-cpp",
               "brandId": "llama-cpp",
               "label": "Local model (llama.cpp)",
-              "hint": "Download and run a private GGUF model"
+              "hint": "Download and run a private GGUF model",
+              "actionLabel": "Review download"
             }, {
               "id": "lmstudio",
               "brandId": "lmstudio",
               "label": "LM Studio",
               "hint": "Connect to a running LM Studio server and use an already loaded model",
+              "actionLabel": "Connect server",
               "icon": "https://cdn.simpleicons.org/lmstudio",
               "website": "https://lmstudio.ai/download"
             }],
@@ -681,6 +684,7 @@ struct OnboardingAISetupTests {
                 id: "ollama",
                 label: "Wire Ollama",
                 hint: "Wire hint",
+                actionLabel: "Choose connection",
                 brandId: "ollama",
                 icon: "https://cdn.simpleicons.org/ollama",
                 website: "https://ollama.com/download"),
@@ -688,6 +692,7 @@ struct OnboardingAISetupTests {
                 id: "llama-cpp",
                 label: "Local model (llama.cpp)",
                 hint: "Private GGUF model",
+                actionLabel: "Review download",
                 brandId: "llama-cpp",
                 icon: nil,
                 website: nil),
@@ -695,6 +700,7 @@ struct OnboardingAISetupTests {
                 id: "lmstudio-local",
                 label: "LM Studio",
                 hint: "Running local service",
+                actionLabel: "Connect server",
                 brandId: "lmstudio",
                 icon: "https://cdn.simpleicons.org/lmstudio",
                 website: "https://lmstudio.ai/download"),
@@ -706,6 +712,7 @@ struct OnboardingAISetupTests {
 
         #expect(options.map(\.id) == ["llama-cpp"])
         #expect(options.first?.label == "Local model (llama.cpp)")
+        #expect(options.first?.actionLabel == "Review download")
         #expect(OnboardingAISetupModel.ProviderWizardKind.prepare.startMethod ==
             "openclaw.setup.prepare.start")
     }

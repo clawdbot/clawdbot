@@ -34,6 +34,13 @@ function buildAnnounceIsolatedAgentTurnJob(name: string): CronAddInput {
   };
 }
 
+function buildWebhookIsolatedAgentTurnJob(name: string): CronAddInput {
+  return {
+    ...buildIsolatedAgentTurnJob(name),
+    delivery: { mode: "webhook", to: "https://example.invalid/cron-completion" },
+  };
+}
+
 function buildAnnounceWithFailureDestinationJob(name: string): CronAddInput {
   return {
     ...buildAnnounceIsolatedAgentTurnJob(name),
@@ -242,6 +249,22 @@ async function runIsolatedJobAndReadState(params: {
 }
 
 describe("CronService persists delivered status", () => {
+  it("records requested webhook delivery as unknown until its detached send is observed", async () => {
+    let finishedDeliveryStatus: string | undefined;
+    const updated = await runIsolatedJobAndReadState({
+      job: buildWebhookIsolatedAgentTurnJob("webhook-pending"),
+      onFinished: (event) => {
+        finishedDeliveryStatus = event.deliveryStatus;
+      },
+    });
+
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBeUndefined();
+    expect(updated?.state.lastDeliveryStatus).toBe("unknown");
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
+    expect(finishedDeliveryStatus).toBe("unknown");
+  });
+
   it("persists lastDelivered=true when isolated job reports delivered", async () => {
     const updated = await runIsolatedJobAndReadState({
       job: buildAnnounceIsolatedAgentTurnJob("delivered-true"),

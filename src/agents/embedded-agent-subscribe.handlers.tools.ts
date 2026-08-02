@@ -55,6 +55,7 @@ import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  readMessageToolSourceReplyText,
 } from "./embedded-agent-message-tool-source-reply.js";
 import {
   isMessagingTool,
@@ -861,6 +862,21 @@ async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
+  const recordApprovalPromptDeliveryFailure = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
+    const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
+    ctx.state.lastToolError = (
+      ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx)
+    )({
+      toolName,
+      meta: approvalMeta,
+      executionStarted: false,
+      outcome: "failure",
+      failure: { error: `Approval prompt delivery failed: ${message}` },
+    }).lastToolError;
+    ctx.state.deterministicApprovalPromptSent = false;
+  };
   const hasStructuredMedia = Boolean(
     result &&
     typeof result === "object" &&
@@ -893,8 +909,8 @@ async function emitToolResultOutput(params: {
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
-    } catch {
-      ctx.state.deterministicApprovalPromptSent = false;
+    } catch (error) {
+      recordApprovalPromptDeliveryFailure(error);
     } finally {
       ctx.state.deterministicApprovalPromptPending = false;
     }
@@ -922,8 +938,8 @@ async function emitToolResultOutput(params: {
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
-    } catch {
-      ctx.state.deterministicApprovalPromptSent = false;
+    } catch (error) {
+      recordApprovalPromptDeliveryFailure(error);
     } finally {
       ctx.state.deterministicApprovalPromptPending = false;
     }
@@ -1556,22 +1572,31 @@ export async function handleToolExecutionEnd(
     });
     ctx.trimMessagingToolSent();
   }
+  const deliveredCurrentSourceReply =
+    didDeliverMessagingResult &&
+    isDeliveredMessageToolOnlySourceReplyResult({
+      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+      toolName,
+      args: startArgs,
+      result,
+      isError: isToolError,
+    });
+  if (deliveredCurrentSourceReply) {
+    ctx.state.messageToolOnlySourceReplyDelivered = true;
+    const sourceReplyText = readMessageToolSourceReplyText(startArgs);
+    const normalizedSourceReplyText = sourceReplyText
+      ? normalizeTextForComparison(sourceReplyText)
+      : "";
+    if (normalizedSourceReplyText) {
+      ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
+      ctx.trimMessagingToolSent();
+    }
+    ctx.params.onDeliveredMessageToolOnlySourceReply?.();
+  }
   if (didDeliverMessagingResult && isMessagingSend) {
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();
-    }
-    if (
-      isDeliveredMessageToolOnlySourceReplyResult({
-        sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
-        toolName,
-        args: startArgs,
-        result,
-        isError: isToolError,
-      })
-    ) {
-      ctx.state.messageToolOnlySourceReplyDelivered = true;
-      ctx.params.onDeliveredMessageToolOnlySourceReply?.();
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {

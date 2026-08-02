@@ -1144,7 +1144,6 @@ describe("createMediaGenerationTaskLifecycle", () => {
         },
         sourceTool: "music_generate",
         bestEffortDeliver: true,
-        durableGeneratedMediaHandoff: true,
       }),
     );
     const announceParams = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock

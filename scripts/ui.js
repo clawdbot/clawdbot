@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
@@ -301,6 +302,10 @@ function resolveScriptAction(action) {
   return null;
 }
 
+export function assertUiBuildOutputRoot(params = {}) {
+  assertRealOutputRoot(path.join(params.rootDir ?? repoRoot, "dist"), { fs: params.fs ?? fs });
+}
+
 export function main(argv = process.argv.slice(2)) {
   const [action, ...rest] = argv;
   if (!action) {
@@ -312,6 +317,9 @@ export function main(argv = process.argv.slice(2)) {
   if (action !== "install" && !script) {
     usage();
     process.exit(2);
+  }
+  if (action === "build") {
+    assertUiBuildOutputRoot();
   }
 
   if (process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" && action === "build") {

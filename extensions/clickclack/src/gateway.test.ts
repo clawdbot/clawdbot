@@ -26,9 +26,7 @@ const mocks = vi.hoisted(() => ({
     events: vi.fn(),
     eventPage: vi.fn(),
     websocket: vi.fn(),
-    channelMessages: vi.fn(),
-    directMessages: vi.fn(),
-    thread: vi.fn(),
+    message: vi.fn(),
     setBotCommands: vi.fn(),
   },
   handleClickClackInbound: vi.fn(),
@@ -40,11 +38,15 @@ vi.mock("./access.js", () => ({
   resolveClickClackInboundAccess: mocks.resolveClickClackInboundAccess,
 }));
 
-vi.mock("./http-client.js", () => ({
-  createClickClackClient: mocks.createClickClackClient,
-  normalizeClickClackCorrelationId: (value: unknown) =>
-    typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(value) ? value : undefined,
-}));
+vi.mock("./http-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./http-client.js")>();
+  return {
+    ClickClackHttpError: actual.ClickClackHttpError,
+    createClickClackClient: mocks.createClickClackClient,
+    normalizeClickClackCorrelationId: (value: unknown) =>
+      typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(value) ? value : undefined,
+  };
+});
 
 vi.mock("./inbound.js", () => ({
   handleClickClackInbound: mocks.handleClickClackInbound,
@@ -139,26 +141,24 @@ describe("ClickClack gateway", () => {
       commandAuthorized: true,
     });
     mocks.resolveWorkspaceId.mockResolvedValue("workspace-1");
-    mocks.client.channelMessages.mockResolvedValue([
-      {
-        id: "msg-1",
-        workspace_id: "workspace-1",
-        channel_id: "chan-1",
-        author_id: "human-1",
-        thread_root_id: "msg-1",
-        body: "hello",
-        body_format: "markdown",
+    mocks.client.message.mockResolvedValue({
+      id: "msg-1",
+      workspace_id: "workspace-1",
+      channel_id: "chan-1",
+      author_id: "human-1",
+      thread_root_id: "msg-1",
+      body: "hello",
+      body_format: "markdown",
+      created_at: "2026-01-01T00:00:00.000Z",
+      author: {
+        id: "human-1",
+        kind: "human",
+        display_name: "Human",
+        handle: "human",
+        avatar_url: "",
         created_at: "2026-01-01T00:00:00.000Z",
-        author: {
-          id: "human-1",
-          kind: "human",
-          display_name: "Human",
-          handle: "human",
-          avatar_url: "",
-          created_at: "2026-01-01T00:00:00.000Z",
-        },
       },
-    ]);
+    });
   });
 
   it("uses the private API base for REST and realtime startup", async () => {
@@ -436,6 +436,41 @@ describe("ClickClack gateway", () => {
     await run;
   });
 
+  it("replays a transient authoritative message fetch before committing its cursor", async () => {
+    const firstSocket = new FakeSocket();
+    const secondSocket = new FakeSocket();
+    const event = createBacklogEvent(1, "message.created");
+    mocks.client.eventPage
+      .mockResolvedValueOnce({ events: [], tailCursor: "" })
+      .mockResolvedValueOnce({ events: [event] })
+      .mockResolvedValueOnce({ events: [] });
+    mocks.client.websocket.mockReturnValueOnce(firstSocket).mockReturnValueOnce(secondSocket);
+    mocks.client.message.mockRejectedValueOnce(new Error("message fetch failed"));
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    emitMessageEvent(firstSocket, 1);
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(2));
+    expect(mocks.client.message).toHaveBeenCalledTimes(2);
+    expect(mocks.handleClickClackInbound).toHaveBeenCalledOnce();
+    expect(firstSocket.close).toHaveBeenCalledOnce();
+    expect(mocks.client.eventPage).toHaveBeenNthCalledWith(2, "workspace-1", {
+      afterCursor: "",
+      limit: 500,
+    });
+    expect(mocks.client.websocket).toHaveBeenLastCalledWith("workspace-1", "cursor-1");
+    expect(ctx.log?.warn).toHaveBeenCalledWith(
+      "[default] ClickClack event processing failed; reconnecting: message fetch failed",
+    );
+
+    abort.abort();
+    await run;
+  });
+
   it("does not serialize unrelated gateway streams", async () => {
     const slowSocket = new FakeSocket();
     const fastSocket = new FakeSocket();
@@ -523,7 +558,7 @@ describe("ClickClack gateway", () => {
       token: "test-token",
       correlationId: "fakeco.case_1",
     });
-    expect(mocks.client.channelMessages).toHaveBeenCalledWith("chan-1", 1, 10);
+    expect(mocks.client.message).toHaveBeenCalledWith("msg-1");
     expect(mocks.handleClickClackInbound).toHaveBeenCalledWith(
       expect.objectContaining({ correlationId: "fakeco.case_1" }),
     );

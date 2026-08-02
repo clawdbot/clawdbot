@@ -199,13 +199,12 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     report: result.reportPath,
     summary: result.summaryPath,
   });
-  if (!runOptions.allowFailures) {
-    const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-      result.summaryPath,
-    );
-    if (blockingScenarioCount > 0) {
-      process.exitCode = 1;
-    }
+  const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+    result.summaryPath,
+    { requireExecutedScenario: runOptions.allowFailures === true },
+  );
+  if (!runOptions.allowFailures && blockingScenarioCount > 0) {
+    process.exitCode = 1;
   }
   return result;
 }

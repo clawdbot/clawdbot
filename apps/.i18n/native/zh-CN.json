@@ -21999,14 +21999,14 @@
       "translated": "设置本地模型"
     },
     {
-      "id": "native.apple.506a932536c642c2",
-      "source": "Download or prepare a local model on this Gateway.",
-      "translated": "在此 Gateway 上下载或准备本地模型。"
+      "id": "native.apple.780c1aa1c8868cc4",
+      "source": "Connect a local model service, or prepare a model on this Gateway.",
+      "translated": "连接本地模型服务，或在此 Gateway 上准备模型。"
     },
     {
-      "id": "native.apple.d31411a9f3c68c33",
-      "source": "Set up / Download model",
-      "translated": "设置 / 下载模型"
+      "id": "native.apple.c218bd844ba8a0ac",
+      "source": "Connect / Set up",
+      "translated": "连接 / 设置"
     },
     {
       "id": "native.apple.7fc409b6aaa6d3b9",
@@ -22039,9 +22039,9 @@
       "translated": "登录"
     },
     {
-      "id": "native.apple.b62dfd708d5cfb14",
-      "source": "The model is downloaded and prepared on this Gateway.",
-      "translated": "模型已在此 Gateway 上下载并准备就绪。"
+      "id": "native.apple.97b24c854f768998",
+      "source": "OpenClaw will detect and verify the prepared model before using it.",
+      "translated": "OpenClaw 会在使用前检测并验证已准备好的模型。"
     },
     {
       "id": "native.apple.869fe436119bb8a6",

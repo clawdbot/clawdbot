@@ -7,6 +7,7 @@ const relayMocks = vi.hoisted(() => ({
   close: vi.fn(),
   connect: vi.fn(async () => {}),
   publish: vi.fn(async () => "ok"),
+  send: vi.fn(async () => {}),
   replayedMessage: undefined as Event | undefined,
   subscriptions: [] as Array<{
     filter: Filter;
@@ -27,9 +28,13 @@ vi.mock("nostr-tools", async (importOriginal) => {
       auth = relayMocks.auth;
       close = relayMocks.close;
       connect = relayMocks.connect;
+      idleSince: number | undefined;
+      ongoingOperations = 0;
       publish = relayMocks.publish;
+      scheduleIdleClose = vi.fn();
+      send = relayMocks.send;
 
-      subscribe(
+      prepareSubscription(
         filters: Filter[],
         handlers: (typeof relayMocks.subscriptions)[number]["handlers"],
       ) {
@@ -61,7 +66,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
           }
           handlers.oneose?.();
         }
-        return { close: vi.fn() };
+        return { id: `sub:${relayMocks.subscriptions.length}`, close: vi.fn() };
       }
     },
   };
@@ -69,6 +74,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
 
 import { createBuzzQaRelayDriver } from "./relay-client.js";
 
+const RELAY_PUBLIC_KEY = "f".repeat(64);
 const credentials = parseBuzzQaCredentialPayload({
   relayUrl: "wss://relay.qa.example",
   roomId: "123e4567-e89b-42d3-a456-426614174000",
@@ -81,6 +87,16 @@ describe("Buzz QA relay driver", () => {
     vi.clearAllMocks();
     relayMocks.subscriptions.length = 0;
     relayMocks.replayedMessage = undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          self: RELAY_PUBLIC_KEY,
+          software: "https://github.com/block/buzz",
+        }),
+      })),
+    );
   });
 
   it("authenticates, verifies membership, and publishes a native mentioned thread event", async () => {

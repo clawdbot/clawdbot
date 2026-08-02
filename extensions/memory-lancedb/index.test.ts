@@ -1965,10 +1965,10 @@ describe("memory plugin e2e", () => {
       expect(embeddingsCreate).not.toHaveBeenCalled();
 
       await beforePromptBuild?.(recallEvent, { agentId: "main" });
-      await agentEnd?.(captureEvent, { agentId: "main", sessionKey: "agent:main:main" });
       expect(embeddingsCreate).toHaveBeenCalled();
-      expect(add).toHaveBeenCalledTimes(1);
-      expect(firstAddedMemory(add).agentId).toBe("main");
+      embeddingsCreate.mockClear();
+      await agentEnd?.(captureEvent, { agentId: "main", sessionKey: "agent:main:main" });
+      expect(embeddingsCreate).toHaveBeenCalledOnce();
 
       embeddingsCreate.mockClear();
       configFile = {

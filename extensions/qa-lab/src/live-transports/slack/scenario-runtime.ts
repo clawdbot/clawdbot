@@ -55,6 +55,7 @@ async function runSlackMessageScenario(params: {
         : params.environment.channelId;
     scenarioContext = { ...params.environment.context, channelId };
     const observedMessageStartIndex = params.environment.observedMessages.length;
+    const messageWriteCursor = params.environment.getMessageWriteCursor();
     const requestStartedAt = new Date();
     const sent = await sendSlackChannelMessage({
       channelId,
@@ -111,9 +112,13 @@ async function runSlackMessageScenario(params: {
         threadTs: requestThreadTs,
       });
     }
+    const capturedMessages = await params.environment.readMessageWrites(messageWriteCursor);
     const observedDetails = params.run.verifyObserved?.({
       finalMessage: reply.message,
-      messages: params.environment.observedMessages.slice(observedMessageStartIndex),
+      messages: [
+        ...params.environment.observedMessages.slice(observedMessageStartIndex),
+        ...capturedMessages,
+      ],
     });
     const afterReplyDetails = await params.run.afterReply?.(reply.message, {
       ...scenarioContext,

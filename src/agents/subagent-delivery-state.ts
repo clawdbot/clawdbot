@@ -26,8 +26,8 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
   entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
   entry.terminalOwner =
     entry.terminalOwner === "interrupted-recovery" &&
-    Number.isFinite(entry.endedAt) &&
-    entry.outcome?.status === "error" &&
+    Number.isFinite(entry.execution.endedAt) &&
+    entry.execution.outcome?.status === "error" &&
     entry.endedReason === "subagent-error" &&
     entry.pauseReason !== "sessions_yield"
       ? "interrupted-recovery"

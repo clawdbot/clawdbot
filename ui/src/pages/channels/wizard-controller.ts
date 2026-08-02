@@ -1,5 +1,6 @@
 // Drives a gateway channel-setup wizard session (wizard.start flow "channels")
 // as a step/answer state machine for the Control UI wizard modal.
+import type { WizardStep } from "../../api/types.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 
 type WizardGatewayClient = {
@@ -37,26 +38,7 @@ async function requestWithTimeout<T>(
   }
 }
 
-export type ChannelWizardStepOption = {
-  value: unknown;
-  label: string;
-  hint?: string;
-};
-
-export type ChannelWizardStep = {
-  id: string;
-  type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress" | "action";
-  title?: string;
-  message?: string;
-  format?: "plain";
-  options?: ChannelWizardStepOption[];
-  initialValue?: unknown;
-  placeholder?: string;
-  sensitive?: boolean;
-  executor?: "gateway" | "client";
-  externalUrl?: string;
-  deviceCode?: { code: string; expiresInMinutes?: number; message?: string };
-};
+export type ChannelWizardStep = WizardStep;
 
 type WizardNextResult = {
   sessionId?: string;

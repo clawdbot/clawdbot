@@ -7,6 +7,7 @@ import type {
   RealtimeVoiceBridgeCreateRequest,
 } from "openclaw/plugin-sdk/realtime-voice";
 import WebSocket, { type RawData } from "ws";
+import { appendOpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import {
   buildOpenAIQuicksilverDelegationPrompt,
   type OpenAIQuicksilverTranscriptEntry,
@@ -164,6 +165,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private closed = false;
   private closeNotified = false;
   private peer: OpenAIQuicksilverAudioPeerContract | undefined;
+  private pendingAudio: Buffer = Buffer.alloc(0);
   private ready = false;
   private sideband: ActiveSideband | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -181,7 +183,12 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   }
 
   sendAudio(audio: Buffer): void {
-    this.peer?.sendAudio(audio);
+    if (this.peer) {
+      this.peer.sendAudio(audio);
+    } else if (!this.closed && !this.abortController.signal.aborted) {
+      // Relay capture starts before asynchronous peer creation and may recycle its input buffers.
+      this.pendingAudio = appendOpenAIQuicksilverPendingAudio(this.pendingAudio, audio);
+    }
   }
 
   setMediaTimestamp(_ts: number): void {}
@@ -255,6 +262,10 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         () => undefined,
       );
       this.peer = await waitForConnectStep(peerPromise, connectSignal);
+      if (this.pendingAudio.length > 0) {
+        this.peer.sendAudio(this.pendingAudio);
+        this.pendingAudio = Buffer.alloc(0);
+      }
       const offerSdp = await waitForConnectStep(this.peer.createOffer(), connectSignal);
       const auth = await waitForConnectStep(this.config.resolveAuth(), connectSignal);
       const requestIds = {
@@ -535,6 +546,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private releaseResources(): void {
     releaseOpenAIQuicksilverSession(this);
     this.connected = false;
+    this.pendingAudio = Buffer.alloc(0);
     this.abortController.abort(new Error("GPT-Live gateway relay bridge closed"));
     this.consultController?.abort(new Error("GPT-Live delegation stopped"));
     this.consultController = undefined;
