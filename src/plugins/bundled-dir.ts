@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { isVitestRuntimeEnv } from "../infra/env.js";
+import { isTruthyEnvValue, isVitestRuntimeEnv } from "../infra/env.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
@@ -37,11 +37,6 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
     fs.existsSync(path.join(packageRoot, "src")) &&
     fs.existsSync(path.join(packageRoot, "extensions"))
   );
-}
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
 function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boolean {

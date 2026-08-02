@@ -5,7 +5,7 @@ function errorCode(error) {
   return error && typeof error === "object" && "code" in error ? error.code : undefined;
 }
 
-export const resolveTrustedExecutablePath = pluginSecretRefSetup.resolveTrustedExecutablePath;
+const resolveTrustedExecutablePath = pluginSecretRefSetup.resolveTrustedExecutablePath;
 export const resolveTrustedOnePasswordDirectoryPath =
   pluginSecretRefSetup.resolveTrustedDirectoryPath;
 

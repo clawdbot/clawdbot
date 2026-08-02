@@ -35,7 +35,6 @@ import type {
 
 let providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
 const defaultProviderRuntimePluginCache = new PluginLruCache<ProviderPlugin | null>(128);
-const PREPARED_PROVIDER_RUNTIME_SURFACES = ["channel"] as const;
 
 type ProviderRuntimePluginLookupParams = {
   provider: string;
@@ -151,23 +150,6 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
     : undefined;
   if (activePlugin) {
     return activePlugin;
-  }
-  for (const surface of PREPARED_PROVIDER_RUNTIME_SURFACES) {
-    const registry = getLoadedRuntimePluginRegistry({
-      env: params.lookup.env,
-      workspaceDir: params.lookup.workspaceDir,
-      surface,
-    });
-    const plugin = registry
-      ? findProviderRuntimePluginInRegistry({
-          registry,
-          provider: params.lookup.provider,
-          apiOwnerHint: params.apiOwnerHint,
-        })
-      : undefined;
-    if (plugin) {
-      return plugin;
-    }
   }
   return undefined;
 }

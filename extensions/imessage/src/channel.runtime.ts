@@ -16,7 +16,9 @@ export async function sendIMessageOutbound(params: {
   to: string;
   text: string;
   mediaUrl?: string;
+  mediaAccess?: Parameters<IMessageSendFn>[2]["mediaAccess"];
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: Parameters<IMessageSendFn>[2]["mediaReadFile"];
   audioAsVoice?: boolean;
   accountId?: string;
   deps?: { [channelId: string]: unknown };
@@ -38,7 +40,9 @@ export async function sendIMessageOutbound(params: {
   const result = await send(params.to, params.text, {
     config: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
     ...(params.audioAsVoice ? { audioAsVoice: true } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,

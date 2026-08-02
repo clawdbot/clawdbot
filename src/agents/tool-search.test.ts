@@ -1037,14 +1037,40 @@ describe("Tool Search", () => {
     expect(details.ok).toBe(true);
     const telemetry = details.telemetry as {
       catalogSize?: number;
+      counterScope?: string;
       searchCount?: number;
       describeCount?: number;
       callCount?: number;
     };
     expect(telemetry.catalogSize).toBe(2);
+    expect(telemetry.counterScope).toMatch(/^[A-Za-z0-9_-]{16}$/);
     expect(telemetry.searchCount).toBe(1);
     expect(telemetry.describeCount).toBe(1);
     expect(telemetry.callCount).toBe(1);
+  });
+
+  it("changes the telemetry counter scope when a catalog is replaced", async () => {
+    const config = { tools: { toolSearch: true } } as never;
+    const catalogRef = createToolSearchCatalogRef();
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    applyToolSearchCatalog({
+      tools: [codeTool, pluginTool("fake_first", "First capability")],
+      config,
+      catalogRef,
+    });
+    const firstScope = expectDefined(catalogRef.current, "first catalog").counterScope;
+    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
+    await runtime.search("fake_first");
+    expect(runtime.telemetry()).toMatchObject({ counterScope: firstScope, searchCount: 1 });
+
+    applyToolSearchCatalog({
+      tools: [codeTool, pluginTool("fake_second", "Second capability")],
+      config,
+      catalogRef,
+    });
+    const replacementScope = expectDefined(catalogRef.current, "second catalog").counterScope;
+    expect(replacementScope).not.toBe(firstScope);
+    expect(runtime.telemetry()).toMatchObject({ counterScope: replacementScope, searchCount: 0 });
   });
 
   it("scopes catalogs by run id when attempts share a session", async () => {
@@ -1653,6 +1679,10 @@ describe("Tool Search", () => {
       config,
       sessionId: "session-client",
     });
+    const initialScope = expectDefined(
+      testCatalogRefs.get("session:session-client")?.current,
+      "initial client catalog",
+    ).counterScope;
 
     const clientTool = fakeTool("client_pick_file", "Ask the client to pick a file");
     const compacted = addClientToolsToToolSearchCatalog({
@@ -1663,9 +1693,14 @@ describe("Tool Search", () => {
 
     expect(compacted.tools).toEqual([]);
     expect(compacted.catalogToolCount).toBe(1);
-    const clientEntry = testCatalogRefs
-      .get("session:session-client")
-      ?.current?.entries.find((entry) => entry.id === "client:client:client_pick_file");
+    const appendedCatalog = expectDefined(
+      testCatalogRefs.get("session:session-client")?.current,
+      "appended client catalog",
+    );
+    expect(appendedCatalog.counterScope).toBe(initialScope);
+    const clientEntry = appendedCatalog.entries.find(
+      (entry) => entry.id === "client:client:client_pick_file",
+    );
     expect(clientEntry?.source).toBe("client");
 
     const executeTool = vi.fn(async () => jsonResult({ status: "ok" }));
@@ -2540,8 +2575,10 @@ describe("Tool Search", () => {
     expect(first.catalogRegistered).toBe(true);
     expect(first.catalogReused).toBe(false);
 
-    const catalogAfterFirst = testCatalogRefs.get(`session:${sessionId}`)?.current;
-    expect(catalogAfterFirst).toBeDefined();
+    const catalogAfterFirst = expectDefined(
+      testCatalogRefs.get(`session:${sessionId}`)?.current,
+      "initial reusable catalog",
+    );
 
     const second = applyToolSearchCatalog({
       tools: [codeTool, alpha, beta],
@@ -2551,6 +2588,9 @@ describe("Tool Search", () => {
     expect(second.catalogRegistered).toBe(true);
     expect(second.catalogReused).toBe(true);
     expect(testCatalogRefs.get(`session:${sessionId}`)?.current).toBe(catalogAfterFirst);
+    expect(testCatalogRefs.get(`session:${sessionId}`)?.current?.counterScope).toBe(
+      catalogAfterFirst.counterScope,
+    );
 
     const laterRef = createToolSearchCatalogRef();
     const later = applyToolSearchCatalog({
@@ -2562,10 +2602,11 @@ describe("Tool Search", () => {
     });
     expect(later.catalogReused).toBe(true);
     expect(laterRef.current).not.toBe(catalogAfterFirst);
-    expect(laterRef.current?.entries).toBe(catalogAfterFirst?.entries);
+    expect(laterRef.current?.entries).toBe(catalogAfterFirst.entries);
+    expect(laterRef.current?.counterScope).not.toBe(catalogAfterFirst.counterScope);
   });
 
-  it("restores an unchanged catalog after run cleanup", () => {
+  it("restores an unchanged catalog after run cleanup", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const alpha = pluginTool("fake_xrun_alpha", "Alpha tool");
     const beta = pluginTool("fake_xrun_beta", "Beta tool");
@@ -2581,8 +2622,18 @@ describe("Tool Search", () => {
       catalogRef: firstRef,
     });
     expect(first.catalogReused).toBe(false);
-    const firstAlphaEntry = firstRef.current?.entries.find((entry) => entry.name === alpha.name);
+    const firstCatalog = expectDefined(firstRef.current, "first run catalog");
+    const firstAlphaEntry = firstCatalog.entries.find((entry) => entry.name === alpha.name);
     expect(firstAlphaEntry).toBeDefined();
+    const firstRuntime = new ToolSearchRuntime(
+      { catalogRef: firstRef },
+      resolveToolSearchConfig(config),
+    );
+    await firstRuntime.search(alpha.name);
+    expect(firstRuntime.telemetry()).toMatchObject({
+      counterScope: firstCatalog.counterScope,
+      searchCount: 1,
+    });
 
     clearToolSearchCatalog({
       sessionId,
@@ -2601,10 +2652,12 @@ describe("Tool Search", () => {
     });
     expect(second.catalogRegistered).toBe(true);
     expect(second.catalogReused).toBe(true);
-    expect(secondRef.current).toBeDefined();
-    expect(secondRef.current?.entries.find((entry) => entry.name === alpha.name)).toBe(
+    const restoredCatalog = expectDefined(secondRef.current, "restored run catalog");
+    expect(restoredCatalog.entries.find((entry) => entry.name === alpha.name)).toBe(
       firstAlphaEntry,
     );
+    expect(restoredCatalog.counterScope).not.toBe(firstCatalog.counterScope);
+    expect(restoredCatalog.searchCount).toBe(0);
   });
 
   it("does not retain hook-bound catalogs, including prewrapped tools", () => {

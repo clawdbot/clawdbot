@@ -23,7 +23,20 @@ describe("control reply display projection", () => {
     };
 
     expect(stripSuppressedControlReplyToken("NO_REPLY")).toBe("");
-    expect(projectChatDisplayMessages([message])).toEqual([message]);
+    expect(projectChatDisplayMessages([message])).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "NO_REPLY" },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png" },
+            omitted: true,
+            bytes: 2,
+          },
+        ],
+      },
+    ]);
   });
 
   it("strips a standalone control token beside visible text", () => {

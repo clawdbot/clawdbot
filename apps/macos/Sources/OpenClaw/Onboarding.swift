@@ -625,7 +625,6 @@ struct OnboardingView: View {
     @State var onboardingSkillsModel = SkillsSettingsModel()
     @State var systemAgentState = OnboardingSystemAgentChatState()
     @State var aiSetup = OnboardingAISetupModel()
-    @State var memoryImport = OnboardingMemoryImportModel()
     @State var configuredGatewayProbe = OnboardingConfiguredGatewayProbe()
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
@@ -635,7 +634,6 @@ struct OnboardingView: View {
     let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
-    let memoryImportGateway: GatewayConnection
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
@@ -645,7 +643,6 @@ struct OnboardingView: View {
     let connectionPageIndex = 1
     let cliPageIndex = 2
     let aiPageIndex = 3
-    let memoryImportPageIndex = 4
     let onboardingChatPageIndex = 8
     let readyPageIndex = 9
 
@@ -672,43 +669,20 @@ struct OnboardingView: View {
 
     static func pageOrder(
         for mode: AppState.ConnectionMode,
-        requiresCLIInstall: Bool,
-        memoryImportEligible: Bool = false) -> [Int]
+        requiresCLIInstall: Bool) -> [Int]
     {
         switch mode {
-        case .remote:
-            // Remote mode skips local Gateway/workspace setup, but its Mac node
-            // still runs the matching CLI node-host runtime inside the app.
-            let setupPages = requiresCLIInstall ? [0, 1, 2, 3, 5] : [0, 1, 3, 5]
-            return setupPages + [9]
+        case .remote, .local:
+            // Native onboarding ends once inference works: install (when
+            // needed) plus AI setup. Everything after — memory import,
+            // permissions, channels, hatch — belongs to the dashboard's
+            // custodian onboarding, which Finish opens.
+            requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]
         case .unconfigured:
-            return [0, 1, 9]
-        case .local:
-            let memoryPages = memoryImportEligible ? [4] : []
-            let setupPages = (requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]) + memoryPages + [5]
-            return setupPages + [9]
+            // "Set up later" has no gateway to hand off to; keep the native
+            // ready page so the flow still ends with a visible outcome.
+            [0, 1, 9]
         }
-    }
-
-    static func shouldIncludeMemoryImportPage(
-        for mode: AppState.ConnectionMode,
-        modelEligible: Bool) -> Bool
-    {
-        mode == .local && modelEligible
-    }
-
-    static func reconciledPageCursor(
-        currentPage: Int,
-        previousOrder: [Int],
-        newOrder: [Int]) -> Int
-    {
-        guard !newOrder.isEmpty else { return 0 }
-        guard !previousOrder.isEmpty else { return min(max(0, currentPage), newOrder.count - 1) }
-        let previousCursor = min(max(0, currentPage), previousOrder.count - 1)
-        let previousPage = previousOrder[previousCursor]
-        if let exact = newOrder.firstIndex(of: previousPage) { return exact }
-        if let next = newOrder.firstIndex(where: { $0 > previousPage }) { return next }
-        return newOrder.count - 1
     }
 
     static func shouldActivateLocalGateway(afterCLIInstallFor mode: AppState.ConnectionMode) -> Bool {
@@ -727,14 +701,9 @@ struct OnboardingView: View {
     }
 
     var pageOrder: [Int] {
-        let requiresCLIInstall = !self.cliInstalled
-        let includeMemoryImport = Self.shouldIncludeMemoryImportPage(
+        Self.pageOrder(
             for: self.state.connectionMode,
-            modelEligible: self.memoryImport.pageEligible)
-        return Self.pageOrder(
-            for: self.state.connectionMode,
-            requiresCLIInstall: requiresCLIInstall,
-            memoryImportEligible: includeMemoryImport)
+            requiresCLIInstall: !self.cliInstalled)
     }
 
     var pageCount: Int {
@@ -783,7 +752,7 @@ struct OnboardingView: View {
     }
 
     var canAdvance: Bool {
-        !self.isCLIBlocking && !self.isAISetupBlocking && !self.memoryImport.isApplying
+        !self.isCLIBlocking && !self.isAISetupBlocking
     }
 
     struct LocalGatewayProbe: Equatable {
@@ -815,7 +784,6 @@ struct OnboardingView: View {
         self.gatewaySelectionPersister = gatewaySelectionPersister ?? {
             state.syncGatewayConfigNow()
         }
-        self.memoryImportGateway = aiSetupGateway
         _defaultsToLocalGateway = State(
             initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
         _gatewayDiscovery = State(initialValue: discoveryModel)

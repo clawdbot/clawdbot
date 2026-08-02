@@ -19,10 +19,10 @@ import {
 } from "./state-migrations.receipts.js";
 import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
 import {
+  LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   readLegacyMigrationSourceSnapshot,
-  resolveLegacyMigrationRelativePath,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
@@ -49,24 +49,6 @@ export function detectLegacyRestartSentinel(params: {
     sourcePath,
     hasLegacy: legacyMigrationSourceOrClaimMayExist(sourcePath, DOCTOR_CLAIM_SUFFIX),
   };
-}
-
-function relativeLegacyPath(stateDir: string, filePath: string): string {
-  return resolveLegacyMigrationRelativePath(stateDir, filePath, "restart sentinel", false);
-}
-
-async function readLegacySourceSnapshot(
-  stateRoot: Root,
-  stateDir: string,
-  sourcePath: string,
-): Promise<LegacySourceSnapshot> {
-  return readLegacyMigrationSourceSnapshot({
-    stateRoot,
-    stateDir,
-    sourcePath,
-    maxBytes: MAX_LEGACY_RESTART_SENTINEL_BYTES,
-    label: "restart sentinel",
-  });
 }
 
 function parseLegacyEnvelope(snapshot: LegacySourceSnapshot): RestartSentinelEnvelope | null {
@@ -139,59 +121,32 @@ function decideAndRecordMigration(params: {
   );
 }
 
-async function restoreClaim(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-}): Promise<string | null> {
-  const claimPath = `${params.sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-  try {
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath)))) {
-      return null;
-    }
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, params.sourcePath))) {
-      return `source path already exists: ${params.sourcePath}`;
-    }
-    await params.stateRoot.move(
-      relativeLegacyPath(params.stateDir, claimPath),
-      relativeLegacyPath(params.stateDir, params.sourcePath),
-    );
-    return null;
-  } catch (error) {
-    return String(error);
-  }
-}
-
 async function recoverInterruptedClaim(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
+  source: LegacyMigrationSourceClaim;
   env: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const claimPath = `${params.sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-  const claimRelativePath = relativeLegacyPath(params.stateDir, claimPath);
-  if (!(await params.stateRoot.exists(claimRelativePath))) {
+  if (!(await params.source.exists(true))) {
     return;
   }
-  if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, params.sourcePath)))) {
-    await params.stateRoot.move(
-      claimRelativePath,
-      relativeLegacyPath(params.stateDir, params.sourcePath),
-    );
+  if (!(await params.source.exists())) {
+    const restoreError = await params.source.restore();
+    if (restoreError) {
+      throw new Error(restoreError);
+    }
     return;
   }
   // Both paths can only be retired safely when the claimed bytes already have
   // an authoritative decision; otherwise preserve both for operator recovery.
   if (
     !readLegacyMigrationReceipt(
-      resolveLegacyMigrationSourceKey("restart-sentinel-json", params.sourcePath),
+      resolveLegacyMigrationSourceKey("restart-sentinel-json", params.source.sourcePath),
       params.env,
     )
   ) {
     throw new Error("legacy restart sentinel source and interrupted claim both exist");
   }
-  await readLegacySourceSnapshot(params.stateRoot, params.stateDir, claimPath);
-  await params.stateRoot.remove(claimRelativePath);
+  await params.source.read(true);
+  await params.source.remove({ skipSourceCheck: true });
 }
 
 function decisionChange(decision: MigrationDecision): string {
@@ -224,11 +179,25 @@ async function migrateWithExclusiveStateOwnership(params: {
   const warnings: string[] = [];
   const notices: string[] = [];
   const sourcePath = params.detected.sourcePath;
+  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
+    stateRoot: params.stateRoot,
+    stateDir: params.stateDir,
+    sourcePath,
+    label: "restart sentinel",
+    includeFilePath: false,
+    claimSuffix: DOCTOR_CLAIM_SUFFIX,
+    readSnapshot: (snapshotPath) =>
+      readLegacyMigrationSourceSnapshot({
+        stateRoot: params.stateRoot,
+        stateDir: params.stateDir,
+        sourcePath: snapshotPath,
+        maxBytes: MAX_LEGACY_RESTART_SENTINEL_BYTES,
+        label: "restart sentinel",
+      }),
+  });
   try {
     await recoverInterruptedClaim({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      sourcePath,
+      source,
       env: params.env,
     });
   } catch (error) {
@@ -237,13 +206,13 @@ async function migrateWithExclusiveStateOwnership(params: {
       warnings: [`Failed recovering a legacy restart sentinel Doctor claim: ${String(error)}`],
     };
   }
-  if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath)))) {
+  if (!(await source.exists())) {
     return { changes, warnings };
   }
 
   let snapshot: LegacySourceSnapshot;
   try {
-    snapshot = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, sourcePath);
+    snapshot = await source.read();
   } catch (error) {
     return {
       changes,
@@ -251,28 +220,19 @@ async function migrateWithExclusiveStateOwnership(params: {
     };
   }
   const envelope = parseLegacyEnvelope(snapshot);
-  const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
   try {
     params.beforeVerify?.();
-    const current = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, sourcePath);
+    const current = await source.read();
     if (!snapshotsMatch(current, snapshot)) {
       throw new Error("legacy restart sentinel changed after migration loaded it");
     }
-    params.beforeClaim?.();
-    await params.stateRoot.move(
-      relativeLegacyPath(params.stateDir, sourcePath),
-      relativeLegacyPath(params.stateDir, claimPath),
-    );
-    const claimed = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, claimPath);
-    if (!snapshotsMatch(claimed, snapshot)) {
-      throw new Error("legacy restart sentinel changed before migration could claim it");
-    }
-  } catch (error) {
-    const restoreError = await restoreClaim({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      sourcePath,
+    await source.claim({
+      snapshot,
+      mismatchMessage: "legacy restart sentinel changed before migration could claim it",
+      beforeClaim: params.beforeClaim,
     });
+  } catch (error) {
+    const restoreError = await source.restore();
     return {
       changes,
       warnings: [
@@ -290,11 +250,7 @@ async function migrateWithExclusiveStateOwnership(params: {
       envelope,
     });
   } catch (error) {
-    const restoreError = await restoreClaim({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      sourcePath,
-    });
+    const restoreError = await source.restore();
     return {
       changes,
       warnings: [
@@ -304,20 +260,11 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   try {
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath))) {
-      throw new Error("legacy restart sentinel reappeared during migration cleanup");
-    }
-    if (params.removeSource) {
-      await params.removeSource(claimPath);
-    } else {
-      await params.stateRoot.remove(relativeLegacyPath(params.stateDir, claimPath));
-    }
-    if (
-      (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath))) ||
-      (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath)))
-    ) {
-      throw new Error("legacy restart sentinel remains after migration cleanup");
-    }
+    await source.remove({
+      removeSource: params.removeSource,
+      sourceReappearedMessage: "legacy restart sentinel reappeared during migration cleanup",
+      remainingMessage: "legacy restart sentinel remains after migration cleanup",
+    });
   } catch (error) {
     warnings.push(`Legacy restart sentinel cleanup failed: ${String(error)}`);
     return { changes, warnings };

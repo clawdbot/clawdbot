@@ -205,6 +205,18 @@ provider/model. Once a plugin harness has claimed a run, OpenClaw does not
 replay that same turn through another runtime, because that can change
 auth/runtime semantics or duplicate side effects.
 
+A failure that occurs before the harness starts any model work may use
+`AgentHarnessPreflightError` from
+`openclaw/plugin-sdk/agent-harness-runtime`. The default error remains terminal
+for the whole model-fallback chain. Pass `{ scope: "harness" }` only when the
+failure is local to the selected harness and retrying another model on that same
+harness would repeat it. OpenClaw records the actual selected harness at the
+attempt boundary, skips only later candidates proven to use that harness, and
+runs any differently owned candidate through its normal runtime and policy
+checks. Plugins opt into the scope but never name the harness owner on the
+error. Do not use harness scope after a request or tool action may have produced
+side effects.
+
 Configured runtime policy remains authoritative about the desired runtime. A
 persisted session `agentHarnessId` keeps ownership of its native transcript
 while route/auth preparation is still pending. Neither makes an incompatible

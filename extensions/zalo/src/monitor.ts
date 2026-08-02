@@ -2,11 +2,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  createChannelPartialDeliveryError,
   formatInboundMediaUnavailableText,
   resolveChannelInboundRouteEnvelope,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -704,7 +706,6 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           payload,
           token,
           chatId,
-          runtime,
           core,
           config,
           webhookUrl: params.webhookUrl,
@@ -718,8 +719,10 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           tableMode: "off",
         });
       },
-      onDelivered: () => {
-        statusSink?.({ lastOutboundAt: Date.now() });
+      onDelivered: (_payload, _info, result) => {
+        if (result?.visibleReplySent !== false) {
+          statusSink?.({ lastOutboundAt: Date.now() });
+        }
       },
       onError: (err, info) => {
         runtime.error?.(`[${account.accountId}] Zalo ${info.kind} reply failed: ${String(err)}`);
@@ -741,7 +744,6 @@ async function deliverZaloReply(params: {
   payload: OutboundReplyPayload;
   token: string;
   chatId: string;
-  runtime: ZaloRuntimeEnv;
   core: ZaloCoreRuntime;
   config: OpenClawConfig;
   webhookUrl?: string;
@@ -758,7 +760,6 @@ async function deliverZaloReply(params: {
     payload,
     token,
     chatId,
-    runtime,
     core,
     config,
     webhookUrl,
@@ -775,39 +776,56 @@ async function deliverZaloReply(params: {
     text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
   });
   const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
-  await deliverTextOrMediaReply({
-    payload,
-    text: reply.text,
-    chunkText: (value) =>
-      core.channel.text.chunkMarkdownTextWithMode(value, ZALO_TEXT_LIMIT, chunkMode),
-    sendText: async (chunk) => {
-      try {
-        await sendMessage(token, { chat_id: chatId, text: chunk }, fetcher);
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error?.(`Zalo message send failed: ${String(err)}`);
-      }
-    },
-    sendMedia: async ({ mediaUrl, caption }) => {
-      const sendableMediaUrl =
-        canHostMedia && webhookUrl && webhookPath
-          ? await prepareHostedZaloMediaUrl({
-              mediaUrl,
-              webhookUrl,
-              webhookPath,
-              maxBytes: mediaMaxBytes,
-              proxyUrl,
-            })
-          : mediaUrl;
-      await sendPhoto(token, { chat_id: chatId, photo: sendableMediaUrl, caption }, fetcher);
-      statusSink?.({ lastOutboundAt: Date.now() });
-    },
-    onMediaError: (error) => {
-      runtime.error?.(
-        `Zalo photo send failed: ${error instanceof Error ? error.message : JSON.stringify(error)}`,
-      );
-    },
-  });
+  const acceptedMessageIds: string[] = [];
+  let visibleReplySent = false;
+  const recordAcceptedSend = (result: Awaited<ReturnType<typeof sendMessage>>) => {
+    const messageId = result.result?.message_id;
+    if (messageId) {
+      acceptedMessageIds.push(messageId);
+    }
+    visibleReplySent = true;
+    statusSink?.({ lastOutboundAt: Date.now() });
+  };
+  try {
+    await deliverTextOrMediaReply({
+      payload,
+      text: reply.text,
+      chunkText: (value) =>
+        core.channel.text.chunkMarkdownTextWithMode(value, ZALO_TEXT_LIMIT, chunkMode),
+      sendText: async (chunk) => {
+        recordAcceptedSend(await sendMessage(token, { chat_id: chatId, text: chunk }, fetcher));
+      },
+      sendMedia: async ({ mediaUrl, caption }) => {
+        const sendableMediaUrl =
+          canHostMedia && webhookUrl && webhookPath
+            ? await prepareHostedZaloMediaUrl({
+                mediaUrl,
+                webhookUrl,
+                webhookPath,
+                maxBytes: mediaMaxBytes,
+                proxyUrl,
+              })
+            : mediaUrl;
+        recordAcceptedSend(
+          await sendPhoto(token, { chat_id: chatId, photo: sendableMediaUrl, caption }, fetcher),
+        );
+      },
+    });
+  } catch (error) {
+    if (!visibleReplySent) {
+      throw error;
+    }
+    // Preserve accepted provider identities so recovery never duplicates a visible partial send.
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: acceptedMessageIds.map((messageId) => ({ channel: "zalo", messageId })),
+      kind: reply.hasMedia ? "media" : "text",
+    });
+    throw createChannelPartialDeliveryError(error, {
+      messageIds: acceptedMessageIds,
+      receipt,
+      visibleReplySent: true,
+    });
+  }
 }
 
 export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<void> {

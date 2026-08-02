@@ -1059,6 +1059,75 @@ struct OnboardingAISetupTests {
             defaults: defaults) == .none)
     }
 
+    @Test func `choose a different AI relists routes without auto-activating`() async throws {
+        let suiteName = "OnboardingChooseDifferentAITests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let recorder = AISetupRequestRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
+                if respondToAISetupHealth(task: task, request: request) {
+                    return
+                }
+                await recorder.record(message)
+                switch request.method {
+                case "openclaw.setup.detect":
+                    // credentials:true would auto-activate; the choose-different
+                    // pass must end at the picker even for actionable candidates.
+                    task.emitReceiveSuccess(.data(actionableDetectedSetupResponse(id: request.id)))
+                case "openclaw.setup.activate":
+                    task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
+                default:
+                    break
+                }
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let model = OnboardingAISetupModel(
+            gateway: gateway,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+
+        await model.detectAndAutoConnect()
+        #expect(model.connected)
+
+        #expect(model.beginChooseDifferentAI())
+        await model.detectAndAutoConnect()
+
+        #expect(!model.connected)
+        #expect(!model.isBusy)
+        #expect(model.candidates.count == 1)
+        #expect(model.statuses["claude-cli"] == .untried)
+        #expect(model.showManualEntry)
+        // Exactly one activation: the initial auto-connect. The re-detect pass
+        // must not redo the choice the user just asked to change.
+        let snapshot = await recorder.snapshot()
+        #expect(snapshot.methods.filter { $0 == "openclaw.setup.activate" }.count == 1)
+        #expect(snapshot.methods.last == "openclaw.setup.detect")
+    }
+
+    @Test func `choose a different AI requires a connected setup`() throws {
+        let suiteName = "OnboardingChooseDifferentAIGuardTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
+                GatewayTestWebSocketTask(sendHook: { _, _, _ in })
+            })))
+        let model = OnboardingAISetupModel(
+            gateway: gateway,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+
+        #expect(!model.beginChooseDifferentAI())
+    }
+
     @Test func `adopts pending activation stored under the retired crestodian key`() throws {
         let suiteName = "OnboardingRetiredKeyMigrationTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -1381,8 +1450,16 @@ struct OnboardingAISetupTests {
             setupOwnsInferenceTransition: false))
     }
 
-    @Test func `configured model label stays pending until live verification`() async {
-        let model = OnboardingAISetupModel()
+    @Test func `configured model label stays pending until live verification`() async throws {
+        // Isolated defaults + fixed route: the default init reads the machine's
+        // real resume store, whose leftover activation leases fail this test on
+        // any Mac that completed onboarding.
+        let suiteName = "OnboardingConfiguredLabelTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = OnboardingAISetupModel(
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
 
         model.resumeConfiguredInference(modelRef: " openai/gpt-5.5 ")
 

@@ -6,8 +6,8 @@ import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
+import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { stableStringify } from "../stable-stringify.js";
 import type { NormalizedUsage } from "../usage.js";
 
 type PromptCacheChangeCode =

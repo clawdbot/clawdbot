@@ -57,11 +57,12 @@ import {
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   deletedChatItemsSignature,
+  getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
   persistedMessageEntryId,
   resetChatThreadState,
-  stableBooleanMapSignature,
+  setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { DeletedMessages } from "../deleted-messages.ts";
@@ -1468,6 +1469,7 @@ function renderChatThreadContents(
   };
   const deleted = getDeletedMessages(props.sessionKey);
   const locale = i18n.getLocale();
+  const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
@@ -1489,14 +1491,19 @@ function renderChatThreadContents(
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
   });
-  syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
+  syncToolCardExpansionState(
+    props.sessionKey,
+    chatItems,
+    Boolean(props.autoExpandToolCalls),
+    searchFiltering || !props.showToolCalls,
+  );
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
   const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
   const toggleToolCardExpanded = (toolCardId: string) => {
-    expandedToolCards.set(toolCardId, !expandedToolCards.get(toolCardId));
+    setExpansionState(expandedToolCards, toolCardId, !expandedToolCards.get(toolCardId));
     requestUpdate();
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
@@ -1552,12 +1559,16 @@ function renderChatThreadContents(
       autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
       isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
       onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
-        expandedToolCards.set(messageId, !(expanded ?? expandedToolCards.get(messageId) ?? false));
+        setExpansionState(
+          expandedToolCards,
+          messageId,
+          !(expanded ?? expandedToolCards.get(messageId) ?? false),
+        );
         requestUpdate();
       },
       isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
       onToggleUserMessageExpanded: (messageId: string) => {
-        expandedUserMessages.set(messageId, !expandedUserMessages.get(messageId));
+        setExpansionState(expandedUserMessages, messageId, !expandedUserMessages.get(messageId));
         requestUpdate();
       },
       isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
@@ -1648,7 +1659,7 @@ function renderChatThreadContents(
         ${renderWorkGroupSummary(item, {
           expanded: workExpanded,
           onToggle: () => {
-            expandedToolCards.set(item.key, !workExpanded);
+            setExpansionState(expandedToolCards, item.key, !workExpanded);
             requestUpdate();
           },
         })}
@@ -1668,7 +1679,7 @@ function renderChatThreadContents(
   const collapsedItems = collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
     sessionKey: props.sessionKey,
     runWorking: Boolean(props.runWorking),
-    searchActive: state.searchOpen && Boolean(state.searchQuery.trim()),
+    searchActive: searchFiltering,
   });
   // Watch/settle on actual indicator visibility (not runWorking): queued
   // sends show the claw before the run starts, and the recap must never
@@ -1752,8 +1763,10 @@ function renderChatThreadContents(
     chatItems,
     locale,
     deletedChatItemsSignature(deleted, chatItems),
-    stableBooleanMapSignature(expandedToolCards),
-    stableBooleanMapSignature(expandedUserMessages),
+    expandedToolCards,
+    getExpansionStateVersion(expandedToolCards),
+    expandedUserMessages,
+    getExpansionStateVersion(expandedUserMessages),
     getAssistantAttachmentAvailabilityRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
