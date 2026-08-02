@@ -136,21 +136,18 @@ export function loadSqliteTranscriptTailEventsByJsonlBytesSync(
   const boundedMaxBytes = Number.isFinite(maxBytes) ? Math.max(0, Math.floor(maxBytes)) : 0;
   let selectedOldestSeq: number | undefined;
   let selectedNewestSeq: number | undefined;
-  let selectedCount = 0;
   let selectedBytes = 0;
   let truncated = false;
   for (const row of rows) {
-    const separatorBytes = selectedCount > 0 ? 1 : 0;
-    const rowBytes = normalizeSqliteNumber(row.event_bytes);
-    if (selectedBytes + separatorBytes + rowBytes > boundedMaxBytes) {
+    const rowBytes = normalizeSqliteNumber(row.event_bytes) + 1;
+    if (selectedBytes + rowBytes > boundedMaxBytes) {
       truncated = true;
       break;
     }
     const seq = normalizeSqliteNumber(row.seq);
     selectedNewestSeq ??= seq;
     selectedOldestSeq = seq;
-    selectedCount += 1;
-    selectedBytes += separatorBytes + rowBytes;
+    selectedBytes += rowBytes;
   }
 
   const events =
