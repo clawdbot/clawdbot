@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendTranscriptMessageSync,
+  readLatestTranscriptAssistantText,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { saveCronStore } from "../cron/store.js";
@@ -25,9 +26,13 @@ async function seedSessionTranscript(params: {
   sessionId: string;
   sessionKey: string;
   messages: unknown[];
+  incognito?: boolean;
 }) {
-  const { agentId, sessionId, sessionKey, messages } = params;
-  await replaceSessionEntry({ agentId, sessionKey }, { sessionId, updatedAt: 1 });
+  const { agentId, sessionId, sessionKey, messages, incognito } = params;
+  await replaceSessionEntry(
+    { agentId, sessionKey },
+    { sessionId, updatedAt: 1, ...(incognito ? { incognito: true } : {}) },
+  );
   for (const message of messages) {
     appendTranscriptMessageSync({ agentId, sessionId, sessionKey }, { message });
   }
@@ -142,6 +147,32 @@ describe("diagnostic session context", () => {
     expect(context.lastAssistant).toBe("latest visible reply");
     expect(formatCronSessionDiagnosticFields(context)).toBe('lastAssistant="latest visible reply"');
   });
+
+  it.each(["dashboard", "subagent", "internal-session-effects"])(
+    "never exposes a %s incognito assistant reply to durable diagnostics",
+    async (sessionSurface) => {
+      const sessionKey = `agent:main:${sessionSurface}:incognito-private`;
+      const sessionId = `incognito-${sessionSurface}`;
+      const privateReply = `memory-only ${sessionSurface} reply`;
+      await seedSessionTranscript({
+        agentId: "main",
+        incognito: true,
+        sessionId,
+        sessionKey,
+        messages: [{ role: "assistant", content: privateReply }],
+      });
+
+      expect(
+        readLatestTranscriptAssistantText({ agentId: "main", sessionId, sessionKey })?.text,
+      ).toBe(privateReply);
+      expect(
+        resolveCronSessionDiagnosticContext({ sessionKey, activeSessionId: sessionId }),
+      ).toEqual({});
+      expect(
+        fs.existsSync(path.join(tempDir!, "agents", "main", "agent", "openclaw-agent.sqlite")),
+      ).toBe(false);
+    },
+  );
 
   it("requires the authoritative current session id before reading transcript text", async () => {
     const sessionKey = "agent:oauth-agent:main";

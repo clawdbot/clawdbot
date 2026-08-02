@@ -6,6 +6,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import {
+  isIncognitoSessionKey,
   isValidAgentId,
   parseAgentSessionKey,
   type ParsedAgentSessionKey,
@@ -63,6 +64,11 @@ export function resolveCronSessionDiagnosticContext(params: {
   activeSessionId?: string;
 }): SessionDiagnosticContext {
   const sessionKey = params.sessionKey?.trim();
+  // Incognito transcripts live only in memory; copying their replies into
+  // durable operator logs would bypass both persistence and sharing boundaries.
+  if (isIncognitoSessionKey(sessionKey)) {
+    return {};
+  }
   const parsedAgent = parseAgentSessionKey(sessionKey);
   if (!sessionKey || !parsedAgent || !isValidAgentId(parsedAgent.agentId)) {
     return {};

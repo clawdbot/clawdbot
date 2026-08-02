@@ -443,6 +443,41 @@ describe("stuck session diagnostics threshold", () => {
     }
   });
 
+  it("never copies an incognito assistant reply into durable heartbeat diagnostics", async () => {
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-heartbeat-incognito-",
+    });
+    const sessionKey = "agent:main:dashboard:incognito-private";
+    const sessionId = "incognito-private-session";
+    const privateReply = "memory-only personal reimbursement details";
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    try {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey },
+        { sessionId, updatedAt: 1, incognito: true },
+      );
+      appendTranscriptMessageSync(
+        { agentId: "main", sessionId, sessionKey },
+        { message: { role: "assistant", content: privateReply } },
+      );
+
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        { recoverStuckSession: vi.fn() },
+      );
+      logSessionStateChange({ sessionId, sessionKey, state: "processing" });
+      vi.advanceTimersByTime(61_000);
+
+      expectLoggerMessageContaining(warnSpy, `sessionKey=${sessionKey}`);
+      expectNoLoggerMessageContaining(warnSpy, privateReply);
+      expectNoLoggerMessageContaining(warnSpy, "lastAssistant=");
+    } finally {
+      await openClawState.cleanup();
+    }
+  });
+
   it("threads session files from heartbeat state into stuck-session recovery", () => {
     const recoverStuckSession = vi.fn();
     const sessionFile = "/tmp/openclaw-heartbeat-session.jsonl";
