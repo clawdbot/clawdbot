@@ -70,10 +70,11 @@ When an NVIDIA API key is configured, setup and model-selection paths fetch
 NVIDIA's public featured-model catalog from
 `https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json` and
 cache the result for 24 hours (first 32 entries, imported as free text-input
-rows). New featured models from build.nvidia.com therefore appear in setup and
-model-selection surfaces without waiting for an OpenClaw release. When the
-live feed is available, the first returned model is the preselected option
-during NVIDIA setup.
+rows). New or republished featured models from build.nvidia.com therefore appear
+in setup and model-selection surfaces after the cache refreshes, without waiting
+for an OpenClaw release. A fresh NVIDIA catalog overrides bundled retirement
+metadata. When the live feed is available, its first model is preselected during
+NVIDIA setup.
 
 The fetch uses a fixed HTTPS host policy for `assets.ngc.nvidia.com`. If no
 NVIDIA API key is configured, or if the feed is unavailable or malformed,
@@ -112,10 +113,10 @@ out of model pickers.
 The full compatibility catalog also retains these shipped refs for existing
 configurations and migration: `nvidia/qwen/qwen3.5-397b-a17b`,
 `nvidia/moonshotai/kimi-k2.5`, `nvidia/z-ai/glm-5.1`, `nvidia/z-ai/glm5`, and
-`nvidia/minimaxai/minimax-m2.7`. These references never appear in onboarding or
-model pickers. NVIDIA has retired the Qwen endpoint, so requests using its model
-reference no longer work. Migrate existing Qwen configurations to an active
-model.
+`nvidia/minimaxai/minimax-m2.7`. These references stay hidden from bundled and
+offline model pickers unless NVIDIA republishes them in its featured catalog.
+NVIDIA has retired the Qwen endpoint, so requests using its model reference no
+longer work. Migrate existing Qwen configurations to an active model.
 
 ## Advanced configuration
 
@@ -130,8 +131,9 @@ model.
     OpenClaw prefers NVIDIA's public featured-model catalog when NVIDIA auth is
     configured and caches it for 24 hours. The bundled selectable fallback is a
     static snapshot of NVIDIA's featured-model catalog; deprecated exact-reference
-    compatibility rows are hidden from model pickers. Costs default to `0` in
-    source since NVIDIA currently offers free API access for the listed models.
+    compatibility rows stay hidden from that fallback. Fresh featured rows can
+    restore models that NVIDIA has republished. Costs default to `0` in source
+    since NVIDIA currently offers free API access for the listed models.
   </Accordion>
 
   <Accordion title="OpenAI-compatible endpoint">

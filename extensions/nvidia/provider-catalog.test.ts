@@ -281,7 +281,7 @@ describe("nvidia provider catalog", () => {
     ]);
   });
 
-  it("keeps every deprecated exact-reference row out of live catalogs", async () => {
+  it("restores bundled legacy models when NVIDIA republishes them in its featured catalog", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
@@ -301,12 +301,16 @@ describe("nvidia provider catalog", () => {
 
     const live = await buildLiveNvidiaProvider();
     const selectableLive = await buildSelectableLiveNvidiaProvider();
+    const republishedIds = [
+      "minimaxai/minimax-m3",
+      ...EXPECTED_DEPRECATED_MODELS.map((model) => model.id),
+    ];
 
-    expect(live.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
-    expect(selectableLive.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
+    expect(live.models.map((model) => model.id)).toEqual(republishedIds);
+    expect(selectableLive.models.map((model) => model.id)).toEqual(republishedIds);
   });
 
-  it("maps current featured rows while excluding a retired Qwen row", async () => {
+  it("maps a republished Qwen model from NVIDIA's current featured catalog", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
@@ -341,6 +345,7 @@ describe("nvidia provider catalog", () => {
     ).toEqual([
       { id: "minimaxai/minimax-m3", contextWindow: 196_608, maxTokens: 8_192 },
       { id: "deepseek-ai/deepseek-v4-pro", contextWindow: 262_144, maxTokens: 16_384 },
+      { id: "qwen/qwen3.5-397b-a17b", contextWindow: 262_144, maxTokens: 16_384 },
     ]);
   });
 
@@ -482,7 +487,10 @@ describe("nvidia provider catalog", () => {
 
     const provider = await buildLiveNvidiaProvider();
 
-    expect(provider.models.map((model) => model.id)).toEqual(["nvidia/nemotron-3-ultra-550b-a55b"]);
+    expect(provider.models.map((model) => model.id)).toEqual([
+      "nvidia/nemotron-3-ultra-550b-a55b",
+      "minimaxai/minimax-m2.7",
+    ]);
     expect(provider.models[0]).toMatchObject({
       name: "Nemotron 3 Ultra 550B",
       contextWindow: 1_048_576,
