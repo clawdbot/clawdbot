@@ -180,6 +180,18 @@
     "target": "诊断导出"
   },
   {
+    "source": "Bun",
+    "target": "Bun"
+  },
+  {
+    "source": "Durable Core Residual-Gap Architecture Proposal",
+    "target": "Durable Core 残余差距架构提案"
+  },
+  {
+    "source": "Durable Core Residual-Gap Compatibility Check Plan",
+    "target": "Durable Core 残余差距兼容性检查计划"
+  },
+  {
     "source": "Agent harness plugins",
     "target": "Agent harness plugins"
   },
