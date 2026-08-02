@@ -51,20 +51,22 @@ export function chunkSlackTextAtHardLimit(
   return chunks;
 }
 
-function buildPlainTextBlocks(text: string): OrderedFallbackBlock[] {
-  return chunkSlackTextAtHardLimit(text, SLACK_SECTION_PLAIN_TEXT_MAX).map((chunk, index) => {
-    const fallbackBlock: OrderedFallbackBlock = {
-      block: {
-        type: "section",
-        text: { type: "plain_text", text: chunk },
-      },
-      text: chunk,
-    };
-    if (index > 0) {
-      fallbackBlock.continuesText = true;
-    }
-    return fallbackBlock;
-  });
+function buildPlainTextBlocks(text: string, textLimit: number): OrderedFallbackBlock[] {
+  return chunkSlackTextAtHardLimit(text, Math.min(textLimit, SLACK_SECTION_PLAIN_TEXT_MAX)).map(
+    (chunk, index) => {
+      const fallbackBlock: OrderedFallbackBlock = {
+        block: {
+          type: "section",
+          text: { type: "plain_text", text: chunk },
+        },
+        text: chunk,
+      };
+      if (index > 0) {
+        fallbackBlock.continuesText = true;
+      }
+      return fallbackBlock;
+    },
+  );
 }
 
 function renderNativeDataPlainText(block: unknown): string {
@@ -77,17 +79,18 @@ function renderNativeDataPlainText(block: unknown): string {
 function buildOrderedFallbackBlocks(params: {
   baseText: string;
   blocks: readonly (Block | KnownBlock)[];
+  textLimit: number;
 }): OrderedFallbackBlock[] {
   const entries: OrderedFallbackBlock[] = [];
   const consumeFromBase = createSlackNativeDataBaseTextConsumer(params.baseText);
   if (params.baseText) {
-    entries.push(...buildPlainTextBlocks(params.baseText));
+    entries.push(...buildPlainTextBlocks(params.baseText, params.textLimit));
   }
   for (const block of params.blocks) {
     if (hasSlackNativeDataBlock([block])) {
       const nativeText = renderNativeDataPlainText(block);
       if (!consumeFromBase(nativeText)) {
-        entries.push(...buildPlainTextBlocks(nativeText));
+        entries.push(...buildPlainTextBlocks(nativeText, params.textLimit));
       }
       continue;
     }
@@ -97,7 +100,7 @@ function buildOrderedFallbackBlocks(params: {
   return entries;
 }
 
-function buildOrderedBlockMessages(entries: readonly OrderedFallbackBlock[]) {
+function buildOrderedBlockMessages(entries: readonly OrderedFallbackBlock[], textLimit: number) {
   const messages: SlackFormattingDisabledMessage[] = [];
   let blocks: (Block | KnownBlock)[] = [];
   let text = "";
@@ -118,13 +121,13 @@ function buildOrderedBlockMessages(entries: readonly OrderedFallbackBlock[]) {
   for (const entry of entries) {
     const separator = text && entry.text && !entry.continuesText ? "\n\n" : "";
     const nextText = entry.text ? `${text}${separator}${entry.text}` : text;
-    if (blocks.length >= SLACK_MAX_BLOCKS || nextText.length > SLACK_MESSAGE_TEXT_HARD_LIMIT) {
+    if (blocks.length >= SLACK_MAX_BLOCKS || nextText.length > textLimit) {
       flush();
     }
     const freshSeparator = text && entry.text && !entry.continuesText ? "\n\n" : "";
     const freshText = entry.text ? `${text}${freshSeparator}${entry.text}` : text;
-    if (freshText.length > SLACK_MESSAGE_TEXT_HARD_LIMIT) {
-      throw new Error("One Slack fallback block exceeds the message text hard limit.");
+    if (freshText.length > textLimit) {
+      throw new Error("One Slack fallback block exceeds the resolved message text limit.");
     }
     blocks.push(entry.block);
     text = freshText;
@@ -137,8 +140,13 @@ function buildOrderedBlockMessages(entries: readonly OrderedFallbackBlock[]) {
 export function buildSlackNativeDataDeliveryPlan(params: {
   baseText?: string;
   blocks: readonly (Block | KnownBlock)[];
+  textLimit?: number;
 }): SlackNativeDataDeliveryPlan {
   const baseText = params.baseText?.trim() ?? "";
+  const textLimit = Math.min(
+    SLACK_MESSAGE_TEXT_HARD_LIMIT,
+    Math.max(2, Math.floor(params.textLimit ?? SLACK_MESSAGE_TEXT_HARD_LIMIT)),
+  );
   const hasNativeData = hasSlackNativeDataBlock(params.blocks);
   const accessibilityText =
     buildSlackNativeDataAccessibilityText(baseText, params.blocks) ||
@@ -146,7 +154,7 @@ export function buildSlackNativeDataDeliveryPlan(params: {
   const survivorBlocks = stripSlackNativeDataBlocks(params.blocks);
   const fallbackMessages =
     survivorBlocks.length === 0
-      ? chunkSlackTextAtHardLimit(accessibilityText).map((text) => ({
+      ? chunkSlackTextAtHardLimit(accessibilityText, textLimit).map((text) => ({
           text,
           mrkdwn: false as const,
         }))
@@ -154,7 +162,9 @@ export function buildSlackNativeDataDeliveryPlan(params: {
           buildOrderedFallbackBlocks({
             baseText,
             blocks: params.blocks,
+            textLimit,
           }),
+          textLimit,
         );
   return {
     accessibilityText,

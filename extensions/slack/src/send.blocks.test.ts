@@ -492,7 +492,7 @@ describe("sendMessageSlack blocks", () => {
     expect(postedMessage(client, 1).mrkdwn).toBe(false);
   });
 
-  it("uses 40k blockless chunks only for oversized native data with no survivors", async () => {
+  it("uses resolved-limit blockless chunks for oversized native data with no survivors", async () => {
     const client = createSlackSendTestClient();
     const caption = "c".repeat(41_000);
     const blocks = [
@@ -510,15 +510,17 @@ describe("sendMessageSlack blocks", () => {
       blocks,
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    const posts = [postedMessage(client, 0), postedMessage(client, 1)];
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(6);
+    const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
+      postedMessage(client, index),
+    );
     expect(posts.every((post) => post.blocks === undefined)).toBe(true);
     expect(posts.every((post) => post.mrkdwn === false)).toBe(true);
-    expect(posts.every((post) => String(post.text).length <= 40_000)).toBe(true);
+    expect(posts.every((post) => String(post.text).length <= SLACK_TEXT_LIMIT)).toBe(true);
     expect(posts.map((post) => post.text).join("")).toBe(`${caption} (table)\nAccount\nAcme`);
   });
 
-  it("splits non-native blocks before their accessibility text exceeds 40k", async () => {
+  it("splits non-native blocks before their accessibility text exceeds the send limit", async () => {
     const client = createSlackSendTestClient();
     const blocks = Array.from({ length: 20 }, (_entry, index) => ({
       type: "section",
@@ -533,9 +535,11 @@ describe("sendMessageSlack blocks", () => {
       authoredTextPlacement: "none",
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    const posts = [postedMessage(client, 0), postedMessage(client, 1)];
-    expect(posts.every((post) => String(post.text).length <= 40_000)).toBe(true);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(10);
+    const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
+      postedMessage(client, index),
+    );
+    expect(posts.every((post) => String(post.text).length <= SLACK_TEXT_LIMIT)).toBe(true);
     expect(posts.every((post) => post.mrkdwn === false)).toBe(true);
     expect(posts.flatMap((post) => post.blocks as unknown[])).toEqual(blocks);
   });
@@ -885,20 +889,74 @@ describe("sendMessageSlack blocks", () => {
       onPlatformSendDispatch,
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
     expect(postedMessage(client, 0).blocks).toEqual(blocks);
     expect(postedMessage(client, 0).text).toBe(
       ["Large pipeline (table)", header, ...accounts].join("\n"),
     );
     expect(postedMessage(client, 0).mrkdwn).toBe(false);
-    const fallbackPost = postedMessage(client, 1);
-    expect(fallbackPost.blocks).toBeUndefined();
-    expect(fallbackPost.mrkdwn).toBe(false);
-    expect(String(fallbackPost.text).length).toBeLessThanOrEqual(40_000);
-    const deliveredText = fallbackPost.text;
+    const fallbackPosts = [postedMessage(client, 1), postedMessage(client, 2)];
+    expect(fallbackPosts.every((post) => post.blocks === undefined)).toBe(true);
+    expect(fallbackPosts.every((post) => post.mrkdwn === false)).toBe(true);
+    expect(fallbackPosts.every((post) => String(post.text).length <= SLACK_TEXT_LIMIT)).toBe(true);
+    const deliveredText = fallbackPosts.map((post) => post.text).join("");
     expect(deliveredText).toBe(["Large pipeline (table)", header, ...accounts].join("\n"));
     expect(deliveredText).toContain("<@U123>");
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+  });
+
+  it("retains every explicit chunk receipt for a rejected 12k native table", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage
+      .mockRejectedValueOnce({ data: { error: "invalid_blocks" } })
+      .mockResolvedValueOnce({ channel: "C123", ts: "171234.568" })
+      .mockResolvedValueOnce({ channel: "C123", ts: "171234.569" });
+    const caption = "c".repeat(12_000);
+    const blocks = [
+      {
+        type: "data_table",
+        caption,
+        rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
+      },
+    ] as never;
+    const expectedText = `${caption} (table)\nAccount\nAcme`;
+    const onDeliveryResult = vi.fn(async (_result: { messageId: string }) => undefined);
+
+    const result = await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks,
+      deliveryQueueId: "queue-12k",
+      onDeliveryResult,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    const fallbackPosts = [postedMessage(client, 1), postedMessage(client, 2)];
+    expect(fallbackPosts.every((post) => post.blocks === undefined)).toBe(true);
+    expect(fallbackPosts.every((post) => post.mrkdwn === false)).toBe(true);
+    expect(fallbackPosts.every((post) => String(post.text).length <= SLACK_TEXT_LIMIT)).toBe(true);
+    expect(fallbackPosts.map((post) => post.text).join("")).toBe(expectedText);
+    expect(fallbackPosts.map((post) => post.metadata)).toEqual([
+      expect.objectContaining({
+        event_payload: expect.objectContaining({
+          openclaw_delivery_part_count: 2,
+          openclaw_delivery_part_index: 0,
+        }),
+      }),
+      expect.objectContaining({
+        event_payload: expect.objectContaining({
+          openclaw_delivery_part_count: 2,
+          openclaw_delivery_part_index: 1,
+        }),
+      }),
+    ]);
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
+      "171234.568",
+      "171234.569",
+    ]);
+    expect(result.messageId).toBe("171234.569");
+    expect(result.receipt.platformMessageIds).toEqual(["171234.568", "171234.569"]);
   });
 
   it("batches more than 50 ordered fallback blocks across Web API posts", async () => {
