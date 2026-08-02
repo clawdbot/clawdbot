@@ -10,7 +10,7 @@ const oauthProviderRuntimeMocks = vi.hoisted(() => {
   vi.resetModules();
   return {
     refreshProviderOAuthCredentialWithPluginMock: vi.fn(
-      async (_params?: { context?: unknown }) => undefined,
+      async (_params?: { context?: unknown }): Promise<OAuthCredential | undefined> => undefined,
     ),
     formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
   };

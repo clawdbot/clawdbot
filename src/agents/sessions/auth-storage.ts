@@ -17,10 +17,7 @@ import type {
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import {
-  loginProviderOAuthWithPlugin,
-  resolveProviderOAuthCredentialWithPlugin,
-} from "../../plugins/provider-runtime.runtime.js";
+import { loginProviderOAuthWithPlugin } from "../../plugins/provider-runtime.runtime.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
 import {
@@ -44,7 +41,10 @@ import {
 } from "../auth-profiles/store.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
-import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
+import {
+  getAuthStorageOAuthProviderRegistry,
+  resolveAuthStoragePluginOAuthCredential,
+} from "./auth-storage-oauth-registry.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 
 export type ApiKeyCredential = {
@@ -706,24 +706,6 @@ export class AuthStorage {
     this.remove(provider);
   }
 
-  private async resolvePluginOAuthCredential(
-    providerId: OAuthProviderId,
-    credential: OAuthCredential,
-    refresh: boolean,
-  ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-    const resolved = await resolveProviderOAuthCredentialWithPlugin({
-      provider: providerId,
-      credential: { ...credential, provider: providerId },
-      refresh,
-    });
-    if (resolved.status === "configured-unavailable") {
-      throw new OAuthProviderConfiguredUnavailableError(providerId);
-    }
-    return resolved.status === "available"
-      ? { apiKey: resolved.apiKey, newCredentials: resolved.credential }
-      : null;
-  }
-
   /**
    * Refresh OAuth token with backend locking to prevent race conditions.
    * Multiple agent sessions may try to refresh simultaneously when tokens expire.
@@ -748,7 +730,7 @@ export class AuthStorage {
           if (provider) {
             return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
           }
-          return { result: await this.resolvePluginOAuthCredential(providerId, cred, false) };
+          return { result: await resolveAuthStoragePluginOAuthCredential(providerId, cred, false) };
         }
 
         const oauthCreds: Record<string, OAuthCredentials> = {};
@@ -760,7 +742,7 @@ export class AuthStorage {
 
         const refreshed = provider
           ? await getAuthStorageOAuthProviderRegistry(this).getApiKey(providerId, oauthCreds)
-          : await this.resolvePluginOAuthCredential(providerId, cred, true);
+          : await resolveAuthStoragePluginOAuthCredential(providerId, cred, true);
         if (!refreshed) {
           return { result: null };
         }
@@ -866,7 +848,7 @@ export class AuthStorage {
             if (provider) {
               return provider.getApiKey(updatedCred);
             }
-            return (await this.resolvePluginOAuthCredential(providerId, updatedCred, false))
+            return (await resolveAuthStoragePluginOAuthCredential(providerId, updatedCred, false))
               ?.apiKey;
           }
 
@@ -878,7 +860,7 @@ export class AuthStorage {
         if (provider) {
           return provider.getApiKey(cred);
         }
-        return (await this.resolvePluginOAuthCredential(providerId, cred, false))?.apiKey;
+        return (await resolveAuthStoragePluginOAuthCredential(providerId, cred, false))?.apiKey;
       }
     }
 
