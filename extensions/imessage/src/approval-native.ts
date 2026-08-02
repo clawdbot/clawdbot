@@ -1,5 +1,5 @@
 // Imessage plugin module implements approval native behavior.
-import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { shouldSuppressLocalNativeExecApprovalPrompt } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -52,7 +52,7 @@ function isIMessageApprovalTransportEnabled(params: {
   return resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
 }
 
-const imessageApproval = createApproverRestrictedNativeApprovalCapability({
+const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
   channel: "imessage",
   channelLabel: "iMessage",
   authorizeActorAction: imessageApprovalAuth.authorizeActorAction,

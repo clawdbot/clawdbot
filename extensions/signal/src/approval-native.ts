@@ -1,5 +1,5 @@
 // Signal plugin module implements approval native behavior.
-import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { shouldSuppressLocalNativeExecApprovalPrompt } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -30,7 +30,7 @@ function isSignalApprovalTransportEnabled(params: {
   return resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
 }
 
-const signalApproval = createApproverRestrictedNativeApprovalCapability({
+const signalApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
   channel: "signal",
   channelLabel: "Signal",
   authorizeActorAction: signalApprovalAuth.authorizeActorAction,

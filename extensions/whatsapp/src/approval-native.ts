@@ -1,5 +1,5 @@
 // Whatsapp plugin module implements approval native behavior.
-import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildApprovalReactionPromptPayloadForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
@@ -25,7 +25,7 @@ function isWhatsAppApprovalTransportEnabled(params: {
   return resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
 }
 
-const whatsappApproval = createApproverRestrictedNativeApprovalCapability({
+const whatsappApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
   channel: "whatsapp",
   channelLabel: "WhatsApp",
   authorizeActorAction: whatsappApprovalAuth.authorizeActorAction,

@@ -54,8 +54,6 @@ type ApproverRestrictedNativeApprovalCommonParams = {
   describePluginApprovalSetup?: ChannelApprovalCapability["describePluginApprovalSetup"];
   /** Native runtime hooks used by channel-specific delivery implementations. */
   nativeRuntime?: ChannelApprovalCapability["nativeRuntime"];
-  /** Render hooks for pending and resolved approval payloads. */
-  render?: ChannelApprovalCapability["render"];
 };
 
 type ApproverRestrictedNativeApprovalLegacyParams = {
@@ -94,8 +92,6 @@ type ApproverRestrictedNativeApprovalLegacyParams = {
   }) => NativeApprovalTarget[] | Promise<NativeApprovalTarget[]>;
   /** Whether DM-only native delivery should also notify the origin channel. */
   notifyOriginWhenDmOnly?: boolean;
-  routing?: never;
-  authorizeActorAction?: never;
 };
 
 type StandardNativeApprovalRouting = Pick<
@@ -122,10 +118,9 @@ type ApproverRestrictedNativeApprovalRoutedParams = {
   createNativeRuntime?: (
     routing: StandardNativeApprovalRouting,
   ) => ChannelApprovalCapability["nativeRuntime"];
+  /** Render hooks for pending and resolved approval payloads. */
+  render?: ChannelApprovalCapability["render"];
 };
-
-type ApproverRestrictedNativeApprovalParams = ApproverRestrictedNativeApprovalCommonParams &
-  (ApproverRestrictedNativeApprovalLegacyParams | ApproverRestrictedNativeApprovalRoutedParams);
 
 type StandardNativeApprovalRoutingParams = {
   /** Default forwarding mode when top-level approval config omits one. */
@@ -403,7 +398,6 @@ function buildApproverRestrictedNativeApprovalCapability(
           }
         : undefined,
     nativeRuntime: params.nativeRuntime,
-    render: params.render,
   });
 }
 
@@ -489,40 +483,32 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
   };
 }
 
-/** Build a forwarding-routed capability and expose its shared route gates to the owning channel. */
-export function createApproverRestrictedNativeApprovalCapability(
-  params: ApproverRestrictedNativeApprovalCommonParams &
-    ApproverRestrictedNativeApprovalRoutedParams,
-): { capability: ChannelApprovalCapability; routing: StandardNativeApprovalRouting };
 /** Build the canonical approval capability for approver-restricted native delivery channels. */
 export function createApproverRestrictedNativeApprovalCapability(
   params: ApproverRestrictedNativeApprovalCommonParams &
     ApproverRestrictedNativeApprovalLegacyParams,
-): ChannelApprovalCapability;
-export function createApproverRestrictedNativeApprovalCapability(
-  params: ApproverRestrictedNativeApprovalParams,
-):
-  | ChannelApprovalCapability
-  | {
-      capability: ChannelApprovalCapability;
-      routing: StandardNativeApprovalRouting;
-    } {
-  if (params.routing) {
-    const routing = createStandardNativeApprovalRouting(params.channel, params.routing);
-    return {
-      capability: createChannelApprovalCapability({
-        authorizeActorAction: params.authorizeActorAction,
-        getActionAvailabilityState: routing.getActionAvailabilityState,
-        getExecInitiatingSurfaceState: routing.getExecInitiatingSurfaceState,
-        describeExecApprovalSetup: params.describeExecApprovalSetup,
-        describePluginApprovalSetup: params.describePluginApprovalSetup,
-        delivery: routing.delivery,
-        native: routing.native,
-        nativeRuntime: params.createNativeRuntime?.(routing) ?? params.nativeRuntime,
-        render: params.render,
-      }),
-      routing,
-    };
-  }
+): ChannelApprovalCapability {
   return buildApproverRestrictedNativeApprovalCapability(params);
+}
+
+/** Build a forwarding-routed capability and expose its shared route gates to the owning channel. */
+export function createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes(
+  params: ApproverRestrictedNativeApprovalCommonParams &
+    ApproverRestrictedNativeApprovalRoutedParams,
+): { capability: ChannelApprovalCapability; routing: StandardNativeApprovalRouting } {
+  const routing = createStandardNativeApprovalRouting(params.channel, params.routing);
+  return {
+    capability: createChannelApprovalCapability({
+      authorizeActorAction: params.authorizeActorAction,
+      getActionAvailabilityState: routing.getActionAvailabilityState,
+      getExecInitiatingSurfaceState: routing.getExecInitiatingSurfaceState,
+      describeExecApprovalSetup: params.describeExecApprovalSetup,
+      describePluginApprovalSetup: params.describePluginApprovalSetup,
+      delivery: routing.delivery,
+      native: routing.native,
+      nativeRuntime: params.createNativeRuntime?.(routing) ?? params.nativeRuntime,
+      render: params.render,
+    }),
+    routing,
+  };
 }

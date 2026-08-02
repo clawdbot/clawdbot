@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createApproverRestrictedNativeApprovalAdapter,
   createApproverRestrictedNativeApprovalCapability,
+  createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes,
   createChannelApprovalCapability,
   splitChannelApprovalCapability,
 } from "./approval-delivery-helpers.js";
@@ -19,7 +20,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       isExecAuthorizedSender: ({ senderId }) => senderId === "exec-owner",
       isPluginAuthorizedSender: ({ senderId }) => senderId === "plugin-owner",
       isNativeDeliveryEnabled: () => true,
-      resolveNativeDeliveryMode: () => "dm" as const,
+      resolveNativeDeliveryMode: () => "dm",
     });
     const authorizeActorAction = adapter.auth.authorizeActorAction;
     if (!authorizeActorAction) {
@@ -435,7 +436,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     const authResult = { authorized: true } as const;
     const authorizeActorAction = vi.fn(() => authResult);
     const render = { exec: { buildPendingPayload: vi.fn() } };
-    const routed = createApproverRestrictedNativeApprovalCapability({
+    const routed = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
       channel: "example",
       channelLabel: "Example",
       authorizeActorAction,
