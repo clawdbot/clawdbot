@@ -1,9 +1,12 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
+import { TaskSummarySchema } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
+import type { TaskSummary } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import {
   normalizeEvents,
   normalizeExecution,
   normalizeMetadata,
 } from "./metadata-normalization.ts";
-import { isRecord } from "./normalization-utils.ts";
 import {
   isValidWorkboardBoardId,
   WORKBOARD_PRIORITIES,
@@ -12,7 +15,6 @@ import {
   type WorkboardCard,
   type WorkboardPriority,
   type WorkboardStatus,
-  type WorkboardTaskStatus,
   type WorkboardTaskSummary,
 } from "./types.ts";
 
@@ -137,53 +139,20 @@ export function normalizeCardPayload(payload: unknown): WorkboardCard {
   return card;
 }
 
-function normalizeTaskStatus(value: unknown): WorkboardTaskStatus | null {
-  switch (value) {
-    case "queued":
-    case "running":
-    case "completed":
-    case "failed":
-    case "cancelled":
-    case "timed_out":
-      return value;
-    default:
-      return null;
-  }
-}
-
 export function normalizeTaskSummary(value: unknown): WorkboardTaskSummary | null {
-  if (!isRecord(value)) {
+  if (!Value.Check(TaskSummarySchema, value)) {
     return null;
   }
-  const id = typeof value.id === "string" && value.id.trim() ? value.id.trim() : null;
-  const taskId = typeof value.taskId === "string" && value.taskId.trim() ? value.taskId.trim() : id;
-  const status = normalizeTaskStatus(value.status);
-  if (!id || !taskId || !status) {
+  const task = value as TaskSummary;
+  const id = task.id.trim();
+  const taskId = task.taskId?.trim() || id;
+  if (!id || !taskId) {
     return null;
   }
   return {
+    ...task,
     id,
     taskId,
-    status,
-    ...(typeof value.title === "string" ? { title: value.title } : {}),
-    ...(typeof value.agentId === "string" ? { agentId: value.agentId } : {}),
-    ...(typeof value.sessionKey === "string" ? { sessionKey: value.sessionKey } : {}),
-    ...(typeof value.childSessionKey === "string"
-      ? { childSessionKey: value.childSessionKey }
-      : {}),
-    ...(typeof value.ownerKey === "string" ? { ownerKey: value.ownerKey } : {}),
-    ...(typeof value.runId === "string" ? { runId: value.runId } : {}),
-    ...(typeof value.sourceId === "string" ? { sourceId: value.sourceId } : {}),
-    ...(typeof value.updatedAt === "number" || typeof value.updatedAt === "string"
-      ? { updatedAt: value.updatedAt }
-      : {}),
-    ...(typeof value.progressSummary === "string"
-      ? { progressSummary: value.progressSummary }
-      : {}),
-    ...(typeof value.terminalSummary === "string"
-      ? { terminalSummary: value.terminalSummary }
-      : {}),
-    ...(typeof value.error === "string" ? { error: value.error } : {}),
   };
 }
 

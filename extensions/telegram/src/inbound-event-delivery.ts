@@ -90,5 +90,8 @@ export function notifyTelegramInboundEventOutboundSuccess(params: {
   if (event.outboundAccountId && params.accountId && params.accountId !== event.outboundAccountId) {
     return;
   }
+  // Retire before invoking channel state: a throwing or reentrant marker must not
+  // retain the correlation or count the same outbound delivery twice.
+  registry.delete(key);
   event.markInboundEventDelivered();
 }

@@ -8,6 +8,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { streamSimple } from "../../llm/stream.js";
+import type { Model } from "../../llm/types.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import {
   describeEmbeddedAgentStreamStrategy as describeEmbeddedAgentStreamStrategyImpl,
@@ -277,6 +278,157 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(requireRecord(result.options, "codex native options").apiKey).toBe("oauth-bearer-token");
     expect(nativeStreamFn).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps real lifecycle-owned Codex sessions on authenticated WebSocket transport", async () => {
+    const tokenHeader = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString(
+      "base64url",
+    );
+    const tokenPayload = Buffer.from(
+      JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-session" } }),
+    ).toString("base64url");
+    const accessToken = `${tokenHeader}.${tokenPayload}.signature`;
+    const protectedAccessToken = mintSecretSentinel(accessToken, {
+      label: "codex-session-websocket-auth",
+    });
+    const handshakes: Array<{ url: string; headers: Headers }> = [];
+    const sentRequests: Array<Record<string, unknown>> = [];
+    let rejectNextConnection = false;
+    const fetchSpy = vi.fn(() => {
+      throw new Error("explicit WebSocket transport must not issue an HTTP request");
+    });
+
+    class SessionWebSocket extends EventTarget {
+      readyState = 1;
+
+      constructor(url: string, options?: { headers?: Record<string, string> }) {
+        super();
+        if (rejectNextConnection) {
+          throw new Error("session websocket connection rejected");
+        }
+        handshakes.push({ url, headers: new Headers(options?.headers) });
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(payload: string): void {
+        sentRequests.push(JSON.parse(payload) as Record<string, unknown>);
+        queueMicrotask(() => {
+          this.dispatchEvent(
+            Object.assign(new Event("message"), {
+              data: JSON.stringify({
+                type: "response.completed",
+                response: {
+                  id: "resp_session_websocket",
+                  status: "completed",
+                  output: [],
+                  usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+                },
+              }),
+            }),
+          );
+          this.readyState = 3;
+        });
+      }
+
+      close(): void {
+        this.readyState = 3;
+      }
+    }
+
+    vi.stubGlobal("WebSocket", SessionWebSocket);
+    vi.stubGlobal("fetch", fetchSpy);
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      baseUrl: "https://chatgpt.test/backend-api",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_000,
+    } satisfies Model<"openai-chatgpt-responses">;
+    // Match createAgentSession's real auth-owning runtime wrapper without importing
+    // the complete session/plugin graph into this focused stream-routing suite.
+    const resolveSessionAuth = vi.fn(async () => protectedAccessToken);
+    const sessionBaseStream: StreamFn = async (sessionModel, context, options) => {
+      const apiKey = await resolveSessionAuth();
+      return llmRuntime.streamSimple(sessionModel, context, { ...options, apiKey });
+    };
+    bindStreamLlmRuntime(sessionBaseStream, llmRuntime);
+    const boundaryStreamFactory = vi.mocked(
+      providerTransportStream.createBoundaryAwareStreamFnForModel,
+    );
+    const initialBoundaryCalls = boundaryStreamFactory.mock.calls.length;
+
+    try {
+      const embeddedStreamFn = resolveEmbeddedAgentStreamFnImpl({
+        currentStreamFn: sessionBaseStream,
+        model,
+        sessionId: "session-websocket",
+        resolvedApiKey: protectedAccessToken,
+      });
+      expect(boundaryStreamFactory.mock.calls.slice(initialBoundaryCalls)).toEqual([]);
+      const stream = await embeddedStreamFn(
+        model,
+        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+        { transport: "websocket" },
+      );
+      const result = await stream.result();
+
+      expect(result.stopReason).toBe("stop");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(boundaryStreamFactory.mock.calls.slice(initialBoundaryCalls)).toEqual([]);
+      expect(handshakes).toHaveLength(1);
+      expect(handshakes[0]?.url).toBe("wss://chatgpt.test/backend-api/codex/responses");
+      expect(handshakes[0]?.headers.get("authorization")).toBe(`Bearer ${accessToken}`);
+      expect(handshakes[0]?.headers.get("chatgpt-account-id")).toBe("acct-session");
+      expect(handshakes[0]?.headers.get("openai-beta")).toBe("responses_websockets=2026-02-06");
+      expect(handshakes[0]?.headers.get("session_id")).toBe("session-websocket");
+      expect(handshakes[0]?.headers.get("x-client-request-id")).toBe("session-websocket");
+      expect(sentRequests).toEqual([
+        expect.objectContaining({ type: "response.create", model: "gpt-5.5" }),
+      ]);
+
+      rejectNextConnection = true;
+      const rejectedStream = await embeddedStreamFn(
+        model,
+        { messages: [{ role: "user", content: "retry", timestamp: 2 }] },
+        { transport: "websocket", sessionId: "session-websocket-rejected" },
+      );
+      const rejectedResult = await rejectedStream.result();
+
+      expect(rejectedResult.stopReason).toBe("error");
+      expect(rejectedResult.errorMessage).toContain("session websocket connection rejected");
+      expect(resolveSessionAuth).toHaveBeenCalledTimes(2);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(boundaryStreamFactory.mock.calls.slice(initialBoundaryCalls)).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(["unbound", "different runtime"])(
+    "keeps %s custom Codex session streams outside the native lifecycle path",
+    (ownership) => {
+      const customStream = vi.fn();
+      if (ownership === "different runtime") {
+        bindStreamLlmRuntime(customStream, { ...llmRuntime } as LlmRuntime);
+      }
+
+      const streamFn = resolveEmbeddedAgentStreamFn({
+        currentStreamFn: customStream as StreamFn,
+        sessionId: "custom-session",
+        model: {
+          api: "openai-chatgpt-responses",
+          provider: "openai",
+          id: "gpt-5.5",
+        } as never,
+      });
+
+      expect(streamFn).toBe(customStream);
+    },
+  );
 
   it("routes GitHub Copilot fallbacks through boundary-aware transports", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   CronJob,
@@ -74,10 +75,6 @@ export type CronFormState = {
   failureAlertAccountId: string;
   timeoutSeconds: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object");
-}
 
 function isCronPayload(value: unknown): value is CronPayload {
   if (!isRecord(value)) {
