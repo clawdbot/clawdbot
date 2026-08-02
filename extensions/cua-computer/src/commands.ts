@@ -447,7 +447,7 @@ export function createCuaComputerCommands(
   const act: OpenClawPluginNodeHostCommand = {
     command: "computer.act",
     cap: "computer",
-    dangerous: true,
+    dangerous: false,
     isAvailable,
     handle: async (paramsJSON) =>
       await queue.run(async () => {
