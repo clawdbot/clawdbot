@@ -93,7 +93,6 @@ extension OnboardingView {
         // Queued detection can otherwise proceed into a mutating activation
         // after the window or its selected route has gone away.
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        memoryImport.reset()
         systemAgentState.resetForGatewayChange()
         stopPermissionMonitoring()
         stopDiscovery()
@@ -140,7 +139,6 @@ extension OnboardingView {
         // The UI attempt belongs to one route, but its durable activation lease
         // must survive A -> B -> A while the old Gateway can still be mutating.
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        memoryImport.reset()
         // OpenClaw sessions belong to one Gateway. Dismiss and replace the chat so
         // changing routes cannot send an old session ID to the new endpoint.
         systemAgentState.resetForGatewayChange()
@@ -367,7 +365,7 @@ extension OnboardingView {
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
                     .opacity(0.8)
-                    .disabled(self.installingCLI || self.aiSetup.isBusy || self.memoryImport.isApplying)
+                    .disabled(self.installingCLI || self.aiSetup.isBusy)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }
@@ -377,8 +375,7 @@ extension OnboardingView {
 
             HStack(spacing: 8) {
                 ForEach(0..<self.pageCount, id: \.self) { index in
-                    let isInstallLocked = (self.installingCLI || self.aiSetup.isBusy ||
-                        self.memoryImport.isApplying) &&
+                    let isInstallLocked = (self.installingCLI || self.aiSetup.isBusy) &&
                         index != self.currentPage
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
