@@ -409,7 +409,7 @@ describe("exec approval forwarder", () => {
 
   it("keeps pending delivery ahead of a resolution received during route lookup", async () => {
     const target = createDeferred<{ channel: "slack"; to: string }>();
-    const pendingDelivery = createDeferred<void>();
+    const pendingDelivery = createDeferred();
     const deliveryOrder: string[] = [];
     const deliver = vi.fn(async (deliveryParams: { payloads?: Array<{ text?: string }> }) => {
       const text = deliveryParams.payloads?.[0]?.text ?? "";
@@ -449,7 +449,7 @@ describe("exec approval forwarder", () => {
 
   it("keeps pending delivery ahead of expiry", async () => {
     vi.useFakeTimers();
-    const pendingDelivery = createDeferred<void>();
+    const pendingDelivery = createDeferred();
     const deliveryOrder: string[] = [];
     const deliver = vi.fn(async (deliveryParams: { payloads?: Array<{ text?: string }> }) => {
       const text = deliveryParams.payloads?.[0]?.text ?? "";
