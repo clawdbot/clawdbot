@@ -119,7 +119,7 @@ function buildGroupedMessageRenderOptions(
     const expansion = opts.getAssistantMessageExpansion?.(messageId);
     assistantMessageDisclosure = {
       expanded: expansion?.status === "loaded" && expansion.expanded,
-      ...(expansion?.status === "loaded" ? { markdown: expansion.markdown } : {}),
+      ...(expansion?.status === "loaded" ? { markdown: actionDetails.markdown } : {}),
       loading: expansion?.status === "loading",
       error: expansion?.status === "error",
       onToggle: () => opts.onToggleAssistantMessageExpanded?.(messageId),
@@ -146,6 +146,7 @@ function buildGroupedMessageRenderOptions(
     isUserMessageExpanded: opts.isUserMessageExpanded,
     onToggleUserMessageExpanded: opts.onToggleUserMessageExpanded,
     assistantMessageDisclosure,
+    actionMarkdown: actionDetails?.markdown,
     isToolExpanded: opts.isToolExpanded,
     onToggleToolExpanded: opts.onToggleToolExpanded,
     onRequestUpdate: opts.onRequestUpdate,
@@ -361,6 +362,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       message: item.message,
       messageId: item.key,
       canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
+      getAssistantMessageExpansion: opts.getAssistantMessageExpansion,
       onReply: opts.onReply,
       senderLabel: who,
     }),
