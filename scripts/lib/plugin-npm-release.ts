@@ -645,6 +645,23 @@ function isNpmViewTimeoutError(error: unknown): error is Error & { code: "ETIMED
   return error instanceof Error && "code" in error && error.code === "ETIMEDOUT";
 }
 
+function isNpmViewNotFoundError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const processError = error as Error & { stderr?: unknown; stdout?: unknown };
+  const output = [processError.message, processError.stderr, processError.stdout]
+    .map((value) => {
+      if (typeof value === "string") {
+        return value;
+      }
+      return Buffer.isBuffer(value) ? value.toString("utf8") : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+  return /\bE404\b|404 not found|is not in this registry/iu.test(output);
+}
+
 function runNpmView(args: string[]): string {
   const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-view-"));
   const userconfigPath = join(tempDir, "npmrc");
@@ -738,10 +755,10 @@ function isPluginVersionPublished(packageName: string, version: string): boolean
     runNpmView([`${packageName}@${version}`, "version"]);
     return true;
   } catch (error) {
-    if (isNpmViewTimeoutError(error)) {
-      throw error;
+    if (isNpmViewNotFoundError(error)) {
+      return false;
     }
-    return false;
+    throw error;
   }
 }
 

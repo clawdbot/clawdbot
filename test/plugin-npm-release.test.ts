@@ -498,7 +498,7 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
 });
 
 describe("collectPluginReleasePlan", () => {
-  it("fails closed when the published-version lookup times out", () => {
+  function createPublishablePluginRepo(): string {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
     writePluginReadme(repoDir, "demo-plugin");
@@ -521,6 +521,61 @@ describe("collectPluginReleasePlan", () => {
         },
       },
     });
+    return repoDir;
+  }
+
+  it("reports a confirmed npm 404 as an unpublished candidate", () => {
+    const repoDir = createPublishablePluginRepo();
+    childProcessMock.execFileSyncOverride = (() => {
+      throw Object.assign(new Error("Command failed: npm view"), {
+        stderr: "npm error code E404\nnpm error 404 No match found for version 2026.4.10",
+      });
+    }) as unknown as ExecFileSync;
+
+    const plan = collectPluginReleasePlan({ rootDir: repoDir });
+
+    expect(plan.candidates).toEqual([
+      expect.objectContaining({
+        packageName: "@openclaw/demo-plugin",
+        version: "2026.4.10",
+        alreadyPublished: false,
+      }),
+    ]);
+    expect(plan.skippedPublished).toEqual([]);
+  });
+
+  it("skips a plugin version that npm confirms is already published", () => {
+    const repoDir = createPublishablePluginRepo();
+    childProcessMock.execFileSyncOverride = (() => "2026.4.10\n") as unknown as ExecFileSync;
+
+    const plan = collectPluginReleasePlan({ rootDir: repoDir });
+
+    expect(plan.candidates).toEqual([]);
+    expect(plan.skippedPublished).toEqual([
+      expect.objectContaining({
+        packageName: "@openclaw/demo-plugin",
+        version: "2026.4.10",
+        alreadyPublished: true,
+      }),
+    ]);
+  });
+
+  it("propagates non-404 npm registry failures", () => {
+    const repoDir = createPublishablePluginRepo();
+    childProcessMock.execFileSyncOverride = (() => {
+      throw Object.assign(new Error("getaddrinfo EAI_AGAIN registry.npmjs.org"), {
+        code: "EAI_AGAIN",
+        stderr: "npm error code EAI_AGAIN",
+      });
+    }) as unknown as ExecFileSync;
+
+    expect(() => collectPluginReleasePlan({ rootDir: repoDir })).toThrow(
+      "getaddrinfo EAI_AGAIN registry.npmjs.org",
+    );
+  });
+
+  it("fails closed when the published-version lookup times out", () => {
+    const repoDir = createPublishablePluginRepo();
     childProcessMock.execFileSyncOverride = ((command: string, args?: readonly string[]) => {
       expect(command).toBe("npm");
       expect(args).toEqual([

@@ -94,6 +94,24 @@ describe("minimal npm extended-stable workflow", () => {
     ).not.toContain("Setup Node environment");
   });
 
+  it("blocks standalone core publication until matching plugin versions exist", () => {
+    const publish = workflow().jobs?.publish_openclaw_npm;
+    const steps = publish?.steps ?? [];
+    const gate = step(publish, "Verify matching plugin releases are published");
+    const gateIndex = steps.indexOf(gate);
+    const coreVersionIndex = steps.indexOf(
+      step(publish, "Ensure version is not already published"),
+    );
+
+    expect(gate.run).toContain("scripts/plugin-npm-release-plan.ts");
+    expect(gate.run).toContain("--selection-mode all-publishable");
+    expect(gate.run).toContain(".candidates[]?");
+    expect(gate.run).toContain('if [[ -n "$MISSING_PLUGINS" ]]');
+    expect(gate.run).toContain("exit 1");
+    expect(gateIndex).toBeGreaterThan(-1);
+    expect(gateIndex).toBeLessThan(coreVersionIndex);
+  });
+
   it("threads an explicit, default-off extended-stable bypass through every policy gate", () => {
     const parsed = workflow();
     const input = parsed.on?.workflow_dispatch?.inputs?.bypass_extended_stable_guard;
