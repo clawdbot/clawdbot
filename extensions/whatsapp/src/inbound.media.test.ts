@@ -311,7 +311,7 @@ async function createBaileysMediaHttpError(statusCode: number, details: string):
     await getHttpStream("https://media.example/private");
   } catch (error) {
     if (!(error instanceof Error)) {
-      throw new Error("expected Baileys to reject media downloads with an Error");
+      throw new Error("expected Baileys to reject media downloads with an Error", { cause: error });
     }
     error.message = `${error.message} ${details}`;
     return error;
