@@ -72,6 +72,13 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain('"sendInbound"');
     expect(flow).toContain('"contentBase64"');
     expect(flow).toContain('"mediaFactCarrier":"media-store-url"');
+    expect(flow).toContain("String(candidate.text ?? '').trim() === config.expectedMarker");
+    expect(flow).toContain("String(message.text ?? '').trim() === config.expectedMarker");
+    expect(flow).toContain("conversationOutbound.length === 1");
+    expect(flow).not.toContain(".includes(config.expectedMarker)");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      tools: { media: { audio: { echoTranscript: false } } },
+    });
     expect(flow).not.toContain('"call":"runAgentPrompt"');
   });
 

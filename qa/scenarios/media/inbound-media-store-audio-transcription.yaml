@@ -18,7 +18,7 @@ scenario:
             capabilities: [audio]
         audio:
           enabled: true
-          echoTranscript: true
+          echoTranscript: false
   successCriteria:
     - QA Channel saves inline audio and emits only its media://inbound identity.
     - Media understanding resolves the local store reference without remote fetch failure.
@@ -81,18 +81,21 @@ flow:
             - ref: state
             - lambda:
                 params: [candidate]
-                expr: "candidate.conversation.id === config.conversationId && String(candidate.text ?? '').includes(config.expectedMarker)"
+                expr: "candidate.conversation.id === config.conversationId && String(candidate.text ?? '').trim() === config.expectedMarker"
             - expr: liveTurnTimeoutMs(env, 60000)
+        - set: conversationOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId)"
         - set: matchingOutbound
           value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && String(message.text ?? '').includes(config.expectedMarker))"
+            expr: "conversationOutbound.filter((message) => String(message.text ?? '').trim() === config.expectedMarker)"
         - set: gatewayLog
           value:
             expr: "String(readGatewayLogs() ?? '').slice(logCursor)"
         - assert:
-            expr: matchingOutbound.length === 1
+            expr: conversationOutbound.length === 1 && matchingOutbound.length === 1
             message:
-              expr: "`expected exactly one transcription marker reply, saw ${matchingOutbound.length}`"
+              expr: "`expected exactly one outbound transcription marker reply, saw ${conversationOutbound.length} messages and ${matchingOutbound.length} marker replies`"
         - assert:
             expr: "!gatewayLog.includes('MediaFetchError') && !gatewayLog.includes('audio: failed')"
             message:
