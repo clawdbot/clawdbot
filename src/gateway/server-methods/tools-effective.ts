@@ -495,11 +495,22 @@ async function resolveReadOnlyToolsEffectiveInventory(
   if (!catalog) {
     return maybeAppendMcpNotice(base, mcpConfig.serverNames, "not-listed");
   }
+  const runtimeModelContext =
+    runtime.workspaceDir === context.workspaceDir
+      ? baseResolution.runtimeModelContext
+      : await resolveEffectiveToolInventoryRuntimeModelContextAsync({
+          cfg: context.cfg,
+          agentId: context.agentId,
+          agentDir: resolveAgentDir(context.cfg, context.agentId),
+          workspaceDir: runtime.workspaceDir,
+          modelProvider: context.modelProvider,
+          modelId: context.modelId,
+        });
   return await projectMcpCatalog({
     base,
     catalog,
     context,
-    runtimeModelContext: baseResolution.runtimeModelContext,
+    runtimeModelContext,
     workspaceDir: runtime.workspaceDir,
   });
 }
