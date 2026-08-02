@@ -30,10 +30,10 @@ export function hasUnavailableMemoryBoundary(text: string): boolean {
   ) {
     return false;
   }
-  // The boundary must describe this responder's limitation. Recipient-only
-  // limits and contradictory first-person access or knowledge stay failures.
+  // The boundary must describe this responder's limitation in one clause.
+  // Recipient-only limits and contradictory first-person claims stay failures.
   return trimmed
-    .split(/[.!?\n]+/u)
+    .split(/[.!?\n,;:]+|\b(?:although|but|however|whereas|while)\b/iu)
     .some(
       (sentence) =>
         MEMORY_BOUNDARY_SUBJECT.test(sentence) &&
