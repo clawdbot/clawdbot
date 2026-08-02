@@ -375,12 +375,14 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     async (testCase) => {
       const { source, locked, expectedProvider } = testCase;
       const transportAuthorized =
-        "transportAuthorized" in testCase ? testCase.transportAuthorized : true;
+        ("transportAuthorized" in testCase ? testCase.transportAuthorized : undefined) ?? true;
       handleCommandsMock.mockResolvedValueOnce({
         shouldContinue: false,
         reply: { text: "compacted" },
       });
-      const targetAgentId = "targetAgentId" in testCase ? testCase.targetAgentId : "main";
+      const targetAgentId =
+        ("targetAgentId" in testCase ? testCase.targetAgentId : undefined) ?? "main";
+      const resolvedModel = "resolvedModel" in testCase ? testCase.resolvedModel : undefined;
       const targetSessionKey = `agent:${targetAgentId}:main`;
       if ("hasBoundCli" in testCase) {
         cliBackendsTesting.setDepsForTest({
@@ -465,10 +467,10 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
                               ...("agentCap" in testCase
                                 ? { contextTokens: testCase.agentCap }
                                 : {}),
-                              ...("resolvedModel" in testCase
+                              ...(resolvedModel !== undefined
                                 ? {
                                     models: {
-                                      [`anthropic/${testCase.resolvedModel}`]: {
+                                      [`anthropic/${resolvedModel}`]: {
                                         alias: "legacy-fast-model",
                                       },
                                     },
@@ -493,13 +495,13 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         aliasIndex: {
           byKey: new Map(),
           byAlias: new Map(
-            "resolvedModel" in testCase
+            resolvedModel !== undefined
               ? [
                   [
                     "legacy-fast-model",
                     {
                       alias: "legacy-fast-model",
-                      ref: { provider: "anthropic", model: testCase.resolvedModel },
+                      ref: { provider: "anthropic", model: resolvedModel },
                     },
                   ],
                 ]
@@ -516,8 +518,8 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       expect(handleCommandsMock.mock.calls[0]?.[0]).toMatchObject({
         provider: expectedProvider,
         model:
-          "resolvedModel" in testCase
-            ? testCase.resolvedModel
+          resolvedModel !== undefined
+            ? resolvedModel
             : expectedProvider === "anthropic"
               ? "claude-fable-5"
               : "gpt-5.5",
