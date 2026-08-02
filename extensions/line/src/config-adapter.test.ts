@@ -20,6 +20,7 @@ describe("LINE config adapter", () => {
           channelSecret: "default-secret",
           tokenFile: "/tmp/default-token",
           secretFile: "/tmp/default-secret",
+          name: "Default LINE",
           accounts: {
             alerts: {
               channelAccessToken: "alerts-token",
@@ -44,6 +45,7 @@ describe("LINE config adapter", () => {
     expect(nextCfg.channels?.line?.channelSecret).toBeUndefined();
     expect(nextCfg.channels?.line?.tokenFile).toBeUndefined();
     expect(nextCfg.channels?.line?.secretFile).toBeUndefined();
+    expect(nextCfg.channels?.line?.name).toBeUndefined();
     expect(listLineAccountIds(nextCfg)).toEqual(["alerts"]);
   });
 });
