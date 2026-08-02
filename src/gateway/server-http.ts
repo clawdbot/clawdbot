@@ -630,9 +630,8 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      // Plugin routes run before the general Control UI SPA catch-all so
-      // explicitly registered endpoints stay reachable. Core routes and the
-      // plugin recovery surface staged above keep precedence.
+      // Core and recovery routes run first, then plugin routes, then read-only Control UI
+      // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
       if (handlePluginRequest) {
         const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
         let pluginGatewayAuthSatisfied = false;
