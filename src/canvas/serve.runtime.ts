@@ -79,15 +79,24 @@ export async function handleCanvasDocumentHttpRequest(
         ? "text/html"
         : ((await detectMime({ filePath: opened.realPath })) ?? "application/octet-stream");
     res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Length", String(opened.data.byteLength));
     if (mime === "text/html") {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       if ((await resolveDocumentSandbox(root, relativePath)) === "scripts") {
         res.setHeader("Content-Security-Policy", "sandbox allow-scripts");
       }
+      if (req.method === "HEAD") {
+        res.end();
+        return true;
+      }
       res.end(opened.data.toString("utf8"));
       return true;
     }
     res.setHeader("Content-Type", mime);
+    if (req.method === "HEAD") {
+      res.end();
+      return true;
+    }
     res.end(opened.data);
     return true;
   } catch (error) {
