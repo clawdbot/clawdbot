@@ -128,6 +128,47 @@ describe("global hook runner registry selection", () => {
     expect(rootHook).toHaveBeenCalledOnce();
   });
 
+  it("overlays an explicitly initialized SDK registry on the process root", async () => {
+    const rootToolHook = vi.fn();
+    const rootWriteHook = vi.fn();
+    const sdkWriteHook = vi.fn(() => ({
+      message: { role: "user", content: "sdk redaction", timestamp: 2 },
+    }));
+    const root = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: rootToolHook, pluginId: "shared" },
+      { hookName: "before_message_write", handler: rootWriteHook, pluginId: "shared" },
+    ]);
+    root.trustedToolPolicies = [
+      {
+        pluginId: "shared",
+        pluginName: "Shared",
+        source: "test",
+        policy: { id: "shared-policy", description: "shared", evaluate: () => undefined },
+      },
+    ];
+    const sdk = createMockPluginRegistry([
+      { hookName: "before_message_write", handler: sdkWriteHook, pluginId: "shared" },
+    ]);
+
+    setActivePluginRegistry(root);
+    initializeGlobalHookRunner(sdk);
+
+    expect(
+      runner().runBeforeMessageWrite(
+        { message: { role: "user", content: "private", timestamp: 1 } },
+        { agentId: "test-agent", sessionKey: "test-session" },
+      ),
+    ).toEqual({ message: { role: "user", content: "sdk redaction", timestamp: 2 } });
+    expect(sdkWriteHook).toHaveBeenCalledOnce();
+    expect(rootWriteHook).not.toHaveBeenCalled();
+
+    await runner().runBeforeToolCall({ toolName: "read", params: {} }, toolCallContext());
+    expect(rootToolHook).toHaveBeenCalledOnce();
+    expect(
+      getGlobalHookRunnerRegistry()?.trustedToolPolicies?.map((entry) => entry.policy.id),
+    ).toEqual(["shared-policy"]);
+  });
+
   it("sees hooks added after initialization", () => {
     const registry: PluginRegistry = createMockPluginRegistry([
       { hookName: "message_received", handler: vi.fn(), pluginId: "plugin" },

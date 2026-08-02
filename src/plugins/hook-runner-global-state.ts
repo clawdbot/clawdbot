@@ -32,52 +32,56 @@ function resolveRootHookRegistry(
   state: HookRunnerGlobalState,
 ): TrustedPolicyHookRunnerRegistry | null {
   const activeRegistry = getActivePluginRegistry();
-  if (activeRegistry) {
-    return activeRegistry;
+  const initializedRegistry =
+    state.registry && !isPluginRegistryRetired(state.registry as PluginRegistry)
+      ? state.registry
+      : null;
+  if (!initializedRegistry || initializedRegistry === activeRegistry) {
+    return activeRegistry ?? initializedRegistry;
   }
-  if (state.registry && !isPluginRegistryRetired(state.registry as PluginRegistry)) {
-    return state.registry;
-  }
-  return null;
+  // SDK consumers can initialize an isolated hook registry while a process root
+  // exists. Preserve both sources, with the explicit initialization on top.
+  return overlayHookRegistries(activeRegistry, initializedRegistry);
 }
 
-function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRunnerRegistry | null {
-  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  const rootRegistry = resolveRootHookRegistry(state);
-  if (!scopedRegistry || scopedRegistry === rootRegistry) {
-    return scopedRegistry ?? rootRegistry;
+function overlayHookRegistries(
+  baseRegistry: TrustedPolicyHookRunnerRegistry | null,
+  overlayRegistry: TrustedPolicyHookRunnerRegistry | null,
+): TrustedPolicyHookRunnerRegistry | null {
+  if (!overlayRegistry || overlayRegistry === baseRegistry) {
+    return baseRegistry;
   }
-  if (!rootRegistry) {
-    return scopedRegistry;
+  if (!baseRegistry) {
+    return overlayRegistry;
   }
 
-  // A handle overlays only the contributions it actually carries. A partial or
-  // failed handle must not hide root hooks or trusted policy from the same plugin.
-  const scopedPluginIds = new Set(scopedRegistry.plugins.map((plugin) => plugin.id));
-  const scopedLegacyHookEvents = new Map<string, Set<string>>();
-  for (const hook of scopedRegistry.hooks) {
+  // Each higher-precedence source overlays only the contributions it carries. A
+  // partial or failed source must not hide unrelated fail-closed hooks or policy.
+  const overlayPluginIds = new Set(overlayRegistry.plugins.map((plugin) => plugin.id));
+  const overlayLegacyHookEvents = new Map<string, Set<string>>();
+  for (const hook of overlayRegistry.hooks) {
     if (!Array.isArray(hook.events)) {
       continue;
     }
-    const events = scopedLegacyHookEvents.get(hook.pluginId) ?? new Set<string>();
+    const events = overlayLegacyHookEvents.get(hook.pluginId) ?? new Set<string>();
     for (const event of hook.events) {
       events.add(event);
     }
-    scopedLegacyHookEvents.set(hook.pluginId, events);
+    overlayLegacyHookEvents.set(hook.pluginId, events);
   }
-  const scopedTypedHooks = new Set(
-    scopedRegistry.typedHooks.map((hook) => `${hook.pluginId}\0${hook.hookName}`),
+  const overlayTypedHooks = new Set(
+    overlayRegistry.typedHooks.map((hook) => `${hook.pluginId}\0${hook.hookName}`),
   );
-  const scopedTrustedPolicies = new Set(
-    (scopedRegistry.trustedToolPolicies ?? []).map(
+  const overlayTrustedPolicies = new Set(
+    (overlayRegistry.trustedToolPolicies ?? []).map(
       (entry) => `${entry.pluginId}\0${entry.policy.id}`,
     ),
   );
   const trustedToolPolicies = [
-    ...(rootRegistry.trustedToolPolicies ?? []).filter(
-      (entry) => !scopedTrustedPolicies.has(`${entry.pluginId}\0${entry.policy.id}`),
+    ...(baseRegistry.trustedToolPolicies ?? []).filter(
+      (entry) => !overlayTrustedPolicies.has(`${entry.pluginId}\0${entry.policy.id}`),
     ),
-    ...(scopedRegistry.trustedToolPolicies ?? []),
+    ...(overlayRegistry.trustedToolPolicies ?? []),
   ].toSorted((left, right) => {
     const leftRank = left.origin === "bundled" ? 0 : 1;
     const rightRank = right.origin === "bundled" ? 0 : 1;
@@ -85,28 +89,35 @@ function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRun
   });
   return {
     hooks: [
-      ...rootRegistry.hooks.flatMap((hook) => {
-        const scopedEvents = scopedLegacyHookEvents.get(hook.pluginId);
-        if (!scopedEvents || !Array.isArray(hook.events)) {
+      ...baseRegistry.hooks.flatMap((hook) => {
+        const overlayEvents = overlayLegacyHookEvents.get(hook.pluginId);
+        if (!overlayEvents || !Array.isArray(hook.events)) {
           return hook;
         }
-        const events = hook.events.filter((event) => !scopedEvents.has(event));
+        const events = hook.events.filter((event) => !overlayEvents.has(event));
         return events.length === 0 ? [] : [{ ...hook, events }];
       }),
-      ...scopedRegistry.hooks,
+      ...overlayRegistry.hooks,
     ],
     typedHooks: [
-      ...rootRegistry.typedHooks.filter(
-        (hook) => !scopedTypedHooks.has(`${hook.pluginId}\0${hook.hookName}`),
+      ...baseRegistry.typedHooks.filter(
+        (hook) => !overlayTypedHooks.has(`${hook.pluginId}\0${hook.hookName}`),
       ),
-      ...scopedRegistry.typedHooks,
+      ...overlayRegistry.typedHooks,
     ],
     plugins: [
-      ...rootRegistry.plugins.filter((plugin) => !scopedPluginIds.has(plugin.id)),
-      ...scopedRegistry.plugins,
+      ...baseRegistry.plugins.filter((plugin) => !overlayPluginIds.has(plugin.id)),
+      ...overlayRegistry.plugins,
     ],
     trustedToolPolicies,
   };
+}
+
+function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRunnerRegistry | null {
+  return overlayHookRegistries(
+    resolveRootHookRegistry(state),
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? null,
+  );
 }
 
 export function createLiveHookRegistryFacade(
