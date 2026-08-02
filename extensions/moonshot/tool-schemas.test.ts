@@ -1,6 +1,6 @@
 // Moonshot tests cover the "moonshot flavored json schema" tool normalization.
 import { describe, expect, it } from "vitest";
-import { normalizeMoonshotSchema, normalizeMoonshotToolSchemas } from "./tool-schemas.js";
+import { normalizeMoonshotToolSchemas } from "./tool-schemas.js";
 
 // The reporter's Apollo.io MCP tool shape (apollo_tasks_bulk_create) from issue #113130.
 const apolloToolSchema = {
@@ -33,9 +33,18 @@ function itemsOf(schema: unknown): Record<string, unknown> {
   return (properties?.tasks_attributes?.items ?? {}) as Record<string, unknown>;
 }
 
-describe("normalizeMoonshotSchema", () => {
+// Drives one schema through the exported provider hook that `index.ts` wires
+// into, so these cases exercise the real registration path, not the internal
+// walker behind it.
+function normalizeSchema(parameters: unknown): unknown {
+  return normalizeMoonshotToolSchemas({
+    tools: [{ name: "probe", description: "", parameters }],
+  } as never)[0]?.parameters;
+}
+
+describe("moonshot schema normalization", () => {
   it("moves the parent type into nested anyOf branches", () => {
-    const items = itemsOf(normalizeMoonshotSchema(apolloToolSchema));
+    const items = itemsOf(normalizeSchema(apolloToolSchema));
 
     expect(items.type).toBeUndefined();
     expect(items.anyOf).toEqual([
@@ -57,7 +66,7 @@ describe("normalizeMoonshotSchema", () => {
       ],
     };
 
-    expect(normalizeMoonshotSchema(schema)).toEqual({
+    expect(normalizeSchema(schema)).toEqual({
       anyOf: [
         { type: "object", required: ["a"] },
         { type: "object", required: ["b"] },
@@ -84,7 +93,7 @@ describe("normalizeMoonshotSchema", () => {
     },
   ])("leaves the node as sent for $name", ({ node }) => {
     const schema = { type: "object", properties: { entry: node } };
-    expect(normalizeMoonshotSchema(schema)).toEqual(schema);
+    expect(normalizeSchema(schema)).toEqual(schema);
   });
 
   it("keeps an own hostile __proto__ key an own key", () => {
@@ -93,7 +102,7 @@ describe("normalizeMoonshotSchema", () => {
         {"required":["a"],"__proto__":{"polluted":true}},{"required":["b"]}]}}}`,
     ) as Record<string, unknown>;
 
-    const normalized = normalizeMoonshotSchema(schema) as {
+    const normalized = normalizeSchema(schema) as {
       properties: { entry: { anyOf: Array<Record<string, unknown>> } };
     };
     const branch = normalized.properties.entry.anyOf[0] as Record<string, unknown>;
@@ -108,7 +117,7 @@ describe("normalizeMoonshotSchema", () => {
       type: "object",
       properties: { entry: { type: "object", oneOf: [{ required: ["a"] }, { required: ["b"] }] } },
     };
-    expect(normalizeMoonshotSchema(schema)).toEqual(schema);
+    expect(normalizeSchema(schema)).toEqual(schema);
   });
 });
 

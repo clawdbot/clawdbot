@@ -93,7 +93,7 @@ function canPushTypeIntoBranches(branches: unknown[], parentTypes: string[]): bo
  * the parent `type` into every untyped branch accepts the identical value set while satisfying that
  * contract. Only `anyOf` is rewritten because only `anyOf` is evidenced by the provider error.
  */
-export function normalizeMoonshotSchema(schema: unknown): unknown {
+function normalizeMoonshotSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) {
     return schema.map(normalizeMoonshotSchema);
   }
