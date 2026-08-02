@@ -1,5 +1,8 @@
 // Imessage plugin module implements channel behavior.
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createAccountStatusSink,
+  resolveOutboundSendDep,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { resolveIMessageDuplicateSourceOwner, type ResolvedIMessageAccount } from "./accounts.js";
 import { PAIRING_APPROVED_MESSAGE, resolveChannelMediaMaxBytes } from "./channel-api.js";
 import type { ChannelPlugin } from "./channel-api.js";
@@ -95,7 +98,8 @@ export async function startIMessageGatewayAccount(
     // openclaw/openclaw#65141: this account shares a local Messages source with
     // an already-owning account, so spawning a second `imsg rpc` would deliver
     // every inbound twice. Keep the account enabled for outbound sends, status,
-    // and capability surfaces; just park the watcher slot until shutdown.
+    // and capability surfaces; just park the watcher slot until shutdown. Lifecycle stays silent:
+    // ready would lie about admission and stopped would invite restart; parked semantics are deferred.
     ctx.log?.info?.(
       `[${account.accountId}] skipping watcher: duplicate iMessage source; using account "${ownerAccountId}"`,
     );
@@ -107,6 +111,11 @@ export async function startIMessageGatewayAccount(
     });
     return;
   }
+  const statusSink = createAccountStatusSink({
+    accountId: account.accountId,
+    setStatus: ctx.setStatus,
+  });
+  statusSink({ lifecycle: "starting" });
   ctx.log?.info?.(
     `[${account.accountId}] starting provider (${cliPath}${dbPath ? ` db=${dbPath}` : ""})`,
   );
@@ -116,6 +125,7 @@ export async function startIMessageGatewayAccount(
     runtime: ctx.runtime,
     abortSignal: ctx.abortSignal,
     channelRuntime: ctx.channelRuntime,
+    statusSink,
   });
 }
 

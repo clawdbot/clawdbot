@@ -1552,6 +1552,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         { timeoutMs: probeTimeoutMs },
       );
       attemptSubscriptionId = result?.subscription ?? null;
+      opts.statusSink?.({
+        connected: true,
+        lifecycle: "ready",
+        lastConnectedAt: Date.now(),
+        lastError: null,
+        terminalDisconnect: undefined,
+      });
       client = attemptClient;
       detachAbortHandler = attemptDetachAbortHandler;
       keepAttemptClient = true;
@@ -1560,9 +1567,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (abort?.aborted) {
         return;
       }
-      const shouldRetry =
-        attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && isRetriableWatchSubscribeStartupError(err);
+      const retriable = isRetriableWatchSubscribeStartupError(err);
+      const shouldRetry = attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && retriable;
       if (!shouldRetry) {
+        opts.statusSink?.({
+          connected: false,
+          lifecycle: retriable ? "recovering" : "blocked",
+          terminalDisconnect: retriable ? undefined : true,
+          lastError: String(err),
+        });
         runtime.error?.(
           danger(
             `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure({
@@ -1581,6 +1594,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         );
         throw err;
       }
+      opts.statusSink?.({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: String(err),
+      });
       runtime.log?.(
         warn(
           describeIMessageWatchSubscribeStartupFailure({

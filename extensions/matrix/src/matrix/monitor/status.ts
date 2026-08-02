@@ -5,6 +5,7 @@ import {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { isMatrixAccessTokenInvalidatedError } from "../sdk/client-support.js";
 import {
   isMatrixDisconnectedSyncState,
   isMatrixReadySyncState,
@@ -47,6 +48,7 @@ export function createMatrixMonitorStatusController(params: {
     lastDisconnect: null,
     lastError: null,
     healthState: "starting",
+    lifecycle: "starting",
   };
 
   const emit = () => {
@@ -68,6 +70,8 @@ export function createMatrixMonitorStatusController(params: {
     status.lastError = null;
     status.lastDisconnect = null;
     status.healthState = "healthy";
+    status.lifecycle = "ready";
+    status.terminalDisconnect = undefined;
     emit();
   };
 
@@ -86,6 +90,9 @@ export function createMatrixMonitorStatusController(params: {
     };
     status.lastError = error;
     status.healthState = paramsLocal.state.toLowerCase();
+    const tokenInvalidated = isMatrixAccessTokenInvalidatedError(paramsLocal.error);
+    status.lifecycle = tokenInvalidated ? "blocked" : "recovering";
+    status.terminalDisconnect = tokenInvalidated || undefined;
     emit();
   };
 
@@ -116,8 +123,9 @@ export function createMatrixMonitorStatusController(params: {
     markStopped(at = Date.now()) {
       status.connected = false;
       status.lastEventAt = at;
-      if (status.healthState !== "error") {
+      if (status.lifecycle !== "blocked" && status.healthState !== "error") {
         status.healthState = "stopped";
+        status.lifecycle = "stopped";
       }
       emit();
     },

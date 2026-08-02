@@ -4,6 +4,7 @@ import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowli
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
+  createAccountStatusSink,
   createReplyToFanout,
   defineChannelMessageAdapter,
   resolveOutboundSendDep,
@@ -607,8 +608,11 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
-          ctx.setStatus({
+          const statusSink = createAccountStatusSink({
             accountId: account.accountId,
+            setStatus: ctx.setStatus,
+          });
+          statusSink({
             baseUrl: account.baseUrl,
           });
           ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
@@ -620,6 +624,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             channelRuntime: ctx.channelRuntime,
             abortSignal: ctx.abortSignal,
             mediaMaxMb: account.config.mediaMaxMb,
+            statusSink,
           });
         },
       },
