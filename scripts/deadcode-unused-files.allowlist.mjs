@@ -6,8 +6,9 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = ["extensions/qa-lab/src/ci-smoke-plan.
 // Knip can disagree across supported local/CI platforms for files that are
 // only reachable through test-only import graphs, sparse-checkout proof
 // workspaces, dynamic entrypoints, manifest-discovered plugin surfaces, or
-// package bridge files. Ignore these when reported, but do not require them
-// to be reported.
+// package bridge files. This also covers standalone foundations wired by the
+// next stack slice. Ignore these when reported, but do not require them to be
+// reported.
 export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "extensions/acpx/src/runtime-internals/mcp-command-line.mjs",
   "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
@@ -22,6 +23,12 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "src/commands/doctor/shared/deprecation-compat.ts",
   "src/config/doc-baseline.runtime.ts",
   "src/config/doc-baseline.ts",
+  "src/durable/runtime-ids.ts",
+  "src/durable/schema.generated.ts",
+  "src/durable/schema.ts",
+  "src/durable/sqlite-store.ts",
+  "src/durable/store-factory.ts",
+  "src/durable/types.ts",
   "src/gateway/gateway-cli-backend.live-helpers.ts",
   "src/gateway/gateway-cli-backend.live-probe-helpers.ts",
   "src/gateway/gateway-codex-harness.live-helpers.ts",
