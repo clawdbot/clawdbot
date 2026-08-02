@@ -111,7 +111,7 @@ export function markSpawnFailureCleanupTerminalState(
   };
 }
 
-export function isTerminalSpawnFailureCleanupStatus(status: unknown): boolean {
+function isTerminalSpawnFailureCleanupStatus(status: unknown): boolean {
   return (
     status === "deleted" ||
     status === "missing" ||

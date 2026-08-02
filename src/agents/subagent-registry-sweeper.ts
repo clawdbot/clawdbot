@@ -33,7 +33,7 @@ import {
   resolveSubagentRunOrphanReason,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
-import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 const SESSION_RUN_TTL_MS = 5 * 60_000;
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
 const SUSPENDED_DELIVERY_CRON_EXPIRY_MS = 2 * 60 * 60_000;

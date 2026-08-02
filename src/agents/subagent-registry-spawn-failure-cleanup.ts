@@ -10,10 +10,8 @@ import {
   resolveCompletionFromSessionEntry,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
-import {
-  resolveProvisionalSessionCleanupProof,
-  type ProvisionalSessionCleanupIdentity,
-} from "./subagent-spawn-cleanup.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
+import { resolveProvisionalSessionCleanupProof } from "./subagent-spawn-cleanup.js";
 
 const SESSION_RUN_TTL_MS = 5 * 60_000;
 
@@ -150,6 +148,7 @@ export async function reconcileSpawnFailureCleanup(
     ) {
       latest.cleanupHandled = true;
       latest.cleanupCompletedAt = now;
+      latest.archiveAtMs ??= now + SESSION_RUN_TTL_MS;
       params.persist(runId);
     }
     return true;

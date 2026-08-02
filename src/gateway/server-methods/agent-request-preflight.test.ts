@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  attachReservedSubagentClaimToken,
-  type ReservedSubagentAdmissionRequest,
-} from "../../agents/reserved-subagent-admission.js";
+import { attachReservedSubagentClaimToken } from "../../agents/reserved-subagent-admission.js";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { DEDUPE_TTL_MS } from "../server-constants.js";
@@ -405,7 +402,7 @@ describe("reserved subagent admission TTL", () => {
         idempotencyKey: "reserved-expired-run",
       },
       claimToken,
-    ) as ReservedSubagentAdmissionRequest;
+    ) as Record<string | symbol, unknown>;
     const result = prepareAgentRequestPreflight({
       params: request,
       respond,
@@ -474,7 +471,7 @@ describe("reserved subagent admission TTL", () => {
     expect(controller.respondToOutcome()).toBe(true);
     expect(markAccepted).toHaveBeenCalledWith(true);
     expect(respond).toHaveBeenCalledWith(
-      false,
+      true,
       expect.objectContaining({
         runId: "reserved-final-expired-run",
         status: "timeout",
@@ -701,7 +698,7 @@ describe("reserved subagent Gateway admission", () => {
     expect(controller.respondToOutcome()).toBe(true);
     expect(context.dedupe.get(`agent:${runId}`)).toBe(reservedEntry);
     expect(ordinaryRespond).toHaveBeenLastCalledWith(
-      false,
+      true,
       { runId, status: "in_flight" },
       undefined,
       expect.objectContaining({ cached: true, runId }),
@@ -780,7 +777,7 @@ describe("reserved subagent Gateway admission", () => {
     expect(controller.respondToOutcome()).toBe(true);
     expect(context.dedupe.get(`agent:${runId}`)).toBe(acceptedEntry);
     expect(ordinaryRespond).toHaveBeenLastCalledWith(
-      false,
+      true,
       { runId, status: "in_flight" },
       undefined,
       expect.objectContaining({ cached: true, runId }),

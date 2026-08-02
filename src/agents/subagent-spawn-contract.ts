@@ -1,5 +1,5 @@
 import type { FastMode } from "../shared/fast-mode.js";
-import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,

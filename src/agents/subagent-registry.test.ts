@@ -663,6 +663,8 @@ describe("subagent registry seam flow", () => {
         },
       });
     });
+    const entry = expectDefined(mod.getSubagentRunByRunId(runId), "terminal child cleanup run");
+    expect(entry.archiveAtMs).toBeGreaterThan(Date.now());
     expect(
       mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
     ).toHaveLength(0);

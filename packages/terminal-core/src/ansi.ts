@@ -217,7 +217,7 @@ export function sanitizeForLog(v: string): string {
   return stripAnsi(v).replace(controlCharsRegex, "");
 }
 
-function textWidth(text: string): number {
+function printableTextWidth(text: string): number {
   // POSIX renders these default-ignorable Hangul fillers as wide/halfwidth cells;
   // same-shaping representatives and well-formed surrogates preserve terminal output.
   const printable = /[\u115F\u3164\uFFA0\uD800-\uDFFF]/u.test(text)
@@ -231,16 +231,36 @@ function textWidth(text: string): number {
   const widthInput = printable
     .replace(/[\u260E]\uFE0F?\u20E3/gu, "\u260E")
     .replace(/[\u2764]\uFE0F?\u200D\u{1F525}/gu, "\u{1F525}")
+    .replace(/^\uFE0F+/u, "")
+    .replace(/^\u200D+/u, "")
     .replace(/([0-9#*])\uFE0F(?!\u20E3)/gu, "$1")
     .replace(/\u200D$/gu, "")
-    .replace(WIDTH_CONTROL_REGEX, "")
     .replace(REGIONAL_INDICATOR_REGEX, "a");
   const normalizedWidthInput = removeZeroWidthDefaultIgnorables(widthInput);
-  let width = stringWidth(normalizedWidthInput);
-  // Tabs execute inside CSI too; string-width intentionally treats them as zero-width.
-  for (let index = text.indexOf("\t"); index !== -1; index = text.indexOf("\t", index + 1)) {
-    width += 1;
+  return stringWidth(normalizedWidthInput);
+}
+
+function textWidth(text: string): number {
+  let width = 0;
+  let printableStart = 0;
+  const flushPrintable = (end: number): void => {
+    if (end > printableStart) {
+      width += printableTextWidth(text.slice(printableStart, end));
+    }
+  };
+  for (let index = 0; index < text.length; index += 1) {
+    WIDTH_CONTROL_REGEX.lastIndex = 0;
+    if (!WIDTH_CONTROL_REGEX.test(text.charAt(index))) {
+      continue;
+    }
+    flushPrintable(index);
+    if (text.charAt(index) === "\t") {
+      // Tabs execute inside CSI too; string-width intentionally treats them as zero-width.
+      width += 1;
+    }
+    printableStart = index + 1;
   }
+  flushPrintable(text.length);
   return width;
 }
 
@@ -361,10 +381,6 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
         out += segment.value;
         used += controlWidth;
       } else if (controlWidth > 0) {
-        out += widthControls.reduce(
-          (value, control) => value.replaceAll(control, ""),
-          segment.value,
-        );
         budgetSpent = true;
       } else {
         out += segment.value;

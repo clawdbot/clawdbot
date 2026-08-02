@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
@@ -9,13 +10,7 @@ const RESERVED_SESSION_DELETE_MAX_ELAPSED_MS = 30_000;
 
 export type ProvisionalSessionDeletionOutcome = "deleted" | "not_deleted" | "indeterminate";
 
-export type ProvisionalSessionCleanupIdentity = {
-  expectedSessionId?: string;
-  expectedLifecycleRevision?: string;
-  expectedSessionUpdatedAt?: number;
-};
-
-export type ProvisionalSessionCleanupProof = "missing" | "original" | "replacement";
+type ProvisionalSessionCleanupProof = "missing" | "original" | "replacement";
 
 type WaitForSessionDeletionOptions =
   | boolean
@@ -57,7 +52,7 @@ export function refreshProvisionalSessionCleanupIdentity(
   return captureProvisionalSessionCleanupIdentity(entry) ?? current;
 }
 
-export function provisionalSessionCleanupIdentityMatches(
+function provisionalSessionCleanupIdentityMatches(
   entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "updatedAt"> | undefined,
   identity?: ProvisionalSessionCleanupIdentity,
 ): boolean {
@@ -93,7 +88,7 @@ export function cleanupIdentityOption(identity?: ProvisionalSessionCleanupIdenti
   return identity ? { expectedIdentity: identity } : {};
 }
 
-export function reservedCleanupState(
+function reservedCleanupState(
   sessionDeletion: ProvisionalSessionDeletionOutcome,
   identity?: ProvisionalSessionCleanupIdentity,
 ): {
@@ -114,12 +109,6 @@ export function applyReservedCleanupState<T extends { status: string }>(
   return sessionDeletion && result.status !== "accepted"
     ? { ...result, reservedCleanup: reservedCleanupState(sessionDeletion, identity) }
     : result;
-}
-
-export function failedSpawnCleanupIdentity(identity?: ProvisionalSessionCleanupIdentity): {
-  sessionIdentity?: ProvisionalSessionCleanupIdentity;
-} {
-  return identity ? { sessionIdentity: identity } : {};
 }
 
 export async function cleanupProvisionalSession(

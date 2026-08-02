@@ -6,11 +6,11 @@ import {
   getLatestSubagentRunByChildSessionKey,
   hasSubagentRunIdentity,
 } from "../agents/subagent-registry.js";
+import type { ProvisionalSessionCleanupIdentity } from "../agents/subagent-spawn-cleanup-types.js";
 import {
   cleanupProvisionalSession,
   resolveProvisionalSessionCleanupProof,
 } from "../agents/subagent-spawn-cleanup.js";
-import type { ProvisionalSessionCleanupIdentity } from "../agents/subagent-spawn-cleanup.js";
 import type { SpawnSubagentResult } from "../agents/subagent-spawn-contract.js";
 import { resolveSubagentTargetPolicy } from "../agents/subagent-target-policy.js";
 import { resolveStorePath } from "../config/sessions/paths.js";

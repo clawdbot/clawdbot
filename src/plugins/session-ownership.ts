@@ -7,7 +7,7 @@ import {
 } from "../sessions/agent-harness-session-key.js";
 import type { PluginRegistry } from "./registry-types.js";
 
-export type LockedSessionPluginOwnership = {
+type LockedSessionPluginOwnership = {
   ownerPluginId: string;
   harnessId?: string;
   registration?: PluginRegistry["agentHarnesses"][number];
@@ -25,7 +25,7 @@ export function resolveAgentHarnessRegistration(params: {
     : undefined;
 }
 
-export function resolveAgentHarnessRegistrationForSessionKey(params: {
+function resolveAgentHarnessRegistrationForSessionKey(params: {
   registry: Pick<PluginRegistry, "agentHarnesses">;
   sessionKey: string;
 }): PluginRegistry["agentHarnesses"][number] | undefined {

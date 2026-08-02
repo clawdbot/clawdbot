@@ -5,7 +5,7 @@ import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
-import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export type SubagentCompletionRequest = {
@@ -139,7 +139,7 @@ export type SubagentCompletionDeliveryState = {
     | "waiting_for_requester_turn";
 };
 
-export type SpawnFailureCleanupState = {
+type SpawnFailureCleanupState = {
   status: "pending" | "exhausted" | "deleted" | "missing" | "replaced" | "terminal_registered";
   reason: string;
   recordedAt: number;

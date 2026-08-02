@@ -1964,6 +1964,30 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.completeCollectorLaunchCleanupMock).not.toHaveBeenCalled();
   });
 
+  it("bounds collector launch settlement retries when registry persistence keeps failing", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
+    hoisted.settleFailedQueuedSubagentLaunchMock.mockImplementation(() => {
+      throw new Error("registry busy");
+    });
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        throw new Error("launch failed");
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "fail launch with persistent registry errors", collect: true },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+
+    expect(result.status).toBe("accepted");
+    await vi.waitFor(() =>
+      expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledTimes(3),
+    );
+  });
+
   it("uses and validates tools.swarm.defaultAgentId for collector children", async () => {
     hoisted.configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, defaultAgentId: "worker" } },

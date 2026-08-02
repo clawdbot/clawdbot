@@ -8,11 +8,11 @@ import {
 } from "./subagent-registry.js";
 import type { SubagentProgressOrigin } from "./subagent-registry.types.js";
 import type { SubagentSpawnAdmissionSlot } from "./subagent-spawn-admission.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import {
   cleanupProvisionalSession,
   resolveProvisionalSessionCleanupProof,
 } from "./subagent-spawn-cleanup.js";
-import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup.js";
 import {
   getRuntimeConfig,
   loadSessionEntry,
@@ -43,7 +43,7 @@ type RetainedFailedSpawnAdmissionState = {
   holders: Map<string, RetainedFailedSpawnAdmission>;
 };
 
-export type RetainedFailedSpawnAdmissionInspection = {
+type RetainedFailedSpawnAdmissionInspection = {
   slotId: string;
   childSessionKey: string;
   attempts: number;
@@ -142,7 +142,7 @@ async function reconcileRetainedFailedSpawnAdmission(
   }
 }
 
-export function retainFailedSpawnAdmissionSlotUntilDeletion(params: {
+function retainFailedSpawnAdmissionSlotUntilDeletion(params: {
   slot: SubagentSpawnAdmissionSlot;
   childSessionKey: string;
   sessionIdentity?: ProvisionalSessionCleanupIdentity;
@@ -221,7 +221,7 @@ export function resolveSpawnPipelineFailure(error: unknown, phase: string) {
   };
 }
 
-export function recordIndeterminateFailedSubagentSpawn(
+function recordIndeterminateFailedSubagentSpawn(
   admissionSlot: SubagentSpawnAdmissionSlot | undefined,
   params: {
     runId: string;

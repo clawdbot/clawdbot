@@ -241,7 +241,7 @@ export function createAgentAdmissionController(params: {
       admission?.release();
       params.dedupeLifecycle.markAccepted(true);
       params.respond(
-        false,
+        true,
         postAdmissionTimeout ?? { runId: params.runId, status: "in_flight" as const },
         undefined,
         { cached: true, runId: params.runId },
