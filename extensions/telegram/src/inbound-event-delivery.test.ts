@@ -21,13 +21,13 @@ describe("telegram inbound event delivery", () => {
       accountId: "a1",
     });
     expect(count).toBe(1);
-    end();
     notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:z",
       to: "999",
       accountId: "a1",
     });
     expect(count).toBe(1);
+    end();
   });
 
   it("ignores outbound sends to another destination", () => {
@@ -44,6 +44,26 @@ describe("telegram inbound event delivery", () => {
       accountId: undefined,
     });
     expect(count).toBe(0);
+    end();
+  });
+
+  it("releases correlation before a failing delivery marker runs", () => {
+    let count = 0;
+    const end = beginTelegramInboundEventDeliveryCorrelation("sess:throws", {
+      outboundTo: "999",
+      markInboundEventDelivered: () => {
+        count += 1;
+        throw new Error("marker failed");
+      },
+    });
+
+    expect(() =>
+      notifyTelegramInboundEventOutboundSuccess({ sessionKey: "sess:throws", to: "999" }),
+    ).toThrow("marker failed");
+    expect(() =>
+      notifyTelegramInboundEventOutboundSuccess({ sessionKey: "sess:throws", to: "999" }),
+    ).not.toThrow();
+    expect(count).toBe(1);
     end();
   });
 
