@@ -803,11 +803,11 @@ describe("Slack live QA runtime helpers", () => {
 
     expect(() =>
       run.verifyObserved?.({
-        finalMessage: { text: finalMarker, ts: "3.000000" },
+        finalMessage: { channelId: "C123456789", text: finalMarker, ts: "3.000000" },
         messages: [
-          { text: `💬 ${commentaryMarker}`, ts: "1.000000" },
-          { text: toolMarker, ts: "2.000000" },
-          { text: finalMarker, ts: "3.000000" },
+          { channelId: "C123456789", text: `💬 ${commentaryMarker}`, ts: "1.000000" },
+          { channelId: "C123456789", text: toolMarker, ts: "2.000000" },
+          { channelId: "C123456789", text: finalMarker, ts: "3.000000" },
         ],
       }),
     ).not.toThrow();
