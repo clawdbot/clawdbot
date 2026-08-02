@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 type CapturedEditOperations = {
   readFile: (absolutePath: string) => Promise<Buffer>;
@@ -17,6 +18,8 @@ type CapturedEditOperations = {
 
 type CapturedWriteOperations = {
   mkdir: (dir: string) => Promise<void>;
+  readFile: (absolutePath: string) => Promise<Buffer | string>;
+  statFile: (absolutePath: string) => Promise<unknown>;
   writeFile: (absolutePath: string, content: string) => Promise<void>;
 };
 
@@ -50,7 +53,7 @@ vi.mock("./sessions/index.js", async () => {
   };
 });
 
-const { createHostWorkspaceEditTool, createHostWorkspaceWriteTool } =
+const { createHostWorkspaceEditTool, createHostWorkspaceWriteTool, createSandboxedWriteTool } =
   await import("./agent-tools.read.js");
 
 const osHome = () => process.env.HOME ?? os.homedir();
@@ -227,4 +230,23 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
       }
     },
   );
+});
+
+describe("write tool verification operations", () => {
+  it("provides readback and stat operations to host writes", () => {
+    createHostWorkspaceWriteTool("/workspace", { workspaceOnly: false });
+
+    expect(readWriteOps().readFile).toBeTypeOf("function");
+    expect(readWriteOps().statFile).toBeTypeOf("function");
+  });
+
+  it("provides readback and stat operations to sandbox writes", () => {
+    createSandboxedWriteTool({
+      root: "/workspace",
+      bridge: {} as SandboxFsBridge,
+    });
+
+    expect(readWriteOps().readFile).toBeTypeOf("function");
+    expect(readWriteOps().statFile).toBeTypeOf("function");
+  });
 });

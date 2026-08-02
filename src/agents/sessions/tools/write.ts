@@ -74,10 +74,10 @@ export interface WriteOperations {
   writeFile: (absolutePath: string, content: string) => Promise<void>;
   /** Create directory recursively */
   mkdir: (dir: string) => Promise<void>;
-  /** Optional readback used to recover when a write succeeded but the tool aborted before returning */
-  readFile?: (absolutePath: string) => Promise<Buffer | string>;
-  /** Optional stat used to avoid reporting success for files that already matched before execution */
-  statFile?: (absolutePath: string) => Promise<WriteToolFileStat | null>;
+  /** Read persisted content before reporting success */
+  readFile: (absolutePath: string) => Promise<Buffer | string>;
+  /** Stat the target for prechecks and persisted-file verification */
+  statFile: (absolutePath: string) => Promise<WriteToolFileStat | null>;
 }
 
 const defaultWriteOperations: WriteOperations = {
@@ -501,6 +501,26 @@ function successfulWriteResult(path: string, content: string, details: WriteTool
   );
 }
 
+async function verifySuccessfulWrite(
+  absolutePath: string,
+  content: string,
+  ops: WriteOperations,
+): Promise<boolean> {
+  // Success receipts must prove the same regular-file bytes across local and delegated writes.
+  // Compare encoded bytes because UTF-8 writes normalize invalid surrogate code units.
+  const expectedContent = Buffer.from(content, "utf8");
+  const stat = await ops.statFile(absolutePath).catch(() => null);
+  if (!stat || stat.type !== "file" || stat.size !== expectedContent.byteLength) {
+    return false;
+  }
+  const readback = await ops.readFile(absolutePath).catch(() => undefined);
+  if (readback === undefined) {
+    return false;
+  }
+  const persistedContent = Buffer.isBuffer(readback) ? readback : Buffer.from(readback, "utf8");
+  return persistedContent.equals(expectedContent);
+}
+
 async function recoverSuccessfulWrite(params: {
   absolutePath: string;
   content: string;
@@ -511,16 +531,15 @@ async function recoverSuccessfulWrite(params: {
   details: WriteToolDetails;
   signal?: AbortSignal;
 }) {
-  if (!params.ops.readFile || !isWriteRecoveryCandidate(params.error, params.signal)) {
+  if (!isWriteRecoveryCandidate(params.error, params.signal)) {
     return null;
   }
-  const readback = await params.ops.readFile(params.absolutePath).catch(() => undefined);
-  const currentContent = Buffer.isBuffer(readback) ? readback.toString("utf8") : readback;
+  const verified = await verifySuccessfulWrite(params.absolutePath, params.content, params.ops);
   const changed =
     params.precheck.state === "different" ||
     (params.precheck.state === "unknown" &&
       (await didWriteMetadataChange(params.absolutePath, params.precheck.beforeStat, params.ops)));
-  if (currentContent !== params.content || !changed) {
+  if (!verified || !changed) {
     return null;
   }
   return successfulWriteResult(params.path, params.content, params.details);
@@ -574,6 +593,11 @@ export function createWriteToolDefinition(
           await ops.writeFile(absolutePath, content);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
+          }
+          if (!(await verifySuccessfulWrite(absolutePath, content, ops))) {
+            throw new Error(
+              `Write verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
+            );
           }
           return successfulWriteResult(path, content, details);
         } catch (error: unknown) {
