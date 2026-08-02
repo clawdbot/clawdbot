@@ -299,7 +299,7 @@ function ensureAgentRunListener() {
       data: evt.data,
     });
     agentRunStarts.delete(evt.runId);
-    if (phase === "error") {
+    if (phase === "error" && evt.data?.fallbackExhaustedFailure !== true) {
       schedulePendingAgentRunError(snapshot);
       return;
     }

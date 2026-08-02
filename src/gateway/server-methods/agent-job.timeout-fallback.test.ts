@@ -89,6 +89,113 @@ describe("waitForAgentJob timeout fallback", () => {
     });
   });
 
+  it("publishes exhausted fallback failures without waiting for retry grace", async () => {
+    const runId = `run-timeout-fallback-exhausted-${runSequence++}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        error: "All model fallback candidates failed",
+        fallbackExhaustedFailure: true,
+      },
+    });
+
+    const terminalFailure = {
+      status: "error",
+      startedAt: 1_000,
+      endedAt: 1_100,
+      error: "All model fallback candidates failed",
+    };
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject(terminalFailure);
+    await expect(waitPromise).resolves.toMatchObject(terminalFailure);
+  });
+
+  it("keeps retryable lifecycle failures pending for the full retry grace", async () => {
+    const runId = `run-timeout-fallback-retryable-${runSequence++}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        error: "Retryable provider failure",
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "timeout",
+      error: "Retryable provider failure",
+      pendingError: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(14_000);
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      endedAt: 1_100,
+      error: "Retryable provider failure",
+    });
+  });
+
+  it("preserves pending hard timeouts over exhausted fallback failures", async () => {
+    const runId = `run-timeout-fallback-exhausted-hard-timeout-${runSequence++}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        aborted: true,
+        timeoutPhase: "provider",
+      },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_200,
+        error: "All model fallback candidates failed",
+        fallbackExhaustedFailure: true,
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "timeout",
+      startedAt: 1_000,
+      endedAt: 1_100,
+      timeoutPhase: "provider",
+    });
+  });
+
   it("ignores a hard timeout that predates a fresh wait", async () => {
     const runId = `run-timeout-fallback-${runSequence++}`;
     emitAgentEvent({
