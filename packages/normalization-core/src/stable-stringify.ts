@@ -3,7 +3,6 @@
  * Serializes arbitrary values with deterministic key ordering and explicit
  * handling for errors, binary data, bigint, non-finite numbers, and cycles.
  */
-import { Buffer } from "node:buffer";
 
 type StableStringNormalizer = (value: string) => string;
 
@@ -69,7 +68,7 @@ function stringifyObjectValue(
     return stringifyStableValue(
       {
         type: "Uint8Array",
-        data: Buffer.from(value).toString("base64"),
+        data: encodeBase64(value),
       },
       stack,
       normalizeString,
@@ -97,6 +96,14 @@ function stringifyObjectValue(
     );
   }
   return `{${serializedFields.join(",")}}`;
+}
+
+function encodeBase64(value: Uint8Array): string {
+  let binary = "";
+  for (const byte of value) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
 }
 
 function compareStableStrings(left: string, right: string): number {

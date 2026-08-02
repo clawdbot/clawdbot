@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -13,7 +14,6 @@ import {
 } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { stableStringify } from "./stable-stringify.js";
 import { getSwarmRunByLaunchReplayKey, initSubagentRegistry } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
