@@ -214,20 +214,167 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(hooks.onTimeout).not.toHaveBeenCalled();
   });
 
-  it("handles getPendingCount error by restarting immediately", () => {
-    const hooks: RestartDeferralHooks = {
-      onCheckError: vi.fn(),
-      onReady: vi.fn(),
+  // A failed inspection leaves active work UNKNOWN, not absent. These three cases pin the
+  // boundary: never restart on the failure itself, keep retrying, and still escalate through
+  // the bounded deferral budget so a permanently broken probe cannot hang restarts forever.
+  it("defers instead of restarting when the initial pending inspection throws", async () => {
+    let emissions = 0;
+    const countEmission = () => {
+      emissions += 1;
     };
+    process.on("SIGUSR1", countEmission);
+    try {
+      const hooks: RestartDeferralHooks = { onCheckError: vi.fn(), onReady: vi.fn() };
+      let call = 0;
+
+      deferGatewayRestartUntilIdle({
+        getPendingCount: () => {
+          call += 1;
+          if (call === 1) {
+            throw new Error("store corrupted");
+          }
+          return 0;
+        },
+        pollMs: 10,
+        hooks,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hooks.onCheckError).toHaveBeenCalledOnce();
+      expect(emissions).toBe(0);
+      expect(hooks.onReady).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(emissions).toBe(1);
+      expect(hooks.onReady).toHaveBeenCalledOnce();
+    } finally {
+      process.removeListener("SIGUSR1", countEmission);
+    }
+  });
+
+  it("keeps the deferral polling when a later pending inspection throws", async () => {
+    let emissions = 0;
+    const countEmission = () => {
+      emissions += 1;
+    };
+    process.on("SIGUSR1", countEmission);
+    try {
+      const hooks: RestartDeferralHooks = { onCheckError: vi.fn(), onReady: vi.fn() };
+      const counts: Array<number | "throw"> = [1, "throw", 0];
+      let call = 0;
+
+      deferGatewayRestartUntilIdle({
+        getPendingCount: () => {
+          const next = counts[Math.min(call, counts.length - 1)];
+          call += 1;
+          if (next === "throw") {
+            throw new Error("store corrupted");
+          }
+          return next as number;
+        },
+        pollMs: 10,
+        hooks,
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(hooks.onCheckError).toHaveBeenCalledOnce();
+      expect(emissions).toBe(0);
+
+      // The poll must have survived the exception for this zero to be observed at all.
+      await vi.advanceTimersByTimeAsync(10);
+      expect(emissions).toBe(1);
+      expect(hooks.onReady).toHaveBeenCalledOnce();
+    } finally {
+      process.removeListener("SIGUSR1", countEmission);
+    }
+  });
+
+  it("does not emit when the final admission-time pending read throws", async () => {
+    let emissions = 0;
+    const countEmission = () => {
+      emissions += 1;
+    };
+    process.on("SIGUSR1", countEmission);
+    try {
+      const hooks: RestartDeferralHooks = { onCheckError: vi.fn(), onReady: vi.fn() };
+      // initial throw -> poll reads 0 -> the final admission read throws -> later reads are 0.
+      const counts: Array<number | "throw"> = ["throw", 0, "throw"];
+      let call = 0;
+
+      deferGatewayRestartUntilIdle({
+        getPendingCount: () => {
+          const next = call < counts.length ? counts[call] : 0;
+          call += 1;
+          if (next === "throw") {
+            throw new Error("store corrupted");
+          }
+          return next as number;
+        },
+        pollMs: 10,
+        hooks,
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(emissions).toBe(0);
+
+      // Recovery still has to go through a clean admission read before emitting.
+      await vi.advanceTimersByTimeAsync(10);
+      expect(emissions).toBe(1);
+    } finally {
+      process.removeListener("SIGUSR1", countEmission);
+    }
+  });
+
+  // A rejected emission is not evidence of idleness either. The old path stopped the
+  // poll and re-emitted with no idle check, so the deferral died after one blind retry.
+  it("keeps deferring when the emission itself rejects", async () => {
+    const hooks: RestartDeferralHooks = { onCheckError: vi.fn(), onReady: vi.fn() };
+    let emitAttempts = 0;
+
+    deferGatewayRestartUntilIdle({
+      // Idle from the start, so every poll reaches emission; emission is what fails.
+      getPendingCount: () => 0,
+      pollMs: 10,
+      hooks,
+      emitHooks: {
+        emitRestart: () => {
+          emitAttempts += 1;
+          throw new Error("independent-root admission rejected");
+        },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    const afterFirst = emitAttempts;
+    expect(afterFirst).toBeGreaterThan(0);
+    expect(hooks.onCheckError).toHaveBeenCalled();
+
+    // The poll must still be live, so later intervals keep retrying the emission
+    // rather than the deferral going silent after one unchecked re-emit.
+    await vi.advanceTimersByTimeAsync(50);
+    expect(emitAttempts).toBeGreaterThan(afterFirst);
+    expect(hooks.onReady).not.toHaveBeenCalled();
+  });
+
+  it("still escalates through the deferral budget when inspection never recovers", async () => {
+    const hooks: RestartDeferralHooks = { onCheckError: vi.fn(), onTimeout: vi.fn() };
 
     deferGatewayRestartUntilIdle({
       getPendingCount: () => {
         throw new Error("store corrupted");
       },
+      pollMs: 10,
+      maxWaitMs: 100,
       hooks,
+      timeoutIntent: { force: true, reason: "gateway.restart.deferral-timeout" },
     });
 
-    expect(hooks.onCheckError).toHaveBeenCalledOnce();
-    expect(hooks.onReady).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(hooks.onTimeout).toHaveBeenCalledOnce();
+    expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+      force: true,
+      reason: "gateway.restart.deferral-timeout",
+    });
   });
 });

@@ -721,6 +721,21 @@ export function deferGatewayRestartUntilIdle(opts: {
   const handle = { cancel };
   const startedAt = Date.now();
   let nextStillPendingAt = startedAt + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
+  // Last count an inspection actually returned. A failed inspection leaves the real count
+  // unknown, so hooks that must report a number reuse this instead of inventing one.
+  let lastKnownPending = 0;
+  // An inspection failure means active work is UNKNOWN, not absent. Returning undefined
+  // instead of emitting keeps the deferral alive, so the bounded maxWaitMs timeout stays
+  // the only authorized escalation rather than a probe crash restarting live work.
+  const readPendingCount = (): number | undefined => {
+    try {
+      lastKnownPending = opts.getPendingCount();
+      return lastKnownPending;
+    } catch (err) {
+      opts.hooks?.onCheckError?.(err);
+      return undefined;
+    }
+  };
   const attemptEmission = (params: {
     intent?: GatewayRestartIntent;
     notifyReady: boolean;
@@ -734,7 +749,15 @@ export function deferGatewayRestartUntilIdle(opts: {
       opts.emitHooks,
       opts.reason,
       params.intent,
-      params.skipIdleCheck ? undefined : () => opts.getPendingCount() <= 0,
+      // Routed through readPendingCount so a throw on this final admission-time read reads
+      // as unknown rather than idle: canEmit stays false and the poll retries, instead of
+      // rejecting into the catch below and re-emitting with no idle check at all.
+      params.skipIdleCheck
+        ? undefined
+        : () => {
+            const current = readPendingCount();
+            return current !== undefined && current <= 0;
+          },
       (rollback) => {
         cancelEmissionFence = rollback;
       },
@@ -759,36 +782,33 @@ export function deferGatewayRestartUntilIdle(opts: {
         // rejection from the independent-root wrapper after cancel raced).
         cancelEmissionFence?.();
         cancelEmissionFence = null;
-        stopPoll();
+        // A rejected emission is no more evidence of idleness than a failed probe read.
+        // Re-emitting here bypassed the idle check entirely, and stopping the poll left
+        // the deferral dead; both also contradicted onCheckError, which is non-terminal.
+        // Keep polling so the next interval retries through the idle-checked path and the
+        // bounded budget still escalates if the emission never succeeds.
         opts.hooks?.onCheckError?.(err);
-        void emitPreparedGatewayRestart(opts.emitHooks, opts.reason, params.intent);
       });
   };
   const inspectPending = () => {
     if (cancelled) {
       return;
     }
-    let current: number;
-    try {
-      current = opts.getPendingCount();
-    } catch (err) {
-      stopPoll();
-      opts.hooks?.onCheckError?.(err);
-      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-      return;
-    }
-    if (current <= 0) {
+    const current = readPendingCount();
+    if (current !== undefined && current <= 0) {
       attemptEmission({ notifyReady: true });
       return;
     }
     const elapsedMs = Date.now() - startedAt;
-    if (Date.now() >= nextStillPendingAt) {
+    // Skipped while the count is unknown: onCheckError already reported that inspection,
+    // and there is no observed count to put in the still-pending warning.
+    if (current !== undefined && Date.now() >= nextStillPendingAt) {
       opts.hooks?.onStillPending?.(current, elapsedMs);
       nextStillPendingAt = Date.now() + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
     }
     if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
       stopPoll();
-      opts.hooks?.onTimeout?.(current, elapsedMs);
+      opts.hooks?.onTimeout?.(lastKnownPending, elapsedMs);
       attemptEmission({
         intent: opts.timeoutIntent,
         notifyReady: false,
@@ -796,20 +816,15 @@ export function deferGatewayRestartUntilIdle(opts: {
       });
     }
   };
-  let pending: number;
-  try {
-    pending = opts.getPendingCount();
-  } catch (err) {
-    opts.hooks?.onCheckError?.(err);
-    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-    return handle;
-  }
-  if (pending > 0) {
+  const pending = readPendingCount();
+  if (pending !== undefined && pending > 0) {
     opts.hooks?.onDeferring?.(pending);
   }
+  // Registered before the idle branch so an unknown initial count lands in the deferred
+  // state and retries, rather than restarting on a probe that never reported idle.
   poll = setInterval(inspectPending, pollMs);
   activeDeferralPolls.add(poll);
-  if (pending <= 0) {
+  if (pending !== undefined && pending <= 0) {
     attemptEmission({ notifyReady: true });
   }
   return handle;

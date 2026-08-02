@@ -515,11 +515,13 @@ class GatewayRestartTransaction {
               `restart timeout after ${elapsedMs}ms with ${this.options.formatDeferredWorkStatus("still active")}; forcing restart`,
             );
           },
+          // Non-terminal, like onStillPending: a failed check leaves pending work unknown
+          // and the deferral keeps polling, so ownership must survive here. Clearing
+          // restartDeferral would strand a live deferral that nothing can cancel or
+          // supersede. onReady and onTimeout stay terminal because they really are.
           onCheckError: (err) => {
-            this.restartPending = false;
-            this.restartDeferral = null;
             params.logReload.warn(
-              `restart deferral check failed (${String(err)}); restarting gateway now`,
+              `restart deferral check failed (${String(err)}); pending work is unknown, deferring and retrying`,
             );
           },
         },
