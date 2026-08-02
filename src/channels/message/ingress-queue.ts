@@ -791,7 +791,7 @@ export function createChannelIngressQueue<
       }
       // Durable identity changes need their channel owner's explicit approval;
       // unrelated derivations can intentionally be ephemeral claim lanes.
-      return claimOptions.reconcileStoredLaneKey(record, storedLaneKey, derivedLaneKey) === true
+      return claimOptions.reconcileStoredLaneKey(record, storedLaneKey, derivedLaneKey)
         ? derivedLaneKey
         : storedLaneKey;
     };
