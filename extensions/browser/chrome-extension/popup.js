@@ -17,6 +17,7 @@ const sendPageButton = document.getElementById("sendPageButton");
 const pageShareStatus = document.getElementById("pageShareStatus");
 const versionValue = document.getElementById("versionValue");
 const statusHint = document.getElementById("statusHint");
+const unpairNote = document.getElementById("unpairNote");
 const relayValue = document.getElementById("relayValue");
 let sendingPage = false;
 let settingsOpen = false;
@@ -51,6 +52,8 @@ async function refresh() {
   settingsSection.classList.toggle("hidden", !settingsOpen);
   settingsButton.classList.toggle("active", settingsOpen);
   relayValue.textContent = status.paired ? relayHost(status.relayUrl) : "—";
+  unpairButton.classList.toggle("hidden", !status.paired);
+  unpairNote.classList.toggle("hidden", !status.paired);
   if (!status.paired) {
     statusLine.textContent = "Not paired with a gateway";
     return;
