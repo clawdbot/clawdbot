@@ -17,6 +17,7 @@ function runWithStubbedKubectl(
   options: {
     deleteKustomizeStatus?: number;
     deleteNamespaceStatus?: number;
+    deleteSecretStatus?: number;
   } = {},
 ) {
   const root = tempDirs.make("openclaw-k8s-delete-");
@@ -34,6 +35,9 @@ if [[ "$1" == "delete" && "$2" == "-k" ]]; then
 fi
 if [[ "$1" == "delete" && "$2" == "namespace" ]]; then
   exit "\${OPENCLAW_KUBECTL_DELETE_NAMESPACE_STATUS:-0}"
+fi
+if [[ "$1" == "delete" && "$2" == "secret" ]]; then
+  exit "\${OPENCLAW_KUBECTL_DELETE_SECRET_STATUS:-0}"
 fi
 if [[ "$1" == "get" && "$2" == "namespace" ]]; then
   exit 99
@@ -53,6 +57,7 @@ esac
       ...process.env,
       OPENCLAW_KUBECTL_DELETE_KUSTOMIZE_STATUS: String(options.deleteKustomizeStatus ?? 0),
       OPENCLAW_KUBECTL_DELETE_NAMESPACE_STATUS: String(options.deleteNamespaceStatus ?? 0),
+      OPENCLAW_KUBECTL_DELETE_SECRET_STATUS: String(options.deleteSecretStatus ?? 0),
       OPENCLAW_KUBECTL_LOG: logPath,
       OPENCLAW_NAMESPACE: namespace,
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
@@ -76,15 +81,26 @@ describe("scripts/k8s/deploy.sh", () => {
     return runWithStubbedKubectl(["--delete-resources"], namespace, options);
   }
 
-  it("keeps the legacy delete mode as a full namespace teardown", () => {
-    const { calls, output, result } = runWithStubbedKubectl(["--delete"], "dedicated-openclaw");
+  it("keeps the default namespace delete mode as a full namespace teardown", () => {
+    const { calls, output, result } = runWithStubbedKubectl(["--delete"], "openclaw");
 
     expect(result.status, output).toBe(0);
-    expect(output).toContain("Deleting namespace 'dedicated-openclaw' and all resources");
+    expect(output).toContain("Deleting namespace 'openclaw' and all resources");
+    expect(calls).toEqual(["cluster-info", "delete namespace openclaw --ignore-not-found"]);
+  });
+
+  it("keeps a custom namespace and unrelated workloads when the legacy delete mode is used", () => {
+    const { calls, output, result } = runWithStubbedKubectl(["--delete"], "my-namespace");
+
+    expect(result.status, output).toBe(0);
+    expect(output).toContain("Deleting OpenClaw resources from namespace 'my-namespace'");
     expect(calls).toEqual([
       "cluster-info",
-      "delete namespace dedicated-openclaw --ignore-not-found",
+      `delete -k ${path.resolve("scripts/k8s/manifests")} -n my-namespace --ignore-not-found`,
+      "delete secret openclaw-secrets -n my-namespace --ignore-not-found",
     ]);
+    expect(calls).not.toContain("delete namespace my-namespace --ignore-not-found");
+    expect(calls).not.toContain("get namespace my-namespace");
   });
 
   it("deletes OpenClaw resources without deleting the namespace", () => {
@@ -113,19 +129,57 @@ describe("scripts/k8s/deploy.sh", () => {
       "cluster-info",
       `delete -k ${path.resolve("scripts/k8s/manifests")} -n restricted-namespace --ignore-not-found`,
     ]);
+    expect(output).not.toContain("Done.");
+  });
+
+  it("stops custom namespace teardown when deleting managed manifests fails", () => {
+    const { calls, output, result } = runWithStubbedKubectl(["--delete"], "shared-namespace", {
+      deleteKustomizeStatus: 17,
+    });
+
+    expect(result.status, output).toBe(17);
+    expect(calls).toEqual([
+      "cluster-info",
+      `delete -k ${path.resolve("scripts/k8s/manifests")} -n shared-namespace --ignore-not-found`,
+    ]);
+    expect(output).not.toContain("Done.");
+  });
+
+  it.each(["--delete", "--delete-resources"])(
+    "surfaces generated Secret deletion failures for %s",
+    (mode) => {
+      const { calls, output, result } = runWithStubbedKubectl([mode], "shared-namespace", {
+        deleteSecretStatus: 23,
+      });
+
+      expect(result.status, output).toBe(23);
+      expect(calls).toEqual([
+        "cluster-info",
+        `delete -k ${path.resolve("scripts/k8s/manifests")} -n shared-namespace --ignore-not-found`,
+        "delete secret openclaw-secrets -n shared-namespace --ignore-not-found",
+      ]);
+      expect(output).not.toContain("Done.");
+    },
+  );
+
+  it("surfaces namespace deletion failures instead of reporting teardown success", () => {
+    const { calls, output, result } = runWithStubbedKubectl(["--delete-namespace"], "shared", {
+      deleteNamespaceStatus: 29,
+    });
+
+    expect(result.status, output).toBe(29);
+    expect(calls).toEqual(["cluster-info", "delete namespace shared --ignore-not-found"]);
+    expect(output).not.toContain("Done.");
   });
 
   it("deletes the namespace only when the explicit namespace teardown mode is selected", () => {
     const { calls, output, result } = runWithStubbedKubectl(
       ["--delete-namespace"],
-      "dedicated-openclaw",
+      "shared-namespace",
     );
 
     expect(result.status, output).toBe(0);
-    expect(output).toContain("Deleting namespace 'dedicated-openclaw' and all resources");
-    expect(calls).toEqual([
-      "cluster-info",
-      "delete namespace dedicated-openclaw --ignore-not-found",
-    ]);
+    expect(output).toContain("Deleting namespace 'shared-namespace' and all resources");
+    expect(calls).toEqual(["cluster-info", "delete namespace shared-namespace --ignore-not-found"]);
   });
 });
