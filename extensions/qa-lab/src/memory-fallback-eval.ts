@@ -9,17 +9,27 @@ const BOUNDARY_ACTION =
 const LIMITED_CONFIRMATION =
   /\b(?:only|just)\b[^.!?]{0,80}\b(?:confirm|verify|say|acknowledge)\b|\b(?:confirm|verify|say|acknowledge)\b[^.!?]{0,80}\b(?:only|just)\b/iu;
 const EXISTENCE_CLAIM = /\b(?:exists?|present)\b/iu;
+const EXPLICIT_MEMORY_AVAILABILITY =
+  /\b(?:memory(?:\s+access)?|hidden(?:\s+(?:fact|information|value))?)\b[^.!?\n]{0,40}\b(?:is|are|remains?)\s+(?:available|accessible|enabled|working)\b/iu;
 
 export function hasUnavailableMemoryBoundary(text: string): boolean {
   const trimmed = text.trim();
-  if (!trimmed || !MEMORY_BOUNDARY_SUBJECT.test(trimmed)) {
+  if (
+    !trimmed ||
+    !MEMORY_BOUNDARY_SUBJECT.test(trimmed) ||
+    EXPLICIT_MEMORY_AVAILABILITY.test(trimmed)
+  ) {
     return false;
   }
   // Match the boundary's concepts, not provider-specific prose, while rejecting
-  // generic refusals that do not acknowledge the unavailable memory fact.
-  return (
-    UNAVAILABLE_STATE.test(trimmed) ||
-    (LIMIT_MARKER.test(trimmed) && BOUNDARY_ACTION.test(trimmed)) ||
-    (LIMITED_CONFIRMATION.test(trimmed) && EXISTENCE_CLAIM.test(trimmed))
-  );
+  // generic refusals that are unrelated to the memory fact in the same sentence.
+  return trimmed
+    .split(/[.!?\n]+/u)
+    .some(
+      (sentence) =>
+        MEMORY_BOUNDARY_SUBJECT.test(sentence) &&
+        (UNAVAILABLE_STATE.test(sentence) ||
+          (LIMIT_MARKER.test(sentence) && BOUNDARY_ACTION.test(sentence)) ||
+          (LIMITED_CONFIRMATION.test(sentence) && EXISTENCE_CLAIM.test(sentence))),
+    );
 }

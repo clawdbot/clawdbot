@@ -16,6 +16,7 @@ describe("hasUnavailableMemoryBoundary", () => {
     "I refuse to help with that unrelated request.",
     "A hidden fact exists.",
     "Memory is working and the hidden fact is accessible.",
+    "Memory is available, but I can't provide anything else.",
     "The answer is ORBIT-9.",
     "",
   ])("rejects a reply without the required memory boundary: %s", (reply) => {
