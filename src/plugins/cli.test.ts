@@ -20,8 +20,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./loader.js", () => ({
   loadOpenClawPluginCliRegistry: (...args: unknown[]) =>
     mocks.loadOpenClawPluginCliRegistry(...args),
-  loadPluginRegistryHandle: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
   loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
+  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+    mocks.loadOpenClawPlugins({ ...options, activate: false }),
 }));
 
 vi.mock("./activation-planner.js", () => ({
@@ -387,7 +388,7 @@ describe("registerPluginCliCommands", () => {
       demo: ["demo configured"],
     });
     expect(loadOptions.cache).toBe(false);
-    expect(loadOptions.forceFullRuntimeForChannelPlugins).toBe(true);
+    expect(loadOptions.channelPluginLoadIntent).toBe("full");
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
   });
 

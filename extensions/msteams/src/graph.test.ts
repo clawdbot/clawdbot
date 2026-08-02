@@ -387,6 +387,32 @@ describe("msteams graph helpers", () => {
     );
   });
 
+  it("releases a successful bodyful DELETE response", async () => {
+    const upstreamCancel = vi.fn();
+    const release = vi.fn(async () => undefined);
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("deleted"));
+        },
+        cancel: upstreamCancel,
+      }),
+    );
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      finalUrl: "https://graph.microsoft.com/v1.0/chats/chat-1/messages/msg-1",
+      release,
+    });
+
+    await deleteGraphRequest({
+      token: graphToken,
+      path: "/chats/chat-1/messages/msg-1",
+    });
+
+    expect(upstreamCancel).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("resolves Graph tokens through the SDK auth provider", async () => {
     const { getAccessToken } = mockGraphTokenResolution();
 

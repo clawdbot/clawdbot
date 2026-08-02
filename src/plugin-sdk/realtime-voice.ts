@@ -176,6 +176,12 @@ export {
   type RealtimeVoiceSessionHarness,
 } from "../talk/realtime-session-harness.js";
 export {
+  createRealtimeVoiceAudioQueue,
+  RealtimeVoiceSessionLifecycle,
+  type RealtimeVoiceAudioQueue,
+  type RealtimeVoiceSessionConnection,
+} from "../talk/realtime-session-lifecycle.js";
+export {
   extendRealtimeVoiceOutputEchoSuppression,
   getRealtimeVoiceBridgeEventHealth,
   getRealtimeVoiceTranscriptHealth,

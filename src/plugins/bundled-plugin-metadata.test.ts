@@ -324,8 +324,6 @@ function createInstalledPluginRecordForManifest(
     startup: {
       sidecar: record.activation?.onStartup === true,
       memory: hasPluginKind(record, "memory"),
-      deferConfiguredChannelFullLoadUntilAfterListen:
-        record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
       agentHarnesses: [
         ...new Set([...(record.activation?.onAgentHarnesses ?? []), ...record.cliBackends]),
       ].toSorted((left, right) => left.localeCompare(right)),

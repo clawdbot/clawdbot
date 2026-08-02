@@ -1,6 +1,7 @@
 /**
  * Gateway runtime state construction tests.
  */
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { connect } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -197,6 +198,65 @@ describe("createGatewayRuntimeState", () => {
       });
 
       expect(firstRequestReads).toBe(routeReads + 1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("returns a retryable response for plugin paths until startup sidecars are ready", async () => {
+    const startupRegistry = createEmptyPluginRegistry();
+    let runtimeRegistry = startupRegistry;
+    let sidecarsReady = false;
+    const pluginHandler = vi.fn((_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 204;
+      res.end();
+      return true;
+    });
+    const runtimeState = await createGatewayRuntimeStateForTest(startupRegistry, {
+      getPluginRouteRegistry: () => runtimeRegistry,
+      isStartupPluginRuntimeReady: () => sidecarsReady,
+    });
+    const server = runtimeState.httpServers[0];
+    if (!server) {
+      throw new Error("expected gateway HTTP server");
+    }
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP gateway address");
+    }
+    try {
+      const startingResponse = await fetch(`http://127.0.0.1:${address.port}/slack/events`);
+      expect(startingResponse.status).toBe(503);
+      expect(startingResponse.headers.get("retry-after")).toBe("1");
+      expect(startingResponse.headers.get("cache-control")).toBe("no-store");
+      expect(await startingResponse.text()).toBe("Plugin runtime is starting");
+      expect(pluginHandler).not.toHaveBeenCalled();
+
+      await expect(fetch(`http://127.0.0.1:${address.port}/healthz`)).resolves.toMatchObject({
+        status: 200,
+      });
+
+      const loadedRegistry = createEmptyPluginRegistry();
+      loadedRegistry.httpRoutes.push({
+        path: "/slack/events",
+        auth: "plugin",
+        match: "exact",
+        handler: pluginHandler,
+        pluginId: "slack",
+        source: "test",
+      });
+      runtimeRegistry = loadedRegistry;
+      sidecarsReady = true;
+
+      await expect(fetch(`http://127.0.0.1:${address.port}/slack/events`)).resolves.toMatchObject({
+        status: 204,
+      });
+      expect(pluginHandler).toHaveBeenCalledTimes(1);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

@@ -332,6 +332,7 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
   getRuntimeConfig?: () => OpenClawConfig;
+  isStartupPluginRuntimeReady?: () => boolean;
   isTerminalEnabled?: () => boolean;
   tlsOptions?: TlsOptions;
 }): HttpServer {
@@ -629,9 +630,8 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-      // Plugin routes run before the general Control UI SPA catch-all so
-      // explicitly registered endpoints stay reachable. Core routes and the
-      // plugin recovery surface staged above keep precedence.
+      // Core and recovery routes run first, then plugin routes, then read-only Control UI
+      // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
       if (handlePluginRequest) {
         const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
         let pluginGatewayAuthSatisfied = false;
@@ -721,6 +721,17 @@ export function createGatewayHttpServer(opts: {
       addRequestStage("control-ui-http", controlUiEnabled, handleControlUiRequest);
 
       if (await runGatewayHttpRequestStages(requestStages)) {
+        return;
+      }
+
+      // Startup owns sidecar readiness. The plugin registry is still empty here, so an
+      // unclaimed path may be a plugin route that would otherwise dead-end as a transient 404.
+      if (opts.isStartupPluginRuntimeReady?.() === false) {
+        res.statusCode = 503;
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("Retry-After", "1");
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Plugin runtime is starting");
         return;
       }
 

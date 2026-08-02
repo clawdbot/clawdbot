@@ -9,6 +9,7 @@ import { renderChannelWizard } from "./wizard-view.ts";
 function renderStep(step: ChannelWizardStep, busy = true) {
   const container = document.createElement("div");
   const onAnswer = vi.fn();
+  const onClose = vi.fn();
   const onToggleMultiselect = vi.fn();
   document.body.append(container);
   render(
@@ -25,7 +26,7 @@ function renderStep(step: ChannelWizardStep, busy = true) {
       multiselectValues: ["alpha"],
       onToggleMultiselect,
       onAnswer,
-      onClose: vi.fn(),
+      onClose,
       whatsappQrDataUrl: null,
       whatsappMessage: null,
       whatsappConnected: null,
@@ -35,7 +36,7 @@ function renderStep(step: ChannelWizardStep, busy = true) {
     }),
     container,
   );
-  return { container, onAnswer, onToggleMultiselect };
+  return { container, onAnswer, onClose, onToggleMultiselect };
 }
 
 describe("renderChannelWizard busy controls", () => {
@@ -68,6 +69,35 @@ describe("renderChannelWizard busy controls", () => {
     confirmButtons.forEach((button) => button.click());
     expect(confirm.onAnswer).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { message: "Installing channel plugin", expectedStatus: "Installing channel plugin" },
+    { message: undefined, expectedStatus: "Working…" },
+  ])(
+    "announces gateway-owned progress and keeps cancellation available",
+    ({ message, expectedStatus }) => {
+      const progress = renderStep({
+        id: "install-progress",
+        type: "progress",
+        executor: "gateway",
+        ...(message ? { message } : {}),
+      });
+
+      const status = progress.container.querySelector<HTMLElement>('[role="status"]');
+      expect(status?.textContent?.trim()).toBe(expectedStatus);
+      expect(status?.getAttribute("aria-live")).toBe("polite");
+      expect(progress.container.querySelectorAll('[role="status"]')).toHaveLength(1);
+
+      const cancel = progress.container.querySelector<HTMLButtonElement>(
+        ".channels-wizard__footer button",
+      );
+      expect(cancel?.textContent?.trim()).toBe("Cancel");
+      expect(progress.container.querySelector(".channels-wizard__footer .primary")).toBeNull();
+      cancel?.click();
+      expect(progress.onClose).toHaveBeenCalledOnce();
+      expect(progress.onAnswer).not.toHaveBeenCalled();
+    },
+  );
 
   it("disables select choices while a step is running", () => {
     const select = renderStep({

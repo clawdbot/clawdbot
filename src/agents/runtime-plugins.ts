@@ -85,7 +85,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
       ...(startupPluginIds === undefined || plan.pluginIds === undefined
         ? {}
         : { onlyPluginIds: plan.pluginIds }),
-      ...(startupPluginIds === undefined ? {} : { forceFullRuntimeForChannelPlugins: true }),
+      ...(startupPluginIds === undefined ? {} : { channelPluginLoadIntent: "full" as const }),
       runtimeOptions: params.allowGatewaySubagentBinding
         ? { allowGatewaySubagentBinding: true }
         : undefined,
