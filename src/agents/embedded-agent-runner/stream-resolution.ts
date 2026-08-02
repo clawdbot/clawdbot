@@ -85,7 +85,12 @@ function resolveOpenClawNativeCodexResponsesStreamFn(params: {
   if (!isOpenAICodexResponsesModel(params.model)) {
     return undefined;
   }
-  if (!isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, params.llmRuntime)) {
+  // Lifecycle-owned session streams wrap auth/retry policy, so their runtime
+  // binding preserves native Codex transport even when function identity differs.
+  if (
+    !isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, params.llmRuntime) &&
+    getStreamLlmRuntime(params.currentStreamFn) !== params.llmRuntime
+  ) {
     return undefined;
   }
   return params.currentStreamFn ?? params.llmRuntime.streamSimple;
