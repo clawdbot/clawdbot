@@ -99,7 +99,10 @@ function renderStepBody(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     presentation: "channels",
     answerLabel: t("channels.setup.continue"),
     sensitiveRevealed: props.secretVisible,
-    onValueChange: step.type === "text" ? props.onTextInput : props.onToggleMultiselect,
+    onValueChange:
+      step.type === "text"
+        ? (value) => props.onTextInput(typeof value === "string" ? value : "")
+        : props.onToggleMultiselect,
     onAnswer: props.onAnswer,
     onToggleSensitiveVisibility: props.onToggleSecretVisibility,
   });
