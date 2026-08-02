@@ -140,7 +140,7 @@ function projectHuggingfaceModels(rows: readonly unknown[]): ModelDefinitionConf
   for (const row of rows) {
     const entry = row as HFModelEntry | undefined;
     const id = typeof entry?.id === "string" ? entry.id.trim() : "";
-    if (!id || seen.has(id)) {
+    if (!entry || !id || seen.has(id)) {
       continue;
     }
     seen.add(id);
