@@ -1,5 +1,5 @@
 // Covers plugin conversation binding persistence and lookup behavior.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type {
   ConversationRef,
@@ -187,6 +187,11 @@ beforeAll(async () => {
   ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
     await import("../infra/outbound/session-binding-service.js"));
   ({ setActivePluginRegistry } = await import("./runtime.js"));
+});
+
+afterEach(() => {
+  clearPluginBindingPendingRequests();
+  vi.useRealTimers();
 });
 
 function createDiscordCodexBindRequest(
@@ -567,6 +572,50 @@ describe("plugin conversation binding approvals", () => {
     expect(parsePluginBindingApprovalCustomId(allowAlways)).toEqual({
       approvalId: "abcdefghijkl",
       decision: "allow-always",
+    });
+  });
+
+  it("fails closed when a pending bind approval reaches its 30-minute deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const request = await requestPendingBinding(
+      createDiscordCodexBindRequest("channel:ttl", "Bind this conversation to Codex."),
+    );
+
+    // The deadline check is authoritative even when the event loop has not dispatched the timer.
+    vi.setSystemTime(1_000 + 30 * 60_000);
+    await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
+      status: "expired",
+    });
+    expect(sessionBindingState.bind).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("evicts the oldest pending bind approval after 512 requests", async () => {
+    vi.useFakeTimers();
+    const requests = [];
+    for (let index = 0; index < 513; index += 1) {
+      requests.push(
+        await requestPendingBinding(
+          createDiscordCodexBindRequest(
+            `channel:bounded-${index}`,
+            `Bind this conversation to Codex thread ${index}.`,
+          ),
+        ),
+      );
+    }
+
+    expect(vi.getTimerCount()).toBe(512);
+    const oldest = requests[0];
+    const newest = requests[512];
+    if (!oldest || !newest) {
+      throw new Error("expected bounded pending requests");
+    }
+    await expect(approveBindingRequest(oldest.approvalId, "allow-once")).resolves.toEqual({
+      status: "expired",
+    });
+    await expect(approveBindingRequest(newest.approvalId, "deny")).resolves.toMatchObject({
+      status: "denied",
     });
   });
 
