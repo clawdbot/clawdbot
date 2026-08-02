@@ -44,13 +44,10 @@ function rejectsKey(schema: JsonSchemaLike | undefined, key: string): boolean {
   if (Array.isArray(alternatives) && alternatives.length > 0) {
     return alternatives.every((branch) => rejectsKey(asSchema(branch), key));
   }
+  // allOf is an intersection: the value must satisfy every component, so one
+  // closed component that omits the key still refuses it at config load.
   if (Array.isArray(schema.allOf) && schema.allOf.length > 0) {
-    const branchAccepts = schema.allOf.some(
-      (branch) => !rejectsKey(asSchema(branch), key) && asSchema(branch)?.properties,
-    );
-    if (branchAccepts) {
-      return false;
-    }
+    return schema.allOf.some((branch) => rejectsKey(asSchema(branch), key));
   }
   if (schema.additionalProperties !== false) {
     return false;
