@@ -246,6 +246,18 @@ fields, `accounts.default`, removed or unresolvable accounts, and mixed changes
 that can affect inheritance are promoted to a whole-channel restart. Plugins
 that do not opt in always use the whole-channel path.
 
+For channels using the durable ingress drain, the account monitor's stop path
+must first settle all accepted transport admissions, then dispose and await its
+drain. Starting the account opens the same account-keyed queue, whose initial
+drain recovers undispatched durable rows. Do not add a second reload-specific
+replay pass; queue recovery is the canonical restart path.
+
+Treat this flag as a capability claim, not a performance preference. Contract
+tests should prove that adding and editing one named account leaves a sibling's
+resolved config unchanged, stopping one account settles only that account's
+monitor and drain, and a fresh monitor recovers that account's rows exactly
+once. If any guarantee cannot be proved, omit the flag.
+
 #### Account-index reload paths
 
 If a channel keeps a channel-owned account index outside `channels.<channel>.accounts`,
@@ -258,18 +270,6 @@ while the refreshed index is reconciled.
 Do not use this for ordinary account config edits. Account edits belong under
 `reload.configPrefixes` and should restart from the candidate config without
 unioning stale known accounts.
-
-For channels using the durable ingress drain, the account monitor's stop path
-must first settle all accepted transport admissions, then dispose and await its
-drain. Starting the account opens the same account-keyed queue, whose initial
-drain recovers undispatched durable rows. Do not add a second reload-specific
-replay pass; queue recovery is the canonical restart path.
-
-Treat this flag as a capability claim, not a performance preference. Contract
-tests should prove that adding and editing one named account leaves a sibling's
-resolved config unchanged, stopping one account settles only that account's
-monitor and drain, and a fresh monitor recovers that account's rows exactly
-once. If any guarantee cannot be proved, omit the flag.
 
 ### Runtime lifecycle status
 
