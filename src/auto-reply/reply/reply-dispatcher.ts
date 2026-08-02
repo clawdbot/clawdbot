@@ -1,11 +1,13 @@
 // Dispatches final reply payloads through visible senders and message tools.
+import { isChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  isOutboundDeliveryError,
-  isPlatformMessageNotDispatchedError,
-} from "../../infra/outbound/deliver-types.js";
+  findPlatformMessageRejectedError,
+  isProvenDeliveryNotSentError,
+} from "../../infra/delivery-recovery.shared.js";
+import { collectErrorGraphCandidates } from "../../infra/errors.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -48,13 +50,24 @@ export type ReplyDispatchDeliveryOutcome =
   | "failed-deliver";
 
 function isRetryableNoSendFailure(error: unknown): boolean {
-  if (isPlatformMessageNotDispatchedError(error)) {
-    return error.retryable;
-  }
-  if (!isOutboundDeliveryError(error) || error.sentBeforeError) {
-    return false;
-  }
-  return isPlatformMessageNotDispatchedError(error.cause) && error.cause.retryable;
+  return (
+    isProvenDeliveryNotSentError(error) &&
+    !findPlatformMessageRejectedError(error) &&
+    !collectErrorGraphCandidates(error, (candidate) => [
+      candidate.cause,
+      candidate.original,
+      candidate.error,
+      candidate.reason,
+      ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+    ]).some(
+      (candidate) =>
+        candidate !== null &&
+        typeof candidate === "object" &&
+        (isChannelPartialDeliveryError(candidate) ||
+          (candidate as { sentBeforeError?: unknown }).sentBeforeError === true ||
+          (candidate as { visibleReplySent?: unknown }).visibleReplySent === true),
+    )
+  );
 }
 
 type ReplyDispatchDeliveryOutcomeTracker = {
@@ -491,16 +504,17 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         deliveryOutcome = "delivered";
       })
       .catch(async (err: unknown) => {
-        deliveryOutcome =
-          deliveryStarted && !isRetryableNoSendFailure(err)
-            ? "failed-deliver"
-            : "failed-before-deliver";
         failedCounts[kind] += 1;
         // Error cleanup belongs to this send: idle/finalization must not race it.
         // Observer failures stay isolated from later queued deliveries.
         try {
           await options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
         } catch {}
+        // Observers can attach partial-send evidence; classify only after that proof settles.
+        deliveryOutcome =
+          deliveryStarted && !isRetryableNoSendFailure(err)
+            ? "failed-deliver"
+            : "failed-before-deliver";
       })
       .finally(() => {
         const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);

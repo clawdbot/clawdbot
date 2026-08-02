@@ -1,4 +1,5 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -27,6 +28,30 @@ import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 describe("web monitor inbox socket lifecycle", () => {
   installStreamsInboundMessageHooks();
+
+  it("socket session marks only preflight reachout timelocks as retryable no-send", async () => {
+    const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
+    sock.fetchAccountReachoutTimelock.mockResolvedValue({
+      isActive: true,
+      enforcementType: "RESTRICT_ALL_COMPANIONS",
+      timeEnforcementEnds: new Date(Date.now() + 60_000),
+    });
+    try {
+      await expect(listener.assertSendReady!("+1555")).rejects.toMatchObject({
+        name: "PlatformMessageNotDispatchedError",
+        retryable: true,
+        cause: expect.objectContaining({
+          message: expect.stringContaining("WhatsApp reachout timelock is active"),
+        }),
+      });
+      await expect(listener.sendMessage("+1555", "hello")).rejects.not.toBeInstanceOf(
+        PlatformMessageNotDispatchedError,
+      );
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
 
   it("socket session stays unavailable on connect in self-chat mode", async () => {
     const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {

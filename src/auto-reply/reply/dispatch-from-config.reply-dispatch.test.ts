@@ -669,60 +669,52 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     }
   });
 
-  it("clears pending final delivery after transport delivery has started", async () => {
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    sessionStoreMocks.currentEntry = {
-      sessionKey: "agent:test:session",
-      pendingFinalDelivery: pendingFinalDelivery("possibly visible reply"),
-    };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
-      existing: sessionStoreMocks.currentEntry,
-    });
-    const dispatcher = createReplyDispatcher({
-      deliver: async () => {
-        throw new Error("transport failed after send started");
-      },
-    });
-
-    await withReplyDispatcher({
-      dispatcher,
-      run: () =>
-        dispatchReplyFromConfig({
-          ctx: createHookCtx(),
-          cfg: emptyConfig,
-          dispatcher,
-          replyResolver: async () => ({ text: "possibly visible reply" }),
-        }),
-    });
-
-    // A started-then-failed transport send may have shown partial content, so
-    // the ledger stays conservative and no fallback rides the same transport.
-    expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
+  const createNoSendFailure = (retryable = true) =>
+    new PlatformMessageNotDispatchedError("offline", { cause: new Error("offline"), retryable });
+  const wrapDeliveryFailure = (cause: unknown) =>
+    new OutboundDeliveryError("delivery failed", { cause });
+  const refusedConnection = Object.assign(new Error(), {
+    code: "ECONNREFUSED",
+    syscall: "connect",
   });
+  const createPartialDelivery = () =>
+    Object.assign(new Error("partial delivery", { cause: createNoSendFailure() }), {
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: { visibleReplySent: true },
+    });
 
-  it("preserves pending final delivery after a retryable proven no-send failure", async () => {
+  it.each([
+    ["direct retryable provider proof", createNoSendFailure(), true],
+    ["wrapped retryable provider proof", wrapDeliveryFailure(createNoSendFailure()), true],
+    ["wrapped pre-connect ECONNREFUSED proof", wrapDeliveryFailure(refusedConnection), true],
+    ["permanent provider rejection", createNoSendFailure(false), false],
+    [
+      "partial outbound delivery",
+      Object.assign(wrapDeliveryFailure(createNoSendFailure()), { sentBeforeError: true }),
+      false,
+    ],
+    ["nested partial envelope", new Error("partial", { cause: createPartialDelivery() }), false],
+    ["aggregate partial envelope", new AggregateError([createPartialDelivery()]), false],
+    ["observer-attached delivery evidence", createNoSendFailure(), false],
+    ["ambiguous transport failure", new Error("transport failed"), false],
+  ] as const)("reconciles pending final delivery after %s", async (name, error, preserve) => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
+    const pending = pendingFinalDelivery("recoverable final reply");
     sessionStoreMocks.currentEntry = {
       sessionKey: "agent:test:session",
-      pendingFinalDelivery: pendingFinalDelivery("retry after listener recovery"),
+      pendingFinalDelivery: pending,
     };
     sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
       existing: sessionStoreMocks.currentEntry,
     });
-    const notDispatched = new PlatformMessageNotDispatchedError("listener not ready", {
-      cause: new Error("no active listener"),
-    });
     const dispatcher = createReplyDispatcher({
       deliver: async () => {
-        throw new OutboundDeliveryError(notDispatched.message, {
-          cause: notDispatched,
-          stage: "platform_send",
-        });
+        throw error;
       },
+      ...(name.startsWith("observer")
+        ? { onError: () => Object.assign(error, { visibleReplySent: true }) }
+        : {}),
     });
-
     await withReplyDispatcher({
       dispatcher,
       run: () =>
@@ -730,14 +722,13 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
           ctx: createHookCtx(),
           cfg: emptyConfig,
           dispatcher,
-          replyResolver: async () => ({ text: "retry after listener recovery" }),
+          replyResolver: async () => ({ text: "recoverable final reply" }),
         }),
     });
-
     expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
     expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
-      pendingFinalDelivery("retry after listener recovery"),
+      preserve ? pending : undefined,
     );
   });
 
