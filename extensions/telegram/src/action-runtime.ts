@@ -346,6 +346,7 @@ export async function handleTelegramAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
   options?: {
+    mediaAccess?: ChannelMessageActionContext["mediaAccess"];
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     sessionKey?: string | null;
@@ -562,12 +563,13 @@ export async function handleTelegramAction(
       quoteText,
     });
     const mediaAccess =
-      options?.mediaLocalRoots || options?.mediaReadFile
+      options?.mediaAccess ??
+      (options?.mediaLocalRoots || options?.mediaReadFile
         ? {
             ...(options.mediaLocalRoots ? { localRoots: options.mediaLocalRoots } : {}),
             ...(options.mediaReadFile ? { readFile: options.mediaReadFile } : {}),
           }
-        : undefined;
+        : undefined);
     const outboundSession = buildOutboundSessionContext({
       cfg,
       sessionKey: options?.sessionKey,
