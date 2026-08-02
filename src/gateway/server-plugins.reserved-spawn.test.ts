@@ -9,7 +9,10 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveReservedSpawnRequesterOwnerPluginId } from "../plugins/session-ownership.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { RESERVED_SUBAGENT_TASK_MAX_BYTES } from "./server-plugins-reserved-spawn.js";
+import {
+  RESERVED_SUBAGENT_LABEL_MAX_BYTES,
+  RESERVED_SUBAGENT_TASK_MAX_BYTES,
+} from "./server-plugins-reserved-spawn.js";
 
 const spawnSubagentDirect = vi.hoisted(() => vi.fn());
 const cleanupProvisionalSession = vi.hoisted(() => vi.fn());
@@ -277,9 +280,43 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     ).rejects.toThrow(`${RESERVED_SUBAGENT_TASK_MAX_BYTES} byte limit`);
   });
 
+  it.each([
+    {
+      name: "multibyte UTF-8",
+      label: `${"€".repeat(
+        Math.floor(RESERVED_SUBAGENT_LABEL_MAX_BYTES / Buffer.byteLength("€", "utf8")),
+      )}€`,
+    },
+    {
+      name: "raw leading whitespace",
+      label: `${" ".repeat(RESERVED_SUBAGENT_LABEL_MAX_BYTES)}x`,
+    },
+  ])(
+    "rejects oversized labels before reserved identity checks or child creation: $name",
+    async ({ label }) => {
+      expect(Buffer.byteLength(label, "utf8")).toBeGreaterThan(RESERVED_SUBAGENT_LABEL_MAX_BYTES);
+
+      await expect(
+        withReservedPluginScope(() =>
+          createGatewaySubagentRuntime().spawnReserved({
+            ...reservation,
+            label,
+          }),
+        ),
+      ).rejects.toThrow(`${RESERVED_SUBAGENT_LABEL_MAX_BYTES} byte limit`);
+
+      expect(loadSessionEntryReadOnly).not.toHaveBeenCalled();
+      expect(getAgentRunContext).not.toHaveBeenCalled();
+      expect(hasSubagentRunIdentity).not.toHaveBeenCalled();
+      expect(getLatestSubagentRunByChildSessionKey).not.toHaveBeenCalled();
+      expect(spawnSubagentDirect).not.toHaveBeenCalled();
+    },
+  );
+
   it("forwards only generic reservation and ownership data", async () => {
     const runtime = createGatewaySubagentRuntime();
     const dedupe: GatewayRequestContext["dedupe"] = new Map();
+    const labeledReservation = { ...reservation, label: "bounded label" };
     spawnSubagentDirect.mockImplementationOnce(
       async (_params: unknown, context: { reservedSubagentClaimToken?: string }) => {
         const reserved = dedupe.get(`agent:${reservation.runId}`);
@@ -299,7 +336,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     );
 
     await expect(
-      withReservedPluginScope(() => runtime.spawnReserved(reservation), dedupe),
+      withReservedPluginScope(() => runtime.spawnReserved(labeledReservation), dedupe),
     ).resolves.toEqual({
       childSessionKey: reservation.childSessionKey,
       runId: reservation.runId,
@@ -308,6 +345,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     expect(spawnSubagentDirect).toHaveBeenCalledWith(
       {
         task: reservation.task,
+        label: labeledReservation.label,
         agentId: reservation.targetAgentId,
         mode: "run",
         expectsCompletionMessage: false,

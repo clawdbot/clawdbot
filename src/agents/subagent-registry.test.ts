@@ -758,6 +758,9 @@ describe("subagent registry seam flow", () => {
     expect(
       mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
     ).toHaveLength(0);
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(mocks.resolveContextEngine).not.toHaveBeenCalled();
+    expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
   });
 
   it("keeps a sweeper archive mutation root-admitted until deletion settles", async () => {

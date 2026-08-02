@@ -55,6 +55,7 @@ type SubagentSpawnReservedParams = {
   runId: string;
   task: string;
   taskName?: string;
+  /** Optional display label. Raw UTF-8 must fit within 1024 bytes. */
   label?: string;
   cleanup?: "delete" | "keep";
   context?: "isolated" | "fork";

@@ -97,8 +97,8 @@ export function createSubagentRegistrySweeper(params: {
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const { runs, resumedRuns } = params;
-  let timer: NodeJS.Timeout | null = null;
-  let sweepInProgress = false;
+  let timer: NodeJS.Timeout | null = null,
+    sweepInProgress = false;
 
   function start() {
     if (timer) {
@@ -118,7 +118,6 @@ export function createSubagentRegistrySweeper(params: {
     }
     timer = null;
   }
-
   async function runTick() {
     try {
       await runWithGatewayIndependentRootWorkAdmission(sweepOnce);
@@ -128,7 +127,6 @@ export function createSubagentRegistrySweeper(params: {
       );
     }
   }
-
   function runCleanupTail(runId: string, label: string, run: () => Promise<unknown>) {
     void runWithGatewayIndependentRootWorkAdmission(run).catch((error: unknown) => {
       params.warn(`subagent sweep ${label} failed`, { runId, error });
@@ -311,7 +309,6 @@ export function createSubagentRegistrySweeper(params: {
       return true;
     }
   }
-
   function resolveSuspendedDeliveryExpiryMs(entry: SubagentRunRecord): number {
     const requester = entry.requesterSessionKey;
     return requester.includes(":cron:")
@@ -320,7 +317,6 @@ export function createSubagentRegistrySweeper(params: {
         ? SUSPENDED_DELIVERY_SUBAGENT_EXPIRY_MS
         : SUSPENDED_DELIVERY_INTERACTIVE_EXPIRY_MS;
   }
-
   async function discardSuspendedPendingFinalDelivery(
     runId: string,
     entry: SubagentRunRecord,
@@ -362,8 +358,7 @@ export function createSubagentRegistrySweeper(params: {
       childSessionKey: entry.childSessionKey,
       requesterSessionKey: entry.requesterSessionKey,
     });
-    const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-    if (shouldDeleteAttachments) {
+    if (entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
       await safeRemoveAttachmentsDir(entry);
     }
     await removeInternalSessionEffectsSession(entry.execution?.transcriptTarget);
@@ -691,11 +686,12 @@ export function createSubagentRegistrySweeper(params: {
         mutated = true;
         await safeRemoveAttachmentsDir(entry);
         runCleanupTail(runId, "context-engine cleanup", async () => {
-          await params.notifyContextEngineSubagentEnded(sweptContext(entry));
+          return entry.spawnFailureCleanup?.status === "replaced"
+            ? undefined
+            : params.notifyContextEngineSubagentEnded(sweptContext(entry));
         });
       }
       params.sweepPendingLifecycle(now);
-
       if (mutated) {
         params.persist();
       }

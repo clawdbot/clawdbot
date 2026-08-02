@@ -42,6 +42,7 @@ type ReservedSubagentCleanupHolder = {
 };
 
 export const RESERVED_SUBAGENT_TASK_MAX_BYTES = 4 * 1024;
+export const RESERVED_SUBAGENT_LABEL_MAX_BYTES = 1024;
 
 const RESERVED_SUBAGENT_IDENTITY_CLAIMS_KEY: unique symbol = Symbol.for(
   "openclaw.pluginRuntime.reservedSubagentIdentityClaims",
@@ -134,13 +135,26 @@ function hasIndeterminateReservedCleanup(result: SpawnSubagentResult): boolean {
   return result.reservedCleanup?.sessionDeletion === "indeterminate";
 }
 
-function assertReservedSubagentTaskWithinLimit(task: string): void {
-  const taskBytes = Buffer.byteLength(task, "utf8");
-  if (taskBytes > RESERVED_SUBAGENT_TASK_MAX_BYTES) {
-    throw new Error(
-      `spawnReserved task exceeds the ${RESERVED_SUBAGENT_TASK_MAX_BYTES} byte limit.`,
-    );
+function assertReservedSubagentTextWithinLimit(
+  fieldName: "label" | "task",
+  value: string,
+  maxBytes: number,
+): void {
+  const bytes = Buffer.byteLength(value, "utf8");
+  if (bytes > maxBytes) {
+    throw new Error(`spawnReserved ${fieldName} exceeds the ${maxBytes} byte limit.`);
   }
+}
+
+function assertReservedSubagentTaskWithinLimit(task: string): void {
+  assertReservedSubagentTextWithinLimit("task", task, RESERVED_SUBAGENT_TASK_MAX_BYTES);
+}
+
+function assertReservedSubagentLabelWithinLimit(label: string | undefined): void {
+  if (label === undefined) {
+    return;
+  }
+  assertReservedSubagentTextWithinLimit("label", label, RESERVED_SUBAGENT_LABEL_MAX_BYTES);
 }
 
 function buildReservedSubagentClaimToken(params: {
@@ -364,6 +378,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
     throw new Error("spawnReserved runId uses a backend-reserved namespace.");
   }
   assertReservedSubagentTaskWithinLimit(params.task);
+  assertReservedSubagentLabelWithinLimit(params.label);
   if (!task) {
     throw new Error("spawnReserved task must be non-empty.");
   }
