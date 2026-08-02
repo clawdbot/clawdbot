@@ -4,6 +4,12 @@ const runtimeMocks = vi.hoisted(() => {
   class OwnerNotPublishedError extends Error {}
   return {
     OwnerNotPublishedError,
+    authStorage: {},
+    modelRegistry: {},
+    preparedSnapshot: {
+      createStores: vi.fn(),
+    },
+    release: vi.fn(),
     resolveModelAsync: vi.fn(async () => ({
       model: {
         id: "chat-latest",
@@ -16,8 +22,17 @@ const runtimeMocks = vi.hoisted(() => {
   };
 });
 
+runtimeMocks.preparedSnapshot.createStores.mockReturnValue({
+  authStorage: runtimeMocks.authStorage,
+  modelRegistry: runtimeMocks.modelRegistry,
+});
+
 vi.mock("./prepared-model-runtime.js", () => ({
   PreparedModelRuntimeOwnerNotPublishedError: runtimeMocks.OwnerNotPublishedError,
+  acquireReadOnlyPreparedModelRuntime: vi.fn(async () => ({
+    snapshot: runtimeMocks.preparedSnapshot,
+    release: runtimeMocks.release,
+  })),
 }));
 
 vi.mock("./embedded-agent-runner/model.js", () => ({
@@ -34,6 +49,7 @@ vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
 vi.mock("./agent-scope.js", () => ({
   resolveAgentDir: () => "/tmp/agents/main/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace-main",
+  resolveDefaultAgentDir: () => "/tmp/agents/main/agent",
   resolveSessionAgentId: () => "main",
 }));
 
@@ -60,7 +76,14 @@ describe("resolveEffectiveToolInventoryRuntimeModelContextAsync", () => {
       "chat-latest",
       "/tmp/agents/main/agent",
       {},
-      { agentId: "main", workspaceDir: "/tmp/workspace-main" },
+      {
+        agentId: "main",
+        workspaceDir: "/tmp/workspace-main",
+        authStorage: runtimeMocks.authStorage,
+        modelRegistry: runtimeMocks.modelRegistry,
+        preparedModelRuntime: runtimeMocks.preparedSnapshot,
+      },
     );
+    expect(runtimeMocks.release).toHaveBeenCalledTimes(1);
   });
 });

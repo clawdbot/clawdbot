@@ -15,13 +15,21 @@ import type { OpenClawConfig } from "../config/config.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+  resolveSessionAgentId,
+} from "./agent-scope.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
-import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  acquireReadOnlyPreparedModelRuntime,
+} from "./prepared-model-runtime.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { buildRuntimeCompatibleToolInventory } from "./tools-effective-inventory-build.js";
 import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
@@ -279,13 +287,29 @@ export async function resolveEffectiveToolInventoryRuntimeModelContextAsync(
     return {};
   }
   const agentId = params.agentId?.trim() || resolveSessionAgentId({ config: params.cfg });
+  const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
-  const resolved = await resolveModelAsync(provider, modelId, params.agentDir, params.cfg, {
+  const lease = await acquireReadOnlyPreparedModelRuntime({
     agentId,
+    agentDir,
+    config: params.cfg,
+    inheritedAuthDir: resolveDefaultAgentDir(params.cfg),
     workspaceDir,
   });
-  const runtimeModel = resolved.model as ProviderRuntimeModel | undefined;
-  return runtimeModel ? { modelApi: runtimeModel.api, runtimeModel } : {};
+  try {
+    const stores = lease.snapshot.createStores();
+    const resolved = await resolveModelAsync(provider, modelId, agentDir, params.cfg, {
+      agentId,
+      workspaceDir,
+      authStorage: stores.authStorage,
+      modelRegistry: stores.modelRegistry,
+      preparedModelRuntime: lease.snapshot,
+    });
+    const runtimeModel = resolved.model as ProviderRuntimeModel | undefined;
+    return runtimeModel ? { modelApi: runtimeModel.api, runtimeModel } : {};
+  } finally {
+    lease.release();
+  }
 }
 
 /** Resolves compatibility metadata explicitly configured for a provider/model pair. */
