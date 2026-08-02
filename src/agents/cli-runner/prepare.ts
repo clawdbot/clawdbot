@@ -128,6 +128,7 @@ import {
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
   resolveAutoCliSessionReseedHistoryChars,
+  resolveCliSessionHistoryExcludedMessageIdempotencyKey,
 } from "./session-history.js";
 import { buildCliBackendToolAvailability } from "./tool-policy.js";
 import type {
@@ -710,6 +711,8 @@ export async function prepareCliRunContext(
     params.provider;
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
+  const excludeMessageIdempotencyKey =
+    resolveCliSessionHistoryExcludedMessageIdempotencyKey(params);
   let openClawHistoryMessages: unknown[] | undefined;
   const loadOpenClawHistoryMessages = async () => {
     openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
@@ -718,6 +721,8 @@ export async function prepareCliRunContext(
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       config: params.config,
+      ...(params.storePath ? { storePath: params.storePath } : {}),
+      ...(excludeMessageIdempotencyKey ? { excludeMessageIdempotencyKey } : {}),
     });
     return openClawHistoryMessages;
   };
@@ -1512,6 +1517,8 @@ export async function prepareCliRunContext(
             sessionKey: params.sessionKey,
             agentId: params.agentId,
             config: params.config,
+            ...(params.storePath ? { storePath: params.storePath } : {}),
+            ...(excludeMessageIdempotencyKey ? { excludeMessageIdempotencyKey } : {}),
             allowRawTranscriptReseed,
             rawTranscriptReseedReason,
           }),
@@ -1636,6 +1643,7 @@ export async function prepareCliRunContext(
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       config: contextEngineConfig,
+      ...(params.storePath ? { storePath: params.storePath } : {}),
     });
     const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
     const preparedParams: RunCliAgentParams = {

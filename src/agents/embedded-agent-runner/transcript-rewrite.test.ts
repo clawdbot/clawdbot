@@ -357,4 +357,80 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       { type: "text", text: "[runtime rewrite]" },
     ]);
   });
+
+  it("rewrites the current SQLite target without mutating a stale marker store", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-relocated-"));
+    const oldStorePath = path.join(dir, "old", "sessions.json");
+    const currentStorePath = path.join(dir, "current", "sessions.json");
+    await fs.mkdir(path.dirname(oldStorePath), { recursive: true });
+    await fs.mkdir(path.dirname(currentStorePath), { recursive: true });
+    const sessionId = "runtime-sqlite-relocated-rewrite";
+    const sessionKey = "agent:main:relocated";
+    const oldMarker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath: oldStorePath,
+    });
+    const currentMarker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath: currentStorePath,
+    });
+    const oldScope = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: oldStorePath,
+    };
+    const currentScope = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: currentStorePath,
+    };
+
+    await replaceSessionEntry({ sessionKey, storePath: oldStorePath }, {
+      sessionFile: oldMarker,
+      sessionId,
+      updatedAt: 10,
+    } as SessionEntry);
+    await replaceSessionEntry({ sessionKey, storePath: currentStorePath }, {
+      // State relocation can leave the copied row pointing at the old database.
+      sessionFile: oldMarker,
+      sessionId,
+      updatedAt: 20,
+    } as SessionEntry);
+    const oldToolResult = await appendTranscriptMessage(oldScope, {
+      message: createToolResultReplacement("exec", "old store control", 1),
+    });
+    const currentToolResult = await appendTranscriptMessage(currentScope, {
+      message: createToolResultReplacement("exec", "current store before rewrite", 2),
+    });
+
+    const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+      scope: {
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        sessionFile: currentMarker,
+      },
+      request: {
+        replacements: [
+          {
+            entryId: currentToolResult.messageId,
+            message: createToolResultReplacement("exec", "current store after rewrite", 2),
+          },
+        ],
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    const oldEvents = await loadTranscriptEvents(oldScope);
+    const currentEvents = await loadTranscriptEvents(currentScope);
+    expect(JSON.stringify(oldEvents)).toContain(oldToolResult.messageId);
+    expect(JSON.stringify(oldEvents)).toContain("old store control");
+    expect(JSON.stringify(oldEvents)).not.toContain("current store after rewrite");
+    expect(JSON.stringify(currentEvents)).toContain("current store after rewrite");
+    expect(JSON.stringify(currentEvents)).not.toContain("current store before rewrite");
+  });
 });

@@ -57,6 +57,7 @@ export function createCliDispatchTranscriptRecorder(params: {
   sessionKey?: string;
   agentId?: string;
   sessionFile?: string;
+  storePath?: string;
   runId: string;
   prompt: string;
   provider: string;
@@ -77,6 +78,7 @@ export function createCliDispatchTranscriptRecorder(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     sessionFile: params.sessionFile,
+    storePath: params.storePath,
   };
 
   const enqueue = (build: () => AgentMessage) => {

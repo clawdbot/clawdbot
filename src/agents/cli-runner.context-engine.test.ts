@@ -1,13 +1,18 @@
 /** Tests CLI runner integration with context-engine lifecycle hooks. */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { ContextEngine } from "../context-engine/types.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
 const {
   executePreparedCliRunMock,
   loadCliSessionContextEngineMessagesMock,
   loadCliSessionHistoryMessagesMock,
+  resolveCliSessionHistoryExcludedMessageIdempotencyKeyMock,
+  resolveCliSessionSqliteTranscriptScopeMock,
   getGlobalHookRunnerMock,
   runBeforeAgentReplyForTurnMock,
   prepareCliRunContextMock,
@@ -15,7 +20,24 @@ const {
   executePreparedCliRunMock: vi.fn(),
   loadCliSessionContextEngineMessagesMock: vi.fn(),
   loadCliSessionHistoryMessagesMock: vi.fn(),
-  getGlobalHookRunnerMock: vi.fn(() => null),
+  resolveCliSessionHistoryExcludedMessageIdempotencyKeyMock: vi.fn(
+    (params: {
+      suppressNextUserMessagePersistence?: boolean;
+      userTurnTranscriptRecorder?: {
+        hasPersisted: () => boolean;
+        getPersistedMessage?: () => { idempotencyKey?: string } | undefined;
+        message?: { idempotencyKey?: string };
+      };
+    }) => {
+      const recorder = params.userTurnTranscriptRecorder;
+      if (params.suppressNextUserMessagePersistence !== true || !recorder?.hasPersisted()) {
+        return undefined;
+      }
+      return (recorder.getPersistedMessage?.() ?? recorder.message)?.idempotencyKey;
+    },
+  ),
+  resolveCliSessionSqliteTranscriptScopeMock: vi.fn(),
+  getGlobalHookRunnerMock: vi.fn<() => unknown>(() => null),
   runBeforeAgentReplyForTurnMock: vi.fn(async () => undefined),
   prepareCliRunContextMock: vi.fn(),
 }));
@@ -36,6 +58,9 @@ vi.mock("./cli-runner/prepare.runtime.js", () => ({
 vi.mock("./cli-runner/session-history.js", () => ({
   loadCliSessionContextEngineMessages: loadCliSessionContextEngineMessagesMock,
   loadCliSessionHistoryMessages: loadCliSessionHistoryMessagesMock,
+  resolveCliSessionHistoryExcludedMessageIdempotencyKey:
+    resolveCliSessionHistoryExcludedMessageIdempotencyKeyMock,
+  resolveCliSessionSqliteTranscriptScope: resolveCliSessionSqliteTranscriptScopeMock,
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -167,6 +192,9 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     ]);
     loadCliSessionHistoryMessagesMock.mockReset();
     loadCliSessionHistoryMessagesMock.mockResolvedValue([]);
+    resolveCliSessionHistoryExcludedMessageIdempotencyKeyMock.mockClear();
+    resolveCliSessionSqliteTranscriptScopeMock.mockReset();
+    resolveCliSessionSqliteTranscriptScopeMock.mockReturnValue(undefined);
     getGlobalHookRunnerMock.mockReset();
     getGlobalHookRunnerMock.mockReturnValue(null);
     runBeforeAgentReplyForTurnMock.mockClear();
@@ -305,6 +333,40 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
+  it("uses the canonical SQLite store target across context-engine lifecycle hooks", async () => {
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
+      bootstrapped: true,
+    }));
+    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
+      createMaintenanceResult(),
+    );
+    const contextEngine = createContextEngine({ bootstrap, afterTurn, maintain });
+    const context = buildPreparedContext(contextEngine);
+    const storePath = "/tmp/openclaw-cli-context-engine-current/sessions.json";
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "openclaw-session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    context.params.sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: context.params.sessionId,
+      storePath: "/tmp/openclaw-cli-context-engine-old/sessions.json",
+    });
+    context.params.storePath = storePath;
+    resolveCliSessionSqliteTranscriptScopeMock.mockReturnValue(sessionTarget);
+
+    await runPreparedCliAgent(context);
+
+    expect(bootstrap.mock.calls[0]?.[0]).toMatchObject({ sessionTarget });
+    expect(afterTurn.mock.calls[0]?.[0]).toMatchObject({ sessionTarget });
+    expect(maintain).toHaveBeenCalledTimes(2);
+    expect(maintain.mock.calls[0]?.[0]).toMatchObject({ sessionTarget });
+    expect(maintain.mock.calls[1]?.[0]).toMatchObject({ sessionTarget });
+  });
+
   it("does not synthesize a context-engine user turn for empty transcript prompts", async () => {
     const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
     const dispose = vi.fn(async () => {});
@@ -363,6 +425,46 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(loadCliSessionHistoryMessagesMock).not.toHaveBeenCalled();
     expect(afterTurnParams?.prePromptMessageCount).toBe(101);
     expect(afterTurnParams?.messages.slice(0, 101)).toEqual(fullHistory);
+  });
+
+  it("excludes an already-persisted retry turn from hook and context-engine history", async () => {
+    const contextEngine = createContextEngine();
+    const context = buildPreparedContext(contextEngine);
+    const persistedMessage = {
+      role: "user" as const,
+      content: "visible ask",
+      timestamp: 3,
+      idempotencyKey: "cli-user:current-turn",
+    };
+    context.params.suppressNextUserMessagePersistence = true;
+    const recorder = createUserTurnTranscriptRecorder({
+      message: persistedMessage,
+      target: createTestUserTurnTranscriptTarget({
+        sessionId: context.params.sessionId,
+        sessionKey: context.params.sessionKey,
+      }),
+    });
+    recorder.markRuntimePersisted(persistedMessage);
+    context.params.userTurnTranscriptRecorder = recorder;
+    const runLlmInput = vi.fn(async () => undefined);
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "llm_input"),
+      runLlmInput,
+    });
+
+    await runPreparedCliAgent(context);
+
+    const expectedTranscriptParams = {
+      sessionId: "openclaw-session-1",
+      sessionFile: "session.jsonl",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      config: undefined,
+      excludeMessageIdempotencyKey: "cli-user:current-turn",
+    };
+    expect(loadCliSessionHistoryMessagesMock).toHaveBeenCalledWith(expectedTranscriptParams);
+    expect(loadCliSessionContextEngineMessagesMock).toHaveBeenCalledWith(expectedTranscriptParams);
+    expect(runLlmInput).toHaveBeenCalledTimes(1);
   });
 
   it("loads context-engine history after bootstrap lifecycle runs", async () => {

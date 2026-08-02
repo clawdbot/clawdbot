@@ -27,6 +27,7 @@ const log = createSubsystemLogger("agents/embedded-cli-dispatch");
 type EmbeddedCliBackendDispatch = {
   provider: string;
   sessionFile: string;
+  storePath?: string;
   /** Named loopback allowlist; the dispatch gate guarantees it is non-empty. */
   toolsAllow: string[];
 };
@@ -65,7 +66,15 @@ function resolveEmbeddedCliBackendDispatch(
     return undefined;
   }
   const eligibility = resolveEmbeddedCliBackendDispatchEligibility(params);
-  return eligibility ? { provider: eligibility.provider, sessionFile, toolsAllow } : undefined;
+  const storePath = params.sessionTarget?.storePath?.trim();
+  return eligibility
+    ? {
+        provider: eligibility.provider,
+        sessionFile,
+        ...(storePath ? { storePath } : {}),
+        toolsAllow,
+      }
+    : undefined;
 }
 
 /**
@@ -116,6 +125,7 @@ async function runEmbeddedAgentViaCliBackend(
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     sessionFile: dispatch.sessionFile,
+    ...(dispatch.storePath ? { storePath: dispatch.storePath } : {}),
     runId: params.runId,
     prompt: params.prompt,
     provider: dispatch.provider,
@@ -197,6 +207,7 @@ async function runEmbeddedAgentViaCliBackend(
       agentId: params.agentId,
       trigger: params.trigger,
       sessionFile: dispatch.sessionFile,
+      ...(dispatch.storePath ? { storePath: dispatch.storePath } : {}),
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       config: params.config,

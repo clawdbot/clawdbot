@@ -362,6 +362,25 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(cliParams).not.toHaveProperty("toolsAllow");
   });
 
+  it("preserves the canonical session store through CLI dispatch", async () => {
+    const storePath = "/tmp/recall/current/agents/main/sessions/sessions.json";
+    await runEmbeddedAgentViaCliBackendIfEligible(
+      baseRunParams({
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "recall-session",
+          sessionKey: "agent:main:recall",
+          storePath,
+        },
+      }),
+    );
+
+    expect(runCliAgent).toHaveBeenCalledWith(expect.objectContaining({ storePath }));
+    expect(createCliDispatchTranscriptRecorder).toHaveBeenCalledWith(
+      expect.objectContaining({ storePath }),
+    );
+  });
+
   // Fail-closed tool policy: only a non-empty named allowlist is expressible
   // on the CLI surface. Every other embedded tool state keeps the passthrough
   // so no closed state silently widens.

@@ -8,7 +8,13 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  resolveStorePath,
 } from "../../config/sessions/paths.js";
+import {
+  hasTranscriptEventsSync,
+  loadTranscriptTailEventsByJsonlBytes,
+} from "../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import {
   parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
@@ -24,8 +30,13 @@ import {
   MAX_AGENT_HOOK_HISTORY_MESSAGES,
 } from "../harness/hook-history.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { migrateSessionEntries, parseSessionEntries } from "../sessions/session-manager.js";
+import {
+  migrateSessionEntries,
+  normalizeLoadedFileEntry,
+  parseSessionEntries,
+} from "../sessions/session-manager.js";
 import { cliBackendLog } from "./log.js";
+import type { RunCliAgentParams } from "./types.js";
 
 /** Maximum transcript size read for CLI session history. */
 const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
@@ -43,6 +54,7 @@ type HistoryMessage = {
   role?: unknown;
   content?: unknown;
   summary?: unknown;
+  idempotencyKey?: unknown;
 };
 type HistoryEntry = {
   type?: unknown;
@@ -57,6 +69,16 @@ type HistoryEntry = {
   firstKeptEntryId?: unknown;
   tokensBefore?: unknown;
   tokensAfter?: unknown;
+};
+
+type CliSessionTranscriptParams = {
+  sessionId: string;
+  sessionFile: string;
+  sessionKey?: string;
+  agentId?: string;
+  config?: OpenClawConfig;
+  storePath?: string;
+  excludeMessageIdempotencyKey?: string;
 };
 
 type RawTranscriptReseedReason =
@@ -79,6 +101,24 @@ const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>
   "mcp",
   "session-expired",
 ]);
+
+/** Resolves a persisted current turn that must not be exposed as prior CLI history. */
+export function resolveCliSessionHistoryExcludedMessageIdempotencyKey(
+  params: Pick<
+    RunCliAgentParams,
+    "suppressNextUserMessagePersistence" | "userTurnTranscriptRecorder"
+  >,
+): string | undefined {
+  const recorder = params.userTurnTranscriptRecorder;
+  if (params.suppressNextUserMessagePersistence !== true || !recorder?.hasPersisted()) {
+    return undefined;
+  }
+  const message = recorder.getPersistedMessage?.() ?? recorder.message;
+  const idempotencyKey = (message as { idempotencyKey?: unknown } | undefined)?.idempotencyKey;
+  return typeof idempotencyKey === "string" && idempotencyKey.length > 0
+    ? idempotencyKey
+    : undefined;
+}
 
 /** Resolves how much prior transcript text may reseed a fresh CLI session. */
 export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
@@ -409,13 +449,10 @@ function parseCliSessionEntries(
   return parseSessionEntries(content);
 }
 
-function resolveSafeCliSessionFile(params: {
-  sessionId: string;
+function resolveSafeCliSessionFile(params: CliSessionTranscriptParams): {
   sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): { sessionFile: string; sessionsDir: string } {
+  sessionsDir: string;
+} {
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -423,7 +460,7 @@ function resolveSafeCliSessionFile(params: {
   });
   const pathOptions = resolveSessionFilePathOptions({
     agentId: sessionAgentId ?? defaultAgentId,
-    storePath: params.config?.session?.store,
+    storePath: params.storePath ?? params.config?.session?.store,
   });
   const sessionFile = resolveSessionFilePath(
     params.sessionId,
@@ -436,14 +473,105 @@ function resolveSafeCliSessionFile(params: {
   };
 }
 
-async function loadCliSessionEntries(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): Promise<unknown[]> {
+export function resolveCliSessionSqliteTranscriptScope(params: CliSessionTranscriptParams):
+  | {
+      agentId: string;
+      sessionId: string;
+      sessionKey?: string;
+      storePath: string;
+    }
+  | undefined {
+  const marker = parseSqliteSessionFileMarker(params.sessionFile);
+  if (!marker) {
+    return undefined;
+  }
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  if (marker.sessionId !== params.sessionId || marker.agentId !== sessionAgentId) {
+    return undefined;
+  }
+  // Persisted markers retain their old absolute store after a supported state
+  // relocation. Identity-gate the marker, then read only the current canonical
+  // store so stale marker metadata cannot redirect transcript access.
+  const storePath = resolveStorePath(params.storePath ?? params.config?.session?.store, {
+    agentId: sessionAgentId,
+  });
+  return {
+    agentId: sessionAgentId,
+    sessionId: params.sessionId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    storePath,
+  };
+}
+
+function finalizeCliSessionEntries(params: {
+  entries: unknown[];
+  source: string;
+  truncated: boolean;
+  excludeMessageIdempotencyKey?: string;
+}): unknown[] {
+  const entries = params.entries.map((entry) =>
+    normalizeLoadedFileEntry(entry as ReturnType<typeof parseSessionEntries>[number]),
+  );
+  const rawSessionEntries = entries.filter((entry) => entry.type !== "session");
+  if (params.truncated && !isSafeTruncatedCliSessionTail(rawSessionEntries)) {
+    cliBackendLog.warn(
+      `cli session history truncated tail skipped because branch controls are incomplete: ${params.source}`,
+    );
+    return [];
+  }
+  migrateSessionEntries(entries);
+  const sessionEntries = entries.filter((entry) => entry.type !== "session");
+  if (params.truncated && !isSafeTruncatedCliSessionTail(sessionEntries)) {
+    cliBackendLog.warn(
+      `cli session history truncated tail skipped because branch controls are incomplete: ${params.source}`,
+    );
+    return [];
+  }
+  const selectedEntries = projectLatestCliHistoryBoundary(
+    selectSessionTranscriptLeafControlledPath(sessionEntries) ?? sessionEntries,
+  );
+  if (!params.excludeMessageIdempotencyKey) {
+    return selectedEntries;
+  }
+  // Select the active branch before removing the already-persisted current
+  // turn so its tree edge cannot change leaf resolution for prior history.
+  return selectedEntries.filter((entry) => {
+    const candidate = entry as HistoryEntry;
+    if (candidate.type !== "message") {
+      return true;
+    }
+    const message = candidate.message as HistoryMessage | undefined;
+    return message?.idempotencyKey !== params.excludeMessageIdempotencyKey;
+  });
+}
+
+async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promise<unknown[]> {
   try {
+    if (params.sessionFile.trim().startsWith("sqlite:")) {
+      const transcriptScope = resolveCliSessionSqliteTranscriptScope(params);
+      if (!transcriptScope) {
+        return [];
+      }
+      const transcript = await loadTranscriptTailEventsByJsonlBytes(
+        transcriptScope,
+        MAX_CLI_SESSION_HISTORY_FILE_BYTES,
+      );
+      if (transcript.truncated) {
+        cliBackendLog.warn(
+          `cli session history truncated to last ${MAX_CLI_SESSION_HISTORY_FILE_BYTES} bytes: ${params.sessionFile}`,
+        );
+      }
+      return finalizeCliSessionEntries({
+        entries: transcript.events,
+        source: params.sessionFile,
+        truncated: transcript.truncated,
+        excludeMessageIdempotencyKey: params.excludeMessageIdempotencyKey,
+      });
+    }
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
     if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
@@ -467,24 +595,12 @@ async function loadCliSessionEntries(params: {
     if (!entries) {
       return [];
     }
-    const rawSessionEntries = entries.filter((entry) => entry.type !== "session");
-    if (transcript.truncated && !isSafeTruncatedCliSessionTail(rawSessionEntries)) {
-      cliBackendLog.warn(
-        `cli session history truncated tail skipped because branch controls are incomplete: ${realSessionFile}`,
-      );
-      return [];
-    }
-    migrateSessionEntries(entries);
-    const sessionEntries = entries.filter((entry) => entry.type !== "session");
-    if (transcript.truncated && !isSafeTruncatedCliSessionTail(sessionEntries)) {
-      cliBackendLog.warn(
-        `cli session history truncated tail skipped because branch controls are incomplete: ${realSessionFile}`,
-      );
-      return [];
-    }
-    return projectLatestCliHistoryBoundary(
-      selectSessionTranscriptLeafControlledPath(sessionEntries) ?? sessionEntries,
-    );
+    return finalizeCliSessionEntries({
+      entries,
+      source: realSessionFile,
+      truncated: transcript.truncated,
+      excludeMessageIdempotencyKey: params.excludeMessageIdempotencyKey,
+    });
   } catch (error) {
     if (!isFileNotFoundError(error)) {
       cliBackendLog.warn(`cli session history load failed: ${formatErrorMessage(error)}`);
@@ -531,14 +647,14 @@ function projectLatestCliHistoryBoundary(entries: unknown[]): unknown[] {
 }
 
 /** Checks whether a safe, bounded transcript file exists for a CLI session. */
-export async function hasCliSessionTranscript(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): Promise<boolean> {
+export async function hasCliSessionTranscript(
+  params: CliSessionTranscriptParams,
+): Promise<boolean> {
   try {
+    if (params.sessionFile.trim().startsWith("sqlite:")) {
+      const transcriptScope = resolveCliSessionSqliteTranscriptScope(params);
+      return transcriptScope ? hasTranscriptEventsSync(transcriptScope) : false;
+    }
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
     if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
@@ -561,13 +677,9 @@ export async function hasCliSessionTranscript(params: {
 }
 
 /** Loads transcript messages for CLI lifecycle hook context. */
-export async function loadCliSessionHistoryMessages(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): Promise<unknown[]> {
+export async function loadCliSessionHistoryMessages(
+  params: CliSessionTranscriptParams,
+): Promise<unknown[]> {
   const history = (await loadCliSessionEntries(params)).flatMap((entry) => {
     const candidate = entry as HistoryEntry;
     return candidate.type === "message" ? [candidate.message] : [];
@@ -576,13 +688,9 @@ export async function loadCliSessionHistoryMessages(params: {
 }
 
 /** Loads transcript messages formatted for context-engine updates. */
-export async function loadCliSessionContextEngineMessages(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): Promise<unknown[]> {
+export async function loadCliSessionContextEngineMessages(
+  params: CliSessionTranscriptParams,
+): Promise<unknown[]> {
   const entries = await loadCliSessionEntries(params);
   const latestCompactionIndex = entries.findLastIndex((entry) => {
     const candidate = entry as HistoryEntry;
@@ -620,15 +728,12 @@ export async function loadCliSessionContextEngineMessages(params: {
 }
 
 /** Loads compacted/raw transcript messages eligible for CLI session reseeding. */
-export async function loadCliSessionReseedMessages(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-  allowRawTranscriptReseed?: boolean;
-  rawTranscriptReseedReason?: RawTranscriptReseedReason;
-}): Promise<unknown[]> {
+export async function loadCliSessionReseedMessages(
+  params: CliSessionTranscriptParams & {
+    allowRawTranscriptReseed?: boolean;
+    rawTranscriptReseedReason?: RawTranscriptReseedReason;
+  },
+): Promise<unknown[]> {
   const entries = await loadCliSessionEntries(params);
   const loadRawTail = () => {
     if (

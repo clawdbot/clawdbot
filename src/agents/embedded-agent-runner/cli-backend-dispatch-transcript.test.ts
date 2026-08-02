@@ -25,6 +25,7 @@ function recorderParams() {
     sessionKey: "agent:main:recall",
     agentId: "main",
     sessionFile: "sqlite://agents/main/recall-session",
+    storePath: "/tmp/recall/current/agents/main/sessions/sessions.json",
     runId: "run-transcript-test",
     prompt: "recall prompt",
     provider: "claude-cli",
@@ -49,6 +50,7 @@ describe("createCliDispatchTranscriptRecorder", () => {
       sessionKey: "agent:main:recall",
       agentId: "main",
       sessionFile: "sqlite://agents/main/recall-session",
+      storePath: "/tmp/recall/current/agents/main/sessions/sessions.json",
     });
     expect(records[0]?.message).toMatchObject({
       role: "user",
