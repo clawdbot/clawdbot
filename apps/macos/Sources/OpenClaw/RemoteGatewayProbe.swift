@@ -2,6 +2,14 @@ import Foundation
 import OpenClawIPC
 import OpenClawKit
 
+private struct RemoteGatewayProbeTimeout: LocalizedError, Sendable {
+    let timeoutMs: Double
+
+    var errorDescription: String? {
+        "Remote gateway check timed out after \(Int(self.timeoutMs))ms"
+    }
+}
+
 enum RemoteGatewayAuthIssue: Equatable {
     case tokenRequired
     case tokenMismatch
@@ -153,6 +161,8 @@ struct RemoteGatewayProbeSuccess: Equatable {
 }
 
 enum RemoteGatewayProbe {
+    private static let gatewayProbeTimeoutMs: Double = 10000
+
     @MainActor
     static func run() async -> RemoteGatewayProbeResult {
         guard AppStateStore.shared.syncGatewayConfigNow() else {
@@ -195,9 +205,25 @@ enum RemoteGatewayProbe {
             }
         }
 
+        return await self.probeGateway(
+            connection: GatewayConnection.shared,
+            timeoutMs: self.gatewayProbeTimeoutMs)
+    }
+
+    private static func probeGateway(
+        connection: GatewayConnection,
+        timeoutMs: Double) async -> RemoteGatewayProbeResult
+    {
         do {
-            _ = try await GatewayConnection.shared.healthSnapshot(timeoutMs: 10000)
-            let authSource = await GatewayConnection.shared.authSource()
+            let authSource = try await AsyncTimeout.withTimeout(
+                seconds: max(0.001, timeoutMs / 1000),
+                onTimeout: { RemoteGatewayProbeTimeout(timeoutMs: timeoutMs) },
+                operation: {
+                    _ = try await connection.healthSnapshot(
+                        timeoutMs: timeoutMs,
+                        retryTransportFailures: false)
+                    return await connection.authSource()
+                })
             return .ready(RemoteGatewayProbeSuccess(authSource: authSource))
         } catch {
             if let authIssue = RemoteGatewayAuthIssue(error: error) {
@@ -206,6 +232,15 @@ enum RemoteGatewayProbe {
             return .failed(error.localizedDescription)
         }
     }
+
+    #if SWIFT_PACKAGE
+    static func _testProbeGateway(
+        connection: GatewayConnection,
+        timeoutMs: Double) async -> RemoteGatewayProbeResult
+    {
+        await self.probeGateway(connection: connection, timeoutMs: timeoutMs)
+    }
+    #endif
 
     private static func isValidWsUrl(_ raw: String) -> Bool {
         GatewayRemoteConfig.normalizeGatewayUrl(raw) != nil
