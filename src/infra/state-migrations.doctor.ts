@@ -1038,7 +1038,7 @@ function buildLegacyStateMigrationSteps(
     : [];
 
   const sharedSteps: LegacyStateMigrationStep[] = [
-    sharedStep(() => migrateLegacyPluginStateSidecar({ stateDir })),
+    sharedStep(() => migrateLegacyPluginStateSidecar({ stateDir }), true),
     sharedStep(() => migrateLegacyInstalledPluginIndex({ stateDir }), true),
     ownerStep(
       detected.debugProxyCaptureSidecar,

@@ -3328,7 +3328,7 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
   });
 
-  it("keeps the plugin-state sidecar when the sidecar has a newer row than canonical state", async () => {
+  it("archives the plugin-state sidecar when the sidecar has a newer row than canonical state", async () => {
     const root = await makeTempRoot();
     const sourcePath = path.join(root, "plugin-state", "state.sqlite");
     fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
@@ -3375,14 +3375,27 @@ describe("doctor legacy state migrations", () => {
     });
     const result = await runLegacyStateMigrations({ detected });
 
-    expect(result.warnings).toStrictEqual([
-      "Left plugin-state sidecar in place because 1 row differs from shared state without a newer canonical timestamp. First key: discord/components/interaction:1",
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toStrictEqual([
+      "Kept canonical shared SQLite plugin state despite differing legacy sidecar row for: discord/components/interaction:1",
     ]);
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
+        namespace: "components",
+        maxEntries: 10,
+      });
+      await expect(store.lookup("interaction:1")).resolves.toEqual({ ok: false });
+    });
+
+    const retry = await runLegacyStateMigrationsForRoot(root);
+    expect(retry.warnings).toStrictEqual([]);
+    expect(retry.notices).toBeUndefined();
   });
 
-  it("keeps the plugin-state sidecar when sidecar and canonical rows have equal timestamps but different values", async () => {
+  it("archives the plugin-state sidecar when sidecar and canonical rows have equal timestamps but different values", async () => {
     const root = await makeTempRoot();
     const sourcePath = path.join(root, "plugin-state", "state.sqlite");
     fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
@@ -3429,11 +3442,12 @@ describe("doctor legacy state migrations", () => {
     });
     const result = await runLegacyStateMigrations({ detected });
 
-    expect(result.warnings).toStrictEqual([
-      "Left plugin-state sidecar in place because 1 row differs from shared state without a newer canonical timestamp. First key: discord/components/interaction:1",
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toStrictEqual([
+      "Kept canonical shared SQLite plugin state despite differing legacy sidecar row for: discord/components/interaction:1",
     ]);
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
   });
 
   it("archives the plugin-state sidecar when conflicting rows already match", async () => {

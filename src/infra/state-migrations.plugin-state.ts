@@ -42,7 +42,7 @@ type LegacyPluginStateImportDatabase = Pick<OpenClawStateKyselyDatabase, "plugin
 
 export async function migrateLegacyPluginStateSidecar(params: {
   stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
+}): Promise<MigrationMessages> {
   const sourcePath = resolveLegacyPluginStateSidecarPath(params.stateDir);
   if (!fileExists(sourcePath)) {
     const changes: string[] = [];
@@ -143,10 +143,15 @@ export async function migrateLegacyPluginStateSidecar(params: {
       );
     }
     if (conflictedKeys.length > 0) {
+      // Shared SQLite state already owns these entries; the legacy sidecar only
+      // disagrees without a newer canonical timestamp. Archive the retired
+      // sidecar for recovery instead of blocking every startup on the conflict.
+      archiveLegacyPluginStateSidecar({ sourcePath, changes, warnings });
       return {
         changes,
-        warnings: [
-          `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row differs" : "rows differ"} from shared state without a newer canonical timestamp. First key: ${conflictedKeys[0]}`,
+        warnings,
+        notices: [
+          `Kept canonical shared SQLite plugin state despite differing legacy sidecar ${conflictedKeys.length === 1 ? "row" : "rows"} for: ${conflictedKeys.join(", ")}`,
         ],
       };
     }
