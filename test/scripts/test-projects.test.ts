@@ -1720,10 +1720,6 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/lib/config-boundary-guard.d.mts", "scripts/lib/config-boundary-guard.mjs"],
       ["scripts/lib/arg-utils.d.mts", "scripts/lib/arg-utils.mjs"],
       [
-        "scripts/lib/deprecated-config-api-guard.d.mts",
-        "scripts/lib/deprecated-config-api-guard.mjs",
-      ],
-      [
         "scripts/lib/extension-source-classifier.d.mts",
         "scripts/lib/extension-source-classifier.mjs",
       ],
@@ -1848,6 +1844,15 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/local-heavy-check-runtime.test.ts"],
       ],
       ["scripts/lib/managed-child-process.mjs", ["test/scripts/managed-child-process.test.ts"]],
+      [
+        "scripts/lib/failed-trailer.mjs",
+        [
+          "test/scripts/run-oxlint.test.ts",
+          "test/scripts/run-tsgo.test.ts",
+          "test/scripts/run-vitest.test.ts",
+          "test/scripts/changed-lanes.test.ts",
+        ],
+      ],
       [
         "scripts/lib/windows-taskkill.mjs",
         ["test/scripts/managed-child-process.test.ts", "test/scripts/run-with-env.test.ts"],
@@ -2387,10 +2392,6 @@ describe("scripts/test-projects changed-target routing", () => {
           "src/plugins/contracts/config-boundary-guard.test.ts",
           "src/plugins/contracts/deprecated-internal-config-api.test.ts",
         ],
-      ],
-      [
-        "scripts/lib/deprecated-config-api-guard.mjs",
-        ["src/plugins/contracts/deprecated-internal-config-api.test.ts"],
       ],
       [
         "scripts/lib/extension-package-boundary.ts",

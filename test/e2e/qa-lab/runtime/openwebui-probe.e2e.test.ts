@@ -191,7 +191,7 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
 
     expect(script).toContain("run(controller.signal, timeoutPromise)");
     expect(script).toMatch(
-      /readBoundedResponseTextWithLimit\(\s*response,\s*label,\s*responseBodyMaxBytes,\s*timeoutPromise,/u,
+      /readBoundedResponseTextWithLimit\(\s*response,\s*label,\s*responseBodyMaxBytes,\s*\{\s*createTooLargeError: createBoundedResponseTooLargeError,\s*timeoutPromise,\s*\}\s*\)/u,
     );
     expect(script.match(/async \(signal, timeoutPromise\)/gu)).toHaveLength(3);
   });
