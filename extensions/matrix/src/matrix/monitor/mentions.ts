@@ -47,7 +47,7 @@ function hasVisibleNativeMatrixUserMention(text: string | undefined, userId: str
   // Historical localparts can end in any punctuation, so shorthand must stay
   // bare; colon plus visible whitespace is safe because localparts forbid colon.
   const pattern = new RegExp(
-    String.raw`(?:^|\p{White_Space})(?:${escapeRegExp(userId)}(?=$|\p{White_Space}|[,!?;](?=$|\p{White_Space}))|${escapeRegExp(`@${localpart}`)}(?=$|\p{White_Space}|:\p{White_Space}))`,
+    String.raw`(?:^|\p{White_Space})(?:${escapeRegExp(userId)}(?=$|\p{White_Space}|:\p{White_Space}|[,!?;](?=$|\p{White_Space}))|${escapeRegExp(`@${localpart}`)}(?=$|\p{White_Space}|:\p{White_Space}))`,
     "u",
   );
   return pattern.test(text);

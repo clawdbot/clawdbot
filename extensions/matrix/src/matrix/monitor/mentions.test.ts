@@ -42,6 +42,21 @@ describe("resolveMentions", () => {
         body: "hello @bot:matrix.org",
       },
       {
+        label: "colon-delimited full Matrix user ID",
+        mentionedUserId: "@bot:matrix.org",
+        body: "@bot:matrix.org: help",
+      },
+      {
+        label: "Unicode-whitespace-colon-delimited full Matrix user ID",
+        mentionedUserId: "@bot:matrix.org",
+        body: "@bot:matrix.org:\u2003help",
+      },
+      {
+        label: "colon-delimited full Matrix user ID with a homeserver port",
+        mentionedUserId: "@bot:matrix.org:8448",
+        body: "@bot:matrix.org:8448: help",
+      },
+      {
         label: "localpart shorthand",
         mentionedUserId: "@bot:matrix.org",
         body: "hello @bot",
@@ -86,6 +101,11 @@ describe("resolveMentions", () => {
         mentionedUserId: "@bot:[2001:db8::1]:8448",
         body: "hello @bot:[2001:db8::1]:8448",
       },
+      {
+        label: "colon-delimited bracketed IPv6 homeserver and port",
+        mentionedUserId: "@bot:[2001:db8::1]:8448",
+        body: "@bot:[2001:db8::1]:8448:\u2003help",
+      },
     ])(
       "detects native plain-text $label without configured mention patterns",
       ({ mentionedUserId, body }) => {
@@ -111,6 +131,25 @@ describe("resolveMentions", () => {
       { label: "case-different homeserver", body: "hello @bot:MATRIX.ORG" },
       { label: "extended DNS homeserver", body: "hello @bot:matrix.org.evil" },
       { label: "unexpected homeserver port", body: "hello @bot:matrix.org:8448" },
+      { label: "unexpected homeserver port before a command", body: "@bot:matrix.org:8448: help" },
+      { label: "unexpected repeated homeserver colon", body: "@bot:matrix.org::8448" },
+      { label: "full Matrix user ID followed by colon alone", body: "@bot:matrix.org:" },
+      {
+        label: "full Matrix user ID followed by invisible BOM",
+        body: "@bot:matrix.org:\ufeffhelp",
+      },
+      {
+        label: "full Matrix user ID followed by invisible zero-width text",
+        body: "@bot:matrix.org:\u200bhelp",
+      },
+      {
+        label: "full Matrix user ID followed by bidirectional formatting",
+        body: "@bot:matrix.org:\u202ehelp",
+      },
+      {
+        label: "full Matrix user ID followed by a hidden control",
+        body: "@bot:matrix.org:\u0001help",
+      },
       { label: "alternate IPv6 homeserver", body: "hello @bot:[::1]" },
       { label: "extended dotted localpart", body: "hello @bot.extra" },
       { label: "extended plus localpart", body: "hello @bot+evil" },
@@ -133,6 +172,7 @@ describe("resolveMentions", () => {
       { label: "ambiguous Markdown-wrapped shorthand", body: "hello **@bot**" },
       { label: "ambiguous hash-wrapped shorthand", body: "hello #@bot#" },
       { label: "Matrix room-alias account collision", body: "hello #@bot:matrix.org" },
+      { label: "Matrix room-alias colon-command collision", body: "#@bot:matrix.org: help" },
       { label: "Matrix room-ID account collision", body: "hello !@bot:matrix.org" },
       { label: "Matrix event-ID account collision", body: "hello $@bot:matrix.org" },
       { label: "unseparated Unicode punctuation", body: "hello （@bot），thanks" },

@@ -954,6 +954,8 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it.each([
     { label: "full Matrix user ID", body: "hello @bot:example.org" },
+    { label: "colon-delimited full Matrix user ID", body: "@bot:example.org: help" },
+    { label: "Unicode-whitespace-colon-delimited full ID", body: "@bot:example.org:\u2003help" },
     { label: "localpart shorthand", body: "hello @bot" },
   ])("processes native plain-text $label without configured mention patterns", async ({ body }) => {
     const getMemberDisplayName = vi.fn(async () => "sender");
@@ -982,6 +984,9 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it.each([
     { label: "another homeserver", body: "hello @bot:evil.example" },
+    { label: "an unexpected homeserver port", body: "@bot:example.org:8448: help" },
+    { label: "an invisible full-ID command separator", body: "@bot:example.org:\ufeffhelp" },
+    { label: "a room-alias full-ID command collision", body: "#@bot:example.org: help" },
     { label: "a longer Unicode localpart", body: "hello @boté" },
     { label: "a historical exclamation localpart", body: "hello @bot!evil:evil.example" },
     { label: "a historical percent localpart", body: "hello @bot%evil:evil.example" },
