@@ -376,8 +376,7 @@ function createInstalledPackageDir(params: {
 }
 
 function createOpenClawPeerLinkFixtures(plugins: Array<{ pluginId: string; packageName: string }>) {
-  const peerTarget = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-peer-target-"));
-  tempDirs.push(peerTarget);
+  const peerTarget = fs.realpathSync(process.cwd());
   const installPaths = Object.fromEntries(
     plugins.map(({ pluginId, packageName }) => [
       pluginId,
@@ -1552,7 +1551,12 @@ describe("updateNpmInstalledPlugins", () => {
       version: "2026.5.3",
       peerDependencies: { openclaw: ">=2026.5.3" },
     });
-    fs.mkdirSync(path.join(installPath, "node_modules", "openclaw"), { recursive: true });
+    fs.mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
+    fs.symlinkSync(
+      fs.realpathSync(process.cwd()),
+      path.join(installPath, "node_modules", "openclaw"),
+      "junction",
+    );
     mockNpmViewMetadata({
       name: "@openclaw/codex",
       version: "2026.5.3",
@@ -1593,6 +1597,64 @@ describe("updateNpmInstalledPlugins", () => {
       },
     ]);
   });
+
+  it.each(["peerDependencies", "dependencies"] as const)(
+    "repairs a copied stale %s host for an unchanged npm plugin without reinstalling it",
+    async (dependencyField) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-legacy-"));
+      tempDirs.push(stateDir);
+      const installPath = path.join(stateDir, "extensions", "email");
+      const staleHostDir = path.join(installPath, "node_modules", "openclaw");
+      fs.mkdirSync(staleHostDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(installPath, "package.json"),
+        JSON.stringify({
+          name: "@clawemail/email",
+          version: "2026.7.1",
+          [dependencyField]: { openclaw: ">=2026.7.1" },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(staleHostDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
+      );
+      mockNpmViewMetadata({
+        name: "@clawemail/email",
+        version: "2026.7.1",
+        integrity: "sha512-same",
+        shasum: "same",
+      });
+      installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+
+      const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () =>
+        updateNpmInstalledPlugins({
+          config: {
+            plugins: {
+              installs: {
+                email: {
+                  source: "npm",
+                  spec: "@clawemail/email",
+                  installPath,
+                  resolvedName: "@clawemail/email",
+                  resolvedVersion: "2026.7.1",
+                  resolvedSpec: "@clawemail/email@2026.7.1",
+                  integrity: "sha512-same",
+                  shasum: "same",
+                },
+              },
+            },
+          },
+          pluginIds: ["email"],
+        }),
+      );
+
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(fs.lstatSync(staleHostDir).isSymbolicLink()).toBe(true);
+      expect(fs.realpathSync(staleHostDir)).toBe(fs.realpathSync(process.cwd()));
+      expect(result.changed).toBe(true);
+      expect(result.outcomes[0]?.status).toBe("unchanged");
+    },
+  );
 
   it("repairs openclaw peer links after batch npm updates prune earlier plugin links", async () => {
     const plugins = [

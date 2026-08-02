@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
-  installedPackageNeedsOpenClawPeerLinkRepair,
   readInstalledPackageManifest,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
@@ -12,6 +11,7 @@ import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { PLUGIN_INSTALL_ERROR_CODE, resolvePluginInstallDir } from "./install.js";
 import {
   buildNpmResolutionInstallFields,
@@ -23,6 +23,10 @@ import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
+import {
+  auditDeclaredOpenClawHostDependency,
+  reconcileRegisteredOpenClawHostLinks,
+} from "./plugin-peer-link.js";
 import {
   buildClawHubTrustSkippedOutcome,
   buildDryRunPluginUpdateOutcome,
@@ -358,6 +362,16 @@ export async function updateNpmInstalledPlugins(params: {
       );
       continue;
     }
+    if (!params.dryRun && record.source === "npm" && currentVersion) {
+      // Existing user-owned legacy installs can relink their host without reinstalling npm payloads.
+      const hostLinkRepair = await reconcileRegisteredOpenClawHostLinks({
+        installRecords: { [pluginId]: record },
+        extensionsDir: resolveDefaultPluginExtensionsDir(),
+        mode: "repair",
+        logger,
+      });
+      changed ||= hostLinkRepair.repaired > 0;
+    }
     // Payload validation is filesystem work needed only to preserve state after metadata failures.
     // Every failure path below ends this plugin iteration, so the result cannot be reused.
     const hasRunnableInstalledPayloadForFailure = async (code?: string): Promise<boolean> => {
@@ -423,7 +437,10 @@ export async function updateNpmInstalledPlugins(params: {
           currentVersion &&
           !bypassTrustedOfficialUnchangedNpmCheck &&
           isNpmMetadataCompatibleWithCurrentHost(metadataResult.metadata) &&
-          !installedPackageNeedsOpenClawPeerLinkRepair(installPath) &&
+          !(await auditDeclaredOpenClawHostDependency({
+            packageDir: installPath,
+            packageName: pluginId,
+          })) &&
           shouldSkipUnchangedNpmInstall({
             currentVersion,
             record,
