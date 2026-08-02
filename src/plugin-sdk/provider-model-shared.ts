@@ -18,7 +18,6 @@ import {
 import type { ProviderPlugin } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
-  OpenClawPluginDefinition,
   ProviderReasoningOutputModeContext,
   ProviderReplayPolicyContext,
   ProviderRuntimeModel,
@@ -43,7 +42,7 @@ export type SelfHostedOpenAICompatibleProviderOptions = {
 /** Defines the canonical setup, discovery, and wizard flow for one self-hosted OpenAI endpoint. */
 export function defineSelfHostedOpenAICompatibleProvider(
   options: SelfHostedOpenAICompatibleProviderOptions,
-): OpenClawPluginDefinition {
+): ReturnType<typeof definePluginEntry> {
   // Provider entries load during plugin discovery; setup/wizard code stays lazy until used.
   const loadProviderSetup = async () => await import("./provider-setup.js");
   return definePluginEntry({
