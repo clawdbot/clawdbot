@@ -58,9 +58,12 @@ const { writePersistedAuthProfileStoreRaw } = await import("../agents/auth-profi
 const { resolveAgentDir } = await import("../agents/agent-scope.js");
 const { startGatewaySidecars } = await import("./server-startup-post-attach.js");
 
-async function listenHealthz(): Promise<{ port: number; close: () => Promise<void> }> {
+async function listenHealthz(
+  onHealthzServed: () => void,
+): Promise<{ port: number; close: () => Promise<void> }> {
   const server = http.createServer((req, res) => {
     if (req.url === "/healthz") {
+      onHealthzServed();
       res.statusCode = 200;
       res.end(JSON.stringify({ ok: true, status: "live" }));
       return;
@@ -84,16 +87,6 @@ async function listenHealthz(): Promise<{ port: number; close: () => Promise<voi
       });
     },
   };
-}
-
-async function requestHealthzAfter(port: number, delayMs: number) {
-  const cpuStartedAt = process.threadCpuUsage();
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, delayMs);
-  });
-  const response = await fetch(`http://127.0.0.1:${port}/healthz`);
-  const cpuUsage = process.threadCpuUsage(cpuStartedAt);
-  return { cpuMs: (cpuUsage.user + cpuUsage.system) / 1_000, response };
 }
 
 afterEach(() => {
@@ -142,7 +135,10 @@ describe("Gateway prepared model runtime startup", () => {
     };
     providerMocks.staticCatalog.mockImplementation(blockEventLoop);
     providerMocks.liveCatalog.mockImplementation(blockEventLoop);
-    const healthServer = await listenHealthz();
+    const startupEvents: string[] = [];
+    const healthServer = await listenHealthz(() => {
+      startupEvents.push("health-served");
+    });
 
     try {
       await withEnvAsync(
@@ -151,24 +147,57 @@ describe("Gateway prepared model runtime startup", () => {
           OPENCLAW_STATE_DIR: stateDir,
         },
         async () => {
-          const probe = requestHealthzAfter(healthServer.port, 25);
+          let releaseStartup = () => {};
+          const startupGate = new Promise<void>((resolve) => {
+            releaseStartup = resolve;
+          });
+          let markStartupBarrierEntered = () => {};
+          const startupBarrierEntered = new Promise<void>((resolve) => {
+            markStartupBarrierEntered = resolve;
+          });
+          let startupCompleted = false;
           const sidecars = startGatewaySidecars({
             cfg,
             pluginRegistry: { plugins: [], typedHooks: [] } as never,
             defaultWorkspaceDir: workspaceDir,
             deps: {} as never,
             startChannels: vi.fn(async () => {}),
+            onChannelsStarted: async () => {
+              startupEvents.push("barrier-entered");
+              markStartupBarrierEntered();
+              await startupGate;
+            },
             shouldStartPluginServices: () => false,
             log: { warn: vi.fn() },
             logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
             logChannels: { info: vi.fn(), error: vi.fn() },
+          }).then((result) => {
+            startupCompleted = true;
+            startupEvents.push("startup-complete");
+            return result;
           });
 
-          const [{ cpuMs, response }] = await Promise.all([probe, sidecars]);
-          expect(response.status).toBe(200);
-          // Current-thread CPU isolates startup work from runner descheduling. Either provider
-          // hook would consume well beyond this budget while starving health-probe handling.
-          expect(cpuMs).toBeLessThan(1_000);
+          try {
+            await Promise.race([startupBarrierEntered, sidecars]);
+            const response = await fetch(`http://127.0.0.1:${healthServer.port}/healthz`);
+            expect(response.status).toBe(200);
+            startupEvents.push("HTTP200");
+            expect(startupEvents).toEqual(["barrier-entered", "health-served", "HTTP200"]);
+            expect(startupCompleted).toBe(false);
+          } finally {
+            startupEvents.push("release");
+            releaseStartup();
+            await sidecars;
+          }
+
+          expect(startupEvents).toEqual([
+            "barrier-entered",
+            "health-served",
+            "HTTP200",
+            "release",
+            "startup-complete",
+          ]);
+          console.info(`[gateway-startup-proof] ${startupEvents.join(" -> ")}`);
           expect(providerMocks.staticCatalog).not.toHaveBeenCalled();
           expect(providerMocks.liveCatalog).not.toHaveBeenCalled();
         },
