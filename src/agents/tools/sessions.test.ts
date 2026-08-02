@@ -858,7 +858,7 @@ describe("sessions_send gating", () => {
     ]);
   });
 
-  it("blocks a global requester through its agent-main alias", async () => {
+  it("blocks a global requester through its stamped agent-main alias", async () => {
     const requesterAlias = "agent:requester:main";
     const thirdPartyAlias = "agent:third-party:main";
     loadConfigMock.mockReturnValue({
@@ -887,7 +887,7 @@ describe("sessions_send gating", () => {
       }
       return {};
     });
-    const tool = withSessionsSendRestrictionContext({ callerSessionKey: "global" }, () =>
+    const tool = withSessionsSendRestrictionContext({ callerSessionKey: requesterAlias }, () =>
       createSessionsSendTool({
         agentSessionKey: "agent:target:telegram:direct:worker",
         agentChannel: "telegram",
@@ -950,6 +950,164 @@ describe("sessions_send gating", () => {
         }),
       }),
     ]);
+  });
+
+  it("allows a non-default global owner to hand off to the default global session", async () => {
+    const requesterAlias = "agent:requester:main";
+    loadConfigMock.mockReturnValue({
+      agents: { list: [{ id: "target", default: true }, { id: "requester" }] },
+      session: { scope: "global", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return { path: "/tmp/sessions.json", sessions: [{ key: "global", kind: "direct" }] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-default-global", acceptedAt: 123 };
+      }
+      return {};
+    });
+    const tool = withSessionsSendRestrictionContext({ callerSessionKey: requesterAlias }, () =>
+      createSessionsSendTool({
+        agentId: "requester",
+        agentSessionKey: requesterAlias,
+        agentChannel: "telegram",
+      }),
+    );
+
+    const result = await tool.execute("call-default-global", {
+      sessionKey: "global",
+      message: "legitimate cross-owner handoff",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result)).toMatchObject({ status: "accepted", sessionKey: "main" });
+  });
+
+  it("blocks reverse sends through safe legacy direct-message aliases", async () => {
+    const legacyAlias = "agent:main:feishu:direct:peer-1";
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main", dmScope: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [{ key: legacyAlias, kind: "direct" }],
+    });
+    const tool = withSessionsSendRestrictionContext(
+      { callerSessionKey: MAIN_AGENT_SESSION_KEY },
+      () =>
+        createSessionsSendTool({
+          agentSessionKey: "agent:worker:main",
+          agentChannel: "feishu",
+        }),
+    );
+
+    const result = await tool.execute("call-legacy-reverse", {
+      sessionKey: legacyAlias,
+      message: "duplicate result",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result)).toMatchObject({ status: "forbidden", sessionKey: legacyAlias });
+  });
+
+  it("blocks global reverse sends through safe legacy direct-message aliases", async () => {
+    const requesterAlias = "agent:requester:main";
+    const legacyAlias = "agent:requester:feishu:direct:peer-1";
+    loadConfigMock.mockReturnValue({
+      agents: { list: [{ id: "target", default: true }, { id: "requester" }] },
+      session: { scope: "global", mainKey: "main", dmScope: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [{ key: legacyAlias, kind: "direct" }],
+    });
+    const tool = withSessionsSendRestrictionContext({ callerSessionKey: requesterAlias }, () =>
+      createSessionsSendTool({
+        agentId: "target",
+        agentSessionKey: "agent:target:main",
+        agentChannel: "feishu",
+      }),
+    );
+
+    const result = await tool.execute("call-global-legacy-reverse", {
+      sessionKey: legacyAlias,
+      message: "duplicate result",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result)).toMatchObject({ status: "forbidden", sessionKey: legacyAlias });
+  });
+
+  it("does not infer an arbitrary target channel from the current agent", async () => {
+    const requesterAlias = "agent:requester:main";
+    const ambiguousLegacyTarget = "agent:requester:direct:peer-1";
+    loadConfigMock.mockReturnValue({
+      agents: {
+        list: [{ id: "requester", default: true }, { id: "worker" }, { id: "third-party" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "third-party",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "direct", id: "peer-1" },
+          },
+          session: { dmScope: "per-peer" },
+        },
+      ],
+      session: { scope: "per-sender", mainKey: "main", dmScope: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: ambiguousLegacyTarget, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-ambiguous-legacy-target", acceptedAt: 123 };
+      }
+      return {};
+    });
+    const tool = withSessionsSendRestrictionContext({ callerSessionKey: requesterAlias }, () =>
+      createSessionsSendTool({
+        agentId: "worker",
+        agentSessionKey: "agent:worker:main",
+        agentChannel: "feishu",
+      }),
+    );
+
+    const result = await tool.execute("call-ambiguous-legacy-target", {
+      sessionKey: ambiguousLegacyTarget,
+      message: "independent handoff",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "accepted",
+      sessionKey: ambiguousLegacyTarget,
+    });
   });
 
   it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
@@ -1332,6 +1490,45 @@ describe("sessions_send gating", () => {
     const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
     expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
     expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
+  });
+
+  it("preserves same-session identity for a default-agent global self-send", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    loadConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main", default: true }] },
+      session: { scope: "global", mainKey: "main" },
+      tools: { agentToAgent: { enabled: false } },
+    });
+    const tool = createSessionsSendTool({
+      agentId: "main",
+      agentSessionKey: "global",
+      agentChannel: MAIN_AGENT_CHANNEL,
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return { path: "/tmp/sessions.json", sessions: [{ key: "global", kind: "direct" }] };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-global-self-send", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-global-self-send", {
+      sessionKey: "global",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result).status).toBe("accepted");
+    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
+    expect(flowParams?.requesterSessionKey).toBe("global");
+    expect(flowParams?.targetSessionKey).toBe("global");
   });
 
   it("canonicalizes aliased requester keys for same-session A2A delivery", async () => {

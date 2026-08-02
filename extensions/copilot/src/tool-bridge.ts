@@ -395,6 +395,8 @@ function buildOpenClawCodingToolsOptions(
     senderUsername: a.senderUsername,
     senderE164: a.senderE164,
     senderIsOwner: a.senderIsOwner,
+    inputProvenance: a.inputProvenance,
+    trustedInternalHandoff: a.trustedInternalHandoff,
     scheduledToolPolicy: a.scheduledToolPolicy,
     allowGatewaySubagentBinding: a.allowGatewaySubagentBinding,
     sessionKey: sandboxSessionKey,

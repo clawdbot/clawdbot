@@ -71,6 +71,7 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRunsByRunId: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunLifecycleGenerations: new WeakMap<EmbeddedAgentQueueHandle, string>(),
   sessionsSendTargetBlocksByOwner: new WeakMap<object, Map<string, number>>(),
+  sessionsSendTargetBlocksByRunId: new Map<string, Map<string, number>>(),
   retainedAbortabilityRunIds: new Set<string>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   sessionIdsByKey: new Map<string, string>(),
@@ -96,6 +97,9 @@ const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
 export const SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER =
   embeddedRunState.sessionsSendTargetBlocksByOwner ??
   (embeddedRunState.sessionsSendTargetBlocksByOwner = new WeakMap<object, Map<string, number>>());
+export const SESSIONS_SEND_TARGET_BLOCKS_BY_RUN_ID =
+  embeddedRunState.sessionsSendTargetBlocksByRunId ??
+  (embeddedRunState.sessionsSendTargetBlocksByRunId = new Map<string, Map<string, number>>());
 export const RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS =
   embeddedRunState.retainedAbortabilityRunIds ??
   (embeddedRunState.retainedAbortabilityRunIds = new Set<string>());
@@ -122,6 +126,7 @@ export const EMBEDDED_RUN_WAITERS =
   (embeddedRunState.waiters = new Map<string, Set<EmbeddedRunWaiter>>());
 
 function evictPriorLifecycleEmbeddedRuns(): void {
+  SESSIONS_SEND_TARGET_BLOCKS_BY_RUN_ID.clear();
   const staleHandles = new Set<EmbeddedAgentQueueHandle>();
   for (const [sessionId, handle] of ACTIVE_EMBEDDED_RUNS) {
     const lifecycleGeneration = ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle);

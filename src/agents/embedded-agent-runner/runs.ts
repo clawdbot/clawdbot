@@ -52,6 +52,7 @@ import {
   getActiveEmbeddedRunCount,
   RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS,
   SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER,
+  SESSIONS_SEND_TARGET_BLOCKS_BY_RUN_ID,
   setActiveEmbeddedRunLifecycleGeneration,
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
@@ -97,6 +98,42 @@ export type EmbeddedAgentQueueMessageOutcome =
       errorMessage?: string;
     };
 
+type SessionsSendTargetBlockOwner =
+  | { kind: "object"; owner: object }
+  | { kind: "run"; runId: string };
+
+function resolveSessionsSendTargetBlockOwner(
+  sessionId: string,
+): SessionsSendTargetBlockOwner | undefined {
+  const replyOperation = resolveActiveReplyOperationForSessionId(sessionId);
+  if (replyOperation) {
+    return { kind: "object", owner: replyOperation };
+  }
+  const embeddedHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const runId = embeddedHandle?.runId?.trim();
+  if (runId) {
+    return { kind: "run", runId };
+  }
+  return embeddedHandle ? { kind: "object", owner: embeddedHandle } : undefined;
+}
+
+function getSessionsSendTargetBlocks(owner: SessionsSendTargetBlockOwner) {
+  return owner.kind === "run"
+    ? SESSIONS_SEND_TARGET_BLOCKS_BY_RUN_ID.get(owner.runId)
+    : SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.get(owner.owner);
+}
+
+function setSessionsSendTargetBlocks(
+  owner: SessionsSendTargetBlockOwner,
+  targetBlocks: Map<string, number>,
+) {
+  if (owner.kind === "run") {
+    SESSIONS_SEND_TARGET_BLOCKS_BY_RUN_ID.set(owner.runId, targetBlocks);
+    return;
+  }
+  SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.set(owner.owner, targetBlocks);
+}
+
 type PreparedEmbeddedAgentQueueMessage =
   | {
       kind: "complete";
@@ -141,9 +178,8 @@ export function isSessionsSendTargetBlockedForActiveRun(params: {
   if (!sessionId || !targetSessionKey) {
     return false;
   }
-  const owner =
-    resolveActiveReplyOperationForSessionId(sessionId) ?? ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  const targetBlocks = owner ? SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.get(owner) : undefined;
+  const owner = resolveSessionsSendTargetBlockOwner(sessionId);
+  const targetBlocks = owner ? getSessionsSendTargetBlocks(owner) : undefined;
   if (targetBlocks?.get(targetSessionKey)) {
     return true;
   }
@@ -167,14 +203,13 @@ export function retainSessionsSendTargetBlockForActiveRun(params: {
   if (!sessionId || !targetSessionKey) {
     return undefined;
   }
-  const owner =
-    resolveActiveReplyOperationForSessionId(sessionId) ?? ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const owner = resolveSessionsSendTargetBlockOwner(sessionId);
   if (!owner) {
     return undefined;
   }
-  const targetBlocks = SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.get(owner) ?? new Map();
+  const targetBlocks = getSessionsSendTargetBlocks(owner) ?? new Map();
   targetBlocks.set(targetSessionKey, (targetBlocks.get(targetSessionKey) ?? 0) + 1);
-  SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.set(owner, targetBlocks);
+  setSessionsSendTargetBlocks(owner, targetBlocks);
   let retained = true;
   return () => {
     if (!retained) {
@@ -189,6 +224,14 @@ export function retainSessionsSendTargetBlockForActiveRun(params: {
     targetBlocks.set(targetSessionKey, currentCount - 1);
   };
 }
+
+export function clearSessionsSendTargetBlocksForRun(runId: string): void {
+  const normalizedRunId = runId.trim();
+  if (normalizedRunId) {
+    SESSIONS_SEND_TARGET_BLOCKS_BY_RUN_ID.delete(normalizedRunId);
+  }
+}
+
 function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
@@ -1077,10 +1120,8 @@ export function setActiveEmbeddedRun(
   const wasActive = previousHandle !== undefined;
   if (previousHandle) {
     const previousTargetBlocks = SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.get(previousHandle);
-    if (previousTargetBlocks && previousHandle !== handle) {
-      // Runs without a ReplyOperation still replace their attempt handle during
-      // provider retry/failover. Keep committed steer restrictions attached to
-      // that lifecycle by sharing the same ref-count map with the replacement.
+    if (previousTargetBlocks && previousHandle !== handle && !previousHandle.runId?.trim()) {
+      // Handles outside a registered run context still need direct handoff.
       SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.set(handle, previousTargetBlocks);
     }
     clearEmbeddedRunAbortability(previousHandle, { retainFinalizing: true });
@@ -1191,6 +1232,7 @@ const testing = {
     EMBEDDED_RUN_WAITERS.clear();
     ACTIVE_EMBEDDED_RUNS.clear();
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.clear();
+    SESSIONS_SEND_TARGET_BLOCKS_BY_RUN_ID.clear();
     RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.clear();
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();

@@ -28,13 +28,11 @@ import {
   isEmbeddedAgentRunAbortableForCompaction,
   isEmbeddedAgentRunHandleActive,
   isEmbeddedRunAbandoned,
-  isSessionsSendTargetBlockedForActiveRun,
   formatEmbeddedAgentQueueFailureSummary,
   markActiveEmbeddedRunAbandoned,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   retainEmbeddedAgentRunAbortabilityForRunId,
-  retainSessionsSendTargetBlockForActiveRun,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
@@ -913,60 +911,6 @@ describe("embedded-agent runner run registry", () => {
 
     clearActiveEmbeddedRun("session-replaced", replacementHandle);
     await expect(waitPromise).resolves.toBe(true);
-  });
-
-  it("preserves committed sessions_send target blocks across replacement handles", () => {
-    const firstHandle = createRunHandle();
-    const replacementHandle = createRunHandle();
-    setActiveEmbeddedRun("session-replaced", firstHandle);
-    const release = retainSessionsSendTargetBlockForActiveRun({
-      sessionId: "session-replaced",
-      targetSessionKey: "global",
-    });
-
-    setActiveEmbeddedRun("session-replaced", replacementHandle);
-
-    expect(
-      isSessionsSendTargetBlockedForActiveRun({
-        sessionId: "session-replaced",
-        targetSessionKey: "agent:requester:main",
-        matchesSessionKey: (blockedSessionKey, targetSessionKey) =>
-          blockedSessionKey === "global" && targetSessionKey === "agent:requester:main",
-      }),
-    ).toBe(true);
-    release?.();
-    expect(
-      isSessionsSendTargetBlockedForActiveRun({
-        sessionId: "session-replaced",
-        targetSessionKey: "agent:requester:main",
-        matchesSessionKey: (blockedSessionKey, targetSessionKey) =>
-          blockedSessionKey === "global" && targetSessionKey === "agent:requester:main",
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps sessions_send target blocks on the reply lifecycle across retry attempts", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:worker:main",
-      sessionId: "session-retry",
-      resetTriggered: false,
-    });
-    operation.setPhase("running");
-    setActiveEmbeddedRun("session-retry", createRunHandle(), "agent:worker:main");
-    retainSessionsSendTargetBlockForActiveRun({
-      sessionId: "session-retry",
-      targetSessionKey: "agent:requester:main",
-    });
-
-    setActiveEmbeddedRun("session-retry", createRunHandle(), "agent:worker:main");
-
-    expect(
-      isSessionsSendTargetBlockedForActiveRun({
-        sessionId: "session-retry",
-        targetSessionKey: "agent:requester:main",
-      }),
-    ).toBe(true);
-    operation.complete();
   });
 
   it("waits for active runs to drain", async () => {

@@ -492,6 +492,20 @@ describe("createCopilotToolBridge", () => {
       const toolBindings = {
         browser: { kind: "tab", tabId: 7, target: "host", profile: "chrome", targetId: "target-7" },
       };
+      const inputProvenance = {
+        kind: "inter_session" as const,
+        sourceSessionKey: "agent:child:subagent:task-1",
+        sourceTool: "subagent_announce" as const,
+      };
+      const trustedInternalHandoff = {
+        kind: "subagent-completion" as const,
+        sourceSessionKey: inputProvenance.sourceSessionKey,
+        sourceSessionId: "child-session-1",
+        targetSessionKey: "agent:agent-1:main",
+        targetSessionId: "session-1",
+        provider: "github-copilot",
+        model: "gpt-4o",
+      };
 
       await createCopilotToolBridge({
         agentId: "agent-1",
@@ -503,6 +517,8 @@ describe("createCopilotToolBridge", () => {
           senderUsername: "ada",
           senderE164: "+15551234567",
           senderIsOwner: true,
+          inputProvenance,
+          trustedInternalHandoff,
           memberRoleIds: ["role-admin"],
           allowGatewaySubagentBinding: true,
           spawnedBy: "parent:agent",
@@ -528,6 +544,7 @@ describe("createCopilotToolBridge", () => {
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
         sessionId: "session-1",
+        sessionKey: "agent:agent-1:main",
       });
 
       const opts = getOpts();
@@ -539,6 +556,8 @@ describe("createCopilotToolBridge", () => {
         senderUsername: "ada",
         senderE164: "+15551234567",
         senderIsOwner: true,
+        inputProvenance,
+        trustedInternalHandoff,
         memberRoleIds: ["role-admin"],
         allowGatewaySubagentBinding: true,
         spawnedBy: "parent:agent",
@@ -558,6 +577,26 @@ describe("createCopilotToolBridge", () => {
         enableHeartbeatTool: true,
         delegationCapability: "report_only",
       });
+    });
+
+    it("forwards sessions_send provenance into coding tool construction", async () => {
+      const { createOpenClawCodingTools, getOpts } = captureCall();
+      const inputProvenance = {
+        kind: "inter_session" as const,
+        sourceSessionKey: "agent:requester:main",
+        sourceTool: "sessions_send" as const,
+      };
+
+      await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { inputProvenance } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(getOpts()).toMatchObject({ inputProvenance });
     });
 
     it("falls back messageProvider to attemptParams.messageChannel when messageProvider is absent (codex parity)", async () => {

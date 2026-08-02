@@ -67,6 +67,7 @@ import { createEmbeddedRunProgressController } from "./run/progress-controller.j
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
 import { assertAgentHarnessRunAdmission, backfillSessionKey } from "./run/session-bootstrap.js";
+import { clearSessionsSendTargetBlocksForRun } from "./runs.js";
 import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
@@ -382,6 +383,7 @@ async function runEmbeddedAgentInternal(
       }
     });
   }).finally(() => {
+    clearSessionsSendTargetBlocksForRun(params.runId);
     revokeMessageActionTurnCapability(recoveryMessageActionTurnCapability);
   });
 }
