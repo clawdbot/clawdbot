@@ -78,6 +78,41 @@ describe("resolveSandboxWorkspaceAuthority", () => {
     expect(gatewayExec.confinementError).toContain("outside the sandbox");
   });
 
+  it("rejects writable named bind sources outside the agent workspace", () => {
+    const externalWritable = resolveSandboxWorkspaceAuthority({
+      config: configWithSandbox({
+        mode: "all",
+        workspaceAccess: "rw",
+        docker: {
+          allowedBindSources: ["/srv/shared"],
+          binds: ["/srv/shared:/shared:rw"],
+        },
+      }),
+      agentId: "main",
+      sessionKey: "agent:main:subagent:workboard-card",
+    });
+    expect(externalWritable.confinementError).toContain("writable bind source outside");
+
+    for (const docker of [
+      { allowedBindSources: ["/srv/shared"] },
+      {
+        allowedBindSources: ["/srv/shared"],
+        binds: ["/srv/shared:/shared:ro"],
+      },
+      {
+        allowedBindSources: ["/workspace/shared"],
+        binds: ["/workspace/shared:/shared:rw"],
+      },
+    ]) {
+      const confined = resolveSandboxWorkspaceAuthority({
+        config: configWithSandbox({ mode: "all", workspaceAccess: "rw", docker }),
+        agentId: "main",
+        sessionKey: "agent:main:subagent:workboard-card",
+      });
+      expect(confined.confinementError).toBeUndefined();
+    }
+  });
+
   it("rejects non-session, elevated, and delegating workers", () => {
     const agentScoped = resolveSandboxWorkspaceAuthority({
       config: configWithSandbox({ mode: "all", workspaceAccess: "rw", scope: "agent" }),

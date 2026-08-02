@@ -167,9 +167,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Per-agent DANGEROUS override for container namespace joins in sandbox Docker network mode.",
   "agents.defaults.sandbox.docker.allowedBindSources":
-    "Absolute host roots sandbox binds may come from in addition to each agent workspace and agent dir. Use this for a shared directory instead of dangerouslyAllowExternalBindSources; blocked host paths and reserved container targets stay rejected.",
+    "Absolute, scoped host roots sandbox binds may come from in addition to each agent workspace and agent dir. Filesystem roots are rejected. Use this for a shared directory instead of dangerouslyAllowExternalBindSources; blocked host paths and reserved container targets stay rejected.",
   "agents.entries.*.sandbox.docker.allowedBindSources":
-    "Per-agent host roots this agent may bind beyond its own workspace, for example a shared directory.",
+    "Per-agent scoped host roots this agent may bind beyond its own workspace, for example a shared directory. Filesystem roots are rejected.",
   "agents.defaults.sandbox.docker.gpus":
     'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
   "agents.entries.*.sandbox.docker.gpus":

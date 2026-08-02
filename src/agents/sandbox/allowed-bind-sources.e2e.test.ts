@@ -4,9 +4,9 @@
 // all-or-nothing external-source override stays unnecessary for this shape.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
@@ -19,6 +19,7 @@ const CONTAINER_PREFIX = "openclaw-bindproof-";
 // runs on the same image real agents get (build: scripts/sandbox-setup.sh).
 const IMAGE = DEFAULT_SANDBOX_IMAGE;
 const SHARED_MOUNT = "/team";
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 function execFileAsync(
   file: string,
@@ -75,6 +76,7 @@ function buildSandboxConfig(params: { allowedBindSources?: string[] }): SandboxC
     scope: "agent",
     workspaceAccess: "rw",
     workspaceRoot: root,
+    dockerTmpfsSource: "configured",
     docker: {
       image: IMAGE,
       containerPrefix: CONTAINER_PREFIX,
@@ -130,7 +132,7 @@ beforeAll(async () => {
   dockerAvailable = await dockerReady();
   // macOS os.tmpdir() is a /var -> /private/var symlink; sandbox mount policy compares
   // canonical paths, so the fixture root must already be canonical.
-  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bindproof-")));
+  root = await fs.realpath(tempDirs.make("openclaw-bindproof-"));
   // The sandbox registry writes to the shared state DB. Own that path explicitly so the run
   // cannot reach a real state directory.
   stateDir = path.join(root, "state-root");
@@ -198,6 +200,28 @@ describe("sandbox allowed bind sources", () => {
   it("leaves the gate off when the caller supplies no roots at all", () => {
     const cfg = buildSandboxConfig({ allowedBindSources: [sharedDir] });
     expect(resolveAllowedBindSourceRoots(cfg.docker, undefined)).toBeUndefined();
+  });
+
+  it.each(["/", "/srv/..", "C:/", "c:\\shared\\..", "\\\\?\\C:\\"])(
+    "rejects configured filesystem root %s at the runtime boundary",
+    (configuredRoot) => {
+      const cfg = buildSandboxConfig({ allowedBindSources: [configuredRoot] });
+      expect(() => resolveAllowedBindSourceRoots(cfg.docker, ownRoots())).toThrow(
+        /filesystem root/,
+      );
+    },
+  );
+
+  it("rejects a configured root whose canonical path is the filesystem root", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootAlias = path.join(root, "filesystem-root-alias");
+    await fs.symlink("/", rootAlias, "dir");
+    const cfg = buildSandboxConfig({ allowedBindSources: [rootAlias] });
+    expect(() => resolveAllowedBindSourceRoots(cfg.docker, ownRoots())).toThrow(
+      /resolves to filesystem root/,
+    );
   });
 
   it("gives each agent a private workspace and one shared directory", async (ctx) => {

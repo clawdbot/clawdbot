@@ -7,7 +7,10 @@ import {
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
-import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
+import {
+  isSandboxHostFilesystemRoot,
+  isSandboxHostPathAbsolute,
+} from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -81,6 +84,16 @@ function validateSandboxAllowedBindSources(
         message:
           `Sandbox security: allowed bind source "${root}" is not absolute. ` +
           "Only absolute POSIX or Windows drive-letter paths can widen the bind allowlist.",
+      });
+      continue;
+    }
+    if (isSandboxHostFilesystemRoot(root)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["allowedBindSources", i],
+        message:
+          `Sandbox security: allowed bind source "${root}" names a filesystem root. ` +
+          "Choose a narrower shared directory.",
       });
     }
   }

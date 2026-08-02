@@ -342,7 +342,7 @@ Changing `workspaceAccess` does not change an additional bind from `ro` to `rw`,
 
 Bind mounts are the supported multi-folder boundary because Docker constructs the container's filesystem view with mount isolation, and the `ro`/`rw` mode applies to every process in the sandbox. That boundary covers `exec`, filesystem tools, child processes, and libraries without duplicating path-authorization checks across each OpenClaw code path. A host-side path allowlist cannot provide the same complete boundary when an allowed shell or dependency can access files directly.
 
-`allowedBindSources` names the exact host roots an agent may bind beyond its own workspace and agent dirs. Global and per-agent roots are merged, so a shared directory can be declared once for the fleet. Every other check still applies: sources outside the listed roots stay blocked, as do blocked system, credential, Docker socket, symlink-parent, and reserved-target paths.
+`allowedBindSources` names the exact host roots an agent may bind beyond its own workspace and agent dirs. Global and per-agent roots are merged, so a shared directory can be declared once for the fleet. Filesystem roots (`/` and Windows drive roots) are rejected, including paths that resolve to one through a symlink; choose a narrower shared directory. Every other check still applies: sources outside the listed roots stay blocked, as do blocked system, credential, Docker socket, symlink-parent, and reserved-target paths.
 
 Use it when several agents need one shared directory while each keeps a private workspace no other agent can mount:
 

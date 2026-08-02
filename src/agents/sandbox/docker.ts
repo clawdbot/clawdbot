@@ -60,6 +60,10 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
+import {
+  isSandboxHostFilesystemRoot,
+  resolveSandboxHostPathViaExistingAncestor,
+} from "./host-paths.js";
 import { readRegistryEntry, removeRegistryEntry, updateRegistry } from "./registry.js";
 import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
@@ -330,6 +334,19 @@ export function resolveAllowedBindSourceRoots(
     return undefined;
   }
   const configured = cfg.allowedBindSources ?? [];
+  for (const root of configured) {
+    const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(root);
+    const directRoot = isSandboxHostFilesystemRoot(root);
+    if (directRoot || isSandboxHostFilesystemRoot(canonicalRoot)) {
+      const reason = directRoot
+        ? "names a filesystem root"
+        : `resolves to filesystem root "${canonicalRoot}"`;
+      throw new Error(
+        `Sandbox security: allowedBindSources entry "${root}" ${reason}. ` +
+          "Filesystem roots cannot be allowlisted; choose a narrower shared directory.",
+      );
+    }
+  }
   return configured.length ? [...bindSourceRoots, ...configured] : bindSourceRoots;
 }
 

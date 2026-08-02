@@ -187,6 +187,11 @@ describe("validateBindMounts", () => {
         binds: ["//etc//passwd:/mnt/passwd"],
         expected: /blocked path "\/etc"/,
       },
+      {
+        name: "Windows drive root",
+        binds: ["C:/:/mnt/drive"],
+        expected: /covers blocked path "C:\/"/,
+      },
     ] as const;
     for (const testCase of cases) {
       expectBindMountsToThrow([...testCase.binds], testCase.expected, testCase.name);

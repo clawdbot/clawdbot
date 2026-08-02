@@ -151,6 +151,23 @@ export function resolveWritableSandboxBindHostRoots(
   return roots;
 }
 
+export function findWritableSandboxBindSourceOutsideRoot(
+  binds: readonly string[] | undefined,
+  root: string,
+): string | undefined {
+  const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(root));
+  for (const bind of parseSandboxBindMounts(binds)) {
+    if (!bind.writable) {
+      continue;
+    }
+    const canonicalSource = resolveSandboxHostPathViaExistingAncestor(bind.hostRoot);
+    if (canonicalSource !== canonicalRoot && !isPathInside(canonicalRoot, canonicalSource)) {
+      return bind.hostRoot;
+    }
+  }
+  return undefined;
+}
+
 export function hasSandboxBindContainerPathAliases(binds: readonly string[] | undefined): boolean {
   for (const parsed of parseSandboxBindMounts(binds)) {
     if (parsed.hostRoot !== parsed.containerRoot) {

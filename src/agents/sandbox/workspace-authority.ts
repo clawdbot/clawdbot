@@ -3,7 +3,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeExecTarget } from "../../infra/exec-approvals.js";
 import { resolveEffectiveSessionToolsVisibility } from "../../plugin-sdk/session-visibility.js";
-import { resolveAgentConfig } from "../agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import {
   resolveEffectiveToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -19,6 +19,7 @@ import {
   resolveToolProfilePolicy,
 } from "../tool-policy.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { findWritableSandboxBindSourceOutsideRoot } from "./fs-paths.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 
 type WorkspaceToolPolicy = { allow?: string[]; deny?: string[] };
@@ -170,9 +171,20 @@ export function resolveSandboxWorkspaceAuthority(params: {
   ) {
     confinementError = "target sandbox enables dangerous Docker isolation overrides.";
   } else {
+    const externalWritableBind = findWritableSandboxBindSourceOutsideRoot(
+      sandbox.docker.binds,
+      resolveAgentWorkspaceDir(params.config, runtime.agentId),
+    );
+    if (externalWritableBind) {
+      confinementError = `target sandbox has writable bind source outside its workspace: ${externalWritableBind}.`;
+    }
     const agentConfig = resolveAgentConfig(params.config, runtime.agentId);
     const elevated = agentConfig?.tools?.elevated;
-    if (params.config.tools?.elevated?.enabled === true && elevated?.enabled !== false) {
+    if (
+      !confinementError &&
+      params.config.tools?.elevated?.enabled === true &&
+      elevated?.enabled !== false
+    ) {
       confinementError = "target agent can request host-level elevated execution.";
     }
     const rawSessionExecHost = params.sessionEntry?.execHost?.trim();

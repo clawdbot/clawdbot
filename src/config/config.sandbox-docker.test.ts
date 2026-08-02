@@ -457,6 +457,18 @@ describe("sandbox browser binds config", () => {
     expect(res.ok).toBe(false);
   });
 
+  it.each(["/", "/srv/..", "C:/", "c:\\shared\\..", "\\\\?\\C:\\"])(
+    "rejects filesystem-root allowedBindSources entry %s",
+    (root) => {
+      const res = validateConfigObject({
+        agents: {
+          defaults: { sandbox: { docker: { allowedBindSources: [root] } } },
+        },
+      });
+      expect(res.ok).toBe(false);
+    },
+  );
+
   it("unions global and agent allowedBindSources roots", () => {
     const cfg = resolveSandboxDockerConfig({
       scope: "agent",

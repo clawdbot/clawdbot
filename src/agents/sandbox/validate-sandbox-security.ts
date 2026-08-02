@@ -13,6 +13,7 @@ import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
   getSandboxHostPathPolicyKey,
+  isSandboxHostFilesystemRoot,
   isSandboxHostPathAbsolute,
   normalizeSandboxHostPath,
   resolveSandboxHostPathViaExistingAncestor,
@@ -140,8 +141,8 @@ function getBlockedReasonForSourcePath(
   sourceNormalized: string,
   blockedHostPaths: string[],
 ): BlockedBindReason | null {
-  if (sourceNormalized === "/") {
-    return { kind: "covers", blockedPath: "/" };
+  if (isSandboxHostFilesystemRoot(sourceNormalized)) {
+    return { kind: "covers", blockedPath: sourceNormalized };
   }
   for (const blocked of blockedHostPaths) {
     if (isPathInsidePolicyPath(blocked, sourceNormalized)) {

@@ -54,6 +54,11 @@ export function normalizeSandboxHostPath(raw: string): string {
   return withoutTrailingSlash;
 }
 
+export function isSandboxHostFilesystemRoot(raw: string): boolean {
+  const normalized = normalizeSandboxHostPath(raw);
+  return normalized === "/" || /^[A-Z]:\/$/i.test(normalized);
+}
+
 export function getSandboxHostPathPolicyKey(raw: string): string {
   const normalized = normalizeSandboxHostPath(raw);
   if (isWindowsDriveAbsolutePath(normalized)) {
