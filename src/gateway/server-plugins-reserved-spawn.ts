@@ -13,7 +13,6 @@ import {
 } from "../agents/subagent-spawn-cleanup.js";
 import type { SpawnSubagentResult } from "../agents/subagent-spawn-contract.js";
 import { resolveSubagentTargetPolicy } from "../agents/subagent-target-policy.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import {
@@ -405,9 +404,7 @@ function assertReservedSubagentRequesterOwned(params: {
   return {
     requesterAgentId: parsedRequester.agentId,
     ...(entry.sessionId ? { requesterSessionId: entry.sessionId } : {}),
-    requesterStorePath: resolveStorePath(loaded.cfg.session?.store, {
-      agentId: parsedRequester.agentId,
-    }),
+    requesterStorePath: loaded.storePath,
   };
 }
 

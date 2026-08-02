@@ -80,6 +80,7 @@ describe("createGatewaySubagentRuntime.spawnReserved validation", () => {
           entries: { main: {}, worker: {} },
         },
       },
+      storePath: "/tmp/openclaw-main-sessions.json",
       entry: {
         pluginOwnerId: "agentic-os",
         sessionId: "requester-session",
@@ -165,5 +166,40 @@ describe("createGatewaySubagentRuntime.spawnReserved validation", () => {
     ).rejects.toThrow("requester session was deleted");
 
     expect(spawnSubagentDirect).not.toHaveBeenCalled();
+  });
+
+  it("uses the loaded requester store path for plugin-owned requester admission", async () => {
+    const requesterStorePath = "/tmp/openclaw-incognito/plugin-owned-main-sessions.json";
+    loadSessionEntryReadOnly.mockReturnValue({
+      cfg: {
+        session: { store: "/tmp/openclaw-default-{agentId}-sessions.json" },
+        agents: {
+          defaults: { subagents: { allowAgents: ["worker"] } },
+          entries: { main: {}, worker: {} },
+        },
+      },
+      storePath: requesterStorePath,
+      entry: {
+        pluginOwnerId: "agentic-os",
+        sessionId: "requester-session",
+        lifecycleRevision: "1",
+        createdAt: 1,
+      },
+    });
+
+    await expect(
+      withReservedPluginScope(() => createGatewaySubagentRuntime().spawnReserved(reservation)),
+    ).resolves.toMatchObject({
+      childSessionKey: reservation.childSessionKey,
+      runId: reservation.runId,
+    });
+
+    expect(runWithWorkAdmission).toHaveBeenCalledWith(
+      {
+        storePath: requesterStorePath,
+        sessionKey: reservation.requesterSessionKey,
+      },
+      expect.any(Function),
+    );
   });
 });
