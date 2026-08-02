@@ -1578,11 +1578,12 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("does not relaunch the task script when the scheduled task process is already starting", async () => {
+  it("does not relaunch a new task script process when it is already starting", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const taskScriptPath = resolveTaskScriptPath(env);
       fastForwardTaskStartWait();
+      let processSnapshotCount = 0;
       spawnSync.mockImplementation((command, args) => {
         if (
           command === getWindowsPowerShellExePath() &&
@@ -1591,15 +1592,20 @@ describe("Windows startup fallback", () => {
             "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
           )
         ) {
+          const processId = processSnapshotCount++ === 0 ? undefined : 4242;
           return {
             pid: 0,
             output: [null, "", ""],
-            stdout: JSON.stringify([
-              {
-                ProcessId: 4242,
-                CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"`,
-              },
-            ]),
+            stdout: JSON.stringify(
+              processId === undefined
+                ? []
+                : [
+                    {
+                      ProcessId: processId,
+                      CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"`,
+                    },
+                  ],
+            ),
             stderr: "",
             status: 0,
             signal: null,
@@ -1619,6 +1625,35 @@ describe("Windows startup fallback", () => {
       await installGatewayScheduledTask(env);
 
       expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back when a pre-existing task script process remains after /Run", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const taskScriptPath = resolveTaskScriptPath(env);
+      fastForwardTaskStartWait();
+      spawnSync.mockImplementation((command, args) =>
+        command === getWindowsPowerShellExePath() &&
+        Array.isArray(args) &&
+        args.includes(
+          "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+        )
+          ? makeSpawnSyncResult({
+              stdout: JSON.stringify([
+                {
+                  ProcessId: 4242,
+                  CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"`,
+                },
+              ]),
+            })
+          : makeSpawnSyncResult(),
+      );
+      addAcceptedRunNeverStartsResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expectStartupFallbackSpawn();
     });
   });
 

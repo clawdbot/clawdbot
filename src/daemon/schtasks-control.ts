@@ -123,11 +123,20 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       return false;
     }
     if (
-      entries.some((entry) =>
-        normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
+      entries.some((entry) => {
+        const processId = entry.ProcessId;
+        if (
+          typeof processId === "number" &&
+          Number.isFinite(processId) &&
+          processId > 0 &&
+          params.excludedPids?.has(processId)
+        ) {
+          return false;
+        }
+        return normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
           .replaceAll("/", "\\")
-          .includes(scriptPathNeedle),
-      )
+          .includes(scriptPathNeedle);
+      })
     ) {
       return true;
     }
