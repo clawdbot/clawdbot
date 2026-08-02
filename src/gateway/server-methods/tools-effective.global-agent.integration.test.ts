@@ -30,7 +30,7 @@ const inventoryMocks = vi.hoisted(() => ({
       modelId: params.modelId,
     }),
   ),
-  resolveEffectiveToolInventoryRuntimeModelContext: vi.fn(() => ({
+  resolveEffectiveToolInventoryRuntimeModelContext: vi.fn((_params?: unknown) => ({
     modelApi: "openai-responses",
     runtimeModel: {
       id: "work-model",

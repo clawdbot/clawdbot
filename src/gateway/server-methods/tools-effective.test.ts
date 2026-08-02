@@ -58,7 +58,7 @@ const runtimeMocks = vi.hoisted(() => ({
   resolveReplyToMode: vi.fn(() => "first"),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-4.1" })),
-  resolveEffectiveToolInventoryRuntimeModelContext: vi.fn(() => ({
+  resolveEffectiveToolInventoryRuntimeModelContext: vi.fn((_params?: unknown) => ({
     modelApi: "openai-responses",
     runtimeModel: {
       id: "gpt-4.1",

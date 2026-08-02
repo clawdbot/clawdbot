@@ -193,22 +193,20 @@ function scheduleBaseToolsEffectiveRefresh(
   }
   const startedAt = nowForToolsEffectiveCache();
   const task = new Promise<EffectiveToolInventoryResult>((resolve, reject) => {
-    setImmediate(async () => {
-      try {
-        const value = await resolveBaseToolsEffectiveInventory(context);
-        cacheToolsEffectiveResult(key, value);
-        const durationMs = nowForToolsEffectiveCache() - startedAt;
-        if (durationMs >= TOOLS_EFFECTIVE_SLOW_LOG_MS) {
-          logDebug(
-            `tools-effective: refresh durationMs=${durationMs} agent=${context.agentId} session=${context.sessionKey} tools=${value.groups.reduce((sum, group) => sum + group.tools.length, 0)}`,
-          );
-        }
-        resolve(value);
-      } catch (err) {
-        reject(toErrorObject(err, "Non-Error rejection"));
-      } finally {
-        toolsEffectiveInflight.delete(key);
-      }
+    setImmediate(() => {
+      void resolveBaseToolsEffectiveInventory(context)
+        .then((value) => {
+          cacheToolsEffectiveResult(key, value);
+          const durationMs = nowForToolsEffectiveCache() - startedAt;
+          if (durationMs >= TOOLS_EFFECTIVE_SLOW_LOG_MS) {
+            logDebug(
+              `tools-effective: refresh durationMs=${durationMs} agent=${context.agentId} session=${context.sessionKey} tools=${value.groups.reduce((sum, group) => sum + group.tools.length, 0)}`,
+            );
+          }
+          resolve(value);
+        })
+        .catch((err: unknown) => reject(toErrorObject(err, "Non-Error rejection")))
+        .finally(() => toolsEffectiveInflight.delete(key));
     });
   });
   toolsEffectiveInflight.set(key, task);
