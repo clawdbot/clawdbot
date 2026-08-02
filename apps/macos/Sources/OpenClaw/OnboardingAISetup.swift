@@ -71,7 +71,7 @@ final class OnboardingAISetupModel {
     private(set) var detectError: Failure?
     private(set) var pendingActivationVerification = false
     private(set) var waitingForPendingActivationDeadline = false
-    private(set) var configuredGatewayProbeUnavailable = false
+    private(set) var configuredGatewayBlocker: ConfiguredGatewayBlocker?
     /// Set once every detected candidate failed; opens the manual key form.
     private(set) var exhaustedAutoCandidates = false
 
@@ -108,7 +108,7 @@ final class OnboardingAISetupModel {
     /// Once setup starts changing inference, its successful result belongs to
     /// OpenClaw rather than the existing-Gateway onboarding bypass.
     var ownsInferenceTransition: Bool {
-        (self.phase == .detecting && !self.configuredGatewayProbeUnavailable) ||
+        (self.phase == .detecting && self.configuredGatewayBlocker == nil) ||
             self.phase == .testing || self.manualTesting || self.authBusy || self.connected ||
             self.pendingActivationVerification
     }
@@ -122,6 +122,7 @@ final class OnboardingAISetupModel {
     private let gateway: GatewayConnection
     private let defaults: UserDefaults
     private let routeIdentityProvider: @MainActor () -> String?
+    private let connectionModeProvider: @MainActor () -> AppState.ConnectionMode
     private var started = false
     private var attemptToken = UUID()
     /// One-shot: the next detection pass lists choices without auto-activating,
@@ -166,11 +167,15 @@ final class OnboardingAISetupModel {
         defaults: UserDefaults = .standard,
         routeIdentityProvider: @escaping @MainActor () -> String? = {
             OnboardingSystemAgentResumeStore.selectedRouteIdentity()
+        },
+        connectionModeProvider: @escaping @MainActor () -> AppState.ConnectionMode = {
+            AppStateStore.shared.connectionMode
         })
     {
         self.gateway = gateway
         self.defaults = defaults
         self.routeIdentityProvider = routeIdentityProvider
+        self.connectionModeProvider = connectionModeProvider
     }
 
     private struct DetectResult: Decodable {
@@ -216,7 +221,7 @@ final class OnboardingAISetupModel {
             self.resetForGatewayChange(clearPendingHandoff: false)
         }
         guard !self.started else { return }
-        self.configuredGatewayProbeUnavailable = false
+        self.configuredGatewayBlocker = nil
         self.started = true
         self.phase = .detecting
         scheduleDetection()
@@ -225,7 +230,7 @@ final class OnboardingAISetupModel {
     func retryFromScratch() {
         // The configured-Gateway preflight has its own read-only retry. Never
         // turn an unavailable agents.list response into setup mutation.
-        guard !self.configuredGatewayProbeUnavailable else { return }
+        guard self.configuredGatewayBlocker == nil else { return }
         guard !self.waitingForPendingActivationDeadline else { return }
         if self.pendingActivationVerification {
             Task { await self.verifyPendingConfiguredInference() }
@@ -256,27 +261,6 @@ final class OnboardingAISetupModel {
         return true
     }
 
-    func showConfiguredGatewayProbeUnavailable() {
-        guard !self.ownsInferenceTransition ||
-            self.configuredGatewayProbeUnavailable ||
-            self.waitingForPendingActivationDeadline
-        else { return }
-        // Retire stale candidates and `started` state. A later successful
-        // missing-model probe must be able to run a fresh detect/activate flow.
-        self.resetForGatewayChange(clearPendingHandoff: false)
-        self.configuredGatewayProbeUnavailable = true
-        self.phase = .ready
-        self.detectError = Failure(
-            summary: "The Gateway did not answer the inference check. Nothing was changed.",
-            detail: nil)
-    }
-
-    func beginConfiguredGatewayProbeRetry() {
-        guard self.configuredGatewayProbeUnavailable else { return }
-        self.phase = .detecting
-        self.detectError = nil
-    }
-
     func waitForPendingActivationDeadline() {
         guard !self.connected,
               self.phase != .testing,
@@ -291,6 +275,16 @@ final class OnboardingAISetupModel {
         self.beginPendingActivationDeadlineWait(
             deadline: deadline,
             routeIdentity: routeIdentity)
+    }
+
+    func updateConfiguredGatewayBlockerState(
+        _ blocker: ConfiguredGatewayBlocker?,
+        phase: Phase,
+        detectError: Failure?)
+    {
+        self.configuredGatewayBlocker = blocker
+        self.phase = phase
+        self.detectError = detectError
     }
 
     /// Restore only the pending handoff state. A configured model label is not
@@ -675,7 +669,7 @@ final class OnboardingAISetupModel {
         self.detectError = nil
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false
-        self.configuredGatewayProbeUnavailable = false
+        self.configuredGatewayBlocker = nil
         self.exhaustedAutoCandidates = false
         self.serverLease = nil
         self.manualProviderID = ""
@@ -836,6 +830,10 @@ extension OnboardingAISetupModel {
         } catch {
             guard self.isCurrentAttempt(context) else { return }
             self.suppressNextAutoActivation = false
+            if self.connectionModeProvider() == .remote, let authIssue = RemoteGatewayAuthIssue(error: error) {
+                self.enterGatewayAuthBlocker(authIssue)
+                return
+            }
             self.phase = .ready
             self.detectError = Self.transportFailure(error.localizedDescription)
             self.showManualEntry = self.candidates.isEmpty

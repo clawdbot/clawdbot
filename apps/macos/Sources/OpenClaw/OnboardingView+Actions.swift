@@ -86,6 +86,19 @@ extension OnboardingView {
     func handleNext() {
         // All callers (Next button, chat handoff) honor the same page gates.
         guard canAdvance else { return }
+        let remoteDecision = Self.remoteGatewayAdvanceDecision(
+            connectionMode: state.connectionMode,
+            activePageIndex: activePageIndex,
+            connectionPageIndex: connectionPageIndex,
+            authIssue: remoteAuthIssue,
+            probeState: remoteProbeState,
+            input: remoteGatewayProbeInput)
+        guard remoteDecision.canAdvance else {
+            if remoteDecision.shouldProbe {
+                Task { await self.probeRemoteConnection(advanceOnSuccess: true) }
+            }
+            return
+        }
         self.commitRecommendedConnectionIfNeeded(for: activePageIndex)
         if currentPage < pageCount - 1 {
             withAnimation { self.currentPage += 1 }

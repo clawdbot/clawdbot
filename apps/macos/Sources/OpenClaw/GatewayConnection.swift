@@ -605,32 +605,32 @@ extension GatewayConnection {
     }
 
     func captureRoute() async -> Route? {
+        try? await self.captureRequiredRoute()
+    }
+
+    func captureRequiredRoute() async throws -> Route {
         let shutdownGeneration = shutdownGeneration
-        do {
-            let endpoint = try await currentEndpoint()
-            let cfg = endpoint.config
-            _ = try await self.configure(
-                url: cfg.url,
-                token: cfg.token,
-                password: cfg.password,
-                tls: endpoint.tls,
-                deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-                routeAuthority: endpoint.routeAuthority,
-                shutdownGeneration: shutdownGeneration)
-            return Route(
-                generation: self.routeGeneration,
-                authority: endpoint.routeAuthority,
-                url: cfg.url,
-                token: cfg.token,
-                password: cfg.password,
-                tls: endpoint.tls,
-                deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-                activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
-                    config: cfg,
-                    key: self.configuredActivationBindingKey))
-        } catch {
-            return nil
-        }
+        let endpoint = try await currentEndpoint()
+        let cfg = endpoint.config
+        _ = try await self.configure(
+            url: cfg.url,
+            token: cfg.token,
+            password: cfg.password,
+            tls: endpoint.tls,
+            deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
+            routeAuthority: endpoint.routeAuthority,
+            shutdownGeneration: shutdownGeneration)
+        return Route(
+            generation: self.routeGeneration,
+            authority: endpoint.routeAuthority,
+            url: cfg.url,
+            token: cfg.token,
+            password: cfg.password,
+            tls: endpoint.tls,
+            deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
+            activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
+                config: cfg,
+                key: self.configuredActivationBindingKey))
     }
 
     /// Connect and bind subsequent work to the hello snapshot's physical
@@ -1417,14 +1417,6 @@ extension GatewayConnection {
     }
 
     // MARK: - Health
-
-    func healthSnapshot(timeoutMs: Double? = nil) async throws -> HealthSnapshot {
-        let data = try await requestRaw(method: .health, timeoutMs: timeoutMs)
-        if let snap = decodeHealthSnapshot(from: data) {
-            return snap
-        }
-        throw GatewayDecodingError(method: Method.health.rawValue, message: "failed to decode health snapshot")
-    }
 
     func healthOK(timeoutMs: Int = 8000) async throws -> Bool {
         let data = try await requestRaw(method: .health, timeoutMs: Double(timeoutMs))

@@ -388,7 +388,9 @@ struct OnboardingViewSmokeTests {
         view.aiSetup.acceptVerifiedPendingInference(modelRef: "openai/gpt-5.5")
         let priorChat = view.systemAgentState.chat
         view.systemAgentState.isPresented = true
-        view.remoteProbeState = .ok(RemoteGatewayProbeSuccess(authSource: .sharedToken))
+        view.remoteProbeState = .ok(
+            view.remoteGatewayProbeInput,
+            RemoteGatewayProbeSuccess(authSource: .sharedToken))
         view.remoteAuthIssue = .tokenMismatch
 
         view.updateManualRemoteURL("wss://gateway-b.example.test")

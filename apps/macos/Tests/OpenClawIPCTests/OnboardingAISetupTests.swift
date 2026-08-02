@@ -2180,6 +2180,100 @@ struct OnboardingAISetupTests {
         #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 
+    @Test func `remote configured gateway auth routes back without AI detection`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectAuthFailureData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    detailCode: GatewayConnectAuthDetailCode.authTokenMissing.rawValue))
+            })
+        })
+        let url = try #require(URL(string: "wss://gateway.example.test"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let appState = AppState(preview: true)
+        appState.connectionMode = .remote
+        appState.remoteTransport = .direct
+        appState.remoteUrl = url.absoluteString
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            aiSetupRouteIdentityProvider: { "remote:direct:gateway" },
+            gatewaySelectionPersister: { true })
+        view.onboardingVisible = true
+        view.currentPage = try #require(view.pageOrder.firstIndex(of: view.aiPageIndex))
+
+        let probe = try #require(view.probeConfiguredGatewayForDashboard(
+            startAISetupWhenMissing: true,
+            knownVisible: true))
+        await probe.value
+        await settleQueuedAISetupTasks()
+
+        #expect(view.aiSetup.configuredGatewayAuthIssue == .tokenRequired)
+        #expect(!view.aiSetup.configuredGatewayProbeUnavailable)
+        #expect(view.aiSetup.detectError == nil)
+        #expect(view.aiSetup.candidates.isEmpty)
+        #expect(session.latestTask()?.snapshotSendCount() == 1)
+        let card = OnboardingAISetupView.gatewayAuthCard(for: .tokenRequired)
+        #expect(card.title == "Gateway authentication required")
+        #expect(card.primaryTitle == "Back to Gateway")
+        #expect(card.secondaryTitle == "Try again")
+        #expect(!card.title.localizedCaseInsensitiveContains("AI account"))
+
+        let decision = try #require(OnboardingView.gatewayAuthenticationReturnDecision(
+            connectionMode: appState.connectionMode,
+            authIssue: view.aiSetup.configuredGatewayAuthIssue,
+            pageOrder: view.pageOrder,
+            connectionPageIndex: view.connectionPageIndex,
+            probeInput: view.remoteGatewayProbeInput))
+        #expect(decision.connectionPage == view.pageOrder.firstIndex(of: view.connectionPageIndex))
+        #expect(decision.authIssue == .tokenRequired)
+        #expect(decision.probeState == .failed(
+            view.remoteGatewayProbeInput,
+            RemoteGatewayAuthIssue.tokenRequired.statusMessage))
+        #expect(decision.showRemoteChoices)
+        #expect(decision.showAdvancedConnection)
+        #expect(OnboardingView.shouldShowRemoteTokenField(
+            showAdvancedConnection: decision.showAdvancedConnection,
+            remoteToken: appState.remoteToken,
+            remoteTokenUnsupported: appState.remoteTokenUnsupported,
+            authIssue: decision.authIssue))
+    }
+
+    @Test func `remote AI detection auth blocks without candidate fallthrough`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectAuthFailureData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue))
+            })
+        })
+        let url = try #require(URL(string: "wss://gateway.example.test"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let model = OnboardingAISetupModel(
+            gateway: gateway,
+            routeIdentityProvider: { "remote:direct:gateway" },
+            connectionModeProvider: { .remote })
+
+        await model.detectAndAutoConnect()
+
+        #expect(model.configuredGatewayAuthIssue == .pairingRequired)
+        #expect(!model.configuredGatewayProbeUnavailable)
+        #expect(model.detectError == nil)
+        #expect(model.candidates.isEmpty)
+        #expect(!model.showManualEntry)
+        #expect(session.latestTask()?.snapshotSendCount() == 1)
+    }
+
     @Test func `configured gateway probe refuses an unpersisted endpoint selection`() async throws {
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
