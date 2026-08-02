@@ -224,6 +224,32 @@ That's it.`;
     expect(result.text).not.toContain("```");
   });
 
+  it.each([
+    {
+      name: "space-indented code",
+      source: "    first()\n    second()",
+      expected: "    first()\n    second()",
+    },
+    {
+      name: "tab-indented Unicode code",
+      source: "\t😀 first()\n\t界 second()",
+      expected: "\t😀 first()\n\t界 second()",
+    },
+    {
+      name: "existing terminal-newline behavior",
+      source: "    first()\n\n",
+      expected: "    first()",
+    },
+  ])("preserves $name in code cards", ({ source, expected }) => {
+    const result = processLineMessage(`\`\`\`python\n${source}\n\`\`\``);
+    const bubble = requireEntry(result.flexMessages, 0, "code flex message").contents as {
+      body: { contents: Array<{ contents?: Array<{ text: string }> }> };
+    };
+    const codeContent = requireEntry(bubble.body.contents, 1, "code flex body content");
+
+    expect(requireEntry(codeContent.contents ?? [], 0, "code flex text").text).toBe(expected);
+  });
+
   it("handles mixed content", () => {
     const text = `# Summary
 
@@ -253,6 +279,149 @@ print("done")
     expect(result.text).not.toContain("|");
     expect(result.text).not.toContain("```");
     expect(result.text).not.toContain("[here]");
+  });
+
+  it("keeps an oversized table visible as canonical bullet text instead of an invalid Flex bubble", () => {
+    const value = "x".repeat(30_000);
+    const result = processLineMessage(
+      `Before\n\n| Name | Value |\n|---|---|\n| Account | ${value} |\n\nAfter`,
+    );
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("Account");
+    expect(result.text).toContain(`• Value: ${value}`);
+    expect(result.text.indexOf("Before")).toBeLessThan(result.text.indexOf("Account"));
+    expect(result.text.indexOf("Account")).toBeLessThan(result.text.indexOf("After"));
+  });
+
+  it("measures serialized Flex bubbles in UTF-8 bytes instead of UTF-16 text units", () => {
+    const value = "😀".repeat(7_600);
+    const result = processLineMessage(`| Name | Value |\n|---|---|\n| Unicode | ${value} |`);
+
+    expect(value.length).toBeLessThan(30_000);
+    expect(Buffer.byteLength(value, "utf8")).toBeGreaterThan(30_000);
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain(`• Value: ${value}`);
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(result.text),
+    ).toBe(false);
+  });
+
+  it("keeps valid tables and code cards while downgrading only an oversized sibling table", () => {
+    const value = "z".repeat(30_000);
+    const result = processLineMessage(
+      `First\n\n| Small | Value |\n|---|---|\n| Kept | card |\n\nBetween\n\n| Name | Value |\n|---|---|\n| Large | [${value}](https://example.test/report) |\n\nAfter\n\n\`\`\`js\nconsole.log("still a card");\n\`\`\``,
+    );
+
+    expect(result.flexMessages.map((message) => message.altText)).toEqual(["Table", "Code"]);
+    expect(result.text).not.toContain("Kept");
+    expect(result.text).toContain(`• Value: ${value} (https://example.test/report)`);
+    expect(result.text.indexOf("First")).toBeLessThan(result.text.indexOf("Between"));
+    expect(result.text.indexOf("Between")).toBeLessThan(result.text.indexOf("Large"));
+    expect(result.text.indexOf("Large")).toBeLessThan(result.text.indexOf("After"));
+    expect(
+      result.segments
+        ?.map((segment) =>
+          segment.type === "flex"
+            ? segment.message.altText
+            : segment.text.includes("Large")
+              ? "oversized-table-text"
+              : undefined,
+        )
+        .filter(Boolean),
+    ).toEqual(["Table", "oversized-table-text", "Code"]);
+    expect(
+      result.flexMessages.every(
+        (message) => Buffer.byteLength(JSON.stringify(message.contents), "utf8") <= 30_000,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps provider-valid large tables as Flex bubbles", () => {
+    const value = "y".repeat(20_000);
+    const result = processLineMessage(`| Name | Value |\n|---|---|\n| Preserved | ${value} |`);
+
+    expect(result.flexMessages).toHaveLength(1);
+    expect(
+      Buffer.byteLength(JSON.stringify(result.flexMessages[0]?.contents), "utf8"),
+    ).toBeLessThanOrEqual(30_000);
+    expect(result.text).toBe("");
+    expect(result.segments).toBeUndefined();
+  });
+
+  it("downgrades a generic table with more than 10 rows to ordered bullet text", () => {
+    const rows = Array.from({ length: 13 }, (_, i) => `| Row${i + 1} | Val${i + 1} |`).join("\n");
+    const result = processLineMessage(
+      `Before\n\n| Name | Value | Extra |\n|---|---|---|\n${rows}\n\nAfter`,
+    );
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("Row1");
+    expect(result.text).toContain("Row13");
+    expect(result.text.indexOf("Before")).toBeLessThan(result.text.indexOf("Row1"));
+    expect(result.text.indexOf("Row13")).toBeLessThan(result.text.indexOf("After"));
+    expect(result.segments).toBeDefined();
+    expect(result.segments!.length).toBeGreaterThanOrEqual(1);
+    const textSegment = result.segments!.find((s) => s.type === "text");
+    expect(textSegment?.type).toBe("text");
+    expect(textSegment?.text).toContain("Row13");
+  });
+
+  it("downgrades a two-column receipt table with more than 12 rows to ordered bullet text", () => {
+    const rows = Array.from({ length: 14 }, (_, i) => `| Item${i + 1} | $${i + 1}.00 |`).join("\n");
+    const result = processLineMessage(`Before\n\n| Name | Price |\n|---|---|\n${rows}\n\nAfter`);
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("Item1");
+    expect(result.text).toContain("Item14");
+    expect(result.text.indexOf("Before")).toBeLessThan(result.text.indexOf("Item1"));
+    expect(result.text.indexOf("Item14")).toBeLessThan(result.text.indexOf("After"));
+    expect(result.segments).toBeDefined();
+  });
+
+  it("keeps a two-column table with 12 rows as a receipt Flex bubble", () => {
+    const rows = Array.from({ length: 12 }, (_, i) => `| Item${i + 1} | $${i + 1}.00 |`).join("\n");
+    const result = processLineMessage(`| Name | Price |\n|---|---|\n${rows}`);
+
+    expect(result.flexMessages).toHaveLength(1);
+    expect(result.segments).toBeUndefined();
+  });
+
+  it("keeps a generic table with exactly 10 rows as a Flex bubble", () => {
+    const rows = Array.from({ length: 10 }, (_, i) => `| Row${i + 1} | Val${i + 1} | Extra |`).join(
+      "\n",
+    );
+    const result = processLineMessage(`| Name | Value | Extra |\n|---|---|---|\n${rows}`);
+
+    expect(result.flexMessages).toHaveLength(1);
+    expect(result.segments).toBeUndefined();
+  });
+
+  it("downgrades a two-column table with inline markup and more than 10 rows using the renderer's layout decision", () => {
+    const rows = Array.from({ length: 11 }, (_, i) =>
+      i === 0 ? "| `\\<u>literal\\</u>` <u>real</u> | Val |" : `| Item${i + 1} | $${i + 1}.00 |`,
+    ).join("\n");
+    const result = processLineMessage(`| Name | Price |\n|---|---|\n${rows}`);
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("Item11");
+    expect(result.segments).toBeDefined();
+  });
+
+  it("preserves all rows in ordered segments when a row-overflow table is downgraded", () => {
+    const rows = Array.from({ length: 15 }, (_, i) => `| R${i + 1} | V${i + 1} |`).join("\n");
+    const result = processLineMessage(`Header\n\n| Name | Value |\n|---|---|\n${rows}\n\nFooter`);
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.segments).toBeDefined();
+    const segmentTexts = result.segments!.filter((s) => s.type === "text").map((s) => s.text);
+    const combined = segmentTexts.join(" ");
+    expect(combined).toContain("R1");
+    expect(combined).toContain("R15");
+    expect(combined).toContain("Header");
+    expect(combined).toContain("Footer");
+    expect(combined.indexOf("Header")).toBeLessThan(combined.indexOf("R1"));
+    expect(combined.indexOf("R15")).toBeLessThan(combined.indexOf("Footer"));
   });
 
   it("handles plain text unchanged", () => {

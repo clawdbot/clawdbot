@@ -1709,12 +1709,13 @@ describe("Claude session catalog", () => {
       entries: [],
       transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Recovered")] },
     });
+    const canonicalTranscriptPath = await fs.realpath(transcriptPath);
     const open = fs.open.bind(fs);
     let transcriptAttempts = 0;
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      if (args[0] === transcriptPath && transcriptAttempts++ === 0) {
+      if (args[0] === canonicalTranscriptPath && transcriptAttempts++ === 0) {
         throw new Error("transient transcript open failure");
       }
       return await open(...args);

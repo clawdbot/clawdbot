@@ -16,6 +16,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
+import { writeValidatedDoctorSessionEntryJson } from "./doctor-session-entry-rewrite.js";
 import {
   collectSharedStateSessionKeys,
   deleteRepairJournal,
@@ -357,7 +358,9 @@ function rewriteSessionEntryJsonReferences(
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
   const rows = executeSqliteQuerySync(
     database,
-    db.selectFrom("session_nodes").select(["session_key", "entry_json"]),
+    db
+      .selectFrom("session_nodes")
+      .select(["session_key", "current_session_id", "entry_json", "updated_at"]),
   ).rows;
   for (const row of rows) {
     let parsed: unknown;
@@ -371,13 +374,7 @@ function rewriteSessionEntryJsonReferences(
     if (entryJson === row.entry_json) {
       continue;
     }
-    executeSqliteQuerySync(
-      database,
-      db
-        .updateTable("session_nodes")
-        .set({ entry_json: entryJson })
-        .where("session_key", "=", row.session_key),
-    );
+    writeValidatedDoctorSessionEntryJson(database, row, entryJson);
   }
 }
 

@@ -72,6 +72,19 @@ function createPrefixOnlyChannelPlugin(
   };
 }
 
+function createEnablementHostileChannelPlugin(id: string): ChannelPlugin {
+  const base = createPrefixOnlyChannelPlugin(id, [id]);
+  return {
+    ...base,
+    config: {
+      ...base.config,
+      // Mirrors twitch/discord: an unlisted or credential-suppressed account
+      // resolves to a not-enabled account, which must NOT read as operator intent.
+      isEnabled: () => false,
+    },
+  };
+}
+
 function setCronValidationTestRegistry(): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -84,6 +97,11 @@ function setCronValidationTestRegistry(): void {
         pluginId: "slack",
         plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]),
         source: "test:slack",
+      },
+      {
+        pluginId: "twitch",
+        plugin: createEnablementHostileChannelPlugin("twitch"),
+        source: "test:twitch",
       },
       {
         pluginId: "msteams",
@@ -137,6 +155,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
       enqueueRun: vi.fn(async () => ({ ok: true, enqueued: true, runId: "run-1" })),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
+      prepareWake: vi.fn(async () => undefined),
       wake: vi.fn(() => ({ ok: true }) as const),
       readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
       list: vi.fn(async () => jobs),
@@ -342,6 +361,20 @@ function telegramSlackConfig(params: { includeMainSession?: boolean } = {}): Ope
       },
     },
     plugins: pluginEntries("telegram", "slack"),
+  } as OpenClawConfig;
+}
+
+function telegramDisabledAccountConfig(): OpenClawConfig {
+  return {
+    channels: {
+      telegram: {
+        accounts: {
+          primary: { botToken: "telegram-token-primary" },
+          retired: { botToken: "telegram-token-retired", enabled: false },
+        },
+      },
+    },
+    plugins: pluginEntries("telegram"),
   } as OpenClawConfig;
 }
 
@@ -2133,6 +2166,247 @@ describe("cron method validation", () => {
     expectResponseError(respond, { messageIncludes: "delivery.channel is not configured" });
   });
 
+  it("rejects an announce accountId whose account is explicitly disabled", async () => {
+    setRuntimeConfig(telegramDisabledAccountConfig());
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "disabled delivery account",
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:123456",
+          accountId: "retired",
+        },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.accountId",
+    });
+  });
+
+  it("accepts an announce accountId whose account is enabled", async () => {
+    setRuntimeConfig(telegramDisabledAccountConfig());
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "enabled delivery account",
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:123456",
+          accountId: "primary",
+        },
+      }),
+    );
+
+    expect(context.cron.add).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("accepts an unlisted accountId so binding-derived ids keep working", async () => {
+    // Cron delivery ids are not always operator-typed: delivery-context.ts copies
+    // the current context account into inferred jobs, and a channel may resolve an
+    // unlisted binding id against its sole token. Only disabled accounts are rejected.
+    setRuntimeConfig(telegramConfig());
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "binding-derived delivery account",
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:123456",
+          accountId: "bot:12345",
+        },
+      }),
+    );
+
+    expect(context.cron.add).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("accepts an unlisted accountId on a channel whose isEnabled reports it disabled", async () => {
+    // twitch/discord resolve an unlisted or credential-suppressed account to a
+    // not-enabled account. That is not the operator disabling a route, so cron
+    // creation must not be blocked by it - only a config-declared enabled:false is.
+    setRuntimeConfig({
+      channels: { twitch: { accounts: { main: { accessToken: "t" } } } },
+      plugins: pluginEntries("twitch"),
+    } as OpenClawConfig);
+
+    const { respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "enablement-hostile channel account",
+        delivery: {
+          mode: "announce",
+          channel: "twitch",
+          to: "twitch:room",
+          accountId: "unlisted-account",
+        },
+      }),
+    );
+
+    const call = respond.mock.calls.at(0);
+    // The channel itself may be judged unconfigured in this fixture; what must not
+    // happen is a rejection naming delivery.accountId.
+    expect(String(call?.[2] ? (call[2] as { message?: unknown }).message : "")).not.toContain(
+      "delivery.accountId",
+    );
+  });
+
+  it("accepts a named account when only the top-level channel config is disabled", async () => {
+    // A top-level `channels.<id>.enabled: false` is not uniformly channel-wide:
+    // twitch resolves named accounts from `accounts` alone, so a disabled root
+    // block must not make every account on that channel unschedulable.
+    setRuntimeConfig({
+      channels: {
+        twitch: { enabled: false, accounts: { main: { accessToken: "t" } } },
+      },
+      plugins: pluginEntries("twitch"),
+    } as OpenClawConfig);
+
+    const { respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "named account under disabled root",
+        delivery: {
+          mode: "announce",
+          channel: "twitch",
+          to: "twitch:room",
+          accountId: "main",
+        },
+      }),
+    );
+
+    const call = respond.mock.calls.at(0);
+    expect(String(call?.[2] ? (call[2] as { message?: unknown }).message : "")).not.toContain(
+      "delivery.accountId",
+    );
+  });
+
+  it("rejects a disabled account whose config key is not canonical", async () => {
+    // Channels resolve account keys canonically: matrix treats `"Team Ops"` as
+    // `team-ops`. A disabled entry stored under the display form must still match.
+    setRuntimeConfig({
+      channels: {
+        telegram: {
+          accounts: {
+            primary: { botToken: "telegram-token-primary" },
+            "Team Ops": { botToken: "telegram-token-team", enabled: false },
+          },
+        },
+      },
+      plugins: pluginEntries("telegram"),
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "noncanonical disabled account key",
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:123456",
+          accountId: "team-ops",
+        },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.accountId",
+    });
+  });
+
+  it("rejects a disabled account reached through a channel alias", async () => {
+    // Aliases are valid delivery channels (msteams answers to `teams`) while the
+    // config lives under the canonical id, so the alias must resolve before lookup.
+    setRuntimeConfig({
+      channels: {
+        msteams: {
+          accounts: {
+            work: { botToken: "teams-token-work", enabled: false },
+          },
+        },
+      },
+      plugins: pluginEntries("msteams"),
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "disabled account via alias",
+        delivery: {
+          mode: "announce",
+          channel: "teams",
+          to: "msteams:conversation",
+          accountId: "work",
+        },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.accountId",
+    });
+  });
+
+  it("accepts announce delivery that omits accountId", async () => {
+    setRuntimeConfig(telegramConfig());
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "no delivery account",
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:123456" },
+      }),
+    );
+
+    expect(context.cron.add).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("rejects a delivery patch that introduces a disabled accountId", async () => {
+    setRuntimeConfig(telegramDisabledAccountConfig());
+
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { delivery: { accountId: "retired" } } },
+      createCronJob({
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:123456" },
+      }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.accountId",
+    });
+  });
+
+  it("keeps a non-routing patch unblocked by a legacy-invalid stored accountId", async () => {
+    // Account validation runs only behind the delivery-patch gate, so edits that do
+    // not touch routing must not be rejected because of an id stored before this
+    // validation existed.
+    setRuntimeConfig(telegramDisabledAccountConfig());
+
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { enabled: false } },
+      createCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:123456",
+          accountId: "retired",
+        },
+      }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
   it("accepts provider-prefixed announce target without delivery.channel when multiple channels are configured", async () => {
     setRuntimeConfig(telegramSlackConfig({ includeMainSession: true }));
 
@@ -2369,13 +2643,13 @@ describe("cron method validation", () => {
   });
 
   it("rejects a provider-prefixed failureAlert.to for an unconfigured channel", async () => {
-    // No explicit channel, but `slack:...` resolves to slack, which is not
-    // configured here, so it must be rejected up front rather than at delivery.
+    // The alert owns its prefixed channel even when primary delivery is valid;
+    // reject that independently selected channel when it is not configured.
     setRuntimeConfig(telegramConfig());
 
     const { context, respond } = await invokeCronUpdate(
       { id: "cron-1", patch: { failureAlert: { to: "slack:C123" } } },
-      createCronJob(),
+      createCronJob({ delivery: { mode: "announce", channel: "telegram", to: "telegram:1" } }),
     );
 
     expect(context.cron.update).not.toHaveBeenCalled();
@@ -2533,18 +2807,68 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it("rejects a failureAlert.to whose prefix conflicts with the inherited delivery channel", async () => {
-    // The alert omits its own channel, so runtime sends via the delivery channel
-    // (telegram); a `slack:`-prefixed target would route to the wrong place, so
-    // reject it up front instead of letting it fail at delivery.
+  it.each([
+    {
+      name: "provider-prefixed recipient",
+      delivery: { mode: "announce", channel: "telegram", to: "telegram:1" },
+      alertTo: "slack:C123",
+    },
+    {
+      name: "provider-alias recipient",
+      delivery: { mode: "announce", channel: "slack", to: "slack:C123" },
+      alertTo: "tg:123",
+    },
+  ] as const)("lets a $name select its own alert channel", async ({ delivery, alertTo }) => {
     setRuntimeConfig(telegramSlackConfig());
 
     const { context, respond } = await invokeCronUpdate(
-      { id: "cron-1", patch: { failureAlert: { to: "slack:C123" } } },
+      { id: "cron-1", patch: { failureAlert: { to: alertTo } } },
+      createCronJob({ delivery }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("accepts a provider-prefixed alert on another channel when creating a job", async () => {
+    setRuntimeConfig(telegramSlackConfig());
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:1" },
+        failureAlert: { to: "slack:C123" },
+      }),
+    );
+
+    expect(context.cron.add).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("does not inherit a primary recipient for another explicit failure-alert channel", async () => {
+    setRuntimeConfig(telegramSlackConfig());
+
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { failureAlert: { channel: "slack" } } },
       createCronJob({ delivery: { mode: "announce", channel: "telegram", to: "telegram:1" } }),
     );
 
-    expect(context.cron.update).not.toHaveBeenCalled();
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("rejects an unconfigured inherited global failure-alert channel", async () => {
+    setRuntimeConfig({
+      ...telegramConfig(),
+      cron: { failureAlert: { enabled: true, channel: "slack", to: "slack:C123" } },
+    });
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:1" },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "failureAlert.channel",
@@ -2619,10 +2943,9 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it("revalidates an inherited failureAlert when a delivery-only patch changes the channel", async () => {
-    // The alert has no own channel, so it inherits delivery. Switching delivery
-    // from slack to telegram makes its slack-prefixed target route wrong, so the
-    // delivery-only edit must re-check the alert even though the patch omits it.
+  it("keeps a provider-prefixed failure alert when primary delivery changes channels", async () => {
+    // A provider-prefixed alert owns its channel even without `channel`, so a
+    // primary-delivery change cannot invalidate that independent destination.
     setRuntimeConfig(telegramSlackConfig());
 
     const { context, respond } = await invokeCronUpdate(
@@ -2633,11 +2956,8 @@ describe("cron method validation", () => {
       }),
     );
 
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "failureAlert.channel",
-    });
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
   });
 
   it("does not block a non-routing delivery edit on a job with a stale explicit alert channel", async () => {
@@ -3480,6 +3800,10 @@ describe("cron method validation", () => {
         text: "ping",
         sessionKey: "agent:main:telegram:dm:42",
       });
+      expect(context.cron.prepareWake).toHaveBeenCalledOnce();
+      expect(context.cron.prepareWake.mock.invocationCallOrder[0]).toBeLessThan(
+        context.cron.wake.mock.invocationCallOrder[0]!,
+      );
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     });
 
@@ -3509,6 +3833,7 @@ describe("cron method validation", () => {
         sessionKey,
       });
       expect(context.cron.wake).not.toHaveBeenCalled();
+      expect(context.cron.prepareWake).not.toHaveBeenCalled();
       expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
     });
 

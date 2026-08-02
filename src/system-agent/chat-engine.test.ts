@@ -24,6 +24,7 @@ import {
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
+import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
@@ -324,6 +325,9 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+const CANCEL_HINT = "Say `cancel` to stop this setup.";
+const countCancelHints = (text: string) => text.split(CANCEL_HINT).length - 1;
 
 describe("SystemAgentChatEngine", () => {
   it("lets only an operator arm delegated persistent writes", async () => {
@@ -681,7 +685,14 @@ describe("SystemAgentChatEngine", () => {
     expect(reply.handoff).toBeUndefined();
     expect(reply.sensitive).toBeUndefined();
     expect(reply.text).toContain("replace the inference route powering this session");
-    expect(reply.text).toContain("Exit OpenClaw and run `openclaw onboard`");
+    // A gateway reader is in a browser or the app and cannot "exit OpenClaw"
+    // into a shell; the copy must name where the command runs instead.
+    expect(reply.text).toContain("`openclaw onboard`");
+    expect(reply.text).toContain("machine running OpenClaw");
+    expect(reply.text).toContain("Stop the OpenClaw host");
+    expect(reply.text).toContain("restart the host");
+    expect(reply.text).toContain("return to OpenClaw");
+    expect(reply.text).not.toContain("Exit OpenClaw");
   });
 
   it("keeps the current inference route when model provider setup is declined", async () => {
@@ -1536,6 +1547,30 @@ describe("SystemAgentChatEngine", () => {
     expect(handoff.handoff).toEqual({ kind: "open-setup", target: "search" });
   });
 
+  it("does not promise Doctor will repair every invalid channel setup config", async () => {
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw.json",
+      hash: "invalid-hash",
+      config: {},
+      sourceConfig: {},
+      issues: [{ path: "gateway.port", message: "Expected number" }],
+    });
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("connect telegram");
+
+    expect(reply.text).toContain("machine running OpenClaw");
+    expect(reply.text).toContain("openclaw doctor --fix");
+    expect(reply.text).toContain("remaining validation errors");
+    expect(reply.text).not.toContain("repairs it");
+  });
+
   it("reports hosted channel setup success when audit persistence fails", async () => {
     const appendAuditEntry = vi.fn(async () => {
       throw new Error("audit store is read-only");
@@ -1953,7 +1988,13 @@ describe("SystemAgentChatEngine", () => {
     const gatewayReply = await gateway.handle("open setup wizard");
     expect(gatewayReply.action).toBe("none");
     expect(gatewayReply.handoff).toBeUndefined();
-    expect(gatewayReply.text).toContain("The app owns the setup screens here");
+    // The gateway surface has real setup screens, so the reply names them
+    // rather than sending the reader to a terminal they may not have.
+    expect(gatewayReply.text).toContain("Settings");
+    expect(gatewayReply.text).toContain("change providers from a shell");
+    expect(gatewayReply.text).toContain("machine running OpenClaw");
+    expect(gatewayReply.text).not.toContain("does the same job");
+    expect(gatewayReply.text).not.toContain("Exit OpenClaw");
   });
 
   it.each([
@@ -2010,8 +2051,59 @@ describe("SystemAgentChatEngine", () => {
     const invalid = await engine.handle("banana");
     expect(invalid.text).toContain("Enter port 18789");
     expect(invalid.text).toContain("Port");
+    expect(countCancelHints(invalid.text)).toBe(1);
+    expect(invalid.text.endsWith(CANCEL_HINT)).toBe(true);
     const done = await engine.handle("18789");
     expect(done.text).toContain("telegram is configured");
+  });
+
+  it("hints cancel once per message, only while a step awaits an answer", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.note("Open the linked-devices screen.", "Step 1");
+        await prompter.note("Scan the code shown next.", "Step 2");
+        await prompter.note("Keep the phone online.", "Step 3");
+        await prompter.text({ message: "Phone number" });
+        await prompter.note("Linked.", "Step 4");
+      },
+    });
+
+    // Three auto-answered notes concatenate into the prompt's message; the hint
+    // is the message's, not each step's.
+    const prompt = await engine.handle("connect telegram");
+    expect(prompt.text).toContain("Step 3");
+    expect(prompt.text).toContain("Phone number");
+    expect(countCancelHints(prompt.text)).toBe(1);
+    expect(prompt.text.endsWith(CANCEL_HINT)).toBe(true);
+    expect(engine.historySince(0).at(-1)).toEqual({ role: "assistant", text: prompt.text });
+
+    const done = await engine.handle("+15551230000");
+    expect(done.text).toContain("Step 4");
+    expect(done.text).toContain("telegram is configured");
+    expect(countCancelHints(done.text)).toBe(0);
+  });
+
+  it("drops the cancel hint from the cancellation message", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect discord");
+    expect(countCancelHints(prompt.text)).toBe(1);
+
+    const cancelled = await engine.handle("cancel");
+    expect(cancelled.text).toContain("cancelled");
+    expect(countCancelHints(cancelled.text)).toBe(0);
   });
 
   it("cancels a hosted wizard mid-flight", async () => {
@@ -2905,6 +2997,24 @@ describe("SystemAgentChatEngine", () => {
     expect(reply.text).toContain("failed validation");
     expect(reply.text).toContain("The write was applied");
     expect(reply.text).toContain("openclaw doctor --fix");
+  });
+
+  it("keeps doctor repair outside OpenClaw when no post-write repair is proposed", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw.json",
+      hash: "h",
+      config: {},
+      sourceConfig: {},
+      issues: [{ path: "gateway.port", message: "Expected number" }],
+    } as never);
+
+    const reply = await verifyConfigAfterSystemAgentWrite(async () => ({ text: "" }));
+
+    expect(reply).toContain("with OpenClaw stopped");
+    expect(reply).toContain("openclaw doctor --fix");
+    expect(reply).toContain("machine running it");
   });
 
   it("warns when an applied write leaves no config to verify", async () => {

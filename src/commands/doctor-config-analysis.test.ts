@@ -6,6 +6,7 @@ import { OpenClawSchema } from "../config/zod-schema.js";
 import {
   formatConfigPath,
   noteImplicitFallbackClobberWarnings,
+  noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
   resolveConfigPathTarget,
   stripUnknownConfigKeys,
@@ -23,6 +24,66 @@ function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
 }
 
 describe("doctor config analysis helpers", () => {
+  it("describes OpenCode overrides against the plugin-provided catalog", () => {
+    noteMock.mockClear();
+
+    noteOpencodeProviderOverrides(
+      {
+        models: {
+          providers: {
+            opencode: {
+              baseUrl: "https://opencode.ai/zen/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+      { opencodePluginActive: true },
+    );
+
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("plugin-provided OpenCode Zen catalog"),
+      "OpenCode",
+    );
+    expect(noteMock.mock.calls.at(-1)?.[0]).not.toContain("built-in");
+  });
+
+  it("classifies external OpenCode overrides only while their plugins are active", () => {
+    noteMock.mockClear();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          opencode: {
+            baseUrl: "https://opencode.ai/zen/v1",
+            api: "openai-completions",
+            models: [],
+          },
+          "opencode-go": {
+            baseUrl: "https://opencode.ai/zen/go/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    };
+
+    noteOpencodeProviderOverrides(cfg);
+    expect(noteMock).not.toHaveBeenCalled();
+
+    noteOpencodeProviderOverrides(cfg, {
+      opencodePluginActive: true,
+      opencodeGoPluginActive: true,
+    });
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /plugin-provided OpenCode Zen catalog[\s\S]*plugin-provided OpenCode Go catalog/u,
+      ),
+      "OpenCode",
+    );
+  });
+
   it("formats config paths predictably", () => {
     expect(formatConfigPath([])).toBe("<root>");
     expect(formatConfigPath(["channels", "slack", "accounts", 0, "token"])).toBe(

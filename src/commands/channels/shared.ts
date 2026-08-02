@@ -23,9 +23,13 @@ export async function requireValidConfig(
   secretResolution?: {
     commandName?: string;
     mode?: CommandSecretResolutionMode;
+    skipPluginValidation?: boolean;
   },
 ): Promise<OpenClawConfig | null> {
-  const cfg = await requireValidConfigSnapshot(runtime);
+  const cfg = await requireValidConfigSnapshot(
+    runtime,
+    secretResolution?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
+  );
   if (!cfg) {
     return null;
   }

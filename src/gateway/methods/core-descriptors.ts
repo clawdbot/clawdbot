@@ -236,14 +236,14 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.abort", scope: "operator.write", since: "<=2026.7", startup: true },
   // Params-aware: write scope may mutate chat-organization fields
   // (label/category/icon/pinned/archived/unread); every other patch field stays
-  // admin-only. Policy lives in method-scopes.ts.
+  // admin-only. Policy lives in shared/session-method-scopes.ts.
   { name: "sessions.patch", scope: "dynamic", since: "<=2026.7" },
   { name: "sessions.pluginPatch", scope: "operator.admin", since: "<=2026.7" },
   { name: "sessions.cleanup", scope: "operator.admin", since: "<=2026.7" },
   { name: "sessions.reset", scope: "operator.admin", since: "<=2026.7" },
   // State-aware: write scope may delete already-archived sessions
   // (archive-then-delete); the handler enforces the archived requirement and
-  // admin keeps unrestricted delete. Policy in method-scopes.ts + handler.
+  // admin keeps unrestricted delete. Shared policy plus the handler own both checks.
   { name: "sessions.delete", scope: "dynamic", since: "<=2026.7" },
   { name: "sessions.compact", scope: "operator.admin", since: "<=2026.7" },
   { name: "sessions.groups.list", scope: "operator.read", since: "<=2026.7" },

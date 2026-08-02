@@ -10,6 +10,7 @@ import {
   isRenderablePayload,
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
+import { stripLeadingInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -212,26 +213,14 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
   return merged;
 }
 
-type PreparedOutboundPayloadPlanEntry = {
-  payload: ReplyPayload;
-  hasPresentation: boolean;
-  hasInteractive: boolean;
-  hasChannelData: boolean;
-  isSilent: boolean;
-};
-
-type IndexedPreparedOutboundPayloadPlanEntry = PreparedOutboundPayloadPlanEntry & {
-  sourceIndex: number;
-};
-
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
-): PreparedOutboundPayloadPlanEntry | null {
+): Omit<OutboundPayloadPlan, "sourceIndex"> | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
-  const parsed = parseReplyDirectives(payload.text ?? "", {
+  const parsed = parseReplyDirectives(stripLeadingInboundMetadata(payload.text ?? ""), {
     extractMarkdownImages: context.extractMarkdownImages,
   });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
@@ -244,10 +233,12 @@ function createOutboundPayloadPlanEntry(
   const strippedParsed =
     strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
   const parsedText = strippedParsed.text ?? "";
-  if (isSuppressedRelayStatusText(parsedText) && mergedMedia.length === 0) {
+  if (
+    (strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText)) &&
+    mergedMedia.length === 0
+  ) {
     return null;
   }
-  const isSilent = strippedParsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
   const channelData = mergeReactionDirectiveChannelData(payload.channelData, parsed.reaction);
@@ -266,16 +257,16 @@ function createOutboundPayloadPlanEntry(
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
     ...(channelData ? { channelData } : {}),
   };
-  if (!isRenderablePayload(normalizedPayload) && !isSilent) {
+  if (!isRenderablePayload(normalizedPayload)) {
     return null;
   }
   const hasChannelData = hasReplyChannelData(normalizedPayload.channelData);
   return {
     payload: normalizedPayload,
+    parts: resolveSendableOutboundReplyParts(normalizedPayload),
     hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
     hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
     hasChannelData,
-    isSilent,
   };
 }
 
@@ -287,7 +278,7 @@ export function createOutboundPayloadPlan(
   // Intentionally scoped to channel-agnostic normalization and projection inputs.
   // Transport concerns (queueing, hooks, retries), channel transforms, and
   // heartbeat-specific token semantics remain outside this plan boundary.
-  const prepared: IndexedPreparedOutboundPayloadPlanEntry[] = [];
+  const plan: OutboundPayloadPlan[] = [];
   for (const [sourceIndex, payload] of payloads.entries()) {
     const entry = createOutboundPayloadPlanEntry(payload, {
       extractMarkdownImages: context.extractMarkdownImages,
@@ -295,21 +286,7 @@ export function createOutboundPayloadPlan(
     if (!entry) {
       continue;
     }
-    prepared.push({ ...entry, sourceIndex });
-  }
-  const plan: OutboundPayloadPlan[] = [];
-  for (const entry of prepared) {
-    if (!entry.isSilent) {
-      plan.push({
-        sourceIndex: entry.sourceIndex,
-        payload: entry.payload,
-        parts: resolveSendableOutboundReplyParts(entry.payload),
-        hasPresentation: entry.hasPresentation,
-        hasInteractive: entry.hasInteractive,
-        hasChannelData: entry.hasChannelData,
-      });
-      continue;
-    }
+    plan.push({ sourceIndex, ...entry });
   }
   return plan;
 }

@@ -1,10 +1,5 @@
 import type { SessionEntry } from "./types.js";
 
-type SessionStoreTarget = {
-  canonicalKey: string;
-  storeKeys: readonly string[];
-};
-
 type SessionProjectionTarget = {
   candidateKeys?: readonly string[];
   primaryKey: string;
@@ -45,43 +40,7 @@ export function inheritSessionSelection(
   };
 }
 
-/** Normalizes caller aliases while always preserving the canonical key. */
-export function normalizeTargetStoreKeys(target: SessionStoreTarget): string[] {
-  const keys = new Set<string>();
-  const remember = (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed) {
-      keys.add(trimmed);
-    }
-  };
-  remember(target.canonicalKey);
-  for (const key of target.storeKeys) {
-    remember(key);
-  }
-  return [...keys];
-}
-
-/** Selects the row that alias migration would promote. */
-export function resolveFreshestTargetEntry(
-  entries: Iterable<{ sessionKey: string; entry: SessionEntry }>,
-  targetKeys: readonly string[],
-): { key: string; entry: SessionEntry } | undefined {
-  const store = new Map(
-    Array.from(entries, ({ entry, sessionKey }) => [sessionKey, entry] as const),
-  );
-  let freshest: { key: string; entry: SessionEntry } | undefined;
-  for (const key of targetKeys) {
-    const entry = store.get(key);
-    if (entry && (!freshest || (entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0))) {
-      freshest = { key, entry };
-    }
-  }
-  return freshest;
-}
-
-export function cloneOptionalSessionEntry(
-  entry: SessionEntry | undefined,
-): SessionEntry | undefined {
+function cloneOptionalSessionEntry(entry: SessionEntry | undefined): SessionEntry | undefined {
   return entry ? structuredClone(entry) : undefined;
 }
 

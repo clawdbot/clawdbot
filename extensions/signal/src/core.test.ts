@@ -180,6 +180,7 @@ describe("probeSignal", () => {
         enabled: true,
         configured: true,
         baseUrl: "http://127.0.0.1:8080",
+        config: {},
         transport: {
           kind: "managed-native",
           baseUrl: "http://127.0.0.1:8080",
@@ -215,6 +216,59 @@ describe("probeSignal", () => {
     expect(res.ok).toBe(true);
     expect(res.version).toBe("0.13.22");
     expect(res.status).toBe(200);
+  });
+
+  it("preserves every version reported by a Signal REST container", async () => {
+    vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      error: null,
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce({
+      versions: ["v1", "v2"],
+      build: 42,
+    });
+
+    const result = await probeSignal("http://127.0.0.1:8080", 1000, {
+      transportKind: "container",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.version).toBe("v1, v2");
+  });
+
+  it("reports container accounts unhealthy when their receive WebSocket cannot upgrade", async () => {
+    const signalCheck = vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
+      ok: false,
+      status: 200,
+      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    });
+    const signalRpcRequest = vi.spyOn(clientModule, "signalRpcRequest");
+
+    const result = await signalPlugin.status!.probeAccount!({
+      cfg: {} as never,
+      account: {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        baseUrl: "http://127.0.0.1:8080",
+        config: { account: "+15550001111" },
+        transport: { kind: "container", url: "http://127.0.0.1:8080" },
+      } as never,
+      timeoutMs: 1000,
+    });
+
+    expect(signalCheck).toHaveBeenCalledWith("http://127.0.0.1:8080", 1000, {
+      transportKind: "container",
+      account: "+15550001111",
+    });
+    expect(signalRpcRequest).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      ok: false,
+      status: 200,
+      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+      version: null,
+    });
   });
 
   it("returns ok=false when /check fails", async () => {

@@ -20,7 +20,11 @@ import {
   createGoogleChatIngressMonitor,
   type GoogleChatIngressLifecycle,
 } from "./monitor-ingress.js";
-import { deliverGoogleChatReply, type GoogleChatTypingMessage } from "./monitor-reply-delivery.js";
+import {
+  createGoogleChatTypingMessage,
+  deliverGoogleChatReply,
+  type GoogleChatTypingMessage,
+} from "./monitor-reply-delivery.js";
 import {
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
@@ -380,7 +384,11 @@ async function processMessageWithPipeline(params: {
         thread: typingMessageThreadName,
       });
       if (result?.messageName) {
-        typingMessage = { name: result.messageName, thread: typingMessageThreadName };
+        typingMessage = createGoogleChatTypingMessage({
+          messageName: result.messageName,
+          requestedThreadName: typingMessageThreadName,
+          deliveredThreadName: result.threadName,
+        });
       }
     } catch (err) {
       runtime.error?.(`Failed sending typing message: ${String(err)}`);
@@ -537,14 +545,15 @@ export async function startGoogleChatMonitor(
   return await monitorGoogleChatProvider(params);
 }
 
+// Null keeps the same meaning it has in monitorGoogleChatProvider above: the
+// configured webhookUrl does not parse, so no route is ever bound. Falling back
+// to the default path here would report a route the monitor never registers.
 export function resolveGoogleChatWebhookPath(params: {
   account: ResolvedGoogleChatAccount;
-}): string {
-  return (
-    resolveWebhookPath({
-      webhookPath: params.account.config.webhookPath,
-      webhookUrl: params.account.config.webhookUrl,
-      defaultPath: "/googlechat",
-    }) ?? "/googlechat"
-  );
+}): string | null {
+  return resolveWebhookPath({
+    webhookPath: params.account.config.webhookPath,
+    webhookUrl: params.account.config.webhookUrl,
+    defaultPath: "/googlechat",
+  });
 }

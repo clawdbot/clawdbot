@@ -543,7 +543,14 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
           scenarioIds: [scenarioId],
         });
         const transcript = extractTranscript(result);
-        const transcriptFailure = detectTranscriptFailure(transcript);
+        const stats = collectTranscriptStats(transcript);
+        // Character capture tolerates missed turns, so a passing scenario alone
+        // cannot prove this candidate ever delivered an assistant reply.
+        const transcriptFailure =
+          detectTranscriptFailure(transcript) ??
+          (stats.assistantTurns === 0
+            ? "candidate transcript did not contain an assistant reply"
+            : undefined);
         const failedScenarioCount = await readQaSuiteFailedScenarioCountFromFile(
           result.summaryPath,
         );
@@ -558,7 +565,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
           reportPath: result.reportPath,
           summaryPath: result.summaryPath,
           transcript,
-          stats: collectTranscriptStats(transcript),
+          stats,
           ...(transcriptFailure ? { error: transcriptFailure } : {}),
         } satisfies QaCharacterEvalRun;
         logCharacterEvalProgress(

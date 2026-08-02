@@ -90,9 +90,6 @@
     "compat": {
       "pluginApi": ">=2026.7.2"
     },
-    "startup": {
-      "deferConfiguredChannelFullLoadUntilAfterListen": true
-    },
     "build": {
       "openclawVersion": "2026.7.2",
       "bundledDist": false

@@ -75,9 +75,12 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
       await sessionLockController.releaseForPrompt();
     } catch (err) {
       // An aborted attempt never submits another prompt, so a submission-blocked
-      // release is expected teardown noise. Rethrowing would skip settle and
-      // after-turn, silently starving every agent_end consumer for aborted runs.
-      if (!input.settle.readLifecycleState().aborted || !isRunnerAbortError(err)) {
+      // release is expected teardown noise, including its recorded timeout reason.
+      // Rethrowing would silently starve every agent_end consumer for aborted runs.
+      const lifecycle = input.settle.readLifecycleState();
+      const expectedAbortError =
+        isRunnerAbortError(err) || sessionLockController.isPromptSubmissionBlockedError(err);
+      if (!lifecycle.aborted || !expectedAbortError) {
         throw err;
       }
     }

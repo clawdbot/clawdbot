@@ -14,6 +14,7 @@ export function visitModuleSpecifiers(
   options?: {
     includeCommonJs?: boolean;
     includeImportMetaUrl?: boolean;
+    includeImportTypes?: boolean;
   },
 ): void;
 /** Diff expected and actual inventory entries using JSON identity. */
@@ -27,8 +28,15 @@ export function diffInventoryEntries(
 };
 /** Write one line to a stream without each caller repeating newline handling. */
 export function writeLine(stream: unknown, text: unknown): void;
-/** Collect import/export/dynamic-import references from source text without full parsing. */
-export function collectModuleReferencesFromSource(source: unknown): unknown[];
+/** Lexically reject clean files before parsing candidate module-boundary violations. */
+export function collectModuleReferencesFromSource(
+  source: string,
+  options?: {
+    acceptSpecifier?: (specifier: string) => boolean;
+    fileName?: string;
+    ts?: unknown;
+  },
+): Array<{ kind: string; line: number; specifier: string }>;
 /** Memoize an async factory while resetting the cache after failures. */
 export function createCachedAsync(factory: unknown): () => Promise<unknown>;
 /** Format grouped inventory entries for human-readable guard output. */

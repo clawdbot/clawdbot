@@ -130,6 +130,35 @@ describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
     );
   });
 
+  it("cancels the unread device code body before throwing on non-OK", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            JSON.stringify({ error: "server_error", error_description: "boom" }),
+          ),
+        );
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
+      response: new Response(body, {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      }),
+      finalUrl: DEVICE_CODE_URL,
+      release: vi.fn(async () => {}),
+    }));
+
+    await expect(runGitHubCopilotDeviceFlow({ showCode: vi.fn() })).rejects.toThrow(
+      "GitHub device code failed: HTTP 502",
+    );
+    expect(canceled).toBe(true);
+  });
+
   it("throws with failureLabel on non-OK access token response", async () => {
     let callIdx = 0;
     mocks.fetchWithSsrFGuard.mockImplementation(async () => {
@@ -143,6 +172,40 @@ describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
     await expect(runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) })).rejects.toThrow(
       "GitHub device token failed: HTTP 500",
     );
+  });
+
+  it("cancels the unread access token body before throwing on non-OK", async () => {
+    let canceled = false;
+    let callIdx = 0;
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
+      callIdx += 1;
+      if (callIdx === 1) {
+        return guardResponse(VALID_DEVICE_CODE_BODY);
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(JSON.stringify({ error: "bad_verification_code" })),
+          );
+        },
+        cancel() {
+          canceled = true;
+        },
+      });
+      return {
+        response: new Response(body, {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }),
+        finalUrl: ACCESS_TOKEN_URL,
+        release: vi.fn(async () => {}),
+      };
+    });
+
+    await expect(runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) })).rejects.toThrow(
+      "GitHub device token failed: HTTP 401",
+    );
+    expect(canceled).toBe(true);
   });
 
   it("rejects a malformed access token response", async () => {

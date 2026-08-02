@@ -4,6 +4,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   resolveSessionPreferredFaceForKey,
@@ -11,6 +12,8 @@ import {
   SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { patchChatSessionLabel } from "./chat-state-route.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const uuid = "12345678-90ab-cdef-1234-567890abcdef";
@@ -73,6 +76,26 @@ function targetLocation(target: ReturnType<typeof sessionNavigationTarget>) {
 }
 
 describe("gateway-backed session route resolution", () => {
+  it("patches a canonical global session on the selected agent", async () => {
+    const patch = vi.fn(async () => ({}));
+    const state = {
+      sessionKey: "global",
+      assistantAgentId: "research",
+      agentsList: null,
+      hello: null,
+    } as ChatPageHost;
+
+    const sessions = { patch } as unknown as Pick<SessionCapability, "patch">;
+
+    await patchChatSessionLabel(state, sessions, "global", "Research thread");
+
+    expect(patch).toHaveBeenCalledWith(
+      "global",
+      { label: "Research thread" },
+      { agentId: "research" },
+    );
+  });
+
   it("resolves a non-default agent's canonical global face from its scoped row", async () => {
     const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
     const { context, list } = contextFor(({ agentId, search }) =>
@@ -442,6 +465,50 @@ describe("gateway-backed session route resolution", () => {
       sessionKey: storedRow.key,
     });
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      connectionChange: "gateway client replacement",
+      replaceConnection: (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
+        snapshot.client = {} as NonNullable<typeof snapshot.client>;
+      },
+    },
+    {
+      connectionChange: "hello replacement on the same gateway client",
+      replaceConnection: (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
+        snapshot.hello = {
+          snapshot: { sessionDefaults: { mainKey: "main" } },
+        } as NonNullable<typeof snapshot.hello>;
+      },
+    },
+  ])("does not trust a carried session after $connectionChange", async ({ replaceConnection }) => {
+    const oldSession = row({
+      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
+      displayName: "Deploy monitor",
+    });
+    const currentSession = row({
+      key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002",
+      displayName: "Deploy monitor",
+    });
+    const { context, list } = contextFor(() => result([currentSession]));
+    context.gateway.snapshot.hello = {
+      snapshot: { sessionDefaults: { mainKey: "main" } },
+    } as NonNullable<typeof context.gateway.snapshot.hello>;
+    const pathname = "/chat/roboclaw/deploy-monitor-12345678";
+
+    prepareSessionNavigationHandoff(context.gateway, pathname, oldSession.key);
+    replaceConnection(context.gateway.snapshot);
+
+    const loaded = await loadChatRoute(
+      context,
+      { pathname, search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "session", sessionKey: currentSession.key });
+    expect(list).toHaveBeenCalledOnce();
   });
 
   it("prefers the current location key over a residual colliding handoff", async () => {

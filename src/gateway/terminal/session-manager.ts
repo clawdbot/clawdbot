@@ -662,6 +662,9 @@ export class TerminalSessionManager {
       // With no socket pressure left, resume immediately. Buffered bytes stay
       // in the replay ring and the next viewer starts at its high-water mark.
       session.output.resetOwnership();
+    } else {
+      // A departed slow viewer must not leave healthy co-viewers stalled.
+      session.output.reconcileRecipients();
     }
     return true;
   }

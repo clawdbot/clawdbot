@@ -33,9 +33,10 @@ export async function runWriteConfigHealth(
   const { replaceConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
+  const configResultWritePending =
+    ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true;
   const shouldWriteConfig =
-    (ctx.configResult.shouldWriteConfig && ctx.configResultWriteCommitted !== true) ||
-    JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
+    configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
     const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
     if (ctx.configResult.skipWizardMetadataForIncludeWrite !== true) {
@@ -58,6 +59,9 @@ export async function runWriteConfigHealth(
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
         skipPluginValidation:
           ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
+        ...(configResultWritePending && ctx.configResult.explicitSetPaths
+          ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
+          : {}),
         preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
         ...(legacyParentVersionOverride
           ? { lastTouchedVersionOverride: legacyParentVersionOverride }

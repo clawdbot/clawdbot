@@ -504,7 +504,6 @@ export const twitchSetupPlugin: ChannelPlugin<ResolvedTwitchAccount> = {
     chatTypes: ["group"],
   },
   config: twitchConfigAdapter,
-  setup: twitchSetupAdapter,
   setupContract: twitchSetupContract,
   setupWizard: twitchSetupWizard,
 };

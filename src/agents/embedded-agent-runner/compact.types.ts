@@ -14,6 +14,7 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
@@ -52,8 +53,8 @@ export type CompactEmbeddedAgentSessionParams = {
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
   inputProvenance?: InputProvenance;
-  /** Trusted in-process subagent-completion handoff; never derived from public input. */
-  trustedInternalHandoff?: boolean;
+  /** Consumed in-process subagent-completion capability; never derived from public input. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   sessionFile: string;
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;

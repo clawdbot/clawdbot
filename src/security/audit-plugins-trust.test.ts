@@ -217,7 +217,6 @@ describe("security audit install metadata findings", () => {
         startup: {
           sidecar: true,
           memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
           agentHarnesses: [],
         },
         compat: [],

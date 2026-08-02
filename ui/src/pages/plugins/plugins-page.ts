@@ -1,5 +1,6 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { formatErrorMessage } from "@openclaw/normalization-core";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -18,6 +19,7 @@ import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { redactToolDetail } from "../../lib/browser-redact.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
 import {
   buildAddMcpServerPatch,
@@ -34,6 +36,7 @@ import {
   installPlugin,
   pluginInstallNeedsRiskAcknowledgement,
   readPluginInstallTrustError,
+  runPluginConfigMutation,
   setPluginEnabled,
   uninstallPlugin,
   type PluginCatalogItem,
@@ -67,37 +70,6 @@ export type PluginsRouteData = {
   error: string | null;
   location: RouteLocation;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-async function runPluginConfigMutation<T>(
-  runtimeConfig: ApplicationContext["runtimeConfig"],
-  expectedClient: GatewayBrowserClient,
-  task: (client: GatewayBrowserClient) => Promise<T>,
-): Promise<{ value: T; refreshError: string | null }> {
-  let taskError: Error | undefined;
-  const mutation = await runtimeConfig.runExternalMutation(async (client) => {
-    if (client !== expectedClient) {
-      throw new Error("Connection changed before the plugin update started.");
-    }
-    try {
-      return await task(client);
-    } catch (error) {
-      // Preserve structured Gateway errors used by the ClawHub risk prompt.
-      taskError = error instanceof Error ? error : new Error(String(error));
-      throw taskError;
-    }
-  });
-  if (mutation.ok) {
-    return {
-      value: mutation.value,
-      refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
-    };
-  }
-  throw taskError ?? new Error(mutation.error);
-}
 
 function committedMutationMessage(success: string, refreshError: string | null): PluginRowMessage {
   return {
@@ -188,7 +160,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.replaceResult(result);
     },
     onError: (error) => {
-      this.error = errorMessage(error);
+      this.error = formatErrorMessage(error, { redact: redactToolDetail });
     },
   });
 
@@ -558,14 +530,14 @@ class PluginsPage extends OpenClawLightDomElement {
   private get searchError(): string | null {
     return this.searchTask.status === TaskStatus.ERROR &&
       this.debouncedSearchQuery === this.query.trim()
-      ? errorMessage(this.searchTask.error)
+      ? formatErrorMessage(this.searchTask.error, { redact: redactToolDetail })
       : null;
   }
 
   private get configRefreshError(): string | null {
     const failure =
       this.configTask.status === TaskStatus.ERROR
-        ? errorMessage(this.configTask.error)
+        ? formatErrorMessage(this.configTask.error, { redact: redactToolDetail })
         : this.configTask.status === TaskStatus.COMPLETE
           ? this.configTask.value
           : null;
@@ -762,7 +734,10 @@ class PluginsPage extends OpenClawLightDomElement {
       isCurrent: () => boolean,
     ) => Promise<void>,
     onError: (error: unknown) => void = (error) => {
-      this.setMessage(rowKey, { kind: "error", text: errorMessage(error) });
+      this.setMessage(rowKey, {
+        kind: "error",
+        text: formatErrorMessage(error, { redact: redactToolDetail }),
+      });
     },
   ): Promise<void> {
     const client = this.client;
@@ -821,7 +796,10 @@ class PluginsPage extends OpenClawLightDomElement {
           });
           return;
         }
-        this.setMessage(rowKey, { kind: "error", text: errorMessage(error) });
+        this.setMessage(rowKey, {
+          kind: "error",
+          text: formatErrorMessage(error, { redact: redactToolDetail }),
+        });
       },
     );
   }
@@ -915,7 +893,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.mcpMessage = { kind: "success", text: params.successText };
       return true;
     } catch (error) {
-      return fail(errorMessage(error));
+      return fail(formatErrorMessage(error, { redact: redactToolDetail }));
     } finally {
       this.mcpBusy = false;
       if (params.busyKey) {

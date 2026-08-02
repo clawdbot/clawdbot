@@ -11,7 +11,15 @@ afterEach(() => {
 });
 
 describe("registerUsersCli", () => {
-  it("routes link-email through the admin gateway method", async () => {
+  it("reports the authoritative linked profile and uses the admin gateway method", async () => {
+    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    callGatewayFromCli.mockResolvedValue({
+      profile: {
+        id: "p-1\nshadow",
+        displayName: "Ada\tadmin\u001b[2J",
+        emails: ["ada@example.com\nnext@example.com"],
+      },
+    });
     const program = new Command().exitOverride();
     registerUsersCli(program);
 
@@ -31,6 +39,37 @@ describe("registerUsersCli", () => {
       { email: "Ada@example.com", targetProfileId: "p-1" },
       { scopes: ["operator.admin"] },
     );
+    expect(output).toHaveBeenCalledWith(
+      "p-1\\nshadow\tAda\\tadmin\tada@example.com\\nnext@example.com\n",
+    );
+  });
+
+  it("reports an empty user profile list", async () => {
+    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    callGatewayFromCli.mockResolvedValue({ profiles: [] });
+    const program = new Command().exitOverride();
+    registerUsersCli(program);
+
+    await program.parseAsync(["node", "openclaw", "users", "list"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "users.list",
+      expect.any(Object),
+      {},
+      { scopes: ["operator.read"] },
+    );
+    expect(output).toHaveBeenCalledWith("No user profiles found.\n");
+  });
+
+  it("preserves the empty profile list JSON response", async () => {
+    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    callGatewayFromCli.mockResolvedValue({ profiles: [] });
+    const program = new Command().exitOverride();
+    registerUsersCli(program);
+
+    await program.parseAsync(["node", "openclaw", "users", "list", "--json"]);
+
+    expect(output).toHaveBeenCalledWith('{\n  "profiles": []\n}\n');
   });
 
   it("prints the link result as JSON when requested", async () => {

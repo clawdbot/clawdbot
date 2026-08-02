@@ -9,7 +9,10 @@ import {
   resolvePluginNpmGenerationProjectDirPrefix,
 } from "./install-paths.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
-import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
+import {
+  resolveInstalledPluginIndexStateDatabaseOptions,
+  resolveInstalledPluginIndexStorePath,
+} from "./installed-plugin-index-store-path.js";
 
 describe("plugin install root context", () => {
   it("keeps discovery roots on the operator install while runtime state is redirected", async () => {
@@ -29,9 +32,20 @@ describe("plugin install root context", () => {
       expect(resolveInstalledPluginIndexStorePath({ env: redirectedEnv })).toBe(
         "/operator/openclaw/state/openclaw.sqlite",
       );
+      expect(
+        resolveInstalledPluginIndexStateDatabaseOptions({ env: redirectedEnv }).env
+          ?.OPENCLAW_STATE_DIR,
+      ).toBe("/operator/openclaw");
     });
 
     expect(resolveDefaultPluginExtensionsDir(redirectedEnv)).toBe("/tmp/ephemeral-run/extensions");
+    expect(resolveInstalledPluginIndexStorePath({ env: redirectedEnv })).toBe(
+      "/tmp/ephemeral-run/state/openclaw.sqlite",
+    );
+    expect(
+      resolveInstalledPluginIndexStateDatabaseOptions({ env: redirectedEnv }).env
+        ?.OPENCLAW_STATE_DIR,
+    ).toBe("/tmp/ephemeral-run");
   });
 
   it("isolates concurrent install-root scopes", async () => {

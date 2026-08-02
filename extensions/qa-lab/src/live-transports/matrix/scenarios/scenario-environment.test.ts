@@ -4,9 +4,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const buildMatrixQaConfig = vi.hoisted(() =>
   vi.fn(() => ({ channels: { matrix: { execApprovals: { enabled: true } } } })),
 );
+const runMatrixQaCanary = vi.hoisted(() =>
+  vi.fn(async () => ({
+    driverEventId: "$canary-driver",
+    reply: { eventId: "$canary-reply" },
+    token: "MATRIX_QA_CANARY",
+  })),
+);
 
 vi.mock("../substrate/config.js", () => ({ buildMatrixQaConfig }));
-vi.mock("./scenario-runtime-room.js", () => ({ runMatrixQaCanary: vi.fn() }));
+vi.mock("./scenario-runtime-room.js", () => ({ runMatrixQaCanary }));
 
 import { createMatrixQaScenarioEnvironment } from "./scenario-environment.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
@@ -74,12 +81,12 @@ describe("matrix scenario environment", () => {
       } as never,
     });
     const input = {
-      config: {},
+      config: { matrixRequireCanary: true },
       gateway,
       outputDir: "/tmp/matrix-qa/output",
       scenarioId: "matrix-observer-reset",
       scenarioTitle: "Matrix observer reset",
-      timeoutMs: 1_000,
+      timeoutMs: 8_000,
       waitForConfigRestartSettle: vi.fn(),
     };
     const first = await environment.prepareFlow(input);
@@ -93,6 +100,7 @@ describe("matrix scenario environment", () => {
 
     expect(second.scenarioContext.syncState).toEqual({});
     expect(second.scenarioContext.syncStreams).toEqual({});
+    expect(runMatrixQaCanary).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
   });
 
   it("waits for the changed Matrix account to restart before accepting readiness", async () => {

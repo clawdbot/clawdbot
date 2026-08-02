@@ -459,6 +459,57 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
   });
 
+  it("retries an explicitly unsent TTS supplement through normal delivery", async () => {
+    const draftStream = createDraftStreamMock();
+    let deliveryAttempt = 0;
+    const deliverFinal = vi.fn(async (payload: { text?: string }) => {
+      deliveryAttempt += 1;
+      if (deliveryAttempt === 1) {
+        return {
+          outcome: "empty" as const,
+          visibleReplySent: false,
+          suppression: { reason: "no_visible_result" as const },
+        };
+      }
+      return {
+        outcome: "text" as const,
+        messageIds: ["supplement-post-1"],
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "mattermost", messageId: "supplement-post-1" }],
+          kind: "media",
+        }),
+        visibleReplySent: true,
+        content: payload.text ?? "",
+      };
+    });
+
+    const result = await deliverMattermostReplyWithDraftPreview({
+      payload: {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText,
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    });
+
+    expect(deliverFinal).toHaveBeenCalledTimes(2);
+    expect(deliverFinal.mock.calls[1]?.[0]).not.toHaveProperty("text");
+    expect(result).toMatchObject({
+      messageIds: ["patched", "supplement-post-1"],
+      visibleReplySent: true,
+      content: "Spoken answer",
+    });
+  });
+
   it("preserves the finalized preview receipt when its supplement fails after sending", async () => {
     const draftStream = createDraftStreamMock();
     const mediaReceipt = createMessageReceiptFromOutboundResults({

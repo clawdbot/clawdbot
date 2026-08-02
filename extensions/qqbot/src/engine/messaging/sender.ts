@@ -25,6 +25,7 @@
  */
 
 import os from "node:os";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ApiClient } from "../api/api-client.js";
 import { ChunkedMediaApi as ChunkedMediaApiClass } from "../api/media-chunked.js";
@@ -43,7 +44,6 @@ import {
   type UploadMediaResponse,
 } from "../types.js";
 import { getMaxUploadSize, LARGE_FILE_THRESHOLD } from "../utils/file-utils.js";
-import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError, debugWarn } from "../utils/log.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "../utils/upload-cache.js";

@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
@@ -24,7 +25,7 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
-import { migrateAndPruneGatewaySessionStoreKey } from "../session-utils.js";
+import { resolveCanonicalGatewaySessionStoreKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -77,7 +78,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         const snapshot = Object.fromEntries(
           entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
         );
-        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key,
           store: snapshot,
@@ -169,6 +170,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     let sessionStillCurrent = true;
     let compactionNoopReason: string | undefined;
     let blockedByActiveRun = false;
+    let blockedByQueuedFollowup = false;
     try {
       await runExclusiveSessionLifecycleMutation({
         scope: storePath,
@@ -219,11 +221,17 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               agentId: requestedAgentId,
               defaultAgentId: resolveDefaultAgentId(cfg),
             });
-          if (blockedByActiveRun) {
+          blockedByQueuedFollowup = hasPendingFollowupQueueWork([
+            key,
+            target.canonicalKey,
+            compactTarget.primaryKey,
+            sessionId,
+          ]);
+          if (blockedByActiveRun || blockedByQueuedFollowup) {
             return;
           }
-          // Drop work queued against the pre-compaction transcript before its
-          // lifecycle fence commits and no longer exposes queue cleanup.
+          // Queued follow-ups are accepted user intent, not stale transcript work.
+          // Refuse compaction until the queue drains so cleanup cannot erase them.
           clearSessionQueues([key, target.canonicalKey, compactTarget.primaryKey, sessionId]);
         },
         run: async () => {
@@ -249,6 +257,17 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 reason: compactionNoopReason,
               },
               undefined,
+            );
+            return;
+          }
+          if (blockedByQueuedFollowup) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `Session ${key} has queued work; retry after it finishes.`,
+              ),
             );
             return;
           }

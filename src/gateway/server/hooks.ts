@@ -30,6 +30,7 @@ import { validateExplicitMessageAccountSelection } from "../../infra/outbound/me
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { CommandLane } from "../../process/lanes.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import {
@@ -416,7 +417,11 @@ export function createGatewayHooksRequestHandler(params: {
             // Isolated runs derive their lifecycle key from random jobId (or an
             // already-stable cron: key), so accepted agentId closes reload drift.
             agentId,
-            lane: "cron",
+            // Hook agent runs get their own lane rather than sharing
+            // `cron-nested` with cron inner work, so a saturated cron budget
+            // cannot starve them. Aggregate capacity stays bounded by the lane
+            // group that owns both lanes.
+            lane: CommandLane.HookDispatch,
             abortSignal: startupAbortController.signal,
             onExecutionStarted: () => {
               // Existing runner-entry callbacks are the final owner-boundary fence:

@@ -15,6 +15,171 @@ export type LegacyMigrationSourceSnapshot = {
   sourcePath: string;
 };
 
+type LegacyMigrationSourceIdentity = Pick<
+  LegacyMigrationSourceSnapshot,
+  "dev" | "ino" | "mtimeMs" | "sha256" | "size" | "sourcePath"
+>;
+
+/** Keep every claim operation bound to the same trusted owner root and source inode. */
+export class LegacyMigrationSourceClaim<
+  TSnapshot extends LegacyMigrationSourceIdentity = LegacyMigrationSourceSnapshot,
+> {
+  readonly sourcePath: string;
+  readonly claimPath: string;
+  readonly sourceRelativePath: string;
+  readonly claimRelativePath: string;
+
+  constructor(
+    private readonly params: {
+      stateRoot: Root;
+      stateDir: string;
+      sourcePath: string;
+      label: string;
+      claimSuffix?: string;
+      readSnapshot: (sourcePath: string) => Promise<TSnapshot>;
+      formatError?: (error: unknown) => string;
+      includeFilePath?: boolean;
+    },
+  ) {
+    this.sourcePath = params.sourcePath;
+    this.claimPath = `${params.sourcePath}${params.claimSuffix ?? ".doctor-importing"}`;
+    this.sourceRelativePath = resolveLegacyMigrationRelativePath(
+      params.stateDir,
+      this.sourcePath,
+      params.label,
+      params.includeFilePath,
+    );
+    this.claimRelativePath = resolveLegacyMigrationRelativePath(
+      params.stateDir,
+      this.claimPath,
+      params.label,
+      params.includeFilePath,
+    );
+  }
+
+  async exists(claimed = false): Promise<boolean> {
+    return await this.params.stateRoot.exists(
+      claimed ? this.claimRelativePath : this.sourceRelativePath,
+    );
+  }
+
+  async read(claimed = false): Promise<TSnapshot> {
+    return await this.params.readSnapshot(claimed ? this.claimPath : this.sourcePath);
+  }
+
+  async recover(conflictMessage: string): Promise<void> {
+    if (!(await this.exists(true))) {
+      return;
+    }
+    const claimed = await this.read(true);
+    if (!(await this.exists())) {
+      await this.params.stateRoot.move(this.claimRelativePath, this.sourceRelativePath);
+      return;
+    }
+    if (!legacyMigrationSourceContentMatches(claimed, await this.read())) {
+      throw new Error(conflictMessage);
+    }
+    await this.params.stateRoot.remove(this.claimRelativePath);
+  }
+
+  async restore(): Promise<string | null> {
+    try {
+      if (!(await this.exists(true))) {
+        return null;
+      }
+      if (await this.exists()) {
+        return `source path already exists: ${this.sourcePath}`;
+      }
+      await this.params.stateRoot.move(this.claimRelativePath, this.sourceRelativePath);
+      return null;
+    } catch (error) {
+      return this.params.formatError?.(error) ?? String(error);
+    }
+  }
+
+  async claim(params: {
+    snapshot: TSnapshot;
+    mismatchMessage: string;
+    beforeClaim?: () => void;
+  }): Promise<TSnapshot> {
+    params.beforeClaim?.();
+    await this.params.stateRoot.move(this.sourceRelativePath, this.claimRelativePath);
+    const claimed = await this.read(true);
+    if (!legacyMigrationSourceSnapshotsMatch(claimed, params.snapshot)) {
+      throw new Error(params.mismatchMessage);
+    }
+    return claimed;
+  }
+
+  async remove(
+    params: {
+      removeSource?: (sourcePath: string) => Promise<void> | void;
+      sourceReappearedMessage?: string;
+      remainingMessage?: string;
+      sourceRemainingMessage?: string;
+      claimRemainingMessage?: string;
+      skipSourceCheck?: boolean;
+    } = {},
+  ): Promise<void> {
+    if (!params.skipSourceCheck && (await this.exists())) {
+      throw new Error(
+        params.sourceReappearedMessage ??
+          `legacy source reappeared during import: ${this.sourcePath}`,
+      );
+    }
+    if (params.removeSource) {
+      await params.removeSource(this.claimPath);
+    } else {
+      await this.params.stateRoot.remove(this.claimRelativePath);
+    }
+    const sourceRemainingMessage = params.sourceRemainingMessage ?? params.remainingMessage;
+    if (sourceRemainingMessage && (await this.exists())) {
+      throw new Error(sourceRemainingMessage);
+    }
+    const claimRemainingMessage = params.claimRemainingMessage ?? params.remainingMessage;
+    if (claimRemainingMessage && (await this.exists(true))) {
+      throw new Error(claimRemainingMessage);
+    }
+  }
+}
+
+/** Restore claimed sources in reverse order so a failed multi-file import remains atomic. */
+export async function restoreLegacyMigrationSourceClaims<
+  TSnapshot extends LegacyMigrationSourceIdentity,
+>(claims: readonly LegacyMigrationSourceClaim<TSnapshot>[]): Promise<string[]> {
+  const errors: string[] = [];
+  for (const claim of claims.toReversed()) {
+    const error = await claim.restore();
+    if (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
+/** Claim every source before SQLite writes; restore the full batch on the first mismatch. */
+export async function claimLegacyMigrationSourceClaims<
+  TSnapshot extends LegacyMigrationSourceIdentity,
+>(
+  claims: readonly { claim: LegacyMigrationSourceClaim<TSnapshot>; snapshot: TSnapshot }[],
+  params: { beforeClaim?: () => void; mismatchMessage: string },
+): Promise<void> {
+  params.beforeClaim?.();
+  const claimed: LegacyMigrationSourceClaim<TSnapshot>[] = [];
+  try {
+    for (const { claim, snapshot } of claims) {
+      claimed.push(claim);
+      await claim.claim({ snapshot, mismatchMessage: params.mismatchMessage });
+    }
+  } catch (error) {
+    const restoreErrors = await restoreLegacyMigrationSourceClaims(claimed);
+    throw new Error(
+      `${String(error)}${restoreErrors.length > 0 ? `; restore failures: ${restoreErrors.join("; ")}` : ""}`,
+      { cause: error },
+    );
+  }
+}
+
 /** A source may be inaccessible; only a proven absence permits skipping repair. */
 export function legacyMigrationPathMayExist(filePath: string): boolean {
   try {
@@ -191,7 +356,7 @@ export function legacyMigrationSourceSnapshotsMatch(
   );
 }
 
-export function legacyMigrationSourceContentMatches(
+function legacyMigrationSourceContentMatches(
   left: Pick<LegacyMigrationSourceSnapshot, "sha256" | "size">,
   right: Pick<LegacyMigrationSourceSnapshot, "sha256" | "size">,
 ): boolean {

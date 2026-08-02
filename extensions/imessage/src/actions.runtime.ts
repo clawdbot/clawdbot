@@ -1,22 +1,23 @@
 // Imessage plugin module implements actions behavior.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { basename, parse, win32 } from "node:path";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   asDateTimestampMs,
   parseStrictInteger,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeDirectChatIdentifier } from "./chat-context.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
-import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { authorizeIMessageResourceReference } from "./message-resource.js";
 import {
   resolveIMessageMessageId as resolveIMessageMessageIdImpl,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
+import { sanitizeIMessageFinalOutboundText } from "./monitor/sanitize-outbound.js";
 import type { IMessageTarget } from "./targets.js";
 
 type CliRunOptions = {
@@ -225,15 +226,23 @@ function resolveMessageId(result: Record<string, unknown>): string {
 }
 
 async function withTempFile<T>(input: TempFileInput, fn: (path: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(resolvePreferredOpenClawTmpDir(), "openclaw-imessage-"));
-  const safeExt = extname(input.filename).slice(0, 16) || ".bin";
-  const filePath = join(dir, `upload${safeExt}`);
-  try {
-    await writeFile(filePath, input.buffer);
-    return await fn(filePath);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  return await withTempWorkspace(
+    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-imessage-" },
+    async (workspace) => {
+      const safeFilename = sanitizeUntrustedFileName(input.filename, "upload.bin");
+      const { name, ext: safeExtension } = parse(safeFilename);
+      const originalExtension = parse(win32.basename(basename(input.filename))).ext;
+      const extension = truncateUtf16Safe(
+        sanitizeUntrustedFileName(originalExtension, safeExtension),
+        16,
+      );
+      // Each UTF-16 unit occupies at most three UTF-8 bytes, keeping 80 units below
+      // the 255-byte filesystem component limit without dropping the attachment extension.
+      const filename = `${truncateUtf16Safe(name, 80 - extension.length)}${extension}`;
+      const filePath = await workspace.write(filename, input.buffer);
+      return await fn(filePath);
+    },
+  );
 }
 
 export const imessageActionsRuntime = {
@@ -319,6 +328,13 @@ export const imessageActionsRuntime = {
     partIndex?: number;
     options: IMessageBridgeActionOptions;
   }) {
+    const text = sanitizeIMessageFinalOutboundText(params.text).text;
+    const backwardsCompatMessage = sanitizeIMessageFinalOutboundText(
+      params.backwardsCompatMessage ?? params.text,
+    ).text;
+    if (!text.trim() || !backwardsCompatMessage.trim()) {
+      throw new Error("iMessage edit requires non-empty text after sanitization");
+    }
     await runIMessageCliJson(
       [
         "edit",
@@ -327,9 +343,9 @@ export const imessageActionsRuntime = {
         "--message",
         params.messageId,
         "--new-text",
-        params.text,
+        text,
         "--bc-text",
-        params.backwardsCompatMessage ?? params.text,
+        backwardsCompatMessage,
         "--part",
         String(params.partIndex ?? 0),
       ],
@@ -379,7 +395,12 @@ export const imessageActionsRuntime = {
     // asterisks. This mirrors the same extraction the rpc-send path does;
     // any caller that hits the bridge via `imsg send-rich` benefits without
     // needing to pre-format the text themselves.
-    const formatted = extractMarkdownFormatRuns(params.text);
+    const formatted = sanitizeIMessageFinalOutboundText(params.text, {
+      formatMarkdown: true,
+    });
+    if (!formatted.text.trim() && !params.attachment) {
+      throw new Error("iMessage rich send requires text or an attachment after sanitization");
+    }
     const buildArgs = (filePath?: string): string[] => [
       "send-rich",
       "--chat",
@@ -469,6 +490,14 @@ export const imessageActionsRuntime = {
     suppressComment?: boolean;
     options: IMessageBridgeActionOptions;
   }): Promise<IMessageBridgeSendResult & { pollOptions: IMessagePollSentOption[] }> {
+    const question = sanitizeIMessageFinalOutboundText(params.question).text;
+    const choices = params.choices.map((choice) => sanitizeIMessageFinalOutboundText(choice).text);
+    if (!question.trim() || choices.some((choice) => !choice.trim())) {
+      throw new Error("iMessage poll requires a non-empty question and options after sanitization");
+    }
+    if (new Set(choices.map((choice) => choice.trim())).size !== choices.length) {
+      throw new Error("iMessage poll options must remain distinct after sanitization");
+    }
     const result = await runIMessageCliJson(
       [
         "poll",
@@ -476,8 +505,8 @@ export const imessageActionsRuntime = {
         "--chat",
         params.chatGuid,
         "--question",
-        params.question,
-        ...params.choices.flatMap((choice) => ["--option", choice]),
+        question,
+        ...choices.flatMap((choice) => ["--option", choice]),
         ...(params.replyToMessageId ? ["--reply-to", params.replyToMessageId] : []),
         ...(params.suppressComment ? ["--no-comment"] : []),
       ],

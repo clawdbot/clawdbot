@@ -1,5 +1,5 @@
 /** Durable per-agent voice-call records for Talk continuity and mutation evidence. */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -13,18 +13,20 @@ import {
   onTrustedToolExecutionEvent,
   type TrustedToolExecutionEvent,
 } from "../infra/diagnostic-events.js";
-import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
-import { resolveSessionDeliveryTarget } from "../infra/outbound/targets-session.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { truncateUtf16Safe } from "../utils.js";
 import {
   deactivateClientVoiceConfirmationSession,
   noteClientVoiceConfirmationUtterance,
   releaseClientVoiceConfirmationRun,
 } from "./client-voice-confirmation.js";
+import {
+  CLIENT_VOICE_MUTATION_DIGEST_POLICY,
+  ClientVoiceMutationDigestOwner,
+  deliverClientVoiceMutationDigest,
+} from "./client-voice-mutation-digest-owner.js";
 import {
   assertVoiceSessionOwnership as assertOwnership,
   type ClientVoiceRunBinding,
@@ -35,15 +37,21 @@ import {
   readVoiceSessionRecord as readRecord,
   readVoiceSessionRecordInTransaction as readRecordInTransaction,
   VOICE_SESSION_CACHE_SCOPE as CACHE_SCOPE,
-  VOICE_SESSION_MAX_TRANSCRIPT_CHARS as MAX_TRANSCRIPT_CHARS,
   VOICE_SESSION_RECORD_VERSION as RECORD_VERSION,
   VOICE_SESSION_STALE_AFTER_MS as STALE_AFTER_MS,
   writeVoiceSessionRecordInTransaction as writeRecordInTransaction,
 } from "./client-voice-session-store.js";
+import {
+  createVoiceTranscriptOperationRegistry,
+  normalizeVoiceTranscriptText,
+  VOICE_TRANSCRIPT_MAX_UNRESOLVED,
+  VOICE_TRANSCRIPT_QUEUE_POLICY,
+} from "./voice-transcript.js";
 
 const voiceSessionByRunId = new Map<string, ClientVoiceRunBinding>();
-const voiceSessionOperations = new Map<string, Promise<void>>();
-const deferredDigestConfigs = new Map<string, OpenClawConfig>();
+const voiceSessionOperations = createVoiceTranscriptOperationRegistry(
+  VOICE_TRANSCRIPT_QUEUE_POLICY,
+);
 let unsubscribeToolEffects: (() => void) | undefined;
 let unsubscribeRunCompletion: (() => void) | undefined;
 
@@ -62,21 +70,22 @@ async function runVoiceSessionOperation<T>(
   agentId: string,
   voiceSessionId: string,
   operation: () => Promise<T>,
+  options: { weight?: number; waitForCapacity?: boolean } = {},
 ): Promise<T> {
-  const key = operationKey(agentId, voiceSessionId);
-  const previous = voiceSessionOperations.get(key) ?? Promise.resolve();
-  const current = previous.then(operation, operation);
-  const settled = current.then(
-    () => undefined,
-    () => undefined,
+  return await voiceSessionOperations.run(
+    operationKey(agentId, voiceSessionId),
+    operation,
+    options,
   );
-  voiceSessionOperations.set(key, settled);
-  void settled.then(() => {
-    if (voiceSessionOperations.get(key) === settled) {
-      voiceSessionOperations.delete(key);
-    }
-  });
-  return await current;
+}
+
+async function closeVoiceSessionOperationOwner(
+  params: Parameters<typeof closeClientVoiceSessionInternal>[0],
+): Promise<void> {
+  await voiceSessionOperations.close(
+    operationKey(params.agentId, params.voiceSessionId),
+    async () => closeClientVoiceSessionInternal(params),
+  );
 }
 
 function effectStatus(event: TrustedToolExecutionEvent): ClientVoiceToolEffect["status"] {
@@ -151,11 +160,7 @@ function ensureToolEffectSubscription(): void {
     }
     voiceSessionByRunId.delete(event.runId);
     releaseClientVoiceConfirmationRun(binding.agentId, binding.voiceSessionId, event.runId);
-    void finishDeferredMutationDigest(binding).catch((error: unknown) => {
-      console.warn(
-        `[talk] deferred voice mutation digest failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
+    mutationDigestDeliveryOwner.retry(binding);
   });
 }
 
@@ -209,6 +214,7 @@ export function createOrResumeClientVoiceSession(params: {
         updatedAt: now,
         consultRunIds: [],
         effects: [],
+        transcriptFailureKeys: [],
       });
     },
     { agentId: params.agentId },
@@ -287,10 +293,14 @@ export function registerClientVoiceConsultRun(params: {
     voiceSessionId: params.voiceSessionId,
     sessionKey: params.sessionKey,
   });
-  // Bound to a call that already closed: its digest may have been delivered and its
-  // retry config cleared, so re-arm it to cover this late run's mutations.
+  // Bound to a call that already closed: re-arm the point-in-time summary owner so
+  // the run completion becomes a retry point without coupling it to transcript work.
   if (recordClosed && params.config) {
-    deferredDigestConfigs.set(operationKey(params.agentId, params.voiceSessionId), params.config);
+    mutationDigestDeliveryOwner.record({
+      agentId: params.agentId,
+      voiceSessionId: params.voiceSessionId,
+      context: params.config,
+    });
   }
   ensureToolEffectSubscription();
 }
@@ -399,7 +409,11 @@ function buildPersistedVoiceMessage(params: {
   };
 }
 
-async function appendVoiceTranscript(params: {
+function transcriptFailureKey(entryId: string): string {
+  return createHash("sha256").update(entryId, "utf8").digest("hex");
+}
+
+function appendVoiceTranscript(params: {
   agentId: string;
   sessionKey: string;
   voiceSessionId: string;
@@ -410,230 +424,146 @@ async function appendVoiceTranscript(params: {
   timestamp?: number;
   config?: OpenClawConfig;
 }): Promise<void> {
-  await runVoiceSessionOperation(params.agentId, params.voiceSessionId, async () => {
-    const text = truncateUtf16Safe(params.text.trim(), MAX_TRANSCRIPT_CHARS);
-    if (!text) {
-      return;
-    }
-    const record = readRecord(params.agentId, params.voiceSessionId);
-    if (!record) {
-      throw new Error("voice session not found");
-    }
-    assertOwnership(record, params);
-    if (record.status !== "open") {
-      throw new Error("voice session is closed");
-    }
-    if (record.origin !== params.origin) {
-      throw new Error("voice session origin does not allow this transcript source");
-    }
-    const sessionEntry = loadSessionEntryReadOnly({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    });
-    if (!sessionEntry?.sessionId) {
-      throw new Error(`agent session not found (${params.sessionKey})`);
-    }
-    const observedAt = Date.now();
-    const timestamp = params.timestamp ?? observedAt;
-    await appendTranscriptMessage(
-      {
-        agentId: params.agentId,
-        sessionId: sessionEntry.sessionId,
-        sessionKey: params.sessionKey,
-      },
-      {
-        ...(params.config ? { config: params.config } : {}),
-        eventId: `voice:${params.voiceSessionId}:${params.entryId}`,
-        message: buildPersistedVoiceMessage({
-          role: params.role,
-          text,
-          timestamp,
-          provider: record.provider ?? "realtime",
-        }),
-        now: timestamp,
-      },
-    );
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        const current = readRecordInTransaction(database, params.voiceSessionId);
-        if (!current) {
-          throw new Error("voice session disappeared during transcript append");
-        }
-        assertOwnership(current, params);
-        // Reaching here means this exact eventId is durably persisted (fresh append or
-        // idempotent dedup of our own prior write). Arm confirmation bookkeeping in both
-        // cases so a retry after a partial failure still records the user utterance.
-        if (params.role === "user") {
-          current.hasUserTranscript = true;
-        }
-        current.updatedAt = Date.now();
-        writeRecordInTransaction(database, current);
-      },
-      { agentId: params.agentId },
-    );
-    if (params.role === "user") {
-      noteClientVoiceConfirmationUtterance({
-        agentId: params.agentId,
-        voiceSessionId: params.voiceSessionId,
-        text,
-        timestamp: observedAt,
+  // Normalize before admission so the queued task retains only bounded text.
+  const normalized = { ...params, text: normalizeVoiceTranscriptText(params.text) };
+  if (!normalized.text) {
+    return Promise.resolve();
+  }
+  return runVoiceSessionOperation(
+    normalized.agentId,
+    normalized.voiceSessionId,
+    async () => {
+      const record = readRecord(normalized.agentId, normalized.voiceSessionId);
+      if (!record) {
+        throw new Error("voice session not found");
+      }
+      assertOwnership(record, normalized);
+      if (record.status !== "open") {
+        throw new Error("voice session is closed");
+      }
+      if (record.origin !== normalized.origin) {
+        throw new Error("voice session origin does not allow this transcript source");
+      }
+      const failureKey = transcriptFailureKey(normalized.entryId);
+      if (
+        record.transcriptFailureKeys.length >= VOICE_TRANSCRIPT_MAX_UNRESOLVED &&
+        !record.transcriptFailureKeys.includes(failureKey)
+      ) {
+        throw new Error("voice transcript persistence has too many unresolved entries");
+      }
+      const sessionEntry = loadSessionEntryReadOnly({
+        agentId: normalized.agentId,
+        sessionKey: normalized.sessionKey,
       });
-    }
-  });
+      if (!sessionEntry?.sessionId) {
+        throw new Error(`agent session not found (${normalized.sessionKey})`);
+      }
+      const observedAt = Date.now();
+      const timestamp = normalized.timestamp ?? observedAt;
+      // Reserve before the fallible append. A crash can leave a conservative
+      // retry requirement, but can never let close skip an accepted entry.
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          const current = readRecordInTransaction(database, normalized.voiceSessionId);
+          if (!current) {
+            throw new Error("voice session disappeared during transcript reservation");
+          }
+          assertOwnership(current, normalized);
+          if (!current.transcriptFailureKeys.includes(failureKey)) {
+            current.transcriptFailureKeys.push(failureKey);
+          }
+          current.updatedAt = Date.now();
+          writeRecordInTransaction(database, current);
+        },
+        { agentId: normalized.agentId },
+      );
+      await appendTranscriptMessage(
+        {
+          agentId: normalized.agentId,
+          sessionId: sessionEntry.sessionId,
+          sessionKey: normalized.sessionKey,
+        },
+        {
+          ...(normalized.config ? { config: normalized.config } : {}),
+          eventId: `voice:${normalized.voiceSessionId}:${normalized.entryId}`,
+          message: buildPersistedVoiceMessage({
+            role: normalized.role,
+            text: normalized.text,
+            timestamp,
+            provider: record.provider ?? "realtime",
+          }),
+          now: timestamp,
+        },
+      );
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          const current = readRecordInTransaction(database, normalized.voiceSessionId);
+          if (!current) {
+            throw new Error("voice session disappeared during transcript append");
+          }
+          assertOwnership(current, normalized);
+          // Reaching here means this exact eventId is durably persisted (fresh append or
+          // idempotent dedup of our own prior write). Arm confirmation bookkeeping in both
+          // cases so a retry after a partial failure still records the user utterance.
+          if (normalized.role === "user") {
+            current.hasUserTranscript = true;
+          }
+          current.transcriptFailureKeys = current.transcriptFailureKeys.filter(
+            (key) => key !== failureKey,
+          );
+          current.updatedAt = Date.now();
+          writeRecordInTransaction(database, current);
+        },
+        { agentId: normalized.agentId },
+      );
+      if (normalized.role === "user") {
+        noteClientVoiceConfirmationUtterance({
+          agentId: normalized.agentId,
+          voiceSessionId: normalized.voiceSessionId,
+          text: normalized.text,
+          timestamp: observedAt,
+        });
+      }
+    },
+    { weight: normalized.text.length },
+  );
 }
 
 /** Append one finalized client-owned transcript item idempotently. */
-export async function appendClientVoiceTranscript(
+export function appendClientVoiceTranscript(
   params: Omit<Parameters<typeof appendVoiceTranscript>[0], "origin">,
 ): Promise<void> {
-  await appendVoiceTranscript({ ...params, origin: "client" });
+  return appendVoiceTranscript({ ...params, origin: "client" });
 }
 
 /** Append one finalized relay-owned transcript item idempotently. */
-export async function appendRelayVoiceTranscript(
+export function appendRelayVoiceTranscript(
   params: Omit<Parameters<typeof appendVoiceTranscript>[0], "origin">,
 ): Promise<void> {
-  await appendVoiceTranscript({ ...params, origin: "relay" });
+  return appendVoiceTranscript({ ...params, origin: "relay" });
 }
 
-// The mutation digest is a best-effort informational summary, not a durable record:
-// the authoritative effects live on the voice record and the canonical transcript is
-// persisted independently. Accepted tradeoffs (retry state is process-local like the
-// rest of this subsystem): a digest already delivered at close does not reissue for a
-// run that binds afterward, and an undelivered digest whose retry map is cleared by a
-// gateway restart is not rediscovered. Both lose a summary message, never real data.
-function formatMutationDigest(effects: ClientVoiceToolEffect[]): string | undefined {
-  if (effects.length === 0) {
-    return undefined;
-  }
-  return [
-    "Voice call changes",
-    ...effects
-      .slice(0, 12)
-      .map(
-        (effect) =>
-          `- ${effect.toolName}: ${effect.status === "started" ? "outcome not confirmed" : effect.status}`,
-      ),
-  ].join("\n");
-}
-
-async function deliverMutationDigest(
-  record: ClientVoiceSessionRecord,
-  config: OpenClawConfig,
-  target: { channel: string; to: string; accountId?: string; threadId?: string | number | null },
-  text: string,
-): Promise<void> {
-  const { sendDurableMessageBatch } = await import("../channels/message/runtime.js");
-  const send = await sendDurableMessageBatch({
-    cfg: config,
-    channel: target.channel,
-    to: target.to,
-    ...(target.accountId ? { accountId: target.accountId } : {}),
-    ...(target.threadId != null ? { threadId: target.threadId } : {}),
-    payloads: [{ text }],
-    durability: "required",
-    requireUnknownSendReconciliation: true,
-    session: buildOutboundSessionContext({
-      cfg: config,
-      agentId: record.agentId,
-      sessionKey: record.sessionKey,
-      policySessionKey: record.sessionKey,
-    }),
-  });
-  if (send.status === "failed" || send.status === "partial_failed") {
-    throw send.error;
-  }
-}
-
-async function deliverMutationDigestOnce(
-  record: ClientVoiceSessionRecord,
-  config: OpenClawConfig,
-): Promise<void> {
-  if (record.digestDeliveredAt) {
-    return;
-  }
-  const text = formatMutationDigest(record.effects);
-  if (!text) {
-    return;
-  }
-  const entry = loadSessionEntryReadOnly({
-    agentId: record.agentId,
-    sessionKey: record.sessionKey,
-  });
-  const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
-  if (!target.channel || target.channel === "webchat" || !target.to) {
-    return;
-  }
-  // Send first, mark after: a transient send failure (the common case) then leaves
-  // the marker unset so close/stale-sweep retries. The rare crash between a durable
-  // send and this marker can re-send one informational digest, which is acceptable.
-  await deliverMutationDigest(
-    record,
-    config,
-    {
-      channel: target.channel,
-      to: target.to,
-      accountId: target.accountId,
-      threadId: target.threadId,
-    },
-    text,
-  );
-  const deliveredAt = Date.now();
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      const current = readRecordInTransaction(database, record.voiceSessionId);
-      if (!current || current.digestDeliveredAt) {
-        return;
-      }
-      current.digestDeliveredAt = deliveredAt;
-      current.updatedAt = deliveredAt;
-      writeRecordInTransaction(database, current);
-    },
-    { agentId: record.agentId },
-  );
-}
-
-async function finishDeferredMutationDigest(binding: {
-  agentId: string;
-  voiceSessionId: string;
-}): Promise<void> {
-  const key = operationKey(binding.agentId, binding.voiceSessionId);
-  const config = deferredDigestConfigs.get(key);
-  if (!config) {
-    return;
-  }
-  await runVoiceSessionOperation(binding.agentId, binding.voiceSessionId, async () => {
-    const record = readRecord(binding.agentId, binding.voiceSessionId);
-    if (!record || record.status !== "closed" || hasLiveConsultRun(record)) {
-      return;
+const mutationDigestDeliveryOwner = new ClientVoiceMutationDigestOwner<OpenClawConfig>({
+  attempt: async ({ agentId, voiceSessionId, context: config, signal }) => {
+    const record = readRecord(agentId, voiceSessionId);
+    if (!record) {
+      return true;
     }
-    // Deliver first; only drop the retry config once the send succeeds, so a
-    // transient failure here is retried by the next closeStaleClientVoiceSessions.
-    await deliverMutationDigestOnce(record, config);
-    deferredDigestConfigs.delete(key);
-  });
-}
-
-/** Retry deferred digests whose delivery previously failed after the call closed. */
-async function retryDeferredMutationDigests(agentId: string): Promise<void> {
-  for (const key of Array.from(deferredDigestConfigs.keys())) {
-    const [entryAgentId, voiceSessionId] = key.split("\0");
-    if (entryAgentId !== agentId || !voiceSessionId) {
-      continue;
+    if (record.status !== "closed" || hasLiveConsultRun(record)) {
+      return false;
     }
-    try {
-      await finishDeferredMutationDigest({ agentId, voiceSessionId });
-    } catch {
-      // Still undeliverable; a later voice session retries again.
-    }
-  }
-}
+    await deliverClientVoiceMutationDigest(record, config, signal);
+    return true;
+  },
+  warn: (message) => console.warn(`[talk] deferred voice mutation digest failed: ${message}`),
+});
 
 async function closeClientVoiceSessionInternal(params: {
   agentId: string;
   sessionKey: string;
   voiceSessionId: string;
   config: OpenClawConfig;
+  transcriptFailurePolicy: "require-success" | "retain-and-close";
   now?: number;
 }): Promise<void> {
   const existing = readRecord(params.agentId, params.voiceSessionId);
@@ -649,6 +579,15 @@ async function closeClientVoiceSessionInternal(params: {
         throw new Error("voice session disappeared during close");
       }
       assertOwnership(current, params);
+      if (
+        current.transcriptFailureKeys.length > 0 &&
+        params.transcriptFailurePolicy === "require-success"
+      ) {
+        throw new Error("voice transcript persistence must be retried before close");
+      }
+      if (params.transcriptFailurePolicy === "retain-and-close" && current.origin !== "relay") {
+        throw new Error("only relay voice sessions may close with unresolved transcripts");
+      }
       if (current.status === "open") {
         current.status = "closed";
         current.closedAt = now;
@@ -669,22 +608,16 @@ async function closeClientVoiceSessionInternal(params: {
     return binding?.voiceSessionId === params.voiceSessionId && binding.agentId === params.agentId;
   });
   deactivateClientVoiceConfirmationSession(params.agentId, params.voiceSessionId, liveRunIds);
-  const key = operationKey(params.agentId, params.voiceSessionId);
-  // Both the deferred and immediate paths retain the retry config until a send
-  // actually succeeds, so a channel outage does not permanently lose the digest.
-  deferredDigestConfigs.set(key, params.config);
-  if (hasLiveConsultRun(closed)) {
-    return;
-  }
-  await deliverMutationDigestOnce(closed, params.config);
-  // Intentionally unconditional: a consult that late-binds during the await above has
-  // its mutations omitted from this already-sent point-in-time summary. Re-sending to
-  // include them would double-notify the user for one call, which is a worse outcome
-  // for an informational digest than omitting a straggler action (still on the record).
-  deferredDigestConfigs.delete(key);
+  // Record retry ownership only after canonical close and confirmation cleanup.
+  // Channel delivery is best-effort and must never delay this durable boundary.
+  mutationDigestDeliveryOwner.record({
+    agentId: params.agentId,
+    voiceSessionId: params.voiceSessionId,
+    context: params.config,
+  });
 }
 
-/** Close a logical voice call and deliver its mutation digest at most once. */
+/** Close a logical voice call after its accepted transcript prefix is durable. */
 export async function closeClientVoiceSession(params: {
   agentId: string;
   sessionKey: string;
@@ -692,8 +625,26 @@ export async function closeClientVoiceSession(params: {
   config: OpenClawConfig;
   now?: number;
 }): Promise<void> {
-  await runVoiceSessionOperation(params.agentId, params.voiceSessionId, async () => {
-    await closeClientVoiceSessionInternal(params);
+  await closeVoiceSessionOperationOwner({
+    ...params,
+    transcriptFailurePolicy: "require-success",
+  });
+}
+
+/**
+ * Terminally close a relay call after its bounded append retries settle.
+ * Relays have no payload replay owner after teardown, so unresolved hashes remain as audit state.
+ */
+export async function closeRelayVoiceSessionRecord(params: {
+  agentId: string;
+  sessionKey: string;
+  voiceSessionId: string;
+  config: OpenClawConfig;
+  now?: number;
+}): Promise<void> {
+  await closeVoiceSessionOperationOwner({
+    ...params,
+    transcriptFailurePolicy: "retain-and-close",
   });
 }
 
@@ -706,9 +657,9 @@ export async function closeStaleClientVoiceSessions(params: {
   warn?: (message: string) => void;
 }): Promise<number> {
   const now = params.now ?? Date.now();
-  // A new voice session is the natural retry point for a digest whose delivery
-  // failed after its own call had already closed and its runs completed.
-  await retryDeferredMutationDigests(params.agentId);
+  // A new voice session remains a retry point, but channel I/O is detached so a
+  // stalled adapter cannot block stale-session recovery.
+  mutationDigestDeliveryOwner.retryAgent(params.agentId, params.config);
   const database = openOpenClawAgentDatabase({ agentId: params.agentId });
   const rows = database.db
     .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND updated_at <= ?")
@@ -743,10 +694,12 @@ export async function closeStaleClientVoiceSessions(params: {
 
 const clientVoiceSessionTesting = {
   readRecord,
+  digestDeliveryPolicy: CLIENT_VOICE_MUTATION_DIGEST_POLICY,
+  digestDeliverySnapshot: () => mutationDigestDeliveryOwner.snapshot(),
   reset(): void {
     voiceSessionByRunId.clear();
     voiceSessionOperations.clear();
-    deferredDigestConfigs.clear();
+    mutationDigestDeliveryOwner.clear();
     unsubscribeToolEffects?.();
     unsubscribeToolEffects = undefined;
     unsubscribeRunCompletion?.();

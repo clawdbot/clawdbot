@@ -695,6 +695,29 @@ describe("devices cli remove", () => {
   });
 });
 
+describe("devices cli reject", () => {
+  it("normalizes a pending request id before rejecting it", async () => {
+    callGateway.mockResolvedValueOnce({ requestId: "req-1", deviceId: "device-1" });
+
+    await runDevicesCommand(["reject", "  req-1  "]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expectGatewayCall(0, {
+      method: "device.pair.reject",
+      params: { requestId: "req-1" },
+    });
+  });
+
+  it("explains blank pending request ids without calling the gateway", async () => {
+    await runDevicesCommand(["reject", "   "]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(readRuntimeErrorOutput()).toContain("requestId is required.");
+    expect(readRuntimeErrorOutput()).toContain("openclaw devices list");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+});
+
 describe("devices cli clear", () => {
   it("requires --yes before clearing", async () => {
     await runDevicesCommand(["clear"]);

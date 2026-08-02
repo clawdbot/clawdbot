@@ -172,6 +172,20 @@ describe("dashboardCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith("ssh hint");
   });
 
+  it("reports opener failure without claiming the host has no GUI", async () => {
+    mockSnapshot("shhhh");
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(false);
+
+    await dashboardCommand(runtime);
+
+    expect(formatControlUiSshHintMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Browser launch failed. Open the Dashboard URL above manually.",
+    );
+  });
+
   it("never passes token to SSH hint (CVE regression — SSH path)", async () => {
     const secretToken = "super-secret-bearer-token";
     mockSnapshot(secretToken);

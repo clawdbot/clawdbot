@@ -258,6 +258,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingEventChain: null,
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
+    currentSourceMessagingToolSentTextsNormalized: [],
+    currentSourceMessagingToolHeldPartial: undefined,
     messagingToolSentTargets: [],
     heartbeatToolResponse: undefined,
     messagingToolSentMediaUrls: [],
@@ -477,6 +479,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.partialBlockState.pendingTagFragment = undefined;
     state.lastStreamedAssistant = undefined;
     state.lastStreamedAssistantCleaned = undefined;
+    state.currentSourceMessagingToolHeldPartial = undefined;
     state.emittedAssistantUpdate = false;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
@@ -567,6 +570,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   // to support commit logic but not used for suppression (avoiding lost messages on tool failure).
   // These tools can send messages via sendMessage/threadReply actions (or sessions_send with message).
   const MAX_MESSAGING_SENT_TEXTS = 200;
+  const MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS = 200;
   const MAX_MESSAGING_SENT_TARGETS = 200;
   const MAX_MESSAGING_SENT_MEDIA_URLS = 200;
   const MAX_MESSAGING_SOURCE_REPLY_PAYLOADS = 200;
@@ -575,6 +579,15 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       const overflow = messagingToolSentTexts.length - MAX_MESSAGING_SENT_TEXTS;
       messagingToolSentTexts.splice(0, overflow);
       messagingToolSentTextsNormalized.splice(0, overflow);
+    }
+    if (
+      state.currentSourceMessagingToolSentTextsNormalized.length >
+      MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS
+    ) {
+      const overflow =
+        state.currentSourceMessagingToolSentTextsNormalized.length -
+        MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS;
+      state.currentSourceMessagingToolSentTextsNormalized.splice(0, overflow);
     }
     if (messagingToolSentTargets.length > MAX_MESSAGING_SENT_TARGETS) {
       const overflow = messagingToolSentTargets.length - MAX_MESSAGING_SENT_TARGETS;
@@ -1328,6 +1341,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
+    state.currentSourceMessagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
     messagingToolSentMediaUrls.length = 0;
     pendingMessagingTexts.clear();

@@ -5,7 +5,10 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
-import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
+import {
+  markdownFileLinkFromEvent,
+  markdownFileLinkFromKeyboardEvent,
+} from "../../../components/markdown-file-links.ts";
 import "../../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
@@ -26,18 +29,22 @@ import type { FileEditorViewHandle } from "./file-editor-view.ts";
 import type { SessionDiffLoader } from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
-export type DetailFullMessageResult = {
+type DetailFullMessageResult = {
   ok?: boolean;
   message?: unknown;
   unavailableReason?: DetailUnavailableReason;
 };
 
-export type SidebarFullMessageRequest = {
+type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
   messageId: string;
   kind: "assistant_message" | "tool_output";
 };
+
+export type SidebarFullMessageLoader = (
+  request: SidebarFullMessageRequest,
+) => Promise<DetailFullMessageResult | null | undefined>;
 
 type MarkdownSidebarContent = {
   kind: "markdown";
@@ -672,9 +679,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: SidebarContent | null = null;
-  @property({ attribute: false }) loadFullMessage?:
-    | ((request: SidebarFullMessageRequest) => Promise<DetailFullMessageResult | null | undefined>)
-    | null = null;
+  @property({ attribute: false }) loadFullMessage?: SidebarFullMessageLoader | null = null;
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;
@@ -1281,6 +1286,13 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     }
   };
 
+  private readonly handlePanelKeyDown = (event: KeyboardEvent) => {
+    const target = markdownFileLinkFromKeyboardEvent(event);
+    if (target) {
+      this.onOpenWorkspaceFile?.(target);
+    }
+  };
+
   override render() {
     const matches = this.fileSearchMatches();
     const currentMatchIndex = matches.length
@@ -1291,7 +1303,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const fillHost =
       this.visibleContent?.kind === "file" || this.visibleContent?.kind === "markdown";
     return html`
-      <div class=${fillHost ? "sidebar-panel-host--fill" : ""} @click=${this.handlePanelClick}>
+      <div
+        class=${fillHost ? "sidebar-panel-host--fill" : ""}
+        @click=${this.handlePanelClick}
+        @keydown=${this.handlePanelKeyDown}
+      >
         ${renderMarkdownSidebar({
           content: this.visibleContent,
           error: this.error,

@@ -8,8 +8,8 @@ import {
   type MeetingChromeTransportConfig,
   type MeetingChromeTransportOptions,
 } from "./chrome-transport.js";
+import { createMeetingConfiguredNodeHost } from "./configured-node-host.js";
 import { isMeetingRealtimeRouteReady, isMeetingTalkBackMode } from "./meeting-modes.js";
-import { createMeetingConfiguredNodeHost } from "./node-host.js";
 import { createMeetingBrowserNodeInvokePolicy } from "./node-invoke-policy.js";
 import type { MeetingPluginConfig } from "./plugin-config.js";
 import {

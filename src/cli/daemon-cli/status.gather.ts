@@ -21,10 +21,11 @@ import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../..
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import { resolveGatewayService } from "../../daemon/service.js";
+import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
+import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { resolveGatewayProbeCredentialConfig } from "../../gateway/probe-auth.js";
 import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
@@ -495,17 +496,21 @@ function toPortStatusSummary(
 async function inspectDaemonPortStatuses(params: {
   daemonPort: number;
   cliPort: number;
+  daemonBindHost: string;
 }): Promise<{ portStatus?: PortStatusSummary; portCliStatus?: PortStatusSummary }> {
+  const daemonProbeHosts = resolveGatewayRequiredListenHosts(params.daemonBindHost);
   if (params.cliPort === params.daemonPort) {
-    const portDiagnostics = await inspectPortUsage(params.daemonPort).catch(() => null);
+    const portDiagnostics = await inspectPortUsage(params.daemonPort, {
+      probeHosts: daemonProbeHosts,
+    }).catch(() => null);
     return {
       portStatus: toPortStatusSummary(portDiagnostics),
       portCliStatus: undefined,
     };
   }
-  const portDiagnosticsByPort = await inspectPortUsages([params.daemonPort, params.cliPort]).catch(
-    () => new Map(),
-  );
+  const portDiagnosticsByPort = await inspectPortUsages([params.daemonPort, params.cliPort], {
+    probeHostsByPort: new Map([[params.daemonPort, daemonProbeHosts]]),
+  }).catch(() => new Map());
   return {
     portStatus: toPortStatusSummary(portDiagnosticsByPort.get(params.daemonPort) ?? null),
     portCliStatus: toPortStatusSummary(portDiagnosticsByPort.get(params.cliPort) ?? null),
@@ -573,20 +578,13 @@ export async function gatherDaemonStatus(
     allowExecSecretRefs?: boolean;
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
+  const timeoutMs = parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ?? 10_000;
   const service = resolveGatewayService();
-  const command = await service.readCommand(process.env).catch(() => null);
-  const serviceEnv = command?.environment
-    ? ({
-        ...process.env,
-        ...command.environment,
-      } satisfies NodeJS.ProcessEnv)
-    : process.env;
-  const [loaded, runtime] = await Promise.all([
-    service.isLoaded({ env: serviceEnv }).catch(() => false),
-    service
-      .readRuntime(serviceEnv)
-      .catch((err: unknown) => ({ status: "unknown", detail: String(err) })),
-  ]);
+  const serviceState = await readGatewayServiceState(service, {
+    env: process.env,
+    timeoutMs,
+  });
+  const { command, env: serviceEnv, loaded, runtime } = serviceState;
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit: ServiceConfigAudit = command
     ? await loadServiceAuditModule().then(({ auditGatewayServiceConfig }) =>
@@ -624,6 +622,7 @@ export async function gatherDaemonStatus(
   const { portStatus, portCliStatus } = await inspectDaemonPortStatuses({
     daemonPort,
     cliPort,
+    daemonBindHost: gateway.bindHost,
   });
   const establishedClients = await inspectEstablishedGatewayClients({
     daemonPort,
@@ -648,8 +647,6 @@ export async function gatherDaemonStatus(
           )
           .catch(() => [])
       : [];
-
-  const timeoutMs = parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ?? 10_000;
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
@@ -726,6 +723,7 @@ export async function gatherDaemonStatus(
               service,
               port: daemonPort,
               env: serviceEnv,
+              probeHosts: resolveGatewayRequiredListenHosts(gateway.bindHost),
             }),
           )
           .catch(() => undefined)

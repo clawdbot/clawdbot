@@ -365,6 +365,18 @@ describe("channel-health-monitor", () => {
     await expectNoRestart(manager);
   });
 
+  it("does not restart a channel with blocked lifecycle", async () => {
+    const manager = createSlackSnapshotManager({
+      running: true,
+      connected: true,
+      enabled: true,
+      configured: true,
+      lifecycle: "blocked",
+      lastError: "Slack identity unavailable",
+    });
+    await expectNoRestart(manager);
+  });
+
   it("restarts a running channel with a live socket but dead ingress", async () => {
     // A restart is the only way to re-prove ingress, so recovery from a transient
     // queue-open failure must stay automatic. Without the ingress dimension this
@@ -449,11 +461,12 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
-  it("restarts a stuck channel (running but not connected)", async () => {
+  it("restarts a starting channel that stays disconnected past connect grace", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({
       whatsapp: {
         default: disconnectedAccount(now - 300_000, {
+          lifecycle: "starting",
           linked: true,
         }),
       },
@@ -500,6 +513,7 @@ describe("channel-health-monitor", () => {
           connected: false,
           enabled: true,
           configured: true,
+          lifecycle: "starting",
           lastStartAt: now - 5_000,
         },
       },
