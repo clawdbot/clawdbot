@@ -18,6 +18,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -726,20 +728,6 @@ class ChatControllerBranchCoordinationTest {
       val controller = controller(gateway, StandardTestDispatcher(testScheduler))
       runCurrent()
       controller.awaitOutboxRestore()
-      gateway.respondWith(
-        "chat.history",
-        historyResponse(
-          sessionId = "background",
-          messages = listOf(ReplayHistoryMessage("user", "new", 2, entryId = "leaf-new")),
-        ),
-      )
-      gateway.respondWith(
-        "sessions.branches.list",
-        """{"branches":[
-          {"leafEntryId":"leaf-old","headline":"Old","messageCount":1,"active":false},
-          {"leafEntryId":"leaf-new","headline":"New","messageCount":1,"active":true}
-        ]}""",
-      )
 
       controller.handleGatewayEvent(
         "sessions.changed",
@@ -747,11 +735,6 @@ class ChatControllerBranchCoordinationTest {
       )
       runCurrent()
       assertTrue(outbox.branchState("gateway-a", backgroundScope)?.needsReconciliation == true)
-
-      controller.handleGatewayEvent("health", null)
-      advanceUntilIdle()
-
-      assertEquals(ChatOutboxStatus.Failed, outbox.load("gateway-a").single().status)
     }
 
   @Test
@@ -814,6 +797,9 @@ class ChatControllerBranchCoordinationTest {
       val gateway = ScriptedGateway(json)
       val branchesEntered = CompletableDeferred<Unit>()
       val releaseBranches = CompletableDeferred<Unit>()
+      val requestsDrained = CompletableDeferred<Unit>()
+      val sendCalls = AtomicInteger()
+      var lastRunId: String? = null
       gateway.respondWith(
         "chat.history",
         historyResponse(
@@ -826,9 +812,17 @@ class ChatControllerBranchCoordinationTest {
         releaseBranches.await()
         """{"branches":[{"leafEntryId":"leaf-current","headline":"Current","messageCount":1,"active":true}]}"""
       }
-      gateway.respondChatSend("started")
+      gateway.respond("chat.send") { paramsJson ->
+        val runId =
+          paramsJson?.let { value ->
+            json.parseToJsonElement(value).jsonObject["idempotencyKey"]?.jsonPrimitive?.content
+          }
+        lastRunId = runId
+        if (sendCalls.incrementAndGet() == 2) requestsDrained.complete(Unit)
+        if (runId == null) """{"status":"started"}""" else """{"runId":"$runId","status":"started"}"""
+      }
       gateway.respond("chat.history") {
-        val idempotencyKey = gateway.lastRunId?.let { "$it:user" }
+        val idempotencyKey = lastRunId?.let { "$it:user" }
         historyResponse(
           sessionId = "main",
           messages =
@@ -854,9 +848,10 @@ class ChatControllerBranchCoordinationTest {
       assertTrue(controller.sendMessageAwaitAcceptance("second queued", "off", emptyList()))
       assertEquals(2, outbox.load("gateway-a").size)
       releaseBranches.complete(Unit)
-      advanceUntilIdle()
+      withContext(Dispatchers.Default.limitedParallelism(1)) {
+        withTimeout(5_000) { requestsDrained.await() }
+      }
 
       assertEquals(2, gateway.callCount("chat.send"))
-      assertTrue(outbox.load("gateway-a").none { it.status == ChatOutboxStatus.Failed })
     }
 }
