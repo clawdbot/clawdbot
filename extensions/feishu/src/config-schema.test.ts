@@ -258,6 +258,16 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(() => FeishuConfigSchema.parse({ allowBots: "mentions" })).toThrow();
   });
 
+  it("keeps sender mentions default-off and accepts account overrides", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: { main: { mentionSenderOnReply: true } },
+    });
+
+    expect(result.mentionSenderOnReply).toBeUndefined();
+    expect(result.accounts?.main?.mentionSenderOnReply).toBe(true);
+    expect(() => FeishuConfigSchema.parse({ mentionSenderOnReply: "always" })).toThrow();
+  });
+
   it("keeps VC auto-join default-off without forcing account overrides", () => {
     const result = FeishuConfigSchema.parse({ accounts: { main: {} } });
     expect(result.vcAutoJoin).toBeUndefined();

@@ -371,6 +371,8 @@ For the topic scopes, native Feishu/Lark topic groups use the event `thread_id` 
 
 Set `replyInThread: "enabled"` (top-level or per group) to make bot replies create or continue a Feishu topic thread instead of replying inline. `topicSessionMode` is the deprecated predecessor of `groupSessionScope`; prefer `groupSessionScope`.
 
+Set `mentionSenderOnReply: true` (top-level or per account) to mention the current human sender on every group reply. Direct messages and proactive messages are unchanged. Because Feishu streaming cards cannot carry native mention recipients, this option uses normal text or card replies instead of streaming cards.
+
 ### Feishu workspace tools
 
 The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud storage, permissions, and Bitable, plus matching skills (`feishu-doc`, `feishu-drive`, `feishu-perm`, `feishu-wiki`). Tool families are gated by `channels.feishu.tools`:
@@ -659,6 +661,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.groups.<chat_id>.allowFrom`             | Per-group sender allowlist (overrides `groupSenderAllowFrom`)                        | -                                    |
 | `channels.feishu.groupSessionScope`                      | Group session mapping (`group`, `group_sender`, `group_topic`, `group_topic_sender`) | `group`                              |
 | `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
+| `channels.feishu.mentionSenderOnReply`                   | Mention the current human sender on every group reply                                | `false`                              |
 | `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
 | `channels.feishu.vcAutoJoin`                             | Join invited VC meetings after normal DM authorization                               | `false`                              |
 | `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation                                             | `false`                              |
