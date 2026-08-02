@@ -1,4 +1,5 @@
 // Msteams plugin module implements graph behavior.
+import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
@@ -10,7 +11,6 @@ import {
   type MSTeamsRequestDeadline,
   withMSTeamsRequestDeadline,
 } from "./request-timeout.js";
-import { responseWithRelease } from "./response-with-release.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
@@ -301,12 +301,13 @@ export async function postGraphBetaJson<T>(params: {
 }
 
 export async function deleteGraphRequest(params: { token: string; path: string }): Promise<void> {
-  await requestGraph({
+  const response = await requestGraph({
     token: params.token,
     path: params.path,
     method: "DELETE",
     errorPrefix: "Graph DELETE",
   });
+  await response.body?.cancel().catch(() => undefined);
 }
 
 export async function patchGraphJson<T>(params: {
