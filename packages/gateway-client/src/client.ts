@@ -37,12 +37,12 @@ import {
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import {
   GatewayProtocolClient,
-  GatewayProtocolRequestError,
   type GatewayProtocolCloseContext,
   type GatewayProtocolRequestOptions,
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
+import { GatewayProtocolRequestError } from "./protocol-request.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
 import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
@@ -248,6 +248,20 @@ export class GatewayClientRequestError extends GatewayProtocolRequestError {
   }
 }
 
+export class GatewayClientRequestTimeoutError extends Error {
+  readonly method: string;
+  readonly timeoutMs: number;
+  readonly requestSent: boolean;
+
+  constructor(params: { method: string; timeoutMs: number; requestSent: boolean }) {
+    super(`gateway request timeout for ${params.method}`);
+    this.name = "GatewayClientRequestTimeoutError";
+    this.method = params.method;
+    this.timeoutMs = params.timeoutMs;
+    this.requestSent = params.requestSent;
+  }
+}
+
 class GatewayClientTransientPreHelloCloseError extends Error {
   constructor() {
     super("gateway transient pre-hello clean close");
@@ -402,7 +416,8 @@ export class GatewayClient {
       createSocket: (handlers) => this.createSocket(handlers),
       createRequestId: randomUUID,
       createRequestError: (error) => new GatewayClientRequestError(error),
-      createRequestTimeoutError: (method) => new Error(`gateway request timeout for ${method}`),
+      createRequestTimeoutError: (method, timeoutMs, requestSent) =>
+        new GatewayClientRequestTimeoutError({ method, timeoutMs, requestSent }),
       createRequestAbortError: createGatewayRequestAbortError,
       buildConnectPlan: ({ nonce, challengeTs }) => {
         if (!nonce) {

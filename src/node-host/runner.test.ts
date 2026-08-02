@@ -47,7 +47,7 @@ const mocks = vi.hoisted(() => ({
     aborted: false,
     elapsedMs: 0,
   })),
-  resolveGatewayConnectionAuth: vi.fn(async () => ({})),
+  resolveGatewayCredentialsWithSecretInputs: vi.fn(async () => ({})),
   activeRuntime: {
     invoke: vi.fn(async () => {}),
     handleInput: vi.fn(),
@@ -78,8 +78,8 @@ vi.mock("../gateway/client.js", () => ({
   },
 }));
 
-vi.mock("../gateway/connection-auth.js", () => ({
-  resolveGatewayConnectionAuth: mocks.resolveGatewayConnectionAuth,
+vi.mock("../gateway/credentials-secret-inputs.js", () => ({
+  resolveGatewayCredentialsWithSecretInputs: mocks.resolveGatewayCredentialsWithSecretInputs,
 }));
 
 vi.mock("../infra/device-identity.js", () => ({
@@ -294,7 +294,7 @@ describe("runNodeHost", () => {
       "event loop readiness timeout",
     );
 
-    expect(mocks.resolveGatewayConnectionAuth).toHaveBeenCalledWith({
+    expect(mocks.resolveGatewayCredentialsWithSecretInputs).toHaveBeenCalledWith({
       config: {
         gateway: {
           mode: "local",

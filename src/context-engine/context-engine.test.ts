@@ -1036,6 +1036,45 @@ describe("Invalid engine fallback", () => {
     );
   });
 
+  it("coalesces fallback initialization across concurrent lifecycle failures", async () => {
+    const defaultFactory = vi.fn(async () => new LegacyContextEngine());
+    registerContextEngineForOwner("legacy", defaultFactory, "core", {
+      allowSameOwnerRefresh: true,
+    });
+    const engineId = uniqueEngineId("concurrent-runtime-fail");
+    const assemble = vi.fn(async () => {
+      await Promise.resolve();
+      throw new Error("plugin context unavailable");
+    });
+    registerTestContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Concurrent Context Engine" },
+      async ingest() {
+        return { ingested: true };
+      },
+      assemble,
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+    }));
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const messages = [makeMockMessage("user", "first"), makeMockMessage("user", "second")];
+
+    const results = await Promise.all(
+      messages.map((message, index) =>
+        engine.assemble({ sessionId: `session-${index}`, messages: [message] }),
+      ),
+    );
+
+    expect(results.map(({ messages: assembled }) => assembled)).toEqual(
+      messages.map((message) => [message]),
+    );
+    expect(assemble).toHaveBeenCalledTimes(2);
+    expect(defaultFactory).toHaveBeenCalledTimes(1);
+    expect(listContextEngineQuarantines()).toEqual([
+      expect.objectContaining({ engineId, operation: "assemble" }),
+    ]);
+  });
+
   it("exposes fallback metadata on the same engine after lifecycle quarantine", async () => {
     const engineId = uniqueEngineId("runtime-fail-metadata");
     const assemble = vi.fn(async () => {

@@ -88,6 +88,7 @@ export async function sendMatrixMessage(
   return await sendMessageMatrix(to, content, {
     cfg: opts.cfg,
     mediaUrl: opts.mediaUrl,
+    ...(opts.mediaAccess ? { mediaAccess: opts.mediaAccess } : {}),
     mediaLocalRoots: opts.mediaLocalRoots,
     replyToId: opts.replyToId,
     threadId: opts.threadId,

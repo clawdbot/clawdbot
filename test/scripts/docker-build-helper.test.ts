@@ -2785,7 +2785,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 docker_e2e_run_with_harness image-name bash -lc true
 docker_e2e_run_detached_with_harness image-name
-test "$(wc -l <"$TMPDIR/docker-run-seen")" = 2
+[[ $(wc -l <"$TMPDIR/docker-run-seen") -eq 2 ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });

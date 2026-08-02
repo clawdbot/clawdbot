@@ -56,6 +56,9 @@ vi.mock("./doctor/cron/index.js", () => ({
 }));
 
 vi.mock("./doctor/cron/legacy-repair.js", () => ({
+  collectCronCodexRuntimePolicyTargetsReadOnly: vi
+    .fn()
+    .mockResolvedValue({ targets: [], warnings: [] }),
   repairLegacyCronStoreWithoutPrompt: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
 }));
 

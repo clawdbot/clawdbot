@@ -56,6 +56,42 @@ describe("callGatewayFromCliRuntime", () => {
     );
   });
 
+  it("accepts a caller-specific default timeout", async () => {
+    await callGatewayFromCliRuntime("health", {}, undefined, { defaultTimeoutMs: 10_000 });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "health", timeoutMs: 10_000 }),
+    );
+  });
+
+  it("forwards specialized connection and authorization context", async () => {
+    const config = { gateway: { mode: "local" as const } };
+    await callGatewayFromCliRuntime(
+      "node.list",
+      { config, localPortOverride: 19_083 },
+      {},
+      {
+        timeoutMs: null,
+        scopes: ["operator.read", "operator.pairing"],
+        useStoredDeviceAuth: true,
+        requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      },
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        localPortOverride: 19_083,
+        timeoutMs: null,
+        scopes: ["operator.read", "operator.pairing"],
+        useStoredDeviceAuth: true,
+        requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      }),
+    );
+  });
+
   it.each([
     { name: "token", auth: { token: "test-gateway-token" } },
     { name: "password", auth: { password: "test-gateway-password" } },

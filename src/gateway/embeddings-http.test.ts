@@ -434,6 +434,33 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     await expectInvalidEmbeddingRequest(res);
   });
 
+  it.each([
+    { name: "an empty string", input: "" },
+    { name: "an empty batch", input: [] },
+    { name: "an empty batch entry", input: [""] },
+    { name: "a mixed batch with an empty entry", input: ["valid", ""] },
+  ])("rejects $name before creating an embedding provider", async ({ input }) => {
+    const providersCreatedBefore = createEmbeddingProviderMock.mock.calls.length;
+    const res = await postEmbeddings({
+      model: "openclaw/default",
+      input,
+    });
+
+    await expectInvalidEmbeddingRequest(res, "`input` must contain at least one non-empty string.");
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(providersCreatedBefore);
+  });
+
+  it("preserves whitespace-only embedding input", async () => {
+    const input = " \t\n";
+    const res = await postEmbeddings({
+      model: "openclaw/default",
+      input,
+    });
+
+    await expectDefaultEmbeddingResponse(res);
+    expect(embedBatchMock.mock.calls.at(-1)?.[0]).toEqual([input]);
+  });
+
   it("ignores narrower declared scopes for shared-secret bearer auth", async () => {
     const res = await postEmbeddings(
       {

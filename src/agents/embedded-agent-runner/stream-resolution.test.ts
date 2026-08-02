@@ -496,53 +496,77 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(result.promptCacheKey).toBe("cron-cache-key");
   });
 
-  it("forwards the run abort signal into provider-owned stream functions", async () => {
-    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
-    const signal = new AbortController().signal;
-    const streamFn = resolveEmbeddedAgentStreamFn({
-      currentStreamFn: undefined,
-      providerStreamFn,
-      sessionId: "session-1",
-      signal,
-      model: {
-        api: "openai-responses",
-        provider: "github-copilot",
-        id: "gpt-5.4",
-      } as never,
-      resolvedApiKey: "resolved-key",
-    });
+  it.each(["run", "caller"] as const)(
+    "preserves the single %s abort signal in provider-owned stream functions",
+    async (signalOwner) => {
+      const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+      const signal = new AbortController().signal;
+      const streamFn = resolveEmbeddedAgentStreamFn({
+        currentStreamFn: undefined,
+        providerStreamFn,
+        sessionId: "session-1",
+        signal: signalOwner === "run" ? signal : undefined,
+        model: {
+          api: "openai-responses",
+          provider: "github-copilot",
+          id: "gpt-5.4",
+        } as never,
+        resolvedApiKey: "resolved-key",
+      });
 
-    const result = await expectStreamResultRecord(
-      streamFn({ provider: "github-copilot", id: "gpt-5.4" } as never, {} as never, {}),
-      "provider-owned signal result",
-    );
-    expect(result.signal).toBe(signal);
-  });
+      const result = await expectStreamResultRecord(
+        streamFn(
+          { provider: "github-copilot", id: "gpt-5.4" } as never,
+          {} as never,
+          signalOwner === "caller" ? { signal } : {},
+        ),
+        "provider-owned signal result",
+      );
+      expect(result.signal).toBe(signal);
+    },
+  );
 
-  it("does not overwrite an explicit provider-owned stream signal", async () => {
-    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
-    const runSignal = new AbortController().signal;
-    const explicitSignal = new AbortController().signal;
-    const streamFn = resolveEmbeddedAgentStreamFn({
-      currentStreamFn: undefined,
-      providerStreamFn,
-      sessionId: "session-1",
-      signal: runSignal,
-      model: {
-        api: "openai-responses",
-        provider: "github-copilot",
-        id: "gpt-5.4",
-      } as never,
-    });
+  it.each([
+    { owner: "run", abortBeforeResolve: false },
+    { owner: "caller", abortBeforeResolve: false },
+    { owner: "run", abortBeforeResolve: true },
+    { owner: "caller", abortBeforeResolve: true },
+  ])(
+    "preserves both provider-owned cancellation sources: $owner ($abortBeforeResolve)",
+    async ({ owner, abortBeforeResolve }) => {
+      const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+      const runController = new AbortController();
+      const callerController = new AbortController();
+      const abortedController = owner === "run" ? runController : callerController;
+      const abortReason = new Error(`${owner} canceled`);
+      if (abortBeforeResolve) {
+        abortedController.abort(abortReason);
+      }
+      const streamFn = resolveEmbeddedAgentStreamFn({
+        currentStreamFn: undefined,
+        providerStreamFn,
+        sessionId: "session-1",
+        signal: runController.signal,
+        model: {
+          api: "openai-responses",
+          provider: "github-copilot",
+          id: "gpt-5.4",
+        } as never,
+      });
 
-    const result = await expectStreamResultRecord(
-      streamFn({ provider: "github-copilot", id: "gpt-5.4" } as never, {} as never, {
-        signal: explicitSignal,
-      }),
-      "provider-owned explicit signal result",
-    );
-    expect(result.signal).toBe(explicitSignal);
-  });
+      const result = await expectStreamResultRecord(
+        streamFn({ provider: "github-copilot", id: "gpt-5.4" } as never, {} as never, {
+          signal: callerController.signal,
+        }),
+        "provider-owned explicit signal result",
+      );
+      if (!abortBeforeResolve) {
+        expect(result.signal).toMatchObject({ aborted: false });
+        abortedController.abort(abortReason);
+      }
+      expect(result.signal).toMatchObject({ aborted: true, reason: abortReason });
+    },
+  );
 
   it("injects the resolved run api key into the OpenClaw native Codex Responses fallback", async () => {
     const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
@@ -615,31 +639,36 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(result.apiKey).toBe("oauth-bearer-token");
   });
 
-  it("does not overwrite an explicit signal on the OpenClaw native fallback path", async () => {
-    const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
-    const runSignal = new AbortController().signal;
-    const explicitSignal = new AbortController().signal;
-    useNativeStreamFn(nativeStreamFn as never);
-    const streamFn = resolveEmbeddedAgentStreamFn({
-      currentStreamFn: undefined,
-      sessionId: "session-1",
-      signal: runSignal,
-      model: {
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        id: "gpt-5.5",
-      } as never,
-      resolvedApiKey: "oauth-bearer-token",
-    });
+  it.each(["run", "caller"] as const)(
+    "cancels the authenticated OpenClaw native fallback when the %s signal aborts",
+    async (signalOwner) => {
+      const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
+      const runController = new AbortController();
+      const callerController = new AbortController();
+      useNativeStreamFn(nativeStreamFn as never);
+      const streamFn = resolveEmbeddedAgentStreamFn({
+        currentStreamFn: undefined,
+        sessionId: "session-1",
+        signal: runController.signal,
+        model: {
+          api: "openai-chatgpt-responses",
+          provider: "openai",
+          id: "gpt-5.5",
+        } as never,
+        resolvedApiKey: "oauth-bearer-token",
+      });
 
-    const result = await expectStreamResultRecord(
-      streamFn({ provider: "openai", id: "gpt-5.5" } as never, {} as never, {
-        signal: explicitSignal,
-      }),
-      "codex explicit signal result",
-    );
-    expect(result.signal).toBe(explicitSignal);
-  });
+      const result = await expectStreamResultRecord(
+        streamFn({ provider: "openai", id: "gpt-5.5" } as never, {} as never, {
+          signal: callerController.signal,
+        }),
+        "codex explicit signal result",
+      );
+      expect(result.signal).toMatchObject({ aborted: false });
+      (signalOwner === "run" ? runController : callerController).abort();
+      expect(result.signal).toMatchObject({ aborted: true });
+    },
+  );
 
   it("forwards the run signal on the sync OpenClaw native fallback path without auth credentials", async () => {
     const nativeStreamFn = vi.fn(async (_model, _context, options) => options);

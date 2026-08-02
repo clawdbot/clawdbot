@@ -266,6 +266,8 @@ const rootToolingAndWorkspaceDependencies = [
   "ipaddr.js",
   "jscpd",
   "lit",
+  // Runtime postbuild resolves this build input from its caller-selected root.
+  "marked",
   "oxlint",
   "oxlint-tsgolint",
   "signal-utils",

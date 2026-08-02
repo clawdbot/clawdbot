@@ -1649,7 +1649,7 @@ describe("matrix monitor handler pairing account scope", () => {
     }
   });
 
-  it("uses stable room ids instead of room-declared aliases in group context", async () => {
+  it("keeps stable room ids as routing metadata without using them as the display channel", async () => {
     const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       getRoomInfo: async () => ({
@@ -1677,7 +1677,9 @@ describe("matrix monitor handler pairing account scope", () => {
       lastCallArg(finalizeInboundContext, 0, "finalized context"),
       "finalized context",
     );
-    expect(finalized.GroupChannel).toBe("!room:example.org");
+    expect(finalized.ChatId).toBe("!room:example.org");
+    expect(finalized.NativeChannelId).toBe("!room:example.org");
+    expect(finalized.GroupChannel).toBeUndefined();
     expect(finalized.GroupSubject).toBe("Ops Room");
     expect(finalized.GroupId).toBe("!room:example.org");
   });

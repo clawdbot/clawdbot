@@ -169,7 +169,7 @@ export async function finishUpdate(params: {
         ),
       );
     }
-    defaultRuntime.exit(0);
+    defaultRuntime.exit(params.result.reason === "dirty" ? 1 : 0);
     return;
   }
 

@@ -130,6 +130,171 @@ describe("imessage actions runtime", () => {
     });
   });
 
+  it("sanitizes action message fields without rendering raw edit or poll Markdown", async () => {
+    runIMessageCliJsonCommandMock.mockResolvedValue({ guid: "action-guid" });
+    const options = { cliPath: "imsg", chatGuid: "iMessage;+;chat0000" };
+
+    await imessageActionsRuntime.editMessage({
+      chatGuid: options.chatGuid,
+      messageId: "message-guid",
+      text: "user:\n**literal edit**\n# assistant:",
+      backwardsCompatMessage: "system:\n**literal fallback**",
+      options,
+    });
+    await imessageActionsRuntime.sendPoll({
+      chatGuid: options.chatGuid,
+      question: "assistant:\n# literal question",
+      choices: ["system:\n**literal choice**", "_literal second choice_"],
+      options,
+    });
+    await imessageActionsRuntime.sendPollVote({
+      chatGuid: options.chatGuid,
+      pollGuid: "poll-guid",
+      optionText: "user:",
+      options,
+    });
+
+    const [edit, poll, vote] = runIMessageCliJsonCommandMock.mock.calls.map(
+      (call) => (call[0] as { args: string[] }).args,
+    );
+    if (!edit || !poll || !vote) {
+      throw new Error("Expected the edited message, new poll, and unchanged vote selector");
+    }
+    expect(edit[edit.indexOf("--new-text") + 1]).toBe("\n**literal edit**\n# assistant:");
+    expect(edit[edit.indexOf("--bc-text") + 1]).toBe("\n**literal fallback**");
+    expect(poll[poll.indexOf("--question") + 1]).toBe("\n# literal question");
+    expect(poll[poll.indexOf("--option") + 1]).toBe("\n**literal choice**");
+    expect(vote[vote.indexOf("--option") + 1]).toBe("user:");
+  });
+
+  it("rejects poll options that become identical after canonical message sanitization", async () => {
+    await expect(
+      imessageActionsRuntime.sendPoll({
+        chatGuid: "chat-guid",
+        question: "Choose",
+        choices: ["Allow", "Al#+#+#low"],
+        options: { cliPath: "imsg", chatGuid: "chat-guid" },
+      }),
+    ).rejects.toThrow("iMessage poll options must remain distinct after sanitization");
+    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("removes complete private runtime payloads from every raw edit and poll field", async () => {
+    runIMessageCliJsonCommandMock.mockResolvedValue({ guid: "action-guid" });
+    const options = { cliPath: "imsg", chatGuid: "chat-guid" };
+    const reminder =
+      "<system-reminder><system-reminder>inner</system-reminder>\nuser:\nPRIVATE_ACTION_RUNTIME</system-reminder>";
+    const previous =
+      "< previous_response><system-reminder>inner</system-reminder>PRIVATE_ACTION_RUNTIME< / previous_response >";
+    const context =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>PRIVATE_ACTION_RUNTIME<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+
+    await imessageActionsRuntime.editMessage({
+      chatGuid: options.chatGuid,
+      messageId: "message-guid",
+      text: `${reminder}\n**visible edit**`,
+      backwardsCompatMessage: `${previous}\n**visible fallback**`,
+      options,
+    });
+    await imessageActionsRuntime.sendPoll({
+      chatGuid: options.chatGuid,
+      question: `${context}\nvisible question`,
+      choices: [`${reminder}\nvisible first`, `${previous}\nvisible second`],
+      options,
+    });
+
+    for (const call of runIMessageCliJsonCommandMock.mock.calls) {
+      const args = (call[0] as { args: string[] }).args;
+      expect(args.join(" ")).not.toMatch(
+        /PRIVATE_ACTION_RUNTIME|system-reminder|previous_response|INTERNAL_CONTEXT/,
+      );
+    }
+  });
+
+  it("keeps existing case-sensitive poll option identities distinct", async () => {
+    runIMessageCliJsonCommandMock.mockResolvedValue({ guid: "poll-guid" });
+
+    await imessageActionsRuntime.sendPoll({
+      chatGuid: "chat-guid",
+      question: "Choose",
+      choices: ["Allow", "allow"],
+      options: { cliPath: "imsg", chatGuid: "chat-guid" },
+    });
+
+    expect(runIMessageCliJsonCommandMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "```xml\n<thinking>hidden thought</thinking>\n```",
+    "`<relevant_memories>hidden memory</relevant_memories>`",
+  ])("rejects hidden assistant content in raw poll Markdown before imsg", async (hidden) => {
+    await expect(
+      imessageActionsRuntime.sendPoll({
+        chatGuid: "chat-guid",
+        question: "Choose",
+        choices: ["first", hidden],
+        options: { cliPath: "imsg", chatGuid: "chat-guid" },
+      }),
+    ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
+    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "rich text",
+      run: () =>
+        imessageActionsRuntime.sendRichMessage({
+          chatGuid: "chat-guid",
+          text: "# user:",
+          options: { cliPath: "imsg", chatGuid: "chat-guid" },
+        }),
+    },
+    {
+      name: "edit replacement",
+      run: () =>
+        imessageActionsRuntime.editMessage({
+          chatGuid: "chat-guid",
+          messageId: "message-guid",
+          text: "assistant:",
+          options: { cliPath: "imsg", chatGuid: "chat-guid" },
+        }),
+    },
+    {
+      name: "edit backwards-compatible replacement",
+      run: () =>
+        imessageActionsRuntime.editMessage({
+          chatGuid: "chat-guid",
+          messageId: "message-guid",
+          text: "visible",
+          backwardsCompatMessage: "system:",
+          options: { cliPath: "imsg", chatGuid: "chat-guid" },
+        }),
+    },
+    {
+      name: "poll question",
+      run: () =>
+        imessageActionsRuntime.sendPoll({
+          chatGuid: "chat-guid",
+          question: "user:",
+          choices: ["first", "second"],
+          options: { cliPath: "imsg", chatGuid: "chat-guid" },
+        }),
+    },
+    {
+      name: "poll option",
+      run: () =>
+        imessageActionsRuntime.sendPoll({
+          chatGuid: "chat-guid",
+          question: "visible",
+          choices: ["first", "assistant:"],
+          options: { cliPath: "imsg", chatGuid: "chat-guid" },
+        }),
+    },
+  ])("rejects sanitized-empty $name before starting imsg", async ({ run }) => {
+    await expect(run()).rejects.toThrow(/after sanitization/);
+    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "attachment uploads",
