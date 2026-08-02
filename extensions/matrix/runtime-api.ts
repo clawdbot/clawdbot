@@ -55,9 +55,9 @@ export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-ru
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 
+// This facade shipped distinct empty and whitespace behavior. Preserve that
+// contract while delegating fractional limits to the progress-safe SDK owner.
 export function chunkTextForOutbound(text: string, limit: number): string[] {
-  // This facade shipped distinct empty and whitespace behavior. Preserve that
-  // contract while delegating fractional limits to the progress-safe SDK owner.
   if (text.length === 0) {
     return [""];
   }
