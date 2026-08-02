@@ -41,6 +41,43 @@ async function withCliSessionState<T>(stateDir: string, run: () => Promise<T>): 
 }
 
 describe("SQLite CLI session history", () => {
+  it("loads canonical session-key targets used by current CLI runs", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const sessionId = "session-sqlite-canonical-target";
+    const sessionKey = "agent:main:cron:canonical-target";
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+
+    await withCliSessionState(stateDir, async () => {
+      await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+        {
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: sessionId,
+          timestamp: new Date(0).toISOString(),
+          cwd: stateDir,
+        },
+        {
+          type: "message",
+          id: "msg-canonical",
+          parentId: null,
+          message: { role: "user", content: "canonical SQLite history" },
+        },
+      ]);
+
+      const target = {
+        sessionId,
+        sessionFile: sessionKey,
+        sessionKey,
+        agentId: "main",
+        storePath,
+      };
+      await expect(hasCliSessionTranscript(target)).resolves.toBe(true);
+      const history = await loadCliSessionHistoryMessages(target);
+      expect(history).toHaveLength(1);
+      expectMessageFields(history[0], { role: "user", content: "canonical SQLite history" });
+    });
+  });
+
   it("loads branched history from markers used by CLI resumes", async () => {
     const stateDir = tempDirs.make("openclaw-cli-state-");
     const sessionId = "session-sqlite-branch";
