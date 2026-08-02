@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
+import { measureCliCommandStartup } from "../command-startup-timing.js";
 import { formatHelpExamples } from "../help-format.js";
 
 type AgentViaGatewayModule = typeof import("../../commands/agent-via-gateway.js");
@@ -108,12 +109,14 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       const verboseLevel =
         typeof opts.verbose === "string" ? normalizeLowercaseStringOrEmpty(opts.verbose) : "";
       const [defaultRuntime, runCommandWithRuntime, setVerbose, agentCliCommand] =
-        await Promise.all([
-          loadDefaultRuntime(),
-          loadRunCommandWithRuntime(),
-          loadSetVerbose(),
-          loadAgentCliCommand(),
-        ]);
+        await measureCliCommandStartup("agent-action-imports", () =>
+          Promise.all([
+            loadDefaultRuntime(),
+            loadRunCommandWithRuntime(),
+            loadSetVerbose(),
+            loadAgentCliCommand(),
+          ]),
+        );
       await runCommandWithRuntime(defaultRuntime, async () => {
         setVerbose(verboseLevel === "on");
         await agentCliCommand(opts, defaultRuntime);

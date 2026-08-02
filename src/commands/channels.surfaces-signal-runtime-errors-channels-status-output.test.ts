@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectStatusIssuesFromLastError } from "../plugin-sdk/status-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { formatGatewayChannelsStatusLines } from "./channels/status.js";
+import { formatGatewayChannelsStatusLines } from "./channels/status.runtime.js";
 
 const now = 1_700_000_000_000;
 

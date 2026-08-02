@@ -13,6 +13,7 @@ import {
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake-contracts.js";
 import { HEARTBEAT_SKIP_LANES_BUSY } from "../../infra/heartbeat-wake.js";
+import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import { cancelTaskById, listTaskRecords } from "../../tasks/task-registry.js";
 import {
   resetTaskRegistryControlRuntimeForTests,
@@ -752,6 +753,7 @@ describe("cron service timer regressions", () => {
         throw new Error("Expected timed-out cron task row");
       }
       expect(task.status).toBe("running");
+      expect(task.taskKind).toBe(CRON_TASK_KIND);
 
       installCronCancellationControlRuntime();
       const cancelResult = await cancelTaskById({

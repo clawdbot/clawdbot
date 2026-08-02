@@ -1264,6 +1264,64 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
   });
 
+  it("replaces session-scoped modes when switching to a session without overrides", async () => {
+    const state = createBaseState({
+      currentSessionKey: "agent:main:source",
+      sessionInfo: {
+        fastMode: true,
+        verboseLevel: "full",
+        traceLevel: "raw",
+        reasoningLevel: "stream",
+      },
+    });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionInfo: {
+        key: "agent:main:target",
+        sessionId: "session-target",
+      },
+      messages: [],
+    });
+    const { setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      state,
+    });
+
+    await setSession("agent:main:target");
+
+    expect(state.sessionInfo).toMatchObject({
+      fastMode: undefined,
+      verboseLevel: undefined,
+      traceLevel: undefined,
+      reasoningLevel: undefined,
+    });
+  });
+
+  it("merges a same-session mode patch without clearing untouched modes", () => {
+    const state = createBaseState({
+      sessionInfo: {
+        fastMode: true,
+        verboseLevel: "full",
+        traceLevel: "off",
+        reasoningLevel: "stream",
+      },
+    });
+    const { applySessionInfoFromPatch } = createTestSessionActions({ state });
+
+    applySessionInfoFromPatch({
+      ok: true,
+      path: "/sessions/patch",
+      key: "agent:main:main",
+      entry: { traceLevel: "raw" },
+    });
+
+    expect(state.sessionInfo).toMatchObject({
+      fastMode: true,
+      verboseLevel: "full",
+      traceLevel: "raw",
+      reasoningLevel: "stream",
+    });
+  });
+
   it("keeps the newer session when an earlier switch's history resolves last", async () => {
     const historyA = createDeferred<unknown>();
     const historyB = createDeferred<unknown>();

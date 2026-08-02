@@ -74,6 +74,7 @@ const sendDurableMessageBatch = vi.fn(
     mediaAccess?: {
       localRoots?: readonly string[];
       readFile?: (filePath: string) => Promise<Buffer>;
+      workspaceDir?: string;
     };
   }) => {
     const payload = params.payloads[0] ?? {};
@@ -111,6 +112,7 @@ const sendDurableMessageBatch = vi.fn(
       asVideoNote: payload.videoAsNote,
       silent: params.silent,
       forceDocument: params.forceDocument,
+      ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
       mediaLocalRoots: params.mediaAccess?.localRoots,
       mediaReadFile: params.mediaAccess?.readFile,
     };
@@ -1392,22 +1394,64 @@ describe("handleTelegramAction", () => {
     expect(options.silent).toBe(true);
   });
 
-  it("forwards trusted mediaLocalRoots into sendMessageTelegram", async () => {
+  it("preserves host-owned workspace media access and legacy roots", async () => {
+    const mediaReadFile = vi.fn(async (_filePath: string) => Buffer.from("chart"));
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-root"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/agent-root",
+    };
     await handleTelegramAction(
       {
         action: "sendMessage",
         to: "@testchannel",
         content: "Hello with local media",
+        mediaUrl: "chart.png",
+        mediaAccess: { localRoots: ["/tmp/model-root"], workspaceDir: "/tmp/model-root" },
       },
       telegramConfig(),
-      { mediaLocalRoots: ["/tmp/agent-root"] },
+      {
+        mediaAccess,
+        mediaLocalRoots: ["/tmp/conflicting-root"],
+        mediaReadFile: vi.fn(async (_filePath: string) => Buffer.from("untrusted")),
+      },
     );
+    const durableOptions = requireRecord(
+      mockCall(sendDurableMessageBatch, 0, "workspace media access")[0],
+      "workspace media access batch",
+    );
+    expect(durableOptions.mediaAccess).toBe(mediaAccess);
+    expect(durableOptions.session).toBeUndefined();
     const call = mockCall(sendMessageTelegram, 0, "local media roots");
     expect(call[0]).toBe("@testchannel");
     expect(call[1]).toBe("Hello with local media");
-    expect(requireRecord(call[2], "local media roots options").mediaLocalRoots).toEqual([
-      "/tmp/agent-root",
-    ]);
+    const sendOptions = requireRecord(call[2], "local media roots options");
+    expect(sendOptions.mediaUrl).toBe("chart.png");
+    expect(sendOptions.mediaAccess).toBe(mediaAccess);
+    expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
+    expect(sendOptions.mediaReadFile).toBe(mediaReadFile);
+
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello with legacy media roots",
+        mediaUrl: "legacy-chart.png",
+      },
+      telegramConfig(),
+      { mediaLocalRoots: ["/tmp/legacy-root"] },
+    );
+    const legacyDurableOptions = requireRecord(
+      mockCall(sendDurableMessageBatch, 1, "legacy media access")[0],
+      "legacy media access batch",
+    );
+    expect(legacyDurableOptions.mediaAccess).toEqual({ localRoots: ["/tmp/legacy-root"] });
+    expect(
+      requireRecord(
+        mockCall(sendMessageTelegram, 1, "legacy media roots")[2],
+        "legacy media options",
+      ).mediaLocalRoots,
+    ).toEqual(["/tmp/legacy-root"]);
   });
 
   it("forwards gateway client scopes into Telegram send target resolution", async () => {

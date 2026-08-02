@@ -2,7 +2,9 @@ import type { PreparedMessageToolCatalog } from "../channels/plugins/message-act
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
+import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
 import type { AuthStorage } from "./sessions/auth-storage.js";
@@ -25,6 +27,9 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   metadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
+  /** Registry value owned by this generation; omitted from read-only/static-catalog builds. */
+  pluginRegistry?: PluginRegistry;
+  allowGatewaySubagentBinding: boolean;
   /**
    * Configured model projection used by turn admission and synchronous callers.
    * Full inventory discovery is deliberately outside the startup publication boundary.
@@ -53,6 +58,8 @@ export type PreparedModelRuntimeInput = {
   readOnly?: boolean;
   skipCredentials?: boolean;
   env?: NodeJS.ProcessEnv;
+  allowGatewaySubagentBinding?: boolean;
+  runtimePluginSelections?: readonly AgentHarnessPluginSelection[];
   config: OpenClawConfig;
 };
 
@@ -72,6 +79,7 @@ export type PreparedModelRuntimeRefreshOptions = {
   defaultWorkspaceDir?: string;
   catalogMode?: PreparedModelRuntimeCatalogMode;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
+  allowGatewaySubagentBinding?: boolean;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{

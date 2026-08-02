@@ -282,10 +282,6 @@ export async function applyPluginNodeInvokePolicy(params: {
           ? Math.min(requestedTimeoutMs, remainingTimeoutMs)
           : remainingTimeoutMs
         : requestedTimeoutMs;
-    // Once the registry owns the request, any failure is ambiguous to callers:
-    // the node may have acted before the response was lost or rejected.
-    nodeCommandDispatched = true;
-    params.onNodeCommandDispatched?.();
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
       expectedConnId: params.nodeSession.connId,
@@ -297,6 +293,12 @@ export async function applyPluginNodeInvokePolicy(params: {
       timeoutMs,
       ...(params.signal ? { signal: params.signal } : {}),
       idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
+      onDispatchReady: () => {
+        // Only the registry knows that the transport send succeeded. Preserve
+        // pre-send failures as retry-safe while making later failures ambiguous.
+        nodeCommandDispatched = true;
+        params.onNodeCommandDispatched?.();
+      },
     });
     if (!res.ok) {
       return {

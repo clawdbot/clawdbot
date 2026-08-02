@@ -11,7 +11,9 @@ import {
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
   clearPluginRegistryLoadCache,
+  loadAndActivateRootPluginRegistry,
   loadOpenClawPlugins,
+  loadPluginRegistryHandle,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
 import { makeTempDir, resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
@@ -22,10 +24,18 @@ import {
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
 
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
+});
+
+it("keeps an empty scoped handle load from replacing the root registry", () => {
+  const root = loadAndActivateRootPluginRegistry({ cache: false, config: {} });
+  const handle = loadPluginRegistryHandle({ cache: false, config: {}, onlyPluginIds: [] });
+
+  expect(handle).not.toBe(root);
+  expect(getActivePluginRegistry()).toBe(root);
 });
 
 function requireMemoryEmbeddingProvider(providerId: string) {

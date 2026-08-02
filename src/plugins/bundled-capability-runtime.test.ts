@@ -60,6 +60,56 @@ function writeArtifactPreferencePlugin(id: string): TempPlugin {
   return plugin;
 }
 
+function writeDistShimCapabilityPlugin(id: string): TempPlugin {
+  return writePlugin({
+    id,
+    filename: "index.ts",
+    body: `import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+
+void isVoiceCompatibleAudio;
+
+export default {
+  id: ${JSON.stringify(id)},
+  register(api) {
+    api.registerMediaUnderstandingProvider({ id: ${JSON.stringify(id)} });
+    api.registerWebSearchProvider({ id: ${JSON.stringify(id)} });
+    api.registerMigrationProvider({ id: ${JSON.stringify(id)} });
+  },
+};`,
+  });
+}
+
+function writeChannelCapabilityPlugin(id: string): TempPlugin {
+  const plugin = writePlugin({
+    id,
+    body: `module.exports = {
+      id: ${JSON.stringify(id)},
+      register(api) {
+        if (api.registrationMode === "discovery") {
+          api.registerTranscriptSourceProvider({
+            id: ${JSON.stringify(`${id}-voice`)},
+            name: "Voice transcripts",
+            sourceKinds: ["meeting"],
+          });
+        }
+      },
+    };`,
+  });
+  fs.writeFileSync(
+    path.join(plugin.dir, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id,
+        channels: [id],
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      },
+      null,
+      2,
+    ),
+  );
+  return plugin;
+}
+
 function loadCanonicalFixture(plugin: TempPlugin, discovery: PluginDiscoveryResult) {
   return loadOpenClawPlugins({
     config: {
@@ -147,39 +197,43 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
   );
 
   it("loads runtime-backed bundled capabilities through the dist SDK shims", () => {
+    const target = writeDistShimCapabilityPlugin("capability-dist-shims");
     const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: ["codex"],
+      pluginIds: [target.id],
       pluginSdkResolution: "dist",
+      discovery: discoveryFor(target),
     });
 
-    const plugin = registry.plugins.find((entry) => entry.id === "codex");
+    const plugin = registry.plugins.find((entry) => entry.id === target.id);
     expect(
       plugin?.status,
       JSON.stringify({ plugin, diagnostics: registry.diagnostics }, null, 2),
     ).toBe("loaded");
     expect(registry.mediaUnderstandingProviders.map((entry) => entry.provider.id)).toEqual([
-      "codex",
+      target.id,
     ]);
-    expect(registry.webSearchProviders.map((entry) => entry.provider.id)).toEqual(["codex"]);
-    expect(registry.migrationProviders.map((entry) => entry.provider.id)).toEqual(["codex"]);
+    expect(registry.webSearchProviders.map((entry) => entry.provider.id)).toEqual([target.id]);
+    expect(registry.migrationProviders.map((entry) => entry.provider.id)).toEqual([target.id]);
   });
 
-  it("registers Discord voice transcript capabilities without full channel activation", () => {
+  it("registers channel capabilities during discovery without replacing the active registry", () => {
+    const target = writeChannelCapabilityPlugin("capability-channel");
     const active = createEmptyPluginRegistry();
-    setActivePluginRegistry(active, "existing-discord-registry");
+    setActivePluginRegistry(active, "existing-channel-registry");
     const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: ["discord"],
+      pluginIds: [target.id],
       pluginSdkResolution: "dist",
+      discovery: discoveryFor(target),
     });
 
-    const plugin = registry.plugins.find((entry) => entry.id === "discord");
+    const plugin = registry.plugins.find((entry) => entry.id === target.id);
     expect(
       plugin?.status,
       JSON.stringify({ plugin, diagnostics: registry.diagnostics }, null, 2),
     ).toBe("loaded");
-    expect(plugin?.transcriptSourceProviderIds).toEqual(["discord-voice"]);
+    expect(plugin?.transcriptSourceProviderIds).toEqual([`${target.id}-voice`]);
     expect(registry.transcriptSourceProviders.map((entry) => entry.provider.id)).toEqual([
-      "discord-voice",
+      `${target.id}-voice`,
     ]);
     expect(registry.typedHooks).toEqual([]);
     expect(getActivePluginRegistry()).toBe(active);

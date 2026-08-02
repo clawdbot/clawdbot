@@ -64,7 +64,7 @@ const hoisted = vi.hoisted(() => {
   const refreshPreparedModelRuntimeSnapshots = vi.fn(
     async (_cfg?: unknown, _options?: unknown) => {},
   );
-  const ensureRuntimePluginsLoaded = vi.fn();
+  const installAgentRuntimePluginRegistryAtProcessRoot = vi.fn();
   const ensureContextWindowCacheLoaded = vi.fn(async () => {});
   const scheduleGatewayHandlerPrewarm = vi.fn(() => ({ stop: vi.fn() }));
   const clearCurrentProviderAuthState = vi.fn();
@@ -104,7 +104,7 @@ const hoisted = vi.hoisted(() => {
     getModelRefStatus,
     prepareModelRuntimeSnapshot,
     refreshPreparedModelRuntimeSnapshots,
-    ensureRuntimePluginsLoaded,
+    installAgentRuntimePluginRegistryAtProcessRoot,
     ensureContextWindowCacheLoaded,
     scheduleGatewayHandlerPrewarm,
     clearCurrentProviderAuthState,
@@ -211,7 +211,8 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: hoisted.ensureRuntimePluginsLoaded,
+  installAgentRuntimePluginRegistryAtProcessRoot:
+    hoisted.installAgentRuntimePluginRegistryAtProcessRoot,
 }));
 
 vi.mock("../agents/context.js", () => ({
@@ -365,7 +366,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.prepareModelRuntimeSnapshot.mockResolvedValue({});
     hoisted.refreshPreparedModelRuntimeSnapshots.mockReset();
     hoisted.refreshPreparedModelRuntimeSnapshots.mockResolvedValue(undefined);
-    hoisted.ensureRuntimePluginsLoaded.mockReset();
+    hoisted.installAgentRuntimePluginRegistryAtProcessRoot.mockReset();
     hoisted.ensureContextWindowCacheLoaded.mockReset();
     hoisted.ensureContextWindowCacheLoaded.mockResolvedValue(undefined);
     hoisted.scheduleGatewayHandlerPrewarm.mockClear();
@@ -1156,17 +1157,17 @@ describe("startGatewayPostAttachRuntime", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    expect(hoisted.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+    expect(hoisted.installAgentRuntimePluginRegistryAtProcessRoot).not.toHaveBeenCalled();
 
     releaseGatewayReady();
     await waitForGatewayTestState(() => {
-      expect(hoisted.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      expect(hoisted.installAgentRuntimePluginRegistryAtProcessRoot).toHaveBeenCalledWith({
         config: currentConfig,
         workspaceDir: "/tmp/openclaw-workspace",
         allowGatewaySubagentBinding: true,
       });
     });
-    expect(hoisted.ensureRuntimePluginsLoaded).not.toHaveBeenCalledWith(
+    expect(hoisted.installAgentRuntimePluginRegistryAtProcessRoot).not.toHaveBeenCalledWith(
       expect.objectContaining({ config: startupConfig }),
     );
   });

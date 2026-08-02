@@ -132,9 +132,75 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "keeps session modes scoped while trace changes and delivery stays process-owned",
+    async () => {
+      const modeFixture = await startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_DELIVER: "1",
+          OPENCLAW_TUI_PTY_MODEL: "fixture-model",
+        },
+      });
+      try {
+        await modeFixture.run.waitForOutput("deliver:on", STARTUP_TIMEOUT_MS);
+        await modeFixture.run.write("/session agent:main:mode-source\r", { delay: false });
+        await modeFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "loadHistory" &&
+            objectFieldEquals(entry, "sessionKey", "agent:main:mode-source"),
+        );
+        await modeFixture.run.waitForOutput(
+          "trace:raw | reasoning:stream | deliver:on",
+          STARTUP_TIMEOUT_MS,
+        );
+
+        const targetOutputOffset = modeFixture.run.visibleOutput().length;
+        await modeFixture.run.write("/session agent:main:mode-target\r", { delay: false });
+        await modeFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "loadHistory" &&
+            objectFieldEquals(entry, "sessionKey", "agent:main:mode-target"),
+        );
+        await modeFixture.run.waitForOutput("session mode-target", STARTUP_TIMEOUT_MS);
+        const targetOutput = modeFixture.run.visibleOutput().slice(targetOutputOffset);
+        expect(targetOutput).toContain("deliver:on");
+        expect(targetOutput).not.toContain("fast:auto");
+        expect(targetOutput).not.toContain("verbose full");
+        expect(targetOutput).not.toContain("trace:raw");
+        expect(targetOutput).not.toContain("reasoning:stream");
+
+        await modeFixture.run.write("/trace on\r", { delay: false });
+        await modeFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "patchSession" && objectFieldEquals(entry, "traceLevel", "on"),
+        );
+        await modeFixture.run.waitForOutput("trace | deliver:on", STARTUP_TIMEOUT_MS);
+
+        await modeFixture.run.write("delivery proof\r", { delay: false });
+        const sent = await modeFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "sendChat" && objectFieldEquals(entry, "message", "delivery proof"),
+        );
+        expect(sent.payload).toMatchObject({ deliver: true });
+        console.log(
+          `[behavior-evidence] tui-session-footer ${JSON.stringify({
+            terminal: "real PTY",
+            sourceModesVisible: true,
+            targetModesCleared: true,
+            traceTransitionVisible: true,
+            fixedDeliveryPropagated: true,
+          })}`,
+        );
+      } finally {
+        await modeFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "keeps the launch thinking override active across session-level changes",
     async () => {
-      const footerNeedle = "fixture-provider/fixture-model high | tokens";
+      const footerNeedle = "fixture-provider/fixture-model high | deliver:off | tokens";
       await thinkingOverrideFixture.run.waitForOutput(footerNeedle, STARTUP_TIMEOUT_MS);
       await thinkingOverrideFixture.run.waitForOutput(
         "PTY_RESPONSE: thinking override proof",
@@ -167,9 +233,11 @@ describe.sequential("TUI PTY harness", () => {
         .visibleOutput()
         .slice(sessionChangeOutputOffset);
       expect(outputAfterSessionChange).toContain(footerNeedle);
-      expect(outputAfterSessionChange).not.toContain("fixture-provider/fixture-model low | tokens");
       expect(outputAfterSessionChange).not.toContain(
-        "fixture-provider/fixture-model medium | tokens",
+        "fixture-provider/fixture-model low | deliver:off | tokens",
+      );
+      expect(outputAfterSessionChange).not.toContain(
+        "fixture-provider/fixture-model medium | deliver:off | tokens",
       );
     },
     STARTUP_TEST_TIMEOUT_MS,

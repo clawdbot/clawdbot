@@ -399,78 +399,101 @@ suite.define(() => {
     }
   });
 
-  it("renders a canonical inbound image through the ticketed media route", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const requestedMediaUrls: URL[] = [];
-    await page.route("**/__openclaw__/assistant-media?**", async (route) => {
-      const request = route.request();
-      const url = new URL(request.url());
-      requestedMediaUrls.push(url);
-      expect(url.searchParams.get("source")).toBe("media://inbound/telegram-photo.png");
-      if (url.searchParams.get("meta") === "1") {
-        expect(request.headers().authorization).toBe("Bearer e2e-device-token");
-        await route.fulfill({
-          contentType: "application/json",
-          body: JSON.stringify({
-            available: true,
-            mediaTicket: "ticket-inbound",
-            mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-          }),
-        });
-        return;
-      }
-      expect(url.searchParams.get("mediaTicket")).toBe("ticket-inbound");
-      await route.fulfill({
-        contentType: "image/png",
-        body: Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
-          "base64",
-        ),
+  it.each([
+    {
+      name: "canonical inbound",
+      source: "media://inbound/telegram-photo.png",
+      workspaceDir: undefined,
+      screenshotName: "canonical-inbound-image",
+    },
+    {
+      name: "sandbox-staged inbound",
+      source: "/workspace/media/inbound/fabricated-sandbox.png",
+      workspaceDir: "/workspace",
+      screenshotName: "sandbox-inbound-image",
+    },
+  ] as const)(
+    "renders a $name image through the ticketed media route",
+    async ({ source, workspaceDir, screenshotName }) => {
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
       });
-    });
-    await installMockGateway(page, {
-      historyMessages: [
-        {
-          id: "user-inbound-media-ref",
-          role: "user",
-          content: [{ type: "text", text: "🖼️ Attached image" }],
-          __openclaw: {
-            media: [{ path: "media://inbound/telegram-photo.png", contentType: "image/png" }],
-          },
-          timestamp: Date.now(),
-        },
-      ],
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
-      const image = page.locator("img.chat-message-image");
-      await image.waitFor({ state: "visible", timeout: 10_000 });
-      await expect
-        .poll(() =>
-          image.evaluate((element) =>
-            element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+      const page = await context.newPage();
+      const requestedMediaUrls: URL[] = [];
+      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        requestedMediaUrls.push(url);
+        expect(url.searchParams.get("source")).toBe(source);
+        if (url.searchParams.get("meta") === "1") {
+          expect(request.headers().authorization).toBe("Bearer e2e-device-token");
+          await route.fulfill({
+            contentType: "application/json",
+            body: JSON.stringify({
+              available: true,
+              mediaTicket: "ticket-inbound",
+              mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+            }),
+          });
+          return;
+        }
+        expect(url.searchParams.get("mediaTicket")).toBe("ticket-inbound");
+        expect(request.headers().authorization).toBeUndefined();
+        await route.fulfill({
+          contentType: "image/png",
+          body: Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+            "base64",
           ),
-        )
-        .toBe(1);
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({
-          fullPage: true,
-          path: `${artifactDir}/canonical-inbound-image.png`,
         });
+      });
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            id: "user-inbound-media-ref",
+            role: "user",
+            content: [{ type: "text", text: "🖼️ Attached image" }],
+            __openclaw: {
+              media: [
+                {
+                  path: source,
+                  contentType: "image/png",
+                  ...(workspaceDir ? { workspaceDir } : {}),
+                },
+              ],
+            },
+            timestamp: Date.now(),
+          },
+        ],
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
+        const image = page.locator("img.chat-message-image");
+        await image.waitFor({ state: "visible", timeout: 10_000 });
+        await expect
+          .poll(() =>
+            image.evaluate((element) =>
+              element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+            ),
+          )
+          .toBe(1);
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({
+            fullPage: true,
+            path: `${artifactDir}/${screenshotName}.png`,
+          });
+        }
+      } finally {
+        await suite.closeBrowserContext(context);
       }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    },
+  );
 
   it("evicts and refetches managed image Blob URLs after the cache reaches capacity", async () => {
     const context = await suite.newBrowserContext({

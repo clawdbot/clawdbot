@@ -26,7 +26,7 @@ import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox.js";
 import {
   resolveScheduledToolPolicyContext,
@@ -41,6 +41,8 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -78,6 +80,7 @@ type PreparedTriggerRuntime = {
   tools: AnyAgentTool[];
   ctx: Omit<ToolSearchToolContext, "catalogRef">;
   hookContext: Omit<HookContext, "runId">;
+  pluginRegistry?: PluginRegistry;
 };
 
 type PrepareTriggerRuntime = (params: {
@@ -135,78 +138,82 @@ async function prepareTriggerRuntime(params: {
   });
   params.signal?.throwIfAborted();
   const workspaceDir = workspace.dir;
-  ensureRuntimePluginsLoaded({
+  const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
     config,
     workspaceDir,
     allowGatewaySubagentBinding: true,
   });
 
-  const rawSessionKey = `cron:${params.jobId}:trigger`;
-  const sessionKey = resolveCronAgentSessionKey({
-    sessionKey: rawSessionKey,
-    agentId,
-    mainKey: config.session?.mainKey,
-    cfg: config,
-  });
-  const sandbox = await resolveSandboxContext({
-    config,
-    sessionKey,
-    workspaceDir,
-  });
-  params.signal?.throwIfAborted();
-  const effectiveWorkspace =
-    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : workspaceDir;
-  const toolPlan = resolveEmbeddedAttemptToolConstructionPlan({
-    toolsEnabled: true,
-    toolsAllow: params.toolsAllow,
-  });
-  // Bundle MCP tools are source:"mcp", which the headless bridge excludes.
-  // LSP runtimes are session-scoped and intentionally outside trigger v1.
-  const allTools = toolPlan.constructTools
-    ? createOpenClawCodingTools({
-        agentId,
-        exec: { config },
-        sandbox,
-        sessionKey,
-        trigger: "cron",
-        jobId: params.jobId,
-        agentDir,
-        cwd: effectiveWorkspace,
-        workspaceDir: effectiveWorkspace,
-        spawnWorkspaceDir: workspaceDir,
-        config,
-        allowGatewaySubagentBinding: true,
-        includeCoreTools: toolPlan.includeCoreTools,
-        runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
-        inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
-        scheduledToolPolicy: resolveScheduledToolPolicyContext({
-          toolsAllow: params.toolsAllow,
-          scheduledToolPolicy: params.scheduledToolPolicy,
-        }),
-        toolConstructionPlan: toolPlan.codingToolConstructionPlan,
-      })
-    : [];
-  const tools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow, {
-    toolMeta: (tool) => getPluginToolMeta(tool),
-  });
-  const hookContext: HookContext = {
-    agentId,
-    config,
-    cwd: effectiveWorkspace,
-    workspaceDir: effectiveWorkspace,
-    sessionKey,
-    loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId }),
-  };
-  return {
-    tools,
-    hookContext,
-    ctx: {
-      config,
-      runtimeConfig: config,
+  const prepare = async (): Promise<PreparedTriggerRuntime> => {
+    const rawSessionKey = `cron:${params.jobId}:trigger`;
+    const sessionKey = resolveCronAgentSessionKey({
+      sessionKey: rawSessionKey,
       agentId,
+      mainKey: config.session?.mainKey,
+      cfg: config,
+    });
+    const sandbox = await resolveSandboxContext({
+      config,
       sessionKey,
-    },
+      workspaceDir,
+    });
+    params.signal?.throwIfAborted();
+    const effectiveWorkspace =
+      sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : workspaceDir;
+    const toolPlan = resolveEmbeddedAttemptToolConstructionPlan({
+      toolsEnabled: true,
+      toolsAllow: params.toolsAllow,
+    });
+    // Bundle MCP tools are source:"mcp", which the headless bridge excludes.
+    // LSP runtimes are session-scoped and intentionally outside trigger v1.
+    const allTools = toolPlan.constructTools
+      ? createOpenClawCodingTools({
+          agentId,
+          exec: { config },
+          sandbox,
+          sessionKey,
+          trigger: "cron",
+          jobId: params.jobId,
+          agentDir,
+          cwd: effectiveWorkspace,
+          workspaceDir: effectiveWorkspace,
+          spawnWorkspaceDir: workspaceDir,
+          config,
+          allowGatewaySubagentBinding: true,
+          includeCoreTools: toolPlan.includeCoreTools,
+          runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
+          inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
+          scheduledToolPolicy: resolveScheduledToolPolicyContext({
+            toolsAllow: params.toolsAllow,
+            scheduledToolPolicy: params.scheduledToolPolicy,
+          }),
+          toolConstructionPlan: toolPlan.codingToolConstructionPlan,
+        })
+      : [];
+    const tools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow, {
+      toolMeta: (tool) => getPluginToolMeta(tool),
+    });
+    const hookContext: HookContext = {
+      agentId,
+      config,
+      cwd: effectiveWorkspace,
+      workspaceDir: effectiveWorkspace,
+      sessionKey,
+      loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId }),
+    };
+    return {
+      tools,
+      hookContext,
+      ...(pluginRegistry ? { pluginRegistry } : {}),
+      ctx: {
+        config,
+        runtimeConfig: config,
+        agentId,
+        sessionKey,
+      },
+    };
   };
+  return await withPluginRuntimeRegistryScope(pluginRegistry, prepare);
 }
 
 function triggerStateNamespace(state: unknown, streamBatch?: string): CodeModeNamespaceDescriptor {
@@ -445,29 +452,35 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         signal: evaluationScope.signal,
       });
 
-      const catalogRef = createToolSearchCatalogRef();
-      const runId = `cron-trigger:${params.jobId}:${crypto.randomUUID()}`;
-      registerHeadlessToolSearchCatalog({
-        catalogRef,
-        tools: runtime.tools,
-        hookContext: { ...runtime.hookContext, runId },
-      });
-      const remainingWallClockMs = evaluationScope.deadline - Date.now();
-      if (remainingWallClockMs <= 0) {
-        throw new CodeModeHeadlessTimeoutError(`${params.label} timed out`);
-      }
-      const result = await runHeadless({
-        ctx: { ...runtime.ctx, catalogRef, abortSignal: evaluationScope.signal },
-        code: params.script,
-        wallClockMs: remainingWallClockMs,
-        maxToolCalls: params.maxToolCalls,
-        extraNamespaces: params.namespaces,
-        signal: evaluationScope.signal,
-      });
-      if (result.status === "failed") {
-        return { kind: "error", code: result.code, error: result.error };
-      }
-      return { kind: "completed", result };
+      const evaluate = async (): Promise<
+        | { kind: "completed"; result: Extract<CodeModeHeadlessResult, { status: "completed" }> }
+        | { kind: "error"; code: CronTriggerFailureCode; error: string }
+      > => {
+        const catalogRef = createToolSearchCatalogRef();
+        const runId = `cron-trigger:${params.jobId}:${crypto.randomUUID()}`;
+        registerHeadlessToolSearchCatalog({
+          catalogRef,
+          tools: runtime.tools,
+          hookContext: { ...runtime.hookContext, runId },
+        });
+        const remainingWallClockMs = evaluationScope.deadline - Date.now();
+        if (remainingWallClockMs <= 0) {
+          throw new CodeModeHeadlessTimeoutError(`${params.label} timed out`);
+        }
+        const result = await runHeadless({
+          ctx: { ...runtime.ctx, catalogRef, abortSignal: evaluationScope.signal },
+          code: params.script,
+          wallClockMs: remainingWallClockMs,
+          maxToolCalls: params.maxToolCalls,
+          extraNamespaces: params.namespaces,
+          signal: evaluationScope.signal,
+        });
+        if (result.status === "failed") {
+          return { kind: "error", code: result.code, error: result.error };
+        }
+        return { kind: "completed", result };
+      };
+      return await withPluginRuntimeRegistryScope(runtime.pluginRegistry, evaluate);
     } catch (error) {
       return {
         kind: "error",

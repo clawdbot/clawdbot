@@ -1,6 +1,7 @@
 // Implements the embedded backend used by local TUI sessions.
 import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
+import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
@@ -26,7 +27,7 @@ import {
   buildConfiguredModelCatalog,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
-import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
 import { executeSessionGoalCommand, parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
@@ -86,6 +87,8 @@ import {
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
 import { logInfo, logWarn } from "../logger.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -190,14 +193,14 @@ function shouldLoadFullGatewayCatalogForReplaceMode(cfg: OpenClawConfig) {
 function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
   cfg: OpenClawConfig;
   sessionAgentId: string;
-}): { status: "warmed" } | { status: "failed"; error: string } {
+}): { status: "warmed"; registry?: PluginRegistry } | { status: "failed"; error: string } {
   try {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId);
-    ensureRuntimePluginsLoaded({
+    const registry = loadAgentRuntimePluginRegistryHandle({
       config: params.cfg,
       workspaceDir,
     });
-    return { status: "warmed" };
+    return { status: "warmed", ...(registry ? { registry } : {}) };
   } catch (err) {
     return { status: "failed", error: formatTuiErrorMessage(err) };
   }
@@ -345,6 +348,11 @@ async function waitForQueuedLocalRun(previousRun: QueuedSessionRun, runId: strin
 }
 
 export class EmbeddedTuiBackend implements TuiBackend {
+  private runtimePluginRegistry?: PluginRegistry;
+
+  private withRuntimePluginRegistry<T>(run: () => T): T {
+    return withPluginRuntimeRegistryScope(this.runtimePluginRegistry, run);
+  }
   readonly connection = { url: "local embedded" };
 
   onEvent?: (evt: TuiEvent) => void;
@@ -611,8 +619,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
       cfg,
       sessionAgentId,
     });
+    this.runtimePluginRegistry =
+      runtimePluginsPrewarm.status === "warmed" ? runtimePluginsPrewarm.registry : undefined;
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
-    const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
+    const max = Math.min(
+      CHAT_HISTORY_MAX_ENTRIES,
+      typeof opts.limit === "number" ? opts.limit : 200,
+    );
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
     const historyPage = await readChatHistoryPage({
@@ -656,7 +669,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await loadEmbeddedTuiModelCatalog(cfg);
+      const catalog = await this.withRuntimePluginRegistry(() => loadEmbeddedTuiModelCatalog(cfg));
       thinkingLevel = resolveThinkingDefault({
         cfg,
         provider: resolvedSessionModel.provider,
@@ -686,7 +699,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel: sessionInfo.verboseLevel,
-      runtimePluginsPrewarm,
+      runtimePluginsPrewarm:
+        runtimePluginsPrewarm.status === "warmed"
+          ? { status: "warmed" as const }
+          : runtimePluginsPrewarm,
       ...(inFlightRun ? { inFlightRun } : {}),
     };
   }
@@ -742,7 +758,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
           storeKey: primaryKey,
           agentId: opts.agentId,
           patch: opts,
-          loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
+          loadGatewayModelCatalog: () =>
+            this.withRuntimePluginRegistry(() => loadEmbeddedTuiModelCatalog(cfg)),
         }),
     });
     if (!applied.ok) {
@@ -796,7 +813,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
       creation: { via: "operator", actor: { type: "human" } },
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
-      loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
+      loadGatewayModelCatalog: () =>
+        this.withRuntimePluginRegistry(() => loadEmbeddedTuiModelCatalog(cfg)),
     });
     if (!result.ok) {
       throw new Error(result.error.message);
@@ -880,7 +898,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async listModels(): Promise<TuiModelChoice[]> {
     const cfg = getRuntimeConfig();
-    const catalog = await loadEmbeddedTuiModelCatalog(cfg);
+    const catalog = await this.withRuntimePluginRegistry(() => loadEmbeddedTuiModelCatalog(cfg));
     const { allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,

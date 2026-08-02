@@ -1,11 +1,6 @@
-// Standalone runtime registry loader tests cover registry loading outside gateway startup.
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  cleanupPluginLoaderFixturesForTest,
-  clearPluginLoaderCache,
-} from "../loader.test-fixtures.js";
+// Verifies scoped registry handles cannot install process-wide runtime state.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
-import type { PluginRegistry } from "../registry-types.js";
 import {
   getActivePluginChannelRegistry,
   getActivePluginRegistry,
@@ -15,129 +10,117 @@ import {
 } from "../runtime.js";
 
 const loaderMocks = vi.hoisted(() => ({
-  loadOpenClawPlugins: vi.fn<typeof import("../loader.js").loadOpenClawPlugins>(),
+  loadAndActivateRootPluginRegistry: vi.fn(),
+  loadPluginRegistryHandle: vi.fn(),
 }));
 
 vi.mock("../loader.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../loader.js")>();
   return {
     ...actual,
-    loadOpenClawPlugins: (...args: Parameters<typeof loaderMocks.loadOpenClawPlugins>) =>
-      loaderMocks.loadOpenClawPlugins(...args),
+    loadAndActivateRootPluginRegistry: loaderMocks.loadAndActivateRootPluginRegistry,
+    loadPluginRegistryHandle: loaderMocks.loadPluginRegistryHandle,
   };
 });
 
-const { ensureStandaloneRuntimePluginRegistryLoaded } =
-  await import("./standalone-runtime-registry-loader.js");
-
-function createRegistryWithPlugin(pluginId: string): PluginRegistry {
-  const registry = createEmptyPluginRegistry();
-  registry.plugins.push({
-    id: pluginId,
-    status: "loaded",
-  } as never);
-  return registry;
-}
+import {
+  installRuntimePluginRegistryAtProcessRoot,
+  loadRuntimePluginRegistryHandle,
+} from "./standalone-runtime-registry-loader.js";
 
 beforeEach(() => {
-  loaderMocks.loadOpenClawPlugins.mockReset();
+  loaderMocks.loadAndActivateRootPluginRegistry.mockReset();
+  loaderMocks.loadPluginRegistryHandle.mockReset();
 });
 
 afterEach(() => {
-  clearPluginLoaderCache();
   resetPluginRuntimeStateForTest();
 });
 
-afterAll(() => {
-  cleanupPluginLoaderFixturesForTest();
-});
-
-describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", () => {
-  it("does not replace active or pinned channel registries during tool discovery", () => {
-    const activeRegistry = createRegistryWithPlugin("provider-only");
+describe("standalone runtime registry ownership", () => {
+  it("returns a scoped handle without replacing active or pinned registries", () => {
+    const activeRegistry = createEmptyPluginRegistry();
+    const channelRegistry = createEmptyPluginRegistry();
+    const scopedRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(activeRegistry, "active-key", "default", "/tmp/ws");
-    const channelRegistry = createRegistryWithPlugin("channel-plugin");
     pinActivePluginChannelRegistry(channelRegistry);
-    const toolRegistry = createRegistryWithPlugin("tool-plugin");
-    loaderMocks.loadOpenClawPlugins.mockReturnValue(toolRegistry);
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(scopedRegistry);
 
-    ensureStandaloneRuntimePluginRegistryLoaded({
-      surface: "channel",
-      forceLoad: true,
-      loadOptions: {
-        onlyPluginIds: ["tool-plugin"],
-        activate: false,
-        toolDiscovery: true,
-        workspaceDir: "/tmp/ws",
-      },
+    expect(
+      loadRuntimePluginRegistryHandle({
+        forceLoad: true,
+        surface: "channel",
+        loadOptions: { onlyPluginIds: ["tool-plugin"], workspaceDir: "/tmp/ws" },
+      }),
+    ).toBe(scopedRegistry);
+
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledWith({
+      activate: false,
+      cache: false,
+      onlyPluginIds: ["tool-plugin"],
+      workspaceDir: "/tmp/ws",
     });
-
     expect(getActivePluginRegistry()).toBe(activeRegistry);
     expect(getActivePluginChannelRegistry()).toBe(channelRegistry);
   });
 
-  it("does not replace the active registry for a tool-discovery active load", () => {
-    const activeRegistry = createRegistryWithPlugin("provider-only");
+  it("builds an explicit empty scope instead of reusing the active registry", () => {
+    const activeRegistry = createEmptyPluginRegistry();
+    const emptyScopedRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(activeRegistry, "active-key", "default", "/tmp/ws");
-    const toolRegistry = createRegistryWithPlugin("tool-plugin");
-    loaderMocks.loadOpenClawPlugins.mockReturnValue(toolRegistry);
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(emptyScopedRegistry);
 
-    const result = ensureStandaloneRuntimePluginRegistryLoaded({
-      surface: "active",
-      forceLoad: true,
-      installRegistry: true,
-      loadOptions: {
-        onlyPluginIds: ["tool-plugin"],
-        activate: false,
-        toolDiscovery: true,
-        workspaceDir: "/tmp/ws",
-      },
+    expect(
+      loadRuntimePluginRegistryHandle({
+        requiredPluginIds: [],
+        loadOptions: { onlyPluginIds: [], workspaceDir: "/tmp/ws" },
+      }),
+    ).toBe(emptyScopedRegistry);
+
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledWith({
+      activate: false,
+      onlyPluginIds: [],
+      workspaceDir: "/tmp/ws",
     });
-
-    expect(result).toBe(toolRegistry);
     expect(getActivePluginRegistry()).toBe(activeRegistry);
   });
 
-  it("still installs a non-tool-discovery active load (migration provider path)", () => {
-    const activeRegistry = createRegistryWithPlugin("provider-only");
-    setActivePluginRegistry(activeRegistry, "active-key", "default", "/tmp/ws");
-    const migrationRegistry = createRegistryWithPlugin("migration-plugin");
-    loaderMocks.loadOpenClawPlugins.mockReturnValue(migrationRegistry);
+  it("uses the activating loader only at the process-root entry point", () => {
+    const rootRegistry = createEmptyPluginRegistry();
+    loaderMocks.loadAndActivateRootPluginRegistry.mockReturnValue(rootRegistry);
 
-    ensureStandaloneRuntimePluginRegistryLoaded({
-      surface: "active",
-      forceLoad: true,
-      installRegistry: true,
-      loadOptions: {
-        onlyPluginIds: ["migration-plugin"],
-        activate: false,
-        workspaceDir: "/tmp/ws",
-      },
+    expect(
+      installRuntimePluginRegistryAtProcessRoot({
+        forceLoad: true,
+        loadOptions: {
+          onlyPluginIds: ["gateway-plugin"],
+          workspaceDir: "/tmp/ws",
+          runtimeOptions: { allowGatewaySubagentBinding: true },
+        },
+      }),
+    ).toBe(rootRegistry);
+
+    expect(loaderMocks.loadAndActivateRootPluginRegistry).toHaveBeenCalledWith({
+      activate: true,
+      cache: false,
+      onlyPluginIds: ["gateway-plugin"],
+      workspaceDir: "/tmp/ws",
+      runtimeOptions: { allowGatewaySubagentBinding: true },
     });
-
-    // Without toolDiscovery the load must still become the active registry, since the migration
-    // provider resolver reads migrationProviders off the active registry.
-    expect(getActivePluginRegistry()).toBe(migrationRegistry);
+    expect(loaderMocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 
-  it("keeps runtime surfaces empty for a cold tool-discovery load", () => {
-    // Establish the cold-start precondition deterministically (no active registry).
-    resetPluginRuntimeStateForTest();
-    const toolRegistry = createRegistryWithPlugin("tool-plugin");
-    loaderMocks.loadOpenClawPlugins.mockReturnValue(toolRegistry);
+  it("pins an explicitly installed channel surface", () => {
+    const rootRegistry = createEmptyPluginRegistry();
+    loaderMocks.loadAndActivateRootPluginRegistry.mockReturnValue(rootRegistry);
 
-    const result = ensureStandaloneRuntimePluginRegistryLoaded({
-      surface: "channel",
+    installRuntimePluginRegistryAtProcessRoot({
       forceLoad: true,
-      loadOptions: {
-        onlyPluginIds: ["tool-plugin"],
-        activate: false,
-        toolDiscovery: true,
-        workspaceDir: "/tmp/ws",
-      },
+      surface: "channel",
+      loadOptions: { workspaceDir: "/tmp/ws" },
     });
 
-    expect(result).toBe(toolRegistry);
-    expect(getActivePluginRegistry()).toBeNull();
+    expect(getActivePluginRegistry()).toBe(rootRegistry);
+    expect(getActivePluginChannelRegistry()).toBe(rootRegistry);
   });
 });

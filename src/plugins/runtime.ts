@@ -16,6 +16,7 @@ import {
   type RegistryState,
   type RegistrySurfaceState,
 } from "./runtime-state.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
 const log = createSubsystemLogger("plugins/runtime");
 
@@ -305,6 +306,10 @@ export function getActivePluginRegistryWorkspaceDir(): string | undefined {
 export function requireActivePluginRegistry(): PluginRegistry {
   if (state.registrationContext) {
     return state.registrationContext.registry;
+  }
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  if (scopedRegistry) {
+    return scopedRegistry;
   }
   if (!state.activeRegistry) {
     state.activeRegistry = createEmptyPluginRegistry();

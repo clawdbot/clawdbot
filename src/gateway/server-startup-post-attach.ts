@@ -328,12 +328,13 @@ function scheduleAgentRuntimePluginPrewarm(params: {
                 return;
               }
               const started = performance.now();
-              const { ensureRuntimePluginsLoaded } = await import("../agents/runtime-plugins.js");
+              const { installAgentRuntimePluginRegistryAtProcessRoot } =
+                await import("../agents/runtime-plugins.js");
               const cfg = params.getConfig();
               if (isStopped()) {
                 return;
               }
-              ensureRuntimePluginsLoaded({
+              installAgentRuntimePluginRegistryAtProcessRoot({
                 config: cfg,
                 workspaceDir: params.workspaceDir,
                 allowGatewaySubagentBinding: true,
@@ -554,6 +555,7 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
   await refreshPreparedModelRuntimeSnapshots(params.cfg, {
     gatewayLifecycle: true,
     catalogMode: "static",
+    allowGatewaySubagentBinding: true,
     ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
     ...(params.startupTrace
       ? {

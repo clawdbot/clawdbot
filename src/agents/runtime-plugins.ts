@@ -3,8 +3,16 @@ import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
-import { ensureStandaloneRuntimePluginRegistryLoaded } from "../plugins/runtime/standalone-runtime-registry-loader.js";
+import {
+  installRuntimePluginRegistryAtProcessRoot,
+  loadRuntimePluginRegistryHandle,
+} from "../plugins/runtime/standalone-runtime-registry-loader.js";
 import { resolveUserPath } from "../utils.js";
+import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
+import {
+  resolveAgentRuntimePluginLoadPlan,
+  type AgentHarnessPluginSelection,
+} from "./harness/runtime-plugin-load-plan.js";
 
 type StartupScopedPluginSnapshot = NonNullable<
   ReturnType<typeof getCurrentPluginMetadataSnapshot>
@@ -29,36 +37,83 @@ function resolveStartupPluginIdsFromCurrentSnapshot(params: {
   return pluginIds.filter((pluginId): pluginId is string => typeof pluginId === "string");
 }
 
-/** Ensure standalone runtime plugins are loaded for the current agent context. */
-export function ensureRuntimePluginsLoaded(params: {
+type AgentRuntimePluginRegistryParams = {
   config?: OpenClawConfig;
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
-}): PluginRegistry | undefined {
-  if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
-    return undefined;
-  }
+  selections?: readonly AgentHarnessPluginSelection[];
+};
+
+function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistryParams) {
   const workspaceDir =
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)
       : undefined;
+  if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
+    return {
+      requiredPluginIds: [],
+      loadOptions: {
+        config: params.config,
+        activationSourceConfig: params.config,
+        workspaceDir,
+        onlyPluginIds: [],
+        runtimeOptions: params.allowGatewaySubagentBinding
+          ? { allowGatewaySubagentBinding: true }
+          : undefined,
+      },
+    };
+  }
   const startupPluginIds = resolveStartupPluginIdsFromCurrentSnapshot({
     config: params.config,
     workspaceDir,
   });
-  const allowGatewaySubagentBinding =
-    params.allowGatewaySubagentBinding === true ||
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable";
-  return ensureStandaloneRuntimePluginRegistryLoaded({
-    requiredPluginIds: startupPluginIds,
+  const plan = resolveAgentRuntimePluginLoadPlan({
+    config: params.config,
+    workspaceDir: workspaceDir ?? process.cwd(),
+    ...(startupPluginIds === undefined ? {} : { basePluginIds: startupPluginIds }),
+    selections: [
+      ...collectConfiguredAgentHarnessRuntimes(params.config ?? {}).map((runtime) => ({
+        runtime,
+        provider: "",
+        modelId: "",
+      })),
+      ...(params.selections ?? []),
+    ],
+  });
+  return {
+    requiredPluginIds: plan.pluginIds,
     loadOptions: {
-      config: params.config,
+      config: plan.config,
+      ...(plan.config ? { activationSourceConfig: plan.config } : {}),
       workspaceDir,
-      ...(startupPluginIds === undefined ? {} : { onlyPluginIds: startupPluginIds }),
+      ...(startupPluginIds === undefined || plan.pluginIds === undefined
+        ? {}
+        : { onlyPluginIds: plan.pluginIds }),
       ...(startupPluginIds === undefined ? {} : { forceFullRuntimeForChannelPlugins: true }),
-      runtimeOptions: allowGatewaySubagentBinding
+      runtimeOptions: params.allowGatewaySubagentBinding
         ? { allowGatewaySubagentBinding: true }
         : undefined,
     },
+  };
+}
+
+/** Loads the registry handle owned by an agent prepared-runtime generation. */
+export function loadAgentRuntimePluginRegistryHandle(
+  params: AgentRuntimePluginRegistryParams,
+): PluginRegistry | undefined {
+  const load = resolveAgentRuntimePluginRegistryLoad(params);
+  return load ? loadRuntimePluginRegistryHandle(load) : undefined;
+}
+
+/** Installs agent runtime plugins from a standalone/gateway process composition root. */
+export function installAgentRuntimePluginRegistryAtProcessRoot(
+  params: AgentRuntimePluginRegistryParams,
+): PluginRegistry | undefined {
+  const load = resolveAgentRuntimePluginRegistryLoad({
+    ...params,
+    allowGatewaySubagentBinding:
+      params.allowGatewaySubagentBinding === true ||
+      getActivePluginRuntimeSubagentMode() === "gateway-bindable",
   });
+  return load ? installRuntimePluginRegistryAtProcessRoot(load) : undefined;
 }
