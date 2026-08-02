@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
   buildFailoverRemediationHint,
@@ -986,6 +987,7 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "ENETRESET" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ENETUNREACH" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ERR_STREAM_PREMATURE_CLOSE" })).toBe("timeout");
   });
 
   it("infers rate-limit and overload from symbolic error codes", () => {
@@ -1024,6 +1026,28 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "stream disconnected before completion: response.completed was not received",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "Premature close of server response while trying to fetch https://api.example.test",
+      }),
+    ).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "Premature close" })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "stream disconnected while copying a local archive",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "worker reported a premature close while compressing logs",
+      }),
+    ).toBeNull();
     expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
       "timeout",
     );
@@ -1426,6 +1450,20 @@ describe("failover-error", () => {
       const abortWrapper = new Error("request was aborted", { cause: staleLifecycle });
       abortWrapper.name = "AbortError";
       expect(isNonProviderRuntimeCoordinationError(abortWrapper)).toBe(true);
+    });
+
+    it("returns true for direct and nested gateway drain admission failures", () => {
+      const draining = new GatewayDrainingError();
+      const causeWrapper = new Error("session send failed", { cause: draining });
+      const aggregateWrapper = new AggregateError(
+        [new Error("cleanup failed"), { error: draining }],
+        "agent run failed",
+      );
+
+      for (const error of [draining, causeWrapper, aggregateWrapper]) {
+        expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
+        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+      }
     });
 
     it("returns true when the coordination error is nested via cause", () => {

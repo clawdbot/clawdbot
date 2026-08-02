@@ -7,6 +7,10 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
+import type {
+  OAuthCredentials as SessionOAuthCredentials,
+  OAuthLoginCallbacks,
+} from "../plugin-sdk/provider-oauth-runtime.js";
 import type { PluginTextTransforms } from "./cli-backend.types.js";
 import type {
   ProviderAuthMethod,
@@ -540,6 +544,13 @@ export type ProviderPlugin = {
    * bearer token (for example Gemini CLI's `{ token, projectId }` payload).
    */
   formatApiKey?: (cred: AuthProfileCredential) => string;
+  /**
+   * Provider-owned OAuth login adapter for the session SDK AuthStorage API.
+   *
+   * This keeps the public callback-based login contract usable without seeding
+   * provider implementations into core. Modern setup flows should use `auth`.
+   */
+  loginOAuth?: (callbacks: OAuthLoginCallbacks) => Promise<SessionOAuthCredentials>;
   /**
    * Legacy auth-profile ids that should be retired by `openclaw doctor`.
    *

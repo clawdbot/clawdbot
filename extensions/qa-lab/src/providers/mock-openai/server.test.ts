@@ -2240,14 +2240,48 @@ describe("qa mock openai server", () => {
         makeUserInput(
           "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
         ),
-        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt."),
+        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt"),
       ],
     });
     expect(finalReply.status).toBe(200);
     const finalPayload = (await finalReply.json()) as {
       output?: Array<{ content?: Array<{ text?: string }> }>;
     };
-    expect(finalPayload.output?.[0]?.content?.[0]?.text).toContain("replay unsafe after write");
+    expect(finalPayload.output?.[0]?.content?.[0]?.text).toBe(
+      "Protocol note: replay unsafe after write.",
+    );
+  });
+
+  it("finishes a compacted retry after the canonical successful write result", async () => {
+    const server = await startMockServer();
+
+    const finalReply = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt"),
+        makeUserInput("Continue after compaction."),
+      ],
+    });
+
+    expect(finalReply.status).toBe(200);
+    expect(outputText(await finalReply.json())).toBe("Protocol note: replay unsafe after write.");
+  });
+
+  it("does not finish a compacted retry when failure text quotes the write success marker", async () => {
+    const server = await startMockServer();
+
+    const failedReply = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeToolOutput(
+          'Write failed after reporting "Successfully wrote 41 bytes to compaction-retry-summary.txt."',
+        ),
+        makeUserInput("Continue after compaction."),
+      ],
+    });
+
+    expect(failedReply.status).toBe(200);
+    expect(outputText(await failedReply.json())).toBe("");
   });
 
   it("keeps compaction retry planning across continuation prompts", async () => {
@@ -2284,7 +2318,7 @@ describe("qa mock openai server", () => {
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(prompt),
-        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt."),
+        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt"),
         makeUserInput("Continue after compaction."),
       ],
     });
@@ -3588,6 +3622,86 @@ describe("qa mock openai server", () => {
     });
     expect(firstB.status).toBe(200);
     expect(await firstB.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+  });
+
+  it("isolates interleaved session state while preserving cross-provider ownership", async () => {
+    const server = await startMockServer();
+    const handoffPrompt =
+      "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
+    const fanoutPrompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+    const sessions = ["qa-session-alpha", "qa-session-beta"] as const;
+    const runtimePrompt = (sessionId: string) =>
+      `Runtime: agent=main | sessionId=${sessionId} | channel=qa`;
+    const postSession = (sessionId: string, input: unknown[], cacheBoundary = 0) =>
+      expectNonStreamingResponsesJson(server, {
+        model: "gpt-5.6-luna",
+        prompt_cache_key: `${sessionId}:${cacheBoundary}`,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [makeDeveloperInput(runtimePrompt(sessionId)), ...input],
+      });
+
+    const handoffs = await Promise.all(
+      sessions.map((sessionId) => postSession(sessionId, [makeUserInput(handoffPrompt)])),
+    );
+    for (const handoff of handoffs) {
+      expect(outputToolArgsFromItem(outputToolCall(handoff, "sessions_spawn"))).toMatchObject({
+        label: "qa-sidecar",
+      });
+    }
+
+    const crossProviderContinuation = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      system: [{ type: "text", text: runtimePrompt(sessions[0]) }],
+      tools: [{ name: "sessions_spawn", input_schema: { type: "object", properties: {} } }],
+      messages: [makeAnthropicUserText(handoffPrompt)],
+    });
+    expect(crossProviderContinuation.status).toBe(200);
+    const continued = requireRecord(
+      await crossProviderContinuation.json(),
+      "cross-provider handoff continuation",
+    );
+    expect(continued.stop_reason).toBe("end_turn");
+
+    const anthropicHandoff = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      system: [{ type: "text", text: runtimePrompt("qa-session-anthropic") }],
+      tools: [{ name: "sessions_spawn", input_schema: { type: "object", properties: {} } }],
+      messages: [makeAnthropicUserText(handoffPrompt)],
+    });
+    expect(anthropicHandoff.status).toBe(200);
+    expect(
+      requireRecord(await anthropicHandoff.json(), "independent Anthropic handoff"),
+    ).toMatchObject({ stop_reason: "tool_use" });
+
+    const firstFanoutCalls = await Promise.all(
+      sessions.map((sessionId) => postSession(sessionId, [makeUserInput(fanoutPrompt)], 1)),
+    );
+    for (const fanout of firstFanoutCalls) {
+      expect(outputToolArgsFromItem(outputToolCall(fanout, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-alpha",
+      });
+    }
+
+    const secondFanoutCalls = await Promise.all(
+      sessions.map((sessionId) =>
+        postSession(
+          sessionId,
+          [
+            makeUserInput(fanoutPrompt),
+            makeToolOutput('{"status":"accepted","childSessionKey":"alpha","note":"ALPHA-OK"}'),
+          ],
+          2,
+        ),
+      ),
+    );
+    for (const fanout of secondFanoutCalls) {
+      expect(outputToolArgsFromItem(outputToolCall(fanout, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-beta",
+      });
+    }
   });
 
   it("answers heartbeat prompts without spawning extra subagents", async () => {

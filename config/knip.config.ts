@@ -238,6 +238,7 @@ const rootBundledPluginRuntimeDependencies = [
   "@homebridge/ciao",
   "@mozilla/readability",
   "@silvia-odwyer/photon-node",
+  "@trycua/cua-driver",
   "@slack/bolt",
   "@slack/types",
   "@slack/web-api",

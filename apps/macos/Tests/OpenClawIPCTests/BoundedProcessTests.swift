@@ -4,6 +4,19 @@ import Testing
 @testable import OpenClaw
 
 struct BoundedProcessTests {
+    /// The two fan-out tests below assert that no exit notification is *lost* when a
+    /// child exits while its monitor is being registered. They are not latency
+    /// assertions, so their timeout must not double as one.
+    ///
+    /// Spawning dozens of processes at once periodically stalls the whole fan-out:
+    /// instrumenting the deadline showed every one of the 64 exits observed at
+    /// ~3.1s, clustered within 100ms of each other, rather than a single slow
+    /// straggler. A 1s per-process budget lost that coin flip roughly one run in
+    /// five, failing 63 of 64 at once. A generous budget still fails hard if an
+    /// exit is genuinely missed — the 50ms `pollUntilExit` fallback would never
+    /// complete — while a merely-loaded machine passes.
+    private static let concurrentSpawnTimeout: TimeInterval = 30
+
     @Test func `captures output without waiting for inherited handles`() async throws {
         let startedAt = ContinuousClock.now
         let result = try await BoundedProcess.run(
@@ -36,7 +49,7 @@ struct BoundedProcessTests {
                     try await BoundedProcess.run(
                         path: "/usr/bin/true",
                         arguments: [],
-                        timeout: 1).terminationStatus
+                        timeout: Self.concurrentSpawnTimeout).terminationStatus
                 }
             }
             return try await group.reduce(into: []) { $0.append($1) }
@@ -61,7 +74,7 @@ struct BoundedProcessTests {
                     try await BoundedProcess.run(
                         path: script.path,
                         arguments: [],
-                        timeout: 1).terminationStatus
+                        timeout: Self.concurrentSpawnTimeout).terminationStatus
                 }
             }
             return try await group.reduce(into: []) { $0.append($1) }
@@ -103,8 +116,8 @@ struct BoundedProcessTests {
             #expect(error is BoundedProcessError)
         }
 
-        let parentPID = try self.readPID(from: parentPIDFile)
-        let childPID = try self.readPID(from: childPIDFile)
+        let parentPID = try await self.waitForPID(in: parentPIDFile)
+        let childPID = try await self.waitForPID(in: childPIDFile)
         #expect(ContinuousClock.now - startedAt < .seconds(3))
         #expect(self.waitUntilGone(parentPID))
         #expect(self.waitUntilGone(childPID))
@@ -178,30 +191,38 @@ struct BoundedProcessTests {
             #expect(!(error is BoundedProcessError))
         }
 
-        let producerPID = try self.readPID(from: pidFile)
+        let producerPID = try await self.waitForPID(in: pidFile)
         #expect(ContinuousClock.now - startedAt < .seconds(2))
         #expect(self.waitUntilGone(producerPID))
     }
 
-    private func readPID(from file: URL) throws -> pid_t {
-        let value = try String(contentsOf: file, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return try #require(pid_t(value))
+    /// Non-recording parse for polling. `#require` records an issue even when the
+    /// error it throws is swallowed by `try?`, so `waitForPID` cannot retry through
+    /// `readPID`: the first read of a created-but-not-yet-written pid file would
+    /// fail the test despite the retry succeeding a moment later.
+    private func pollPID(from file: URL) -> pid_t? {
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        return pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// `echo $$ > file` creates the file and writes to it in two steps, so a single
+    /// read can observe a missing *or* empty file. Poll until it parses, and only
+    /// then fall back to the recording read so a genuine absence still fails.
     private func waitForPID(in file: URL) async throws -> pid_t {
-        let deadline = ContinuousClock.now + .seconds(1)
+        let deadline = ContinuousClock.now + .seconds(10)
         while ContinuousClock.now < deadline {
-            if let value = try? self.readPID(from: file) {
+            if let value = self.pollPID(from: file) {
                 return value
             }
             try await Task.sleep(for: .milliseconds(10))
         }
-        return try self.readPID(from: file)
+        let text = try String(contentsOf: file, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return try #require(pid_t(text))
     }
 
     private func waitUntilGone(_ pid: pid_t) -> Bool {
-        let deadline = Date().addingTimeInterval(1)
+        let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
             errno = 0
             if kill(pid, 0) == -1, errno == ESRCH {

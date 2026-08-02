@@ -740,7 +740,7 @@ export function writeSessionEntry(
       updatedAt,
     });
   }
-  publishSqliteSessionEntryCacheInvalidation(database);
+  publishSqliteSessionEntryCacheInvalidation(database, sessionNode);
 }
 
 /** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */

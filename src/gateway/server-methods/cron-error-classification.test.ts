@@ -1,0 +1,17 @@
+import { describe, expect, it } from "vitest";
+import { isCronInvalidRequestError } from "./cron-error-classification.js";
+
+describe("isCronInvalidRequestError", () => {
+  it.each([
+    "cron script payload has a syntax error: Unexpected token (line 1, column 10)",
+    "cron script payload must not be empty",
+    "cron script payloads cannot be combined with a condition trigger",
+    "cron script payloads are disabled; set cron.triggers.enabled=true to allow unattended scripts",
+  ])("classifies script payload validation: %s", (message) => {
+    expect(isCronInvalidRequestError(new Error(message))).toBe(true);
+  });
+
+  it("does not classify unrelated script runtime failures", () => {
+    expect(isCronInvalidRequestError(new Error("cron script payload runtime failed"))).toBe(false);
+  });
+});

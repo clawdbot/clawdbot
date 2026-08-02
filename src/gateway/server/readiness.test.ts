@@ -487,6 +487,7 @@ describe("createReadinessChecker", () => {
       const { readiness } = createReadinessHarness({
         getEventLoopHealth: () => ({
           degraded: true,
+          degradedSinceMs: 61_000,
           reasons: ["cpu", "event_loop_utilization"],
           intervalMs: 2_000,
           delayP99Ms: 42.1,
@@ -500,6 +501,7 @@ describe("createReadinessChecker", () => {
         readySnapshot(FIVE_MIN_MS, {
           eventLoop: {
             degraded: true,
+            degradedSinceMs: 61_000,
             reasons: ["cpu", "event_loop_utilization"],
             intervalMs: 2_000,
             delayP99Ms: 42.1,

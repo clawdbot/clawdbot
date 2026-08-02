@@ -3030,7 +3030,7 @@ describe("collectCodexRouteWarnings", () => {
     ]);
   });
 
-  it("repairs persisted session route refs, clears stale runtime pins, and preserves auth pins", () => {
+  it("repairs persisted session routes while preserving selected auth accounts", () => {
     const store: Record<string, SessionEntry> = {
       main: {
         sessionId: "s1",
@@ -3058,6 +3058,7 @@ describe("collectCodexRouteWarnings", () => {
     const result = repairCodexSessionStoreRoutes({
       store,
       now: 123,
+      authProfileIdMap: new Map([["openai-codex:default", "openai:chatgpt-default"]]),
     });
 
     expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
@@ -3071,7 +3072,7 @@ describe("collectCodexRouteWarnings", () => {
       expectDefined(store.main, "store.main test invariant").modelOverrideRouteResolution,
     ).toBe("resolved");
     expect(expectDefined(store.main, "store.main test invariant").authProfileOverride).toBe(
-      "openai-codex:default",
+      "openai:chatgpt-default",
     );
     expect(expectDefined(store.main, "store.main test invariant").authProfileOverrideSource).toBe(
       "auto",
@@ -3086,6 +3087,57 @@ describe("collectCodexRouteWarnings", () => {
     expect(expectDefined(store.main, "store.main test invariant").fallbackNotice).toBeUndefined();
     expect(expectDefined(store.other, "store.other test invariant").updatedAt).toBe(2);
     expect(expectDefined(store.other, "store.other test invariant").agentHarnessId).toBe("codex");
+  });
+
+  it("rewrites only exactly mapped auth pins on otherwise canonical sessions", () => {
+    const store: Record<string, SessionEntry> = {
+      selected: {
+        sessionId: "selected",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "gpt-5.5",
+        authProfileOverride: "openai-codex:default",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 3,
+      },
+      unknown: {
+        sessionId: "unknown",
+        updatedAt: 2,
+        authProfileOverride: "openai-codex:missing",
+        authProfileOverrideSource: "user",
+      },
+      canonical: {
+        sessionId: "canonical",
+        updatedAt: 3,
+        authProfileOverride: "openai:default",
+        authProfileOverrideSource: "auto",
+      },
+    };
+    const authProfileIdMap = new Map([["openai-codex:default", "openai:chatgpt-default"]]);
+
+    expect(repairCodexSessionStoreRoutes({ store, now: 123, authProfileIdMap })).toEqual({
+      changed: true,
+      sessionKeys: ["selected"],
+    });
+    expect(store.selected).toMatchObject({
+      updatedAt: 123,
+      authProfileOverride: "openai:chatgpt-default",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 3,
+    });
+    expect(store.unknown).toMatchObject({
+      updatedAt: 2,
+      authProfileOverride: "openai-codex:missing",
+    });
+    expect(store.canonical).toMatchObject({
+      updatedAt: 3,
+      authProfileOverride: "openai:default",
+    });
+    expect(repairCodexSessionStoreRoutes({ store, now: 456, authProfileIdMap })).toEqual({
+      changed: false,
+      sessionKeys: [],
+    });
+    expect(store.selected?.updatedAt).toBe(123);
   });
 
   it("repairs shipped codex namespace session route refs", () => {
@@ -3521,6 +3573,7 @@ describe("collectCodexRouteWarnings", () => {
     const result = repairCodexSessionStoreRoutes({
       store,
       now: 123,
+      authProfileIdMap: new Map([["openai-codex:default", "openai:chatgpt-default"]]),
     });
 
     expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
@@ -3532,7 +3585,7 @@ describe("collectCodexRouteWarnings", () => {
       expectDefined(store.main, "store.main test invariant").modelOverrideRouteResolution,
     ).toBe("resolved");
     expect(expectDefined(store.main, "store.main test invariant").authProfileOverride).toBe(
-      "openai-codex:default",
+      "openai:chatgpt-default",
     );
     expect(expectDefined(store.main, "store.main test invariant").authProfileOverrideSource).toBe(
       "auto",

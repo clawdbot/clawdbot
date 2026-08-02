@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
 import { terminateManagedChild } from "./lib/managed-child-process.mjs";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
@@ -416,15 +417,13 @@ async function newestOpenClawTarball(outputDir, packOutput) {
   let fromOutput = "";
   try {
     const parsed = JSON.parse(packOutput);
-    if (Array.isArray(parsed)) {
-      for (const entry of parsed) {
-        if (typeof entry?.filename !== "string") {
-          continue;
-        }
-        const filename = resolvePackedOpenClawFileName(entry.filename);
-        if (filename) {
-          fromOutput = filename;
-        }
+    for (const entry of resolveNpmJsonEntries(parsed)) {
+      if (typeof entry?.filename !== "string") {
+        continue;
+      }
+      const filename = resolvePackedOpenClawFileName(entry.filename);
+      if (filename) {
+        fromOutput = filename;
       }
     }
   } catch {}
@@ -465,18 +464,22 @@ async function writePackJson(packOutput, tarball, packJsonPath, sourceDir) {
   } catch (error) {
     throw new Error("npm pack --json output was not valid JSON", { cause: error });
   }
-  if (!Array.isArray(parsed)) {
-    throw new Error("npm pack --json output must be an array");
+  const entries = resolveNpmJsonEntries(parsed);
+  if (
+    entries.length === 0 ||
+    entries.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))
+  ) {
+    throw new Error("npm pack --json output did not contain package results");
   }
   const filename = path.basename(tarball);
-  for (const entry of parsed) {
+  for (const entry of entries) {
     if (entry && typeof entry === "object" && typeof entry.filename === "string") {
       entry.filename = filename;
     }
   }
   const target = path.resolve(sourceDir, packJsonPath);
   await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(target, `${JSON.stringify(parsed, null, 2)}\n`);
+  await fs.writeFile(target, `${JSON.stringify(entries, null, 2)}\n`);
 }
 
 async function cleanPackedOpenClawTarballs(outputDir) {

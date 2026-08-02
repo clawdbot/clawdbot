@@ -1082,6 +1082,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   });
   try {
     await waitForReady({ child, port, logPath });
+    assertPluginLoaded(logPath, pluginId);
     await assertBaseGatewayProbes({
       entrypoint,
       port,
@@ -1256,6 +1257,19 @@ export function assertGatewayLogNotTruncated(logPath) {
         GATEWAY_LOG_CAPTURE_BYTES,
       )} bytes; runtime smoke cannot validate complete post-ready output`,
     );
+  }
+}
+
+export function assertPluginLoaded(logPath, pluginId) {
+  let text;
+  try {
+    text = fs.readFileSync(logPath, "utf8");
+  } catch {
+    return;
+  }
+  const failurePrefix = `[plugins] ${pluginId} failed to load`;
+  if (text.includes(failurePrefix)) {
+    throw new Error(`${failurePrefix}: ${tailText(text)}`);
   }
 }
 

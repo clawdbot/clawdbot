@@ -166,6 +166,7 @@ function setupDeps(params: {
     probeBrowserHandoffGateway:
       params.probeBrowserHandoffGateway ??
       (vi.fn(async () => ({ ok: false })) as GuidedOnboardingDeps["probeBrowserHandoffGateway"]),
+    ensureControlUiAssetsBuilt: vi.fn(async () => ({ ok: true, built: false })),
     runSystemAgentChat,
     platform: "linux",
     ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),

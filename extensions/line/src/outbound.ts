@@ -14,7 +14,6 @@ import {
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import {
   buildLineMediaMessage,
@@ -38,6 +37,9 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const outboundRuntime = await loadLineOutboundRuntime();
     const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
     const lineRuntime = runtime.channel.line;
+    const location = lineData.location;
+    const locationMessage = location ? outboundRuntime.createLocationMessage(location) : null;
+    const validLocation = locationMessage ? location : undefined;
     const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
     const sendBatch = lineRuntime?.pushMessagesLine ?? outboundRuntime.pushMessagesLine;
     const sendFlex = lineRuntime?.pushFlexMessage ?? outboundRuntime.pushFlexMessage;
@@ -181,9 +183,9 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         }
       }
 
-      if (lineData.location) {
+      if (validLocation) {
         await recordResult(
-          sendLocation(to, lineData.location, {
+          sendLocation(to, validLocation, {
             verbose: false,
             cfg,
             accountId: accountId ?? undefined,
@@ -281,14 +283,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           quickReplyMessages.push(template);
         }
       }
-      if (lineData.location) {
-        quickReplyMessages.push({
-          type: "location",
-          title: truncateUtf16Safe(lineData.location.title, 100),
-          address: truncateUtf16Safe(lineData.location.address, 100),
-          latitude: lineData.location.latitude,
-          longitude: lineData.location.longitude,
-        });
+      if (locationMessage) {
+        quickReplyMessages.push(locationMessage);
       }
       for (const flexMsg of processed.flexMessages) {
         quickReplyMessages.push(

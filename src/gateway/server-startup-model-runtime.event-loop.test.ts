@@ -150,7 +150,6 @@ describe("Gateway prepared model runtime startup", () => {
             startup: {
               sidecar: false,
               memory: false,
-              deferConfiguredChannelFullLoadUntilAfterListen: false,
               agentHarnesses: [],
             },
             compat: [],

@@ -35,7 +35,7 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
+        "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -161,16 +161,6 @@ export async function maybeSpawnVisibleSession(params: {
   }
 
   const cfg = params.options?.config ?? getRuntimeConfig();
-  if (
-    (params.options?.inheritedToolAllowlist?.length ?? 0) > 0 ||
-    (params.options?.inheritedToolDenylist?.length ?? 0) > 0
-  ) {
-    return {
-      status: "forbidden",
-      error:
-        "Visible sessions unavailable with inherited tool restrictions. This session was spawned with a tool allow/denylist; visible sessions require an unrestricted session.",
-    };
-  }
   const ownership = resolveSubagentSpawnOwnership({
     cfg,
     agentSessionKey: params.options?.agentSessionKey,
@@ -288,6 +278,12 @@ export async function maybeSpawnVisibleSession(params: {
         callInProcessGatewayToolWithCreation(method, requestParams, {
           via: "spawn",
           actor: { type: "agent", id: requesterKey },
+          completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+          inheritedToolPolicy: {
+            version: 1,
+            allow: [...(params.options?.inheritedToolAllowlist ?? [])],
+            deny: [...(params.options?.inheritedToolDenylist ?? [])],
+          },
         }));
     const response = await createGatewayCall<{
       key?: string;

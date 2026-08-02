@@ -17,6 +17,10 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
+import {
+  normalizeInheritedToolAllowlist,
+  normalizeInheritedToolDenylist,
+} from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import {
   resolveDefaultModelForAgent,
@@ -289,6 +293,13 @@ export async function createGatewaySession(params: {
    * operator sessions and forks stay spawn-capable roots.
    */
   spawnDepth?: number;
+  /** Trusted effective policy captured by an in-process visible spawn. */
+  spawnToolPolicy?: {
+    version: 1;
+    completionOwnerSessionKey?: string;
+    allow: string[];
+    deny: string[];
+  };
   spawnedCwd?: string;
   /** Managed worktree bound to the new session; persisted alongside spawnedCwd. */
   worktree?: { id: string; branch: string; repoRoot: string };
@@ -494,6 +505,12 @@ export async function createGatewaySession(params: {
         error: errorShape(ErrorCodes.INVALID_REQUEST, "spawnDepth requires parentSessionKey"),
       };
     }
+  }
+  if (params.spawnToolPolicy && params.spawnDepth === undefined) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "spawn tool policy requires spawnDepth"),
+    };
   }
   let canonicalParentSessionKey: string | undefined;
   let parentSessionEntry: SessionEntry | undefined;
@@ -705,6 +722,17 @@ export async function createGatewaySession(params: {
 
   let createdContext: CreatedGatewaySession | undefined;
   let createdNewEntry = false;
+  const spawnToolPolicy =
+    params.spawnToolPolicy && canonicalParentSessionKey
+      ? {
+          completionOwnerSessionKey: normalizeOptionalString(
+            params.spawnToolPolicy.completionOwnerSessionKey,
+          ),
+          allow: normalizeInheritedToolAllowlist(params.spawnToolPolicy.allow),
+          deny: normalizeInheritedToolDenylist(params.spawnToolPolicy.deny),
+          parentSessionKey: canonicalParentSessionKey,
+        }
+      : undefined;
   const createChildSession = async (): Promise<CreateGatewaySessionResult> => {
     let currentParentSessionEntry = parentSessionEntry;
     if (
@@ -854,6 +882,15 @@ export async function createGatewaySession(params: {
             error: errorShape(
               ErrorCodes.INVALID_REQUEST,
               "catalog session target requires a new session",
+            ),
+          };
+        }
+        if (spawnToolPolicy && existingEntry !== undefined) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "spawn tool policy requires a new session",
             ),
           };
         }
@@ -1030,6 +1067,21 @@ export async function createGatewaySession(params: {
           // and plugin sessions) persists as a depth-0 root. Reused entries keep
           // their stored depth.
           ...(existingEntry === undefined ? { spawnDepth: params.spawnDepth ?? 0 } : {}),
+          ...(existingEntry === undefined && spawnToolPolicy
+            ? {
+                spawnedBy: spawnToolPolicy.parentSessionKey,
+                ...(spawnToolPolicy.completionOwnerSessionKey
+                  ? { completionOwnerSessionKey: spawnToolPolicy.completionOwnerSessionKey }
+                  : {}),
+                inheritedToolPolicyVersion: 1 as const,
+                ...(spawnToolPolicy.allow.length > 0
+                  ? { inheritedToolAllow: spawnToolPolicy.allow }
+                  : {}),
+                ...(spawnToolPolicy.deny.length > 0
+                  ? { inheritedToolDeny: spawnToolPolicy.deny }
+                  : {}),
+              }
+            : {}),
           ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
         };
         sessionEntries[target.canonicalKey] = initializedEntry;

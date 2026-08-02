@@ -22,7 +22,7 @@ import {
   reserveQueuedCronRun,
   updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
-import type { CronEvent, CronServiceState } from "./state.js";
+import type { CronEvent, CronServiceState, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
 import {
   ensureLoaded,
@@ -151,6 +151,7 @@ async function skipInvalidPersistedManualRun(params: {
   error: unknown;
 }) {
   const rollbackSnapshot = snapshotStoreForRollback(params.state);
+  const postPersistNotifications: DeferredCronNotifications = [];
   const endedAt = params.state.deps.nowMs();
   const errorText = normalizeCronRunErrorText(params.error);
   const diagnostics = createCronRunDiagnosticsFromError("cron-preflight", errorText, {
@@ -167,7 +168,10 @@ async function skipInvalidPersistedManualRun(params: {
       startedAt: endedAt,
       endedAt,
     },
-    { scheduleMode: params.mode === "force" ? "preserve" : "advance" },
+    {
+      scheduleMode: params.mode === "force" ? "preserve" : "advance",
+      deferredNotifications: postPersistNotifications,
+    },
   );
 
   emitCronRunFinished(
@@ -192,13 +196,14 @@ async function skipInvalidPersistedManualRun(params: {
 
   recomputeNextRunsForMaintenance(params.state, {
     recomputeExpired: true,
+    deferredNotifications: postPersistNotifications,
     ...(params.mode === "force"
       ? {
           preserveExpiredPacedNextRunJobId: params.job.id,
         }
       : {}),
   });
-  await persistOrRestore(params.state, rollbackSnapshot);
+  await persistOrRestore(params.state, rollbackSnapshot, { postPersistNotifications });
   armTimer(params.state);
 }
 

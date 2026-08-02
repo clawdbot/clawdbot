@@ -85,7 +85,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     platform: "darwin",
     canReveal: true,
     copiedAction: null,
-    canRename: true,
+    renameDisabledReason: undefined,
     terminalAction: nothing,
     discussionAction: nothing,
     diffAction: nothing,
@@ -330,10 +330,13 @@ describe("chat pane header", () => {
   });
 
   it("keeps read-only gateway session titles static", () => {
-    const { container } = mount({ canRename: false });
+    const { container } = mount({ renameDisabledReason: "Operator write access is required." });
     expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
     expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(
       "Session title",
+    );
+    expect(container.querySelector(".chat-pane__session-title")?.getAttribute("title")).toBe(
+      "Operator write access is required.",
     );
   });
 

@@ -858,10 +858,22 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             );
             return;
           }
-          this.handleEvent(event, lifecycleConnection);
           if (event.type === "session.updated") {
+            try {
+              this.handleEvent(event, lifecycleConnection);
+            } catch (error) {
+              const readyError = error instanceof Error ? error : new Error(String(error));
+              attempt.reject(readyError);
+              this.failConnection(readyError, ws, lifecycleConnection, {
+                code: 1011,
+                reason: "Readiness callback failed",
+              });
+              return;
+            }
             attempt.resolve(this.lifecycle.isReady());
+            return;
           }
+          this.handleEvent(event, lifecycleConnection);
         } catch (error) {
           if (error instanceof OpenAIRealtimeMalformedAudioError) {
             attempt.reject(error);
@@ -1680,6 +1692,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private resetTerminalState(): void {
+    // Transport retries preserve readiness and rotation attribution. A terminal
+    // session clears both so explicit bridge reuse starts as a new session.
+    this.sessionReadyFired = false;
+    this.reconnectReason = undefined;
+    this.activeConnectionReason = undefined;
     this.resetRealtimeSessionState();
   }
 

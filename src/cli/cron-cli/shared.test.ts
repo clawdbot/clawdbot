@@ -91,6 +91,37 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "isolated");
   });
 
+  it.each([
+    [59_999, "<1m"],
+    [60_000, "1m"],
+    [3_569_000, "59m"],
+    [3_570_000, "1h"],
+    [84_599_000, "23h"],
+    [84_600_000, "1d"],
+  ])("renders %i ms as %s across cron list and show", (deltaMs, expected) => {
+    vi.useFakeTimers();
+    const now = new Date("2026-08-02T12:00:00.000Z");
+    vi.setSystemTime(now);
+    const job = createBaseJob({
+      id: "rounding-job",
+      state: {
+        nextRunAtMs: now.getTime() + deltaMs,
+        lastRunAtMs: now.getTime() - deltaMs,
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const row = list.logs.find((line) => line.includes(job.id)) ?? "";
+    expect(row).toContain(`in ${expected}`);
+    expect(row).toContain(`${expected} ago`);
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expect(show.logs).toContain(`next: in ${expected}`);
+    expect(show.logs).toContain(`last: ${expected} ago`);
+  });
+
   it("truncates and aligns names by sanitized terminal display width", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const prefix19 = "x".repeat(19);
@@ -303,6 +334,51 @@ describe("printCronList", () => {
     const singleLine = logs.find((line) => line.includes("single-failure-job")) ?? "";
     expect(singleLine).toContain("error");
     expect(singleLine).not.toContain("(1x)");
+  });
+
+  it("shows why the scheduler auto-disabled a job without changing JSON status", () => {
+    const runFailures = createBaseJob({
+      id: "auto-disabled-runs",
+      name: "Auto-disabled runs",
+      enabled: false,
+      state: {
+        consecutiveErrors: 10,
+        autoDisabled: {
+          reason: "consecutive-failures",
+          atMs: Date.now(),
+          consecutiveErrors: 10,
+        },
+      },
+    });
+    const scheduleErrors = createBaseJob({
+      id: "auto-disabled-schedule",
+      name: "Auto-disabled schedule",
+      enabled: false,
+      state: {
+        scheduleErrorCount: 3,
+        autoDisabled: {
+          reason: "schedule-errors",
+          atMs: Date.now(),
+          consecutiveErrors: 3,
+        },
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([runFailures, scheduleErrors], list.runtime);
+    expectLogsToInclude(list.logs, "disabled (10x)");
+    expectLogsToInclude(list.logs, "disabled (schedule)");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(runFailures, show.runtime);
+    expectLogsToInclude(show.logs, "status: disabled (10x)");
+
+    expect(enrichCronJsonWithStatus(runFailures)).toMatchObject({
+      status: "disabled",
+      state: {
+        autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 },
+      },
+    });
   });
 
   it("caps the failure count so the status column never overflows", () => {
