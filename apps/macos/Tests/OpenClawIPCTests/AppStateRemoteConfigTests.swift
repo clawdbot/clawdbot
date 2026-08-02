@@ -459,9 +459,15 @@ struct AppStateRemoteConfigTests {
             }
         }
         let state = AppState(preview: true)
-        state.connectionMode = .remote
-        state.remoteTransport = .direct
-        state.remoteUrl = "wss://gateway-a.example.test"
+        state._testApplyConfigOverrides([
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://gateway-a.example.test",
+                ],
+            ],
+        ])
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
         OnboardingSystemAgentResumeStore.markPending(routeIdentity: "remote:id:gateway-a")
         let view = OnboardingView(state: state)
@@ -494,10 +500,16 @@ struct AppStateRemoteConfigTests {
         let previousGatewayPreference = captureGatewayPreference()
         defer { restoreGatewayPreference(previousGatewayPreference) }
         let state = AppState(preview: true)
-        state.connectionMode = .remote
-        state.remoteTransport = .ssh
-        state.remoteUrl = "ws://127.0.0.1:18789"
-        state.remoteTarget = "alice@gateway-a.example.test"
+        state._testApplyConfigOverrides([
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "ssh",
+                    "url": "ws://127.0.0.1:18789",
+                    "sshTarget": "alice@gateway-a.example.test",
+                ],
+            ],
+        ])
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
         let view = OnboardingView(state: state)
         view.preferredGatewayID = "gateway-a"
@@ -523,11 +535,17 @@ struct AppStateRemoteConfigTests {
         let previousGatewayPreference = captureGatewayPreference()
         defer { restoreGatewayPreference(previousGatewayPreference) }
         let state = AppState(preview: true)
-        state.connectionMode = .remote
-        state.remoteTransport = .ssh
-        state.remoteUrl = "ws://127.0.0.1:18789"
-        state.remoteTarget = "alice@gateway-a.example.test"
-        state.remoteIdentity = "/tmp/gateway-a-id"
+        state._testApplyConfigOverrides([
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "ssh",
+                    "url": "ws://127.0.0.1:18789",
+                    "sshTarget": "alice@gateway-a.example.test",
+                    "sshIdentity": "/tmp/gateway-a-id",
+                ],
+            ],
+        ])
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
 
         state._testApplyConfigOverrides([
