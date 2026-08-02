@@ -1,5 +1,6 @@
 // Doctor config preflight tests cover state migration preflight behavior before config repair.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import {
   listActiveDegradedPlugins,
   setActiveDegradedPlugins,
@@ -241,6 +242,19 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
     collectCronCodexRuntimePolicyTargetsReadOnly.mockReset();
     collectCronCodexRuntimePolicyTargetsReadOnly.mockResolvedValue({ targets: [], warnings: [] });
+  });
+
+  it("forwards config snapshot phase measurement", async () => {
+    const measure: ConfigSnapshotReadMeasure = async (_name, run) => await run();
+
+    await runDoctorConfigPreflight({
+      migrateState: false,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      measure,
+    });
+
+    expect(readConfigFileSnapshot).toHaveBeenCalledWith(expect.objectContaining({ measure }));
   });
 
   it("runs the startup guard immediately before the first state mutation", async () => {

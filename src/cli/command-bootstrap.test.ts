@@ -35,6 +35,7 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime,
       commandPath: ["agents", "list"],
+      measure: expect.any(Function),
       allowInvalid: true,
       suppressDoctorStdout: true,
     });
@@ -58,6 +59,7 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime,
       commandPath: ["gateway"],
+      measure: expect.any(Function),
       skipPristineCoreStateMigrations: true,
       skipPristineStartupStateMigrations: true,
     });

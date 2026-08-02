@@ -11,6 +11,7 @@ import {
   recoverConfigFromJsonRootSuffix,
   recoverConfigFromLastKnownGood,
 } from "../config/io.js";
+import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { resolveCanonicalConfigPath } from "../config/paths.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
@@ -407,6 +408,7 @@ export async function runDoctorConfigPreflight(
     recoverCorruptTargetStore?: boolean;
     invalidConfigNote?: string | false;
     observe?: boolean;
+    measure?: ConfigSnapshotReadMeasure;
     /** Return false or reject on config drift; the preflight always unwinds owned resources. */
     beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
     requireStartupMigrationCheckpoint?: boolean;
@@ -510,6 +512,7 @@ export async function runDoctorConfigPreflight(
 
     const readOptions = {
       ...(options.observe === false ? { observe: false } : {}),
+      ...(options.measure ? { measure: options.measure } : {}),
       skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
     };
     let snapshot = addDoctorLegacyIssues(

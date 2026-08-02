@@ -311,6 +311,7 @@ describe("registerPreActionHooks", () => {
     expect(setVerboseMock).toHaveBeenCalledWith(true);
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["status"],
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
@@ -326,6 +327,7 @@ describe("registerPreActionHooks", () => {
     expect(process.env.NODE_NO_WARNINGS).toBe("1");
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["agents", "list"],
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
@@ -372,6 +374,7 @@ describe("registerPreActionHooks", () => {
       expect.objectContaining({
         beforeStateMigrations: expect.any(Function),
         commandPath: ["gateway", "run"],
+        measure: expect.any(Function),
         skipPristineCoreStateMigrations: true,
         skipPristineStartupStateMigrations: true,
       }),
@@ -403,6 +406,7 @@ describe("registerPreActionHooks", () => {
       expect.objectContaining({
         allowInvalid: true,
         commandPath: ["gateway", "run"],
+        measure: expect.any(Function),
       }),
     );
   });
@@ -415,6 +419,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["update"],
       allowInvalid: true,
     });
@@ -427,6 +432,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["update", "status"],
       allowInvalid: true,
       suppressDoctorStdout: true,
@@ -441,6 +447,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["agent"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
@@ -456,6 +463,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["agent"],
       suppressDoctorStdout: true,
     });
@@ -484,6 +492,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["onboard"],
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
@@ -496,6 +505,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["channels", "add"],
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
@@ -571,6 +581,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["plugins", "install"],
       allowInvalid: true,
     });
@@ -583,6 +594,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["plugins", "install"],
       allowInvalid: true,
     });
@@ -595,6 +607,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["plugins", "install"],
       allowInvalid: true,
     });
@@ -607,6 +620,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["plugins", "install"],
       allowInvalid: true,
     });
@@ -619,6 +633,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["plugins", "install"],
     });
 
@@ -630,6 +645,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["plugins", "install"],
       allowInvalid: true,
     });
@@ -650,6 +666,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["plugins", "install"],
     });
   });
@@ -726,6 +743,7 @@ describe("registerPreActionHooks", () => {
       expect.objectContaining({
         runtime: runtimeMock,
         commandPath: ["skills", action],
+        measure: expect.any(Function),
       }),
     );
   });
@@ -738,6 +756,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["status"],
       suppressDoctorStdout: true,
     });
@@ -751,6 +770,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["update", "status"],
       allowInvalid: true,
       suppressDoctorStdout: true,
@@ -765,6 +785,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["config", "set"],
     });
   });
@@ -852,6 +873,7 @@ describe("registerPreActionHooks", () => {
     expect(observedMachineOutputStdoutIsTTY).toBe(false);
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["machine"],
       suppressDoctorStdout: true,
     });
@@ -866,6 +888,7 @@ describe("registerPreActionHooks", () => {
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["acp"],
       suppressDoctorStdout: true,
     });
@@ -879,6 +902,7 @@ describe("registerPreActionHooks", () => {
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["acp", "client"],
     });
 
@@ -891,6 +915,7 @@ describe("registerPreActionHooks", () => {
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: ["mcp", "serve"],
       suppressDoctorStdout: true,
     });
@@ -918,6 +943,7 @@ describe("registerPreActionHooks", () => {
     const bootstrap = ensureConfigReadyMock.mock.calls.at(-1)?.[0];
     expect(bootstrap).toEqual({
       runtime: runtimeMock,
+      measure: expect.any(Function),
       commandPath: testCase.expectedPath,
       suppressDoctorStdout: true,
     });
