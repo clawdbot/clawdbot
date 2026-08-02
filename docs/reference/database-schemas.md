@@ -74,11 +74,45 @@ Every release through `v2026.7.1` used agent schema 1 and state schema 1. The 20
 
 Downgrading the binary never downgrades the data. If you must run a release older than 2026.7.2 after updating, you have three options:
 
-1. Restore a backup taken before the update. [Create and verify backups](/cli/backup) before major updates.
+1. Restore a backup taken before the update. [Create and verify backups](/cli/backup) before major updates. If you did not take one, check for an [automatic pre-migration snapshot](#automatic-pre-migration-snapshots) first.
 2. Run the older build against a separate state directory (`OPENCLAW_STATE_DIR`). It starts fresh; your migrated data stays untouched for when you return to the newer build.
 3. Follow the manual downgrade procedure below. It is unsupported and risks data loss without a verified backup.
 
 Since 2026.7.2, `openclaw update` refuses to install a release that cannot open your current databases, so the updater will not put you in this situation. Installing an older version manually through npm bypasses that guard; the databases still refuse the old binary, but only after it is installed.
+
+### Automatic pre-migration snapshots
+
+Before OpenClaw raises the state database's schema version in place, it copies the database first. This happens on both paths that perform the upgrade: `openclaw doctor --fix` and an ordinary Gateway start. The copy is what lets you go back if an upgrade turns out to be the problem.
+
+Snapshots live next to the state database:
+
+```
+<state dir>/pre-migration-backups/openclaw-state-v<from>-to-v<to>-<timestamp>.sqlite
+```
+
+The directory is `0700` and each snapshot is `0600`, because a snapshot is a complete copy of shared state. **Only the newest three are kept.** Every successful migration prunes the rest, so a snapshot is a short-term recovery window across a few upgrades, not an archive. If you need to keep one, copy it somewhere else.
+
+This is best effort by design. If the copy fails — a read-only directory, a full disk, a restrictive umask — the migration still proceeds and the failure is reported as a warning naming the path and the reason. A failed snapshot never stops a Gateway that would otherwise start, so do not assume a snapshot exists: check the directory.
+
+To restore one, with the Gateway and every other process that can open the database stopped:
+
+```bash
+openclaw gateway stop
+```
+
+Then replace the live database with the snapshot, removing the write-ahead log sidecars so SQLite does not replay the newer database's journal over the older file:
+
+```bash
+cd ~/.openclaw/state   # or "$OPENCLAW_STATE_DIR/state" if you set it
+cp openclaw.sqlite openclaw.sqlite.rejected
+rm -f openclaw.sqlite-wal openclaw.sqlite-shm
+cp pre-migration-backups/openclaw-state-v5-to-v6-<timestamp>.sqlite openclaw.sqlite
+chmod 600 openclaw.sqlite
+```
+
+Keeping the rejected file is deliberate: if the snapshot turns out to be older than you thought, it is the only copy of the state you just replaced.
+
+The restored database carries its pre-migration `user_version`, so a build supporting that schema opens it normally. A build that already migrated past it refuses it — that refusal is the expected outcome, not a new fault. If the database was quarantined before you restored, run `openclaw doctor --fix` afterwards to clear the quarantine record.
 
 ### The Gateway refuses to start with a newer schema version error
 
