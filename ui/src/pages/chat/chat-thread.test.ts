@@ -3818,28 +3818,10 @@ describe("expansion-state render dependencies", () => {
 
   it("keeps mounted disclosure handlers attached to recreated session expansion maps", async () => {
     resetChatThreadState();
-    const { JSDOM } = await import("jsdom");
-    const dom = new JSDOM("<!doctype html><html><body></body></html>", {
-      url: "http://localhost/",
-      pretendToBeVisual: true,
+    const { builtinEnvironments } = await import("vitest/runtime");
+    const environment = await builtinEnvironments.jsdom.setup(globalThis, {
+      jsdom: { url: "http://localhost/", pretendToBeVisual: true },
     });
-    for (const name of [
-      "window",
-      "document",
-      "navigator",
-      "HTMLElement",
-      "HTMLAnchorElement",
-      "HTMLDivElement",
-      "Element",
-      "Node",
-      "customElements",
-      "MutationObserver",
-      "getComputedStyle",
-      "requestAnimationFrame",
-      "cancelAnimationFrame",
-    ] as const) {
-      vi.stubGlobal(name, dom.window[name]);
-    }
 
     try {
       const [{ render }, { ChatTranscriptController, resetChatThreadPresentationState }] =
@@ -3924,12 +3906,11 @@ describe("expansion-state render dependencies", () => {
       expect(staleUsers.size).toBe(0);
       resetChatThreadPresentationState();
     } finally {
-      dom.window.document.body.replaceChildren();
+      document.body.replaceChildren();
       await new Promise<void>((resolve) => {
-        dom.window.setTimeout(resolve, 0);
+        window.setTimeout(resolve, 0);
       });
-      dom.window.close();
-      vi.unstubAllGlobals();
+      await environment.teardown(globalThis);
       resetChatThreadState();
     }
   });
