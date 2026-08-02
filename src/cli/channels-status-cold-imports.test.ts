@@ -1,4 +1,4 @@
-// The real route-first channel status path must stay out of local config/plugin runtimes.
+// The real route-first channel status path must honor the shared catalog guard policy.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loaded = vi.hoisted(() => {
@@ -55,7 +55,7 @@ describe("routed channels status cold imports", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps successful JSON routes cold with and without probing", async () => {
+  it("keeps successful JSON routes out of config/plugin runtimes with and without probing", async () => {
     for (const probe of [false, true]) {
       vi.clearAllMocks();
       const argv = ["node", "openclaw", "channels", "status", "--json"];

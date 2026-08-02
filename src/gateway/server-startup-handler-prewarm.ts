@@ -1,10 +1,12 @@
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 
 const SIDEBAR_SESSION_LIST_LIMIT = 60;
 const SIDEBAR_CATALOG_LIMIT_PER_HOST = 40;
 const SIDEBAR_PREWARM_MAX_SESSION_ENTRIES = 2_000;
+const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
 
 type StartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
@@ -119,40 +121,48 @@ export function scheduleGatewayHandlerPrewarm(params: {
   let stopped = false;
   let nextIndex = 0;
   let currentItemName = "unknown";
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let idleTask: GatewayIdleTaskHandle | undefined;
 
   const scheduleNext = () => {
     if (stopped || nextIndex >= items.length) {
       return;
     }
-    timer = setTimeout(() => {
-      timer = undefined;
-      void (async () => {
-        await params.waitForPostReadyWork?.();
-        if (stopped) {
-          return;
-        }
-        const item = items[nextIndex++];
-        if (!item) {
-          return;
-        }
-        currentItemName = item.name;
-        const load = () => item.load();
-        await runWithGatewayIndependentRootWorkAdmission(() =>
-          params.startupTrace
-            ? params.startupTrace.measure(`post-ready.gateway-data.${item.name}`, load)
-            : load(),
-        );
-      })()
-        .catch((err: unknown) => {
-          // Prewarm only improves latency; readiness and request-time loaders remain authoritative.
-          params.log.warn(
-            `post-ready gateway data prewarm failed for ${currentItemName}: ${String(err)}`,
-          );
-        })
-        .finally(scheduleNext);
-    }, 0);
-    timer.unref?.();
+    void (async () => {
+      await params.waitForPostReadyWork?.();
+      if (stopped) {
+        return;
+      }
+      const item = items[nextIndex++];
+      if (!item) {
+        return;
+      }
+      currentItemName = item.name;
+      const load = () => item.load();
+      idleTask = scheduleGatewayIdleTask({
+        delayMs: 0,
+        retryDelayMs: GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS,
+        isClosing: () => stopped,
+        isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+        run: async () => {
+          try {
+            await (params.startupTrace
+              ? params.startupTrace.measure(`post-ready.gateway-data.${item.name}`, load)
+              : load());
+          } finally {
+            idleTask = undefined;
+            scheduleNext();
+          }
+        },
+        log: params.log,
+        // Prewarm only improves latency; readiness and request-time loaders remain authoritative.
+        errorMessage: `post-ready gateway data prewarm failed for ${item.name}`,
+      });
+    })().catch((err: unknown) => {
+      params.log.warn(
+        `post-ready gateway data prewarm failed for ${currentItemName}: ${String(err)}`,
+      );
+      scheduleNext();
+    });
   };
 
   // One cache fill per event-loop turn lets immediate client work run between steps.
@@ -161,10 +171,8 @@ export function scheduleGatewayHandlerPrewarm(params: {
   return {
     stop: () => {
       stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      idleTask?.stop();
+      idleTask = undefined;
     },
   };
 }

@@ -162,7 +162,6 @@ function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
       startup: {
         sidecar: false,
         memory: false,
-        deferConfiguredChannelFullLoadUntilAfterListen: false,
         agentHarnesses: [],
       },
       compat: [],

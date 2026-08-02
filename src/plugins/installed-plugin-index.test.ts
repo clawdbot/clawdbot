@@ -977,8 +977,6 @@ describe("installed plugin index", () => {
         startup: {
           sidecar: plugin.startup.sidecar,
           memory: plugin.startup.memory,
-          deferConfiguredChannelFullLoadUntilAfterListen:
-            plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen,
           agentHarnesses: plugin.startup.agentHarnesses,
         },
       })),

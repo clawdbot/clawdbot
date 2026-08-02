@@ -1138,12 +1138,16 @@ describe("computeJobPreviousRunAtOrBeforeMs", () => {
     };
   }
 
-  it("includes an exact boundary and keeps the prior slot between boundaries", () => {
-    const job = createCronJob({ kind: "cron", expr: "* * * * * *", tz: "UTC", staggerMs: 0 });
+  it.each([
+    ["five-field", "* * * * *"],
+    ["six-field", "* * * * * *"],
+  ])("includes exact and subsecond boundaries for %s schedules", (_label, expr) => {
+    const job = createCronJob({ kind: "cron", expr, tz: "UTC", staggerMs: 0 });
     const boundary = Date.parse("2025-12-13T04:02:00.000Z");
 
     expect(computeJobPreviousRunAtOrBeforeMs(job, boundary)).toBe(boundary);
     expect(computeJobPreviousRunAtOrBeforeMs(job, boundary + 500)).toBe(boundary);
+    expect(computeJobPreviousRunAtOrBeforeMs(job, boundary + 999)).toBe(boundary);
   });
 
   it("includes an exact effective boundary after per-job staggering", () => {
@@ -1158,6 +1162,9 @@ describe("computeJobPreviousRunAtOrBeforeMs", () => {
 
     expect(effectiveBoundary).toBeTypeOf("number");
     expect(computeJobPreviousRunAtOrBeforeMs(job, effectiveBoundary!)).toBe(effectiveBoundary);
+    expect(computeJobPreviousRunAtOrBeforeMs(job, effectiveBoundary! + 500)).toBe(
+      effectiveBoundary,
+    );
   });
 });
 

@@ -7,13 +7,16 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/con
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 
 const hoisted = vi.hoisted(() => ({
   resolvePluginTools: vi.fn(),
 }));
 const TEST_AGENT_DIR = path.join(os.tmpdir(), "openclaw-plugin-tool-auth-test");
+const observedGatewayCallerIdentities: unknown[] = [];
 
-vi.mock("../plugins/tools.js", () => ({
+vi.mock("../plugins/tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/tools.js")>()),
   resolvePluginTools: (...args: unknown[]) => hoisted.resolvePluginTools(...args),
 }));
 
@@ -474,5 +477,89 @@ describe("createOpenClawTools browser plugin integration", () => {
 
     expect(getRuntimeConfig?.()).toStrictEqual(nextRuntimeConfig);
     expect(getRuntimeConfig?.()?.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
+  });
+});
+
+function requirePluginTool(name: string, overrides?: Parameters<typeof createOpenClawTools>[0]) {
+  hoisted.resolvePluginTools.mockReturnValue([
+    {
+      name,
+      label: "Synthetic direct cron plugin",
+      description: "Calls Gateway cron directly like plugin-owned reminder tools.",
+      parameters: { type: "object", properties: {} },
+      execute: async () => {
+        const { getGatewayToolCallerIdentity } = await import("./tools/gateway-caller-context.js");
+        observedGatewayCallerIdentities.push(getGatewayToolCallerIdentity());
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    },
+  ]);
+  const tool = createOpenClawTools({
+    agentSessionKey: "agent:main:discord:channel:123",
+    disableMessageTool: true,
+    pluginToolAllowlist: [name],
+    requesterAgentIdOverride: "main",
+    wrapBeforeToolCallHook: false,
+    ...overrides,
+  }).find((candidate) => candidate.name === name);
+  if (!tool?.execute) {
+    throw new Error(`Expected executable tool ${name}`);
+  }
+  return tool;
+}
+
+describe("createOpenClawTools Gateway caller identity", () => {
+  afterEach(() => {
+    observedGatewayCallerIdentities.length = 0;
+  });
+
+  it("wraps plugin tools so direct cron Gateway calls inherit the agent identity", async () => {
+    const tool = requirePluginTool("synthetic_direct_cron_plugin");
+    await tool.execute("tool-call-1", {});
+
+    expect(observedGatewayCallerIdentities).toEqual([
+      { agentId: "main", sessionKey: "agent:main:discord:channel:123" },
+    ]);
+  });
+
+  it("carries trusted turn-source routing with the agent identity", async () => {
+    const tool = requirePluginTool("synthetic_direct_cron_plugin", {
+      agentChannel: "discord",
+      agentTo: "channel:123",
+      agentAccountId: "work",
+      agentThreadId: "thread-7",
+    });
+    await tool.execute("tool-call-2", {});
+
+    expect(observedGatewayCallerIdentities).toEqual([
+      {
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:123",
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "thread-7",
+      },
+    ]);
+  });
+
+  it("uses scheduled creator account authority without changing live delivery routing", async () => {
+    const tool = requirePluginTool("synthetic_direct_cron_plugin", {
+      agentChannel: "discord",
+      agentTo: "channel:123",
+      agentAccountId: "delivery-account",
+      gatewayCallerAccountId: "creator-account",
+    });
+    await tool.execute("tool-call-scheduled", {});
+
+    expect(observedGatewayCallerIdentities).toEqual([
+      {
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:123",
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:123",
+        turnSourceAccountId: "creator-account",
+      },
+    ]);
   });
 });

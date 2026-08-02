@@ -533,6 +533,10 @@ surfaces:
 - `openclaw/plugin-sdk/inbound-envelope` and
   `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
+- `createInboundEventDeliveryCorrelation(...)` from
+  `openclaw/plugin-sdk/inbound-event-delivery` when successful outbound sends must
+  retire an active inbound-event marker; create one tracker per channel and
+  keep target matching in the channel plugin
 - `openclaw/plugin-sdk/channel-targets` for target parsing helpers
 - `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
   and typed payload planning

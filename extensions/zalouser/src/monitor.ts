@@ -1,10 +1,16 @@
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
 import {
   createChannelInboundEnvelopeBuilder,
+  createChannelPartialDeliveryError,
   implicitMentionKindWhen,
+  isChannelPartialDeliveryError,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  createMessageReceiptFromOutboundResults,
+  listMessageReceiptPlatformIds,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
@@ -662,6 +668,9 @@ async function processMessage(
         }
       },
       onError: (err, info) => {
+        if (isChannelPartialDeliveryError(err)) {
+          statusSink?.({ lastOutboundAt: Date.now() });
+        }
         runtime.error(`[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`);
       },
     },
@@ -702,43 +711,46 @@ async function deliverZalouserReply(params: {
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(config, "zalouser", accountId, {
     fallbackLimit: ZALOUSER_TEXT_LIMIT,
   });
-  await deliverTextOrMediaReply({
-    payload,
-    text: reply.text,
-    sendText: async (chunk) => {
-      try {
-        await sendMessageZalouser(chatId, chunk, {
-          profile,
-          isGroup,
-          textMode: "markdown",
-          textChunkMode: chunkMode,
-          textChunkLimit,
-        });
+  const accepted: Awaited<ReturnType<typeof sendMessageZalouser>>[] = [];
+  const sendReplyPart = async (text: string, mediaUrl?: string) => {
+    await sendMessageZalouser(chatId, text, {
+      profile,
+      ...(mediaUrl ? { mediaUrl } : {}),
+      isGroup,
+      textMode: "markdown",
+      textChunkMode: chunkMode,
+      textChunkLimit,
+      onDeliveryResult: (result) => {
+        accepted.push(result);
         visibleReplySent = true;
-      } catch (err) {
-        runtime.error(`Zalouser message send failed: ${String(err)}`);
-      }
-    },
-    sendMedia: async ({ mediaUrl, caption }) => {
-      logVerbose(core, runtime, `Sending media to ${chatId}`);
-      await sendMessageZalouser(chatId, caption ?? "", {
-        profile,
-        mediaUrl,
-        isGroup,
-        textMode: "markdown",
-        textChunkMode: chunkMode,
-        textChunkLimit,
-      });
-      visibleReplySent = true;
-    },
-    onMediaError: (error) => {
-      runtime.error(
-        `Zalouser media send failed: ${
-          error instanceof Error ? error.message : JSON.stringify(error)
-        }`,
-      );
-    },
-  });
+      },
+    });
+    visibleReplySent = true;
+  };
+  try {
+    await deliverTextOrMediaReply({
+      payload,
+      text: reply.text,
+      sendText: sendReplyPart,
+      sendMedia: async ({ mediaUrl, caption }) => {
+        logVerbose(core, runtime, `Sending media to ${chatId}`);
+        await sendReplyPart(caption ?? "", mediaUrl);
+      },
+    });
+  } catch (error) {
+    if (!visibleReplySent) {
+      throw error;
+    }
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: accepted.map((result) => ({ receipt: result.receipt })),
+      kind: reply.hasMedia ? "media" : "text",
+    });
+    throw createChannelPartialDeliveryError(error, {
+      messageIds: listMessageReceiptPlatformIds(receipt),
+      receipt,
+      visibleReplySent: true,
+    });
+  }
   return { visibleReplySent };
 }
 

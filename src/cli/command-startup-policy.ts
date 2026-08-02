@@ -3,16 +3,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { CliCommandPluginLoadPolicy } from "./command-catalog.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 
-export function shouldBypassConfigGuardForCommandPath(
-  commandPath: string[],
-  argv: string[] = [],
-): boolean {
-  const bypassConfigGuard = resolveCliCommandPathPolicy(commandPath).bypassConfigGuard;
-  return typeof bypassConfigGuard === "function"
-    ? bypassConfigGuard({ argv, commandPath })
-    : bypassConfigGuard;
-}
-
 function shouldLoadPlugins(params: {
   argv?: string[];
   commandPath: string[];
@@ -36,19 +26,20 @@ export function resolveCliStartupPolicy(params: {
   commandPath: string[];
   jsonOutputMode: boolean;
   env?: NodeJS.ProcessEnv;
-  routeMode?: boolean;
 }) {
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
   // Protocol commands own stdout from process startup, before their action installs later routing.
   const suppressDoctorStdout = params.jsonOutputMode || commandPolicy.ownsProtocolStdout;
+  const configGuard =
+    typeof commandPolicy.configGuard === "function"
+      ? commandPolicy.configGuard({ argv: params.argv ?? [], commandPath: params.commandPath })
+      : commandPolicy.configGuard;
   const env = params.env ?? process.env;
   return {
     suppressDoctorStdout,
     hideBanner: isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER) || commandPolicy.hideBanner,
-    skipConfigGuard: params.routeMode
-      ? commandPolicy.routeConfigGuard === "always" ||
-        (commandPolicy.routeConfigGuard === "when-suppressed" && suppressDoctorStdout)
-      : false,
+    skipConfigGuard:
+      configGuard === "skip" || (configGuard === "when-suppressed" && suppressDoctorStdout),
     loadPlugins: shouldLoadPlugins({
       argv: params.argv,
       commandPath: params.commandPath,

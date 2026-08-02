@@ -81,6 +81,17 @@ function setLoaderMetadataSnapshot(params: { pluginIds?: readonly string[] } = {
 }
 
 describe("resolvePluginLoadCacheContext", () => {
+  it("partitions full and setup channel plugin load intent", () => {
+    const fullKey = resolvePluginLoadCacheContext({ config: {} }).cacheKey;
+    const setupKey = resolvePluginLoadCacheContext({
+      config: {},
+      channelPluginLoadIntent: "setup",
+    }).cacheKey;
+
+    expect(setupKey).not.toBe(fullKey);
+    expect(resolvePluginLoadCacheContext({ config: {} }).channelPluginLoadIntent).toBe("full");
+  });
+
   it("keys concrete runtime bindings by identity", () => {
     const firstNodes = {} as PluginRuntime["nodes"];
     const firstSubagent = {} as PluginRuntime["subagent"];

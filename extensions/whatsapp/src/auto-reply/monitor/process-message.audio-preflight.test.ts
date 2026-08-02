@@ -308,61 +308,57 @@ describe("processMessage audio preflight transcription", () => {
     });
   });
 
-  it("keeps the empty caption and audio fact when transcription fails", async () => {
-    transcribeFirstAudioMock.mockRejectedValueOnce(new Error("provider unavailable"));
+  it.each([
+    {
+      name: "keeps the empty caption and audio fact when transcription fails",
+      arrange: () =>
+        transcribeFirstAudioMock.mockRejectedValueOnce(new Error("provider unavailable")),
+    },
+    {
+      name: "keeps the empty caption when transcription returns undefined",
+      arrange: () => transcribeFirstAudioMock.mockResolvedValueOnce(undefined),
+    },
+  ])("$name", async ({ arrange }) => {
+    arrange();
 
     await processMessage(makeParams());
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-
-    expectContextFields(firstDispatchContext(), {
-      Body: "",
-      BodyForAgent: "",
-    });
+    expectContextFields(firstDispatchContext(), { Body: "", BodyForAgent: "" });
   });
 
-  it("keeps the empty caption when transcription returns undefined", async () => {
-    transcribeFirstAudioMock.mockResolvedValueOnce(undefined);
-
-    await processMessage(makeParams());
-
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-
-    expectContextFields(firstDispatchContext(), {
-      Body: "",
-      BodyForAgent: "",
-    });
-  });
-
-  it("does not call transcribeFirstAudio when mediaType is not audio", async () => {
-    await processMessage(
-      makeParams({ body: "<media:image>", mediaType: "image/jpeg", mediaPath: "/tmp/img.jpg" }),
-    );
+  it.each([
+    {
+      name: "does not call transcribeFirstAudio when mediaType is not audio",
+      overrides: {
+        body: "<media:image>",
+        mediaType: "image/jpeg",
+        mediaPath: "/tmp/img.jpg",
+      },
+      assertEmptyBody: false,
+    },
+    {
+      name: "does not call transcribeFirstAudio when audio has a caption",
+      overrides: { body: "hello there", mediaType: "audio/ogg; codecs=opus" },
+      assertEmptyBody: false,
+    },
+    {
+      name: "does not call transcribeFirstAudio when mediaPath is absent",
+      overrides: { mediaPath: undefined },
+      assertEmptyBody: false,
+    },
+    {
+      name: "does not call transcribeFirstAudio when msg.mediaType is absent",
+      overrides: { mediaType: undefined, mediaPath: "/tmp/voice.ogg" },
+      assertEmptyBody: true,
+    },
+  ])("$name", async ({ overrides, assertEmptyBody }) => {
+    await processMessage(makeParams(overrides));
 
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-  });
-
-  it("does not call transcribeFirstAudio when audio has a caption", async () => {
-    await processMessage(makeParams({ body: "hello there", mediaType: "audio/ogg; codecs=opus" }));
-
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-  });
-
-  it("does not call transcribeFirstAudio when mediaPath is absent", async () => {
-    await processMessage(makeParams({ mediaPath: undefined }));
-
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-  });
-
-  it("does not call transcribeFirstAudio when msg.mediaType is absent", async () => {
-    await processMessage(makeParams({ mediaType: undefined, mediaPath: "/tmp/voice.ogg" }));
-
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-
-    // Empty body passes through without a classified audio fact.
-    expectContextFields(firstDispatchContext(), {
-      Body: "",
-    });
+    if (assertEmptyBody) {
+      expectContextFields(firstDispatchContext(), { Body: "" });
+    }
   });
 
   it("does not use transcript body for command detection", async () => {
