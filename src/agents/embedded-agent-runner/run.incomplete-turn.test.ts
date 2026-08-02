@@ -117,7 +117,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     );
 
-    const result = await runEmbeddedAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       runId: "run-tool-summary-failure-count",
     });
@@ -1566,7 +1566,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
-  it("returns NO_REPLY without retrying reasoning-only assistant turns when silence is allowed", async () => {
+  it("retries reasoning-only assistant turns even when deliberate silence is allowed", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -1586,6 +1586,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible answer."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "Visible answer." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
 
     const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
@@ -1595,14 +1607,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       runId: "run-reasoning-only-silent",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    const onlyCall = runAttemptCall(0);
-    expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
-    expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-    expectNoWarnMessageWith("reasoning-only assistant turn detected");
-    expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
-    expect(result.meta.terminalReplyKind).toBe("silent-empty");
-    expect(result.meta.livenessState).toBe("working");
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1).prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+    expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
   it("replays an unpersisted reasoning continuation across a missing-assistant retry", async () => {
@@ -1680,7 +1687,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     );
 
-    const result = await runEmbeddedAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "openai",
       model: "gpt-5.4",
@@ -4243,7 +4250,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
-  it("treats clean empty assistant turns as silent only when the caller allows it", () => {
+  it("treats clean empty assistant turns as silent only for reply-optional runs", () => {
     const attempt = makeAttemptResult({
       assistantTexts: [],
       lastAssistant: {
@@ -4263,6 +4270,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         timedOut: false,
         attempt,
       }),
+    ).toBe(false);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
     ).toBe(true);
     expect(
       shouldTreatEmptyAssistantReplyAsSilent({
@@ -4275,7 +4292,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
-  it("treats reasoning-only assistant turns as silent only when the caller allows it", () => {
+  it("treats reasoning-only assistant turns as silent only for reply-optional runs", () => {
     const attempt = makeAttemptResult({
       assistantTexts: [],
       lastAssistant: {
@@ -4296,6 +4313,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(
       shouldTreatEmptyAssistantReplyAsSilent({
         allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
         payloadCount: 0,
         aborted: false,
         timedOut: false,
@@ -4453,9 +4480,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
-  it("returns NO_REPLY without retrying clean empty assistant turns when silence is allowed", async () => {
+  it("retries clean empty assistant turns even when deliberate silence is allowed", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockResolvedValue(
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
@@ -4464,6 +4491,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           provider: "openai",
           model: "gpt-5.5",
           content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible answer."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "Visible answer." }],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     );
@@ -4476,13 +4515,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       runId: "run-empty-assistant-silent",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    const onlyCall = runAttemptCall(0);
-    expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
-    expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-    expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
-    expect(result.meta.terminalReplyKind).toBe("silent-empty");
-    expect(result.meta.livenessState).toBe("working");
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1).prompt).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expectWarnMessageWith("empty response detected");
   });
 
   it("returns NO_REPLY without retrying exact silent assistant replies when silence is allowed", async () => {

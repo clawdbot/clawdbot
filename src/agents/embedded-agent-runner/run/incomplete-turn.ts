@@ -700,19 +700,10 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   ) {
     return true;
   }
-  if (params.onlyExplicitSilentReply) {
-    return false;
-  }
-  // Post-tool empty stops are ambiguous provider failures when a reply is still
-  // expected; reply-optional runs settle their work in the tools themselves.
-  if (
-    !terminalReplyOptional &&
-    params.attempt.toolMetas.length > 0 &&
-    isEmptyResponseAssistantTurn({
-      payloadCount: params.payloadCount,
-      attempt: params.attempt,
-    })
-  ) {
+  // A visible turn owes a reply unless the model explicitly chose NO_REPLY.
+  // Bare empty and reasoning-only stops are provider failures, even when the
+  // conversation policy permits deliberate silence.
+  if (params.onlyExplicitSilentReply || !terminalReplyOptional) {
     return false;
   }
   return isNonVisibleAssistantTurnEligibleForSilentReply({
