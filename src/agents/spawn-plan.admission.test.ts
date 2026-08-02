@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
+import {
+  reserveChildAdmissionSlot,
+  resolveChildAdmission,
+  type ChildAdmissionCap,
+} from "./child-admission.js";
 
 type AdmissionParams = Parameters<typeof resolveChildAdmission>[0];
 type AnnounceAdmissionParams = Extract<AdmissionParams, { collect: false }>;
@@ -78,5 +82,44 @@ describe("resolveChildAdmission", () => {
     if (!result.ok) {
       expect(result.error).toContain(governingCap);
     }
+  });
+
+  it("shares pending capacity by controller and releases reservations exactly once", () => {
+    let registeredChildren = 0;
+    const reserve = (controllerSessionKey = "agent:main:controller") =>
+      reserveChildAdmissionSlot({
+        controllerSessionKey,
+        resolveAdmission: (pendingChildren) =>
+          resolveChildAdmission(
+            announce({
+              activeChildren: registeredChildren + pendingChildren,
+              maxActiveChildren: 1,
+            }),
+          ),
+      });
+    const first = reserve();
+    const otherController = reserve("agent:main:other-controller");
+    if (!first.ok || !otherController.ok) {
+      throw new Error("Expected independent controller reservations");
+    }
+
+    expect(reserve()).toMatchObject({
+      ok: false,
+      governingCap: "subagents.maxChildrenPerAgent",
+    });
+    first.release();
+    first.release();
+    otherController.release();
+
+    const replacement = reserve();
+    if (!replacement.ok) {
+      throw new Error("Expected released controller capacity");
+    }
+    registeredChildren += 1;
+    replacement.release();
+    expect(reserve()).toMatchObject({
+      ok: false,
+      governingCap: "subagents.maxChildrenPerAgent",
+    });
   });
 });

@@ -15,6 +15,44 @@ type ChildAdmissionParams = {
   maxActiveChildren: number;
 } & ({ collect: false } | { collect: true; totalChildren: number; maxTotalChildren: number });
 
+/** ACP child keys deduplicate task rows; symbols keep anonymous starts distinct. */
+const pendingChildAdmissions = new Map<string, Set<string | symbol>>();
+
+export function reserveChildAdmissionSlot<
+  TAccepted extends { ok: true },
+  TRejected extends { ok: false },
+>(params: {
+  controllerSessionKey: string;
+  childSessionKey?: string;
+  resolveAdmission: (
+    pendingChildren: number,
+    pendingChildSessionKeys: ReadonlySet<string>,
+  ) => TAccepted | TRejected;
+}): (TAccepted & { release: () => void }) | TRejected {
+  const pending = pendingChildAdmissions.get(params.controllerSessionKey) ?? new Set();
+  const pendingChildSessionKeys = new Set(
+    [...pending].filter((sessionKey): sessionKey is string => typeof sessionKey === "string"),
+  );
+  const admission = params.resolveAdmission(pending.size, pendingChildSessionKeys);
+  if (!admission.ok) {
+    return admission;
+  }
+  const reservation = params.childSessionKey ?? Symbol("pending child admission");
+  pending.add(reservation);
+  pendingChildAdmissions.set(params.controllerSessionKey, pending);
+  return {
+    ...admission,
+    release() {
+      if (!pending.delete(reservation)) {
+        return;
+      }
+      if (pending.size === 0) {
+        pendingChildAdmissions.delete(params.controllerSessionKey);
+      }
+    },
+  };
+}
+
 const rejectChildAdmission = (
   governingCap: ChildAdmissionCap,
   error: string,

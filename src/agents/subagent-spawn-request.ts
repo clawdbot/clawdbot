@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { listAgentIds } from "./agent-scope-config.js";
+import { reserveChildAdmissionSlot } from "./child-admission.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "./spawn-plan.js";
 import { listSwarmRunsForGroup } from "./subagent-registry.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
@@ -47,8 +48,9 @@ type ResolvedSubagentSpawnRequest = {
     reservationPending: boolean;
   };
   admission: {
-    resolve: () => ReturnType<typeof resolveSpawnAdmission>;
+    resolve: (pendingChildren?: number) => ReturnType<typeof resolveSpawnAdmission>;
     initial: ReturnType<typeof resolveSpawnAdmission> & { ok: true };
+    reservation?: { release: () => void };
     childDepth: number;
     maxSpawnDepth: number;
   };
@@ -209,7 +211,7 @@ export function resolveSubagentSpawnRequest(
   const swarmSchedulerGroupKey = swarmGroupId
     ? JSON.stringify([requesterInternalKey, swarmGroupId])
     : undefined;
-  const resolveAdmission = () => {
+  const resolveAdmission = (pendingChildren = 0) => {
     const collectorRuns = params.collect
       ? swarmGroupId
         ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey)
@@ -230,9 +232,15 @@ export function resolveSubagentSpawnRequest(
       targetAgentId,
       requestedAgentId: effectiveRequestedAgentId,
       configuredAgentIds,
+      additionalActiveChildren: pendingChildren,
     });
   };
-  const admission = resolveAdmission();
+  const admission = params.collect
+    ? resolveAdmission()
+    : reserveChildAdmissionSlot({
+        controllerSessionKey: ownership.controllerSessionKey,
+        resolveAdmission,
+      });
   if (!admission.ok) {
     return rejectSubagentSpawnRequest(
       "forbidden",
@@ -307,6 +315,7 @@ export function resolveSubagentSpawnRequest(
       admission: {
         resolve: resolveAdmission,
         initial: admission,
+        reservation: "release" in admission ? admission : undefined,
         childDepth,
         maxSpawnDepth,
       },
