@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   validateQaEvidenceSummaryJson,
-  type QaEvidenceScorecardJson,
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/src/evidence-summary.js";
@@ -29,17 +28,45 @@ import {
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
 const DEFAULT_SCORES_PATH = "qa/maturity-scores.yaml";
-const DEFAULT_OUTPUT_DIR = "docs";
+const DEFAULT_STATE_PATH = "qa/maturity-docs-state.json";
+const DEFAULT_DOCS_ROOT = "docs";
+const DEFAULT_OUTPUT_DIR = ".artifacts/maturity-docs";
 
 type Args = {
   taxonomy: string;
   scores: string;
   docsRoot: string;
   outputDir: string;
+  outputDirExplicit: boolean;
   staticAssetsDir?: string;
   evidenceDir?: string;
+  statePath: string;
+  stateOutput?: string;
   check: boolean;
   strictInputs: boolean;
+};
+
+type PublicCount = {
+  fulfilled: number;
+  total: number;
+  fulfillmentPercent: number;
+};
+
+type PublicCategoryReport = {
+  surfaceId: string;
+  name: string;
+  status: "fulfilled" | "partial" | "missing";
+  features: PublicCount;
+  coverageIds: PublicCount;
+  missingCoverageCount: number;
+  docs: string;
+};
+
+type PublicScorecard = {
+  categories: PublicCount;
+  features: PublicCount;
+  coverageIds: PublicCount;
+  categoryReports: PublicCategoryReport[];
 };
 
 type EvidenceSummary = {
@@ -50,7 +77,41 @@ type EvidenceSummary = {
   entryCount: number;
   statuses: StatusCounts;
   blockingResults: string[];
-  scorecard?: QaEvidenceScorecardJson;
+  scorecard?: PublicScorecard;
+};
+
+type StateCount = [fulfilled: number, total: number, fulfillmentPercent: number];
+
+type StateCategory = [
+  surfaceName: string,
+  categoryName: string,
+  status: PublicCategoryReport["status"],
+  featureFulfilled: number,
+  featureTotal: number,
+  featurePercent: number,
+  coverageFulfilled: number,
+  coverageTotal: number,
+  coveragePercent: number,
+  missingCoverageCount: number,
+  docs: string,
+];
+
+type MaturityDocsStateSummary = {
+  categories: StateCategory[];
+  entryCount: number;
+  generatedAt: string;
+  profile: string;
+  statuses: StatusCounts;
+  totals: {
+    categories: StateCount;
+    coverageIds: StateCount;
+    features: StateCount;
+  };
+};
+
+type MaturityDocsState = {
+  summaries: MaturityDocsStateSummary[];
+  version: 1;
 };
 
 type StatusCounts = Record<QaEvidenceStatus, number>;
@@ -78,6 +139,8 @@ type RenderMaturityScorecardInputs = Pick<RenderInputs, "taxonomy" | "scores" | 
 };
 
 type DerivedCoverageScores = QaMaturityCoverageScores & {
+  categoryDocs: Map<string, string>;
+  categoryFeatureTotals: Map<string, number>;
   surfaces: Map<string, QaMaturityScoreObject>;
   rollups: {
     surface_average?: QaMaturityScoreObject;
@@ -86,16 +149,17 @@ type DerivedCoverageScores = QaMaturityCoverageScores & {
   warnings: string[];
 };
 
-const MATURITY_DOC_OUTPUTS = ["maturity/scorecard.md", "maturity/taxonomy.md"] as const;
-
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     taxonomy: DEFAULT_TAXONOMY_PATH,
     scores: DEFAULT_SCORES_PATH,
-    docsRoot: DEFAULT_OUTPUT_DIR,
+    docsRoot: DEFAULT_DOCS_ROOT,
     outputDir: DEFAULT_OUTPUT_DIR,
+    outputDirExplicit: false,
     staticAssetsDir: undefined,
     evidenceDir: undefined,
+    statePath: DEFAULT_STATE_PATH,
+    stateOutput: undefined,
     check: false,
     strictInputs: false,
   };
@@ -128,10 +192,15 @@ function parseArgs(argv: string[]): Args {
       args.docsRoot = next();
     } else if (arg === "--output-dir") {
       args.outputDir = next();
+      args.outputDirExplicit = true;
     } else if (arg === "--static-assets-dir") {
       args.staticAssetsDir = next();
     } else if (arg === "--evidence-dir") {
       args.evidenceDir = next();
+    } else if (arg === "--state") {
+      args.statePath = next();
+    } else if (arg === "--state-output") {
+      args.stateOutput = next();
     } else if (arg === "--help" || arg === "-h") {
       process.stdout.write(`Usage: node --import tsx scripts/qa/render-maturity-docs.ts [options]
 
@@ -143,6 +212,8 @@ Options:
   --static-assets-dir <path>
                         Copy source YAML and QA evidence JSON for docs components
   --evidence-dir <path> Optional directory containing qa-evidence.json artifacts
+  --state <path>        Sanitized public evidence projection (default: qa/maturity-docs-state.json)
+  --state-output <path> Atomically write a sanitized projection from --evidence-dir
   --check               Fail when output files are stale
   --strict-inputs       Fail on score or evidence input warnings
   -h, --help            Show this help
@@ -622,7 +693,7 @@ function numberText(value: unknown): string {
   return Number.isFinite(value) ? String(value) : "";
 }
 
-function countText(counts?: QaEvidenceScorecardJson["categories"]): string {
+function countText(counts?: PublicCount): string {
   if (!counts || typeof counts !== "object") {
     return "";
   }
@@ -677,11 +748,42 @@ function readinessStatusText(status: string): string {
   return status;
 }
 
-function followUpText(missingCoverageIds: readonly string[]): string {
-  if (missingCoverageIds.length === 0) {
+function followUpText(missingCoverageCount: number): string {
+  if (missingCoverageCount === 0) {
     return "None";
   }
-  return `${missingCoverageIds.length} capability ${missingCoverageIds.length === 1 ? "gap" : "gaps"}`;
+  return `${missingCoverageCount} capability ${missingCoverageCount === 1 ? "gap" : "gaps"}`;
+}
+
+function publicCount(count: {
+  fulfilled: number;
+  total: number;
+  fulfillmentPercent: number;
+}): PublicCount {
+  return {
+    fulfilled: count.fulfilled,
+    total: count.total,
+    fulfillmentPercent: count.fulfillmentPercent,
+  };
+}
+
+function publicScorecardFromEvidence(
+  scorecard: NonNullable<QaEvidenceSummaryJson["scorecard"]>,
+): PublicScorecard {
+  return {
+    categories: publicCount(scorecard.categories),
+    features: publicCount(scorecard.features),
+    coverageIds: publicCount(scorecard.coverageIds),
+    categoryReports: scorecard.categoryReports.map((category) => ({
+      surfaceId: category.surfaceId,
+      name: category.name,
+      status: category.status,
+      features: publicCount(category.features),
+      coverageIds: publicCount(category.coverageIds),
+      missingCoverageCount: category.missingCoverageIds.length,
+      docs: "",
+    })),
+  };
 }
 
 function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
@@ -695,9 +797,424 @@ function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
       entryCount: payload.entries.length,
       statuses: countStatuses(payload.entries),
       blockingResults: blockingResultLabels(payload.entries),
-      scorecard: payload.scorecard,
+      scorecard: payload.scorecard ? publicScorecardFromEvidence(payload.scorecard) : undefined,
     };
   });
+}
+
+function assertRecord(value: unknown, context: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function assertExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+  context: string,
+): void {
+  const actual = Object.keys(value).toSorted();
+  const sortedExpected = expected.toSorted();
+  if (actual.join("\0") !== sortedExpected.join("\0")) {
+    throw new Error(
+      `${context} must contain exactly: ${sortedExpected.join(", ")}; got: ${actual.join(", ")}`,
+    );
+  }
+}
+
+function readNonNegativeInteger(value: unknown, context: string): number {
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new Error(`${context} must be a non-negative integer`);
+  }
+  return value as number;
+}
+
+function readPercent(value: unknown, context: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
+    throw new Error(`${context} must be a finite percentage from 0 through 100`);
+  }
+  return value;
+}
+
+function readNonEmptyString(value: unknown, context: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${context} must be a non-empty string`);
+  }
+  return value;
+}
+
+function readStateCount(value: unknown, context: string): StateCount {
+  if (!Array.isArray(value) || value.length !== 3) {
+    throw new Error(`${context} must be [fulfilled, total, fulfillmentPercent]`);
+  }
+  const fulfilled = readNonNegativeInteger(value[0], `${context}[0]`);
+  const total = readNonNegativeInteger(value[1], `${context}[1]`);
+  const fulfillmentPercent = readPercent(value[2], `${context}[2]`);
+  if (fulfilled > total) {
+    throw new Error(`${context} fulfilled count cannot exceed total`);
+  }
+  return [fulfilled, total, fulfillmentPercent];
+}
+
+function readStatusCounts(value: unknown, context: string): StatusCounts {
+  const record = assertRecord(value, context);
+  assertExactKeys(record, ["blocked", "fail", "pass", "skipped"], context);
+  return {
+    pass: readNonNegativeInteger(record.pass, `${context}.pass`),
+    fail: readNonNegativeInteger(record.fail, `${context}.fail`),
+    blocked: readNonNegativeInteger(record.blocked, `${context}.blocked`),
+    skipped: readNonNegativeInteger(record.skipped, `${context}.skipped`),
+  };
+}
+
+function readStateCategory(value: unknown, context: string): StateCategory {
+  if (!Array.isArray(value) || value.length !== 11) {
+    throw new Error(`${context} must be an 11-field category tuple`);
+  }
+  const surfaceName = readNonEmptyString(value[0], `${context}[0]`);
+  const categoryName = readNonEmptyString(value[1], `${context}[1]`);
+  const status = value[2];
+  if (status !== "fulfilled" && status !== "partial" && status !== "missing") {
+    throw new Error(`${context}[2] must be fulfilled, partial, or missing`);
+  }
+  const featureFulfilled = readNonNegativeInteger(value[3], `${context}[3]`);
+  const featureTotal = readNonNegativeInteger(value[4], `${context}[4]`);
+  const featurePercent = readPercent(value[5], `${context}[5]`);
+  const coverageFulfilled = readNonNegativeInteger(value[6], `${context}[6]`);
+  const coverageTotal = readNonNegativeInteger(value[7], `${context}[7]`);
+  const coveragePercent = readPercent(value[8], `${context}[8]`);
+  const missingCoverageCount = readNonNegativeInteger(value[9], `${context}[9]`);
+  const docs = typeof value[10] === "string" ? value[10] : undefined;
+  if (docs === undefined || /[\r\n]/u.test(docs)) {
+    throw new Error(`${context}[10] must be a single-line public docs projection`);
+  }
+  if (featureFulfilled > featureTotal || coverageFulfilled > coverageTotal) {
+    throw new Error(`${context} fulfilled counts cannot exceed their totals`);
+  }
+  if (missingCoverageCount > coverageTotal) {
+    throw new Error(`${context} missing coverage count cannot exceed its total`);
+  }
+  return [
+    surfaceName,
+    categoryName,
+    status,
+    featureFulfilled,
+    featureTotal,
+    featurePercent,
+    coverageFulfilled,
+    coverageTotal,
+    coveragePercent,
+    missingCoverageCount,
+    docs,
+  ];
+}
+
+function taxonomyCategoryOrder(taxonomy: QaMaturityTaxonomy): Array<[string, string, string]> {
+  return activeQaMaturityTaxonomySurfaces(taxonomy)
+    .flatMap((surface) =>
+      surface.categories.map((category) => ({
+        sortKey: `${surface.id}.${category.id}`,
+        tuple: [surface.id, surface.name, category.name] as [string, string, string],
+      })),
+    )
+    .toSorted((left, right) => left.sortKey.localeCompare(right.sortKey))
+    .map((entry) => entry.tuple);
+}
+
+function readMaturityDocsState(statePath: string, taxonomy: QaMaturityTaxonomy): MaturityDocsState {
+  if (!fs.existsSync(statePath)) {
+    throw new Error(
+      `maturity docs state is missing at ${statePath}; pass --state or generate it from QA evidence with --evidence-dir and --state-output`,
+    );
+  }
+  const root = assertRecord(JSON.parse(fs.readFileSync(statePath, "utf8")), statePath);
+  assertExactKeys(root, ["summaries", "version"], statePath);
+  if (root.version !== 1) {
+    throw new Error(`${statePath}.version must be 1`);
+  }
+  if (!Array.isArray(root.summaries) || root.summaries.length === 0) {
+    throw new Error(`${statePath}.summaries must be a non-empty array`);
+  }
+
+  const categoryOrder = taxonomyCategoryOrder(taxonomy);
+  const knownCategories = new Set(
+    categoryOrder.map(([, surfaceName, categoryName]) => `${surfaceName}\0${categoryName}`),
+  );
+  const summaries = root.summaries.map((rawSummary, summaryIndex): MaturityDocsStateSummary => {
+    const context = `${statePath}.summaries[${summaryIndex}]`;
+    const summary = assertRecord(rawSummary, context);
+    assertExactKeys(
+      summary,
+      ["categories", "entryCount", "generatedAt", "profile", "statuses", "totals"],
+      context,
+    );
+    const entryCount = readNonNegativeInteger(summary.entryCount, `${context}.entryCount`);
+    const generatedAt = readNonEmptyString(summary.generatedAt, `${context}.generatedAt`);
+    if (!Number.isFinite(Date.parse(generatedAt))) {
+      throw new Error(`${context}.generatedAt must be an ISO timestamp`);
+    }
+    const profile = readNonEmptyString(summary.profile, `${context}.profile`);
+    const statuses = readStatusCounts(summary.statuses, `${context}.statuses`);
+    if (Object.values(statuses).reduce((sum, count) => sum + count, 0) !== entryCount) {
+      throw new Error(`${context}.statuses must sum to entryCount`);
+    }
+    const totalsRecord = assertRecord(summary.totals, `${context}.totals`);
+    assertExactKeys(totalsRecord, ["categories", "coverageIds", "features"], `${context}.totals`);
+    const totals = {
+      categories: readStateCount(totalsRecord.categories, `${context}.totals.categories`),
+      coverageIds: readStateCount(totalsRecord.coverageIds, `${context}.totals.coverageIds`),
+      features: readStateCount(totalsRecord.features, `${context}.totals.features`),
+    };
+    if (!Array.isArray(summary.categories)) {
+      throw new Error(`${context}.categories must be an array`);
+    }
+    const categories = summary.categories.map((category, categoryIndex) =>
+      readStateCategory(category, `${context}.categories[${categoryIndex}]`),
+    );
+    if (totals.categories[1] !== categories.length) {
+      throw new Error(`${context}.totals.categories total must equal the category tuple count`);
+    }
+    const seen = new Set<string>();
+    for (const [surfaceName, categoryName] of categories) {
+      const key = `${surfaceName}\0${categoryName}`;
+      if (!knownCategories.has(key)) {
+        throw new Error(
+          `${context} contains unknown taxonomy category ${surfaceName} / ${categoryName}`,
+        );
+      }
+      if (seen.has(key)) {
+        throw new Error(
+          `${context} contains duplicate taxonomy category ${surfaceName} / ${categoryName}`,
+        );
+      }
+      seen.add(key);
+    }
+    if (profile === "all" && categories.length !== categoryOrder.length) {
+      throw new Error(
+        `${context} all-profile state covers ${categories.length} of ${categoryOrder.length} active taxonomy categories`,
+      );
+    }
+    return { categories, entryCount, generatedAt, profile, statuses, totals };
+  });
+
+  const sorted = summaries.toSorted(
+    (left, right) =>
+      left.profile.localeCompare(right.profile) ||
+      left.generatedAt.localeCompare(right.generatedAt),
+  );
+  if (summaries.some((summary, index) => summary !== sorted[index])) {
+    throw new Error(`${statePath}.summaries must be sorted by profile and generatedAt`);
+  }
+  return { summaries, version: 1 };
+}
+
+function stateCount(count: PublicCount): StateCount {
+  return [count.fulfilled, count.total, count.fulfillmentPercent];
+}
+
+function maturityDocsStateFromEvidence(
+  taxonomy: QaMaturityTaxonomy,
+  evidenceSummaries: EvidenceSummary[],
+  docsRouteIndex: DocsRouteIndex,
+): MaturityDocsState {
+  const surfaceNames = new Map(
+    activeQaMaturityTaxonomySurfaces(taxonomy).map((surface) => [surface.id, surface.name]),
+  );
+  const categoryOrder = taxonomyCategoryOrder(taxonomy);
+  const docsByKey = new Map(
+    activeQaMaturityTaxonomySurfaces(taxonomy).flatMap((surface) =>
+      surface.categories.map((category) => [
+        `${surface.name}\0${category.name}`,
+        (category.docs ?? [])
+          .map((doc) => docsLink(doc, docsRouteIndex))
+          .filter((doc): doc is string => Boolean(doc))
+          .join(", "),
+      ]),
+    ),
+  );
+  const summaries = evidenceSummaries
+    .filter((summary): summary is EvidenceSummary & { scorecard: PublicScorecard } =>
+      Boolean(summary.scorecard),
+    )
+    .map((summary): MaturityDocsStateSummary => {
+      const categoriesByKey = new Map<string, StateCategory>();
+      for (const category of summary.scorecard.categoryReports) {
+        const surfaceName = surfaceNames.get(category.surfaceId);
+        if (!surfaceName) {
+          throw new Error(`QA evidence contains unknown taxonomy surface ${category.surfaceId}`);
+        }
+        const key = `${surfaceName}\0${category.name}`;
+        if (categoriesByKey.has(key)) {
+          throw new Error(
+            `QA evidence contains duplicate taxonomy category ${surfaceName} / ${category.name}`,
+          );
+        }
+        categoriesByKey.set(key, [
+          surfaceName,
+          category.name,
+          category.status,
+          category.features.fulfilled,
+          category.features.total,
+          category.features.fulfillmentPercent,
+          category.coverageIds.fulfilled,
+          category.coverageIds.total,
+          category.coverageIds.fulfillmentPercent,
+          category.missingCoverageCount,
+          docsByKey.get(key) ?? "",
+        ]);
+      }
+      const categories = categoryOrder.flatMap(([, surfaceName, categoryName]) => {
+        const category = categoriesByKey.get(`${surfaceName}\0${categoryName}`);
+        return category ? [category] : [];
+      });
+      if (categories.length !== categoriesByKey.size) {
+        throw new Error("QA evidence contains a category that is absent from the active taxonomy");
+      }
+      if (summary.profile === "all" && categories.length !== categoryOrder.length) {
+        throw new Error(
+          `all-profile QA evidence covers ${categories.length} of ${categoryOrder.length} active taxonomy categories`,
+        );
+      }
+      if (summary.scorecard.categories.total !== categories.length) {
+        throw new Error(
+          `QA evidence category total ${summary.scorecard.categories.total} does not match ${categories.length} projected rows`,
+        );
+      }
+      if (
+        Object.values(summary.statuses).reduce((sum, count) => sum + count, 0) !==
+        summary.entryCount
+      ) {
+        throw new Error("QA evidence status counts do not sum to the evidence entry count");
+      }
+      return {
+        categories,
+        entryCount: summary.entryCount,
+        generatedAt: summary.generatedAt,
+        profile: summary.profile,
+        statuses: summary.statuses,
+        totals: {
+          categories: stateCount(summary.scorecard.categories),
+          coverageIds: stateCount(summary.scorecard.coverageIds),
+          features: stateCount(summary.scorecard.features),
+        },
+      };
+    })
+    .toSorted(
+      (left, right) =>
+        left.profile.localeCompare(right.profile) ||
+        left.generatedAt.localeCompare(right.generatedAt),
+    );
+  if (summaries.length === 0) {
+    throw new Error("QA evidence does not contain a scorecard to project into maturity docs state");
+  }
+  return { summaries, version: 1 };
+}
+
+function publicCountFromState([fulfilled, total, fulfillmentPercent]: StateCount): PublicCount {
+  return { fulfilled, total, fulfillmentPercent };
+}
+
+function evidenceSummariesFromState(
+  state: MaturityDocsState,
+  statePath: string,
+  taxonomy: QaMaturityTaxonomy,
+): EvidenceSummary[] {
+  const surfaceIds = new Map(
+    activeQaMaturityTaxonomySurfaces(taxonomy).map((surface) => [surface.name, surface.id]),
+  );
+  return state.summaries.map((summary, index) => ({
+    sourcePath: statePath,
+    path: `${statePath}#summaries[${index}]`,
+    generatedAt: summary.generatedAt,
+    profile: summary.profile,
+    entryCount: summary.entryCount,
+    statuses: summary.statuses,
+    blockingResults: [],
+    scorecard: {
+      categories: publicCountFromState(summary.totals.categories),
+      coverageIds: publicCountFromState(summary.totals.coverageIds),
+      features: publicCountFromState(summary.totals.features),
+      categoryReports: summary.categories.map(
+        ([
+          surfaceName,
+          name,
+          status,
+          featureFulfilled,
+          featureTotal,
+          featurePercent,
+          coverageFulfilled,
+          coverageTotal,
+          coveragePercent,
+          missingCoverageCount,
+          docs,
+        ]) => ({
+          surfaceId: surfaceIds.get(surfaceName) ?? surfaceName,
+          name,
+          status,
+          features: {
+            fulfilled: featureFulfilled,
+            total: featureTotal,
+            fulfillmentPercent: featurePercent,
+          },
+          coverageIds: {
+            fulfilled: coverageFulfilled,
+            total: coverageTotal,
+            fulfillmentPercent: coveragePercent,
+          },
+          missingCoverageCount,
+          docs,
+        }),
+      ),
+    },
+  }));
+}
+
+function formatMaturityDocsState(state: MaturityDocsState): string {
+  const lines = ["{", '  "summaries": ['];
+  for (const [summaryIndex, summary] of state.summaries.entries()) {
+    lines.push(
+      "    {",
+      '      "categories": [',
+      ...summary.categories.map(
+        (category, categoryIndex) =>
+          `        ${JSON.stringify(category)}${categoryIndex + 1 === summary.categories.length ? "" : ","}`,
+      ),
+      "      ],",
+      `      "entryCount": ${summary.entryCount},`,
+      `      "generatedAt": ${JSON.stringify(summary.generatedAt)},`,
+      `      "profile": ${JSON.stringify(summary.profile)},`,
+      '      "statuses": {',
+      `        "blocked": ${summary.statuses.blocked},`,
+      `        "fail": ${summary.statuses.fail},`,
+      `        "pass": ${summary.statuses.pass},`,
+      `        "skipped": ${summary.statuses.skipped}`,
+      "      },",
+      '      "totals": {',
+      `        "categories": ${JSON.stringify(summary.totals.categories)},`,
+      `        "coverageIds": ${JSON.stringify(summary.totals.coverageIds)},`,
+      `        "features": ${JSON.stringify(summary.totals.features)}`,
+      "      }",
+      `    }${summaryIndex + 1 === state.summaries.length ? "" : ","}`,
+    );
+  }
+  lines.push("  ],", '  "version": 1', "}");
+  return `${lines.join("\n")}\n`;
+}
+
+function writeFileAtomic(outputPath: string, content: string): void {
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  const temporaryPath = path.join(
+    path.dirname(outputPath),
+    `.${path.basename(outputPath)}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`,
+  );
+  try {
+    fs.writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx" });
+    // Rename only after the complete projection is durable, so interruption cannot expose half JSON.
+    fs.renameSync(temporaryPath, outputPath);
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
+  }
 }
 
 function rejectBlockingEvidence(evidenceSummaries: EvidenceSummary[]): void {
@@ -757,11 +1274,16 @@ function deriveCoverageScores(
   }
 
   const categories = new Map<string, QaMaturityScoreObject>();
+  const categoryDocs = new Map<string, string>();
+  const categoryFeatureTotals = new Map<string, number>();
   for (const report of coverageSummary.scorecard?.categoryReports ?? []) {
+    const key = qaMaturityCoverageCategoryKey(report.surfaceId, report.name);
     categories.set(
-      qaMaturityCoverageCategoryKey(report.surfaceId, report.name),
+      key,
       qaMaturityScoreObjectForScore(Math.round(report.coverageIds.fulfillmentPercent)),
     );
+    categoryDocs.set(key, report.docs);
+    categoryFeatureTotals.set(key, report.features.total);
   }
 
   const surfaces = new Map<string, QaMaturityScoreObject>();
@@ -794,6 +1316,8 @@ function deriveCoverageScores(
   const surfaceScores = Array.from(surfaces.values());
   return {
     categories,
+    categoryDocs,
+    categoryFeatureTotals,
     surfaces,
     rollups: {
       category_average:
@@ -943,7 +1467,7 @@ function renderEvidenceSection(
           `          <span className="maturity-readiness-status maturity-readiness-status-${markdownSlug(status)}">${markdownEscape(status)} - ${markdownEscape(checkSetTitle(item.profile))}</span>`,
           "        </div>",
           `        <span>${markdownEscape(countText(category.features))} / ${markdownEscape(countText(category.coverageIds))}</span>`,
-          `        <span>${markdownEscape(followUpText(category.missingCoverageIds))}</span>`,
+          `        <span>${markdownEscape(followUpText(category.missingCoverageCount))}</span>`,
           "      </div>",
         );
       }
@@ -1106,19 +1630,20 @@ function renderTaxonomy({
         '  <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>',
       ];
       for (const category of surface.categories) {
-        const docs = (category.docs ?? [])
-          .map((doc) => docsLink(doc, docsRouteIndex))
-          .filter((doc): doc is string => Boolean(doc))
-          .join(", ");
+        const categoryKey = qaMaturityCoverageCategoryKey(surface.id, category.name);
+        const docs =
+          coverage.categoryDocs.get(categoryKey) ??
+          (category.docs ?? [])
+            .map((doc) => docsLink(doc, docsRouteIndex))
+            .filter((doc): doc is string => Boolean(doc))
+            .join(", ");
         const scoreCategory = categoryScores.get(category.name);
-        const coverageScore = coverage.categories.get(
-          qaMaturityCoverageCategoryKey(surface.id, category.name),
-        );
+        const coverageScore = coverage.categories.get(categoryKey);
         categoryLines.push(
           '  <div className="maturity-category-row">',
           '    <div className="maturity-category-area">',
           `      <span className="maturity-category-title">${markdownEscape(category.name)}</span>`,
-          `      <span>${category.features.length} capabilities${scoreCategory?.lts?.supported ? " / LTS-supported" : ""}</span>`,
+          `      <span>${coverage.categoryFeatureTotals.get(categoryKey) ?? category.features.length} capabilities${scoreCategory?.lts?.supported ? " / LTS-supported" : ""}</span>`,
           "    </div>",
           `    <div>${scoreMeter(coverageScore)}</div>`,
           `    <div>${scoreMeter(scoreCategory?.quality)}</div>`,
@@ -1172,59 +1697,26 @@ function writeOrCheck(outputPath: string, content: string, check: boolean): bool
   return false;
 }
 
-function checkEvidenceIndependentInputs({
-  args,
-  scoresPath,
-  taxonomy,
-  taxonomyPath,
-}: {
-  args: Args;
-  scoresPath: string;
-  taxonomy: QaMaturityTaxonomy;
-  taxonomyPath: string;
-}): void {
-  const { warnings } = readValidatedQaMaturityScoreSources({
-    scoresPath,
-    taxonomy,
-    taxonomyPath,
-  });
-  writeInputWarnings(warnings);
-  if (args.strictInputs) {
-    enforceStrictInputs(warnings);
-  }
-
-  const missing = MATURITY_DOC_OUTPUTS.map((fileName) =>
-    path.join(args.outputDir, fileName),
-  ).filter((outputPath) => !fs.existsSync(outputPath));
-  if (missing.length > 0) {
-    throw new Error(
-      `maturity docs check cannot skip evidence-backed freshness because generated docs are missing:\n${missing.map((file) => `- ${file}`).join("\n")}`,
-    );
-  }
-}
-
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   const taxonomyPath = path.normalize(args.taxonomy);
   const scoresPath = path.normalize(args.scores);
+  const statePath = path.normalize(args.statePath);
+  const stateOutput = args.stateOutput ? path.normalize(args.stateOutput) : undefined;
   const docsRoot = path.normalize(args.docsRoot);
   const outputDir = path.normalize(args.outputDir);
   const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
-  if (args.check && !args.evidenceDir?.trim()) {
-    checkEvidenceIndependentInputs({
-      args: { ...args, outputDir },
-      scoresPath,
-      taxonomy,
-      taxonomyPath,
-    });
-    process.stdout.write(
-      `maturity docs inputs are valid in ${outputDir}; evidence-backed freshness check skipped because --evidence-dir was not supplied\n`,
-    );
-    return;
+  const docsRouteIndex = collectDocsRouteIndex(docsRoot);
+  const rawEvidenceSummaries = args.evidenceDir
+    ? readEvidenceSummaries(path.normalize(args.evidenceDir))
+    : undefined;
+  if (rawEvidenceSummaries) {
+    rejectBlockingEvidence(rawEvidenceSummaries);
   }
-
-  const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
-  rejectBlockingEvidence(evidenceSummaries);
+  const state = rawEvidenceSummaries
+    ? maturityDocsStateFromEvidence(taxonomy, rawEvidenceSummaries, docsRouteIndex)
+    : readMaturityDocsState(statePath, taxonomy);
+  const evidenceSummaries = evidenceSummariesFromState(state, stateOutput ?? statePath, taxonomy);
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,
@@ -1239,9 +1731,9 @@ function main(): void {
     enforceStrictInputs(inputWarnings);
   }
   const copiedStaticAssets =
-    !args.check && args.staticAssetsDir
+    !args.check && args.staticAssetsDir && rawEvidenceSummaries
       ? copyStaticSourceAssets({
-          evidenceSummaries,
+          evidenceSummaries: rawEvidenceSummaries,
           scoresPath,
           staticAssetsDir: args.staticAssetsDir,
           taxonomyPath,
@@ -1261,21 +1753,33 @@ function main(): void {
       "maturity/taxonomy.md",
       renderTaxonomy({
         coverage,
-        docsRouteIndex: collectDocsRouteIndex(docsRoot),
+        docsRouteIndex,
         taxonomy,
         scores,
       }),
     ],
   ]);
   const changed: string[] = [];
-  for (const [fileName, content] of outputs) {
-    const outputPath = path.join(outputDir, fileName);
-    if (writeOrCheck(outputPath, content, args.check)) {
-      changed.push(outputPath);
+  if (!args.check || args.outputDirExplicit) {
+    for (const [fileName, content] of outputs) {
+      const outputPath = path.join(outputDir, fileName);
+      if (writeOrCheck(outputPath, content, args.check)) {
+        changed.push(outputPath);
+      }
     }
   }
-  if (args.check) {
+  const formattedState = formatMaturityDocsState(state);
+  if (args.check && !rawEvidenceSummaries) {
+    if (fs.readFileSync(statePath, "utf8") !== formattedState) {
+      throw new Error(`${statePath} is not canonically formatted; regenerate it from QA evidence`);
+    }
+  } else if (!args.check && stateOutput) {
+    writeFileAtomic(stateOutput, formattedState);
+  }
+  if (args.check && args.outputDirExplicit) {
     process.stdout.write(`maturity docs are up to date in ${outputDir}\n`);
+  } else if (args.check) {
+    process.stdout.write(`maturity docs inputs and sanitized state are valid\n`);
   } else if (changed.length > 0) {
     process.stdout.write(
       `rendered maturity docs:\n${changed.map((file) => `- ${file}`).join("\n")}\n`,
@@ -1287,6 +1791,9 @@ function main(): void {
     process.stdout.write(
       `copied maturity static assets:\n${copiedStaticAssets.map((file) => `- ${file}`).join("\n")}\n`,
     );
+  }
+  if (!args.check && stateOutput) {
+    process.stdout.write(`wrote sanitized maturity docs state:\n- ${stateOutput}\n`);
   }
 }
 

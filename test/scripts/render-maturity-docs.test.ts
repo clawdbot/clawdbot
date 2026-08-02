@@ -8,6 +8,28 @@ import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const tempDirs = createTempDirTracker();
+const generatedLocales = [
+  "zh-CN",
+  "zh-TW",
+  "ja-JP",
+  "es",
+  "pt-BR",
+  "ko",
+  "de",
+  "fr",
+  "hi",
+  "ar",
+  "it",
+  "vi",
+  "nl",
+  "fa",
+  "tr",
+  "uk",
+  "id",
+  "pl",
+  "th",
+  "ru",
+] as const;
 
 type TaxonomyFixture = {
   surfaces?: TaxonomySurfaceFixture[];
@@ -203,19 +225,45 @@ describe("maturity docs renderer CLI", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("maturity docs inputs are valid in docs");
-    expect(result.stdout).toContain("evidence-backed freshness check skipped");
+    expect(result.stdout).toContain("maturity docs inputs and sanitized state are valid");
   });
 
-  it("still requires QA evidence artifacts when rendering generated docs", () => {
+  it("renders generated docs from the committed sanitized state", () => {
     const outputDir = tempDirs.make("openclaw-maturity-docs-test-");
     const result = runCli("--output-dir", outputDir);
 
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8")).toContain(
+      "## QA evidence summary",
+    );
+    expect(fs.readFileSync(path.join(outputDir, "maturity", "taxonomy.md"), "utf8")).toContain(
+      "# Maturity taxonomy",
+    );
+  });
+
+  it("requires an explicit state file when the default projection is unavailable", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-docs-test-");
+    const missingState = path.join(outputDir, "missing-state.json");
+    const result = runCli("--output-dir", outputDir, "--state", missingState);
+
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(
-      "maturity scorecard rendering requires all or release profile qa-evidence.json",
+    expect(result.stderr).toContain(`maturity docs state is missing at ${missingState}`);
+  });
+
+  it("rejects extra fields in sanitized state", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-docs-test-");
+    const statePath = path.join(outputDir, "state.json");
+    fs.writeFileSync(
+      statePath,
+      `${JSON.stringify({ summaries: [], unexpected: true, version: 1 }, null, 2)}\n`,
+      "utf8",
     );
+    const result = runCli("--output-dir", outputDir, "--state", statePath);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("must contain exactly: summaries, version");
   });
 
   it("rejects scorecard evidence with failed or blocked entries", () => {
@@ -248,6 +296,7 @@ describe("maturity docs renderer CLI", () => {
         { id: "passing-scenario", status: "pass" },
         { id: "skipped-scenario", status: "skipped" },
       ],
+      scorecard: allProfileScorecardFixture(),
     });
 
     const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
@@ -285,5 +334,94 @@ describe("maturity docs renderer CLI", () => {
     );
     expect(scorecard).toContain("Coverage Experimental - 0%");
     expect(scorecard).toContain("end-to-end coverage above 90%");
+  });
+
+  it("renders raw evidence through the same deterministic sanitized projection", () => {
+    const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
+    const rawOutputDir = tempDirs.make("openclaw-maturity-docs-raw-");
+    const stateOutputDir = tempDirs.make("openclaw-maturity-docs-state-");
+    const replayOutputDir = tempDirs.make("openclaw-maturity-docs-replay-");
+    const statePath = path.join(stateOutputDir, "maturity-docs-state.json");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [{ id: "passing-scenario", status: "pass" }],
+      scorecard: allProfileScorecardFixture(),
+    });
+
+    const rawResult = runCli(
+      "--output-dir",
+      rawOutputDir,
+      "--evidence-dir",
+      evidenceDir,
+      "--state-output",
+      statePath,
+    );
+    expect(rawResult.status).toBe(0);
+    expect(rawResult.stderr).toBe("");
+
+    const projection = fs.readFileSync(statePath, "utf8");
+    expect(projection).not.toContain("passing-scenario");
+    expect(projection).not.toContain("qa/scenarios");
+    const parsed = JSON.parse(projection) as {
+      summaries: Array<{ categories: unknown[] }>;
+    };
+    expect(parsed.summaries[0]?.categories).toHaveLength(
+      allProfileScorecardFixture().categoryReports.length,
+    );
+    expect(projection.split("\n").filter((line) => /^        \[/.test(line))).toHaveLength(
+      allProfileScorecardFixture().categoryReports.length,
+    );
+
+    const replayResult = runCli("--output-dir", replayOutputDir, "--state", statePath);
+    expect(replayResult.status).toBe(0);
+    for (const fileName of ["scorecard.md", "taxonomy.md"]) {
+      expect(fs.readFileSync(path.join(replayOutputDir, "maturity", fileName), "utf8")).toBe(
+        fs.readFileSync(path.join(rawOutputDir, "maturity", fileName), "utf8"),
+      );
+    }
+  });
+
+  it("does not replace an existing state projection when evidence is rejected", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
+    const statePath = path.join(outputDir, "state.json");
+    fs.writeFileSync(statePath, "existing-state\n", "utf8");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [{ id: "failing-scenario", status: "fail" }],
+    });
+
+    const result = runCli(
+      "--output-dir",
+      outputDir,
+      "--evidence-dir",
+      evidenceDir,
+      "--state-output",
+      statePath,
+    );
+
+    expect(result.status).toBe(1);
+    expect(fs.readFileSync(statePath, "utf8")).toBe("existing-state\n");
+  });
+
+  it("leaves every generated locale byte-identical", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-docs-locales-");
+    const fixtures = generatedLocales.flatMap((locale) =>
+      ["scorecard.md", "taxonomy.md"].map((fileName) => {
+        const filePath = path.join(outputDir, locale, "maturity", fileName);
+        const content = `${locale}/${fileName}\n`;
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, content, "utf8");
+        return [filePath, content] as const;
+      }),
+    );
+
+    const result = runCli("--output-dir", outputDir);
+
+    expect(result.status).toBe(0);
+    expect(generatedLocales).toHaveLength(20);
+    for (const [filePath, content] of fixtures) {
+      expect(fs.readFileSync(filePath, "utf8")).toBe(content);
+    }
   });
 });

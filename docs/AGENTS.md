@@ -16,7 +16,7 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 - For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime order or auto-detection order.
 - Keep bundled plugin naming consistent with the repo-wide plugin terminology rules in the root `AGENTS.md`.
 - Generated docs, never hand-edit: `docs/plugins/reference/**`, `docs/plugins/reference.md`, and `docs/plugins/plugin-inventory.md` come from `pnpm plugins:inventory:gen`; `docs/maturity/**` from `pnpm maturity:render`.
-- The public and packaged docs map is generated from `pnpm docs:list --headings` during publishing and packaging. Keep only the small source stub at `docs/docs_map.md`; never commit the expanded heading mirror.
+- Public and packaged maturity pages and the docs map are generated during publishing and packaging. Keep only their small source stubs; never commit expanded generated docs.
 
 ## Internal Docs
 
@@ -28,10 +28,10 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 
 ## Maturity Scorecard Editing
 
-`taxonomy.yaml` and `qa/maturity-scores.yaml` are the source inputs; generated maturity docs under `docs/maturity/` are projections and should not be hand-edited for score, LTS, taxonomy, QA profile, or evidence tables.
-`scripts/qa/render-maturity-docs.ts` owns generation; use `pnpm maturity:render` to refresh committed docs and `pnpm maturity:check` to verify them.
-`.github/workflows/maturity-scorecard.yml` renders artifact previews and can open generated-doc PRs; `.github/workflows/openclaw-release-checks.yml` dispatches it for release QA.
-Keep deterministic `qa-evidence.json.scorecard` data in GitHub Actions artifacts unless a maintainer explicitly asks for a sanitized committed projection.
+`taxonomy.yaml`, `qa/maturity-scores.yaml`, and `qa/maturity-docs-state.json` are the source inputs; tracked `docs/maturity/` pages are route stubs, not editable score, LTS, taxonomy, QA profile, or evidence tables.
+`scripts/qa/render-maturity-docs.ts` owns generation; `pnpm maturity:render` writes an artifact preview, and `pnpm maturity:check` validates the source inputs and sanitized state.
+`.github/workflows/maturity-scorecard.yml` renders artifact previews and can open source-state PRs; `.github/workflows/openclaw-release-checks.yml` dispatches it for release QA.
+Keep raw `qa-evidence.json.scorecard` data in GitHub Actions artifacts; the committed projection contains only deterministic, already-public aggregate facts.
 Human overrides must change source state in a PR and explain the reason plus public or redacted evidence.
 
 ## Docs i18n

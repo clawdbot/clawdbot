@@ -18,7 +18,7 @@ on:
         default: ""
         type: string
       publish_pull_request:
-        description: Open or update a pull request for generated maturity files
+        description: Open or update a pull request for maturity sources and public projection
         required: false
         default: true
         type: boolean
@@ -250,8 +250,7 @@ jobs:
             if ! git diff --quiet "$selected_revision" "$publication_ref" -- \
               . \
               ':(exclude)qa/maturity-scores.yaml' \
-              ':(exclude)docs/maturity/scorecard.md' \
-              ':(exclude)docs/maturity/taxonomy.md'; then
+              ':(exclude)qa/maturity-docs-state.json'; then
               echo "Pull request base '${publication_base}' changed maturity inputs after '${INPUT_REF}' resolved." >&2
               echo "Dispatch again from the latest base before generating release evidence." >&2
               exit 1
@@ -540,7 +539,17 @@ jobs:
             --static-assets-dir .artifacts/maturity-docs/assets/maturity \
             --scores qa/maturity-scores.yaml \
             --evidence-dir .artifacts/maturity-evidence \
+            --state-output qa/maturity-docs-state.json \
             --strict-inputs
+          pnpm maturity:render -- \
+            --output-dir .artifacts/maturity-docs-replay \
+            --scores qa/maturity-scores.yaml \
+            --state qa/maturity-docs-state.json \
+            --strict-inputs
+          cmp .artifacts/maturity-docs/maturity/scorecard.md \
+            .artifacts/maturity-docs-replay/maturity/scorecard.md
+          cmp .artifacts/maturity-docs/maturity/taxonomy.md \
+            .artifacts/maturity-docs-replay/maturity/taxonomy.md
           {
             echo "### Maturity scorecard docs"
             echo
@@ -548,26 +557,24 @@ jobs:
             echo "- Artifact docs: \`.artifacts/maturity-docs\`"
             echo "- Strict inputs: \`true\`"
             echo "- QA evidence: included"
+            echo "- Sanitized projection replay: byte-identical"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Render committed docs preview
+      - name: Stage generated PR files
+        if: ${{ inputs.publish_pull_request }}
         run: |
           set -euo pipefail
-          pnpm maturity:render -- \
-            --output-dir docs \
-            --scores qa/maturity-scores.yaml \
-            --evidence-dir .artifacts/maturity-evidence \
-            --strict-inputs
+          mkdir -p .artifacts/maturity-pr/qa
+          install -m 0644 qa/maturity-scores.yaml .artifacts/maturity-pr/qa/maturity-scores.yaml
+          install -m 0644 qa/maturity-docs-state.json .artifacts/maturity-pr/qa/maturity-docs-state.json
 
       - name: Upload generated PR files
         if: ${{ inputs.publish_pull_request }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            qa/maturity-scores.yaml
-            docs/maturity/scorecard.md
-            docs/maturity/taxonomy.md
+          path: .artifacts/maturity-pr/
+          include-hidden-files: true
           retention-days: 1
           if-no-files-found: error
 
@@ -643,8 +650,7 @@ jobs:
           set -euo pipefail
           expected=(
             qa/maturity-scores.yaml
-            docs/maturity/scorecard.md
-            docs/maturity/taxonomy.md
+            qa/maturity-docs-state.json
           )
           declare -A allowed=()
           for path in "${expected[@]}"; do
@@ -669,15 +675,15 @@ jobs:
               exit 1
             fi
           done
-          for directory in selected selected/qa selected/docs selected/docs/maturity; do
+          for directory in selected selected/qa; do
             if [[ ! -d "$directory" || -L "$directory" ]]; then
               echo "Selected worktree destination must be a real directory: $directory" >&2
               exit 1
             fi
           done
           for path in "${expected[@]}"; do
-            if [[ ! -f "selected/$path" || -L "selected/$path" ]]; then
-              echo "Selected worktree destination must be a regular file: $path" >&2
+            if [[ -e "selected/$path" && ( ! -f "selected/$path" || -L "selected/$path" ) ]]; then
+              echo "Existing selected worktree destination must be a regular file: $path" >&2
               exit 1
             fi
             install -D -m 0644 "$STAGING_DIR/$path" "selected/$path"
@@ -685,7 +691,7 @@ jobs:
 
       # Credentialed actions resolve only from the trusted root checkout. selected/ provides the
       # git source tree and generated files, but cannot shadow either composite action.
-      - name: Open or update generated docs PR
+      - name: Open or update maturity source PR
         if: >-
           ${{ inputs.publish_pull_request &&
             github.event_name == 'workflow_dispatch' &&
@@ -706,30 +712,28 @@ jobs:
           pr-title: "docs: update maturity scorecard"
           generated-paths: |
             qa/maturity-scores.yaml
-            docs/maturity/scorecard.md
-            docs/maturity/taxonomy.md
+            qa/maturity-docs-state.json
           invalidation-paths: |
             .
             :(exclude)qa/maturity-scores.yaml
-            :(exclude)docs/maturity/scorecard.md
-            :(exclude)docs/maturity/taxonomy.md
+            :(exclude)qa/maturity-docs-state.json
           overlap-policy: fail
           pr-body: |
             ## What Problem This Solves
 
-            Keep the release maturity source and rendered docs synchronized with full-taxonomy QA evidence.
+            Keep the release maturity source and sanitized public projection synchronized with full-taxonomy QA evidence.
 
             ## Why This Change Was Made
 
-            The maturity workflow generated this update from the selected immutable source and strict QA evidence.
+            The maturity workflow generated this source update and public-only projection from the selected immutable source and strict QA evidence.
 
             ## User Impact
 
-            Release maturity documentation reflects the reviewed score source and current evidence.
+            Release maturity documentation can be reproduced without committing generated pages or raw QA evidence.
 
             ## Evidence
 
             - Source ref: `${{ inputs.ref }}`
             - Source SHA: `${{ needs.validate_selected_ref.outputs.selected_revision }}`
             - QA evidence run: `${{ inputs.qa_evidence_run_id || github.run_id }}`
-            - Strict score validation and maturity docs rendering passed.
+            - Strict score validation, maturity docs rendering, and byte-identical projection replay passed.

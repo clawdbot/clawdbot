@@ -40,11 +40,7 @@ const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
 const OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS = new Set<string>();
-const MATURITY_GENERATED_PR_PATHS = [
-  "qa/maturity-scores.yaml",
-  "docs/maturity/scorecard.md",
-  "docs/maturity/taxonomy.md",
-];
+const MATURITY_GENERATED_PR_PATHS = ["qa/maturity-scores.yaml", "qa/maturity-docs-state.json"];
 
 type WorkflowStep = {
   env?: Record<string, unknown>;
@@ -4963,7 +4959,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
     });
     expect(maturityWorkflow.on.workflow_dispatch.inputs.publish_pull_request).toEqual({
-      description: "Open or update a pull request for generated maturity files",
+      description: "Open or update a pull request for maturity sources and public projection",
       required: false,
       default: true,
       type: "boolean",
@@ -5085,8 +5081,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "Unable to determine whether '${INPUT_REF}' is a remote branch",
       'git merge-base --is-ancestor "$selected_revision"',
       "':(exclude)qa/maturity-scores.yaml'",
-      "':(exclude)docs/maturity/scorecard.md'",
-      "':(exclude)docs/maturity/taxonomy.md'",
+      "':(exclude)qa/maturity-docs-state.json'",
       "qa_evidence_run_id must be a numeric GitHub Actions run id",
       'publication_head="automation/maturity-scorecard-',
     ]) {
@@ -5196,17 +5191,27 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const generatedPrUploadStep = publishJob.steps.find(
       (step: WorkflowStep) => step.name === "Upload generated PR files",
     );
+    const stageGeneratedPrStep = publishJob.steps.find(
+      (step: WorkflowStep) => step.name === "Stage generated PR files",
+    );
     expect(renderCheckoutStep.with["fetch-depth"]).toBe(0);
     expect(generatedPrUploadStep).toMatchObject({
       if: "${{ inputs.publish_pull_request }}",
       uses: UPLOAD_ARTIFACT_V7,
       with: {
         name: "maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: ".artifacts/maturity-pr/",
+        "include-hidden-files": true,
         "retention-days": 1,
         "if-no-files-found": "error",
       },
     });
-    expect(generatedPrUploadStep.with.path.trim().split("\n")).toEqual(MATURITY_GENERATED_PR_PATHS);
+    expect(stageGeneratedPrStep.if).toBe("${{ inputs.publish_pull_request }}");
+    for (const generatedPath of MATURITY_GENERATED_PR_PATHS) {
+      expect(stageGeneratedPrStep.run).toContain(
+        `install -m 0644 ${generatedPath} .artifacts/maturity-pr/${generatedPath}`,
+      );
+    }
 
     expect(publishPrJob.needs).toEqual(["validate_selected_ref", "publisher_preflight", "publish"]);
     expect(publishPrJob["runs-on"]).toBe("ubuntu-24.04");
@@ -5228,7 +5233,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Download generated PR files",
     );
     const openDocsPrStep = publishPrJob.steps.find(
-      (step: WorkflowStep) => step.name === "Open or update generated docs PR",
+      (step: WorkflowStep) => step.name === "Open or update maturity source PR",
     );
     expect(trustedPublishCheckoutStep).toMatchObject({
       uses: CHECKOUT_V6,
@@ -5274,8 +5279,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(openDocsPrStep.with["invalidation-paths"].trim().split("\n")).toEqual([
       ".",
       ":(exclude)qa/maturity-scores.yaml",
-      ":(exclude)docs/maturity/scorecard.md",
-      ":(exclude)docs/maturity/taxonomy.md",
+      ":(exclude)qa/maturity-docs-state.json",
     ]);
     for (const heading of [
       "## What Problem This Solves",
@@ -5349,7 +5353,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
       const extra = runMaturityArtifactCopyScenario({ extraFile: true });
       expect(extra.status).not.toBe(0);
-      expect(extra.output).toContain("Generated PR artifact must contain exactly 3 files.");
+      expect(extra.output).toContain("Generated PR artifact must contain exactly 2 files.");
 
       const sourceSymlink = runMaturityArtifactCopyScenario({ sourceSymlink: true });
       expect(sourceSymlink.status).not.toBe(0);
@@ -5360,7 +5364,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const destinationSymlink = runMaturityArtifactCopyScenario({ destinationSymlink: true });
       expect(destinationSymlink.status).not.toBe(0);
       expect(destinationSymlink.output).toContain(
-        "Selected worktree destination must be a regular file: qa/maturity-scores.yaml",
+        "Existing selected worktree destination must be a regular file: qa/maturity-scores.yaml",
       );
       expect(destinationSymlink.escaped).toBe("outside\n");
     },
