@@ -18,6 +18,11 @@ export { hasConfiguredMemorySecretInput } from "openclaw/plugin-sdk/memory-core-
 export { auditDreamingArtifacts, repairDreamingArtifacts } from "./src/dreaming-repair.js";
 export { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 export {
+  createDreamingCycleController,
+  type DreamingCycleController,
+  type DreamingCyclePhaseResult,
+} from "./src/dreaming-cycle-controller.js";
+export {
   auditShortTermPromotionArtifacts,
   loadShortTermPromotionDreamingStats,
   removeGroundedShortTermCandidates,
