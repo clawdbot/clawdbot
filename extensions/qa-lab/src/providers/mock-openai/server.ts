@@ -98,6 +98,8 @@ import {
   shouldUseWhatsAppContactMarker,
   shouldUseWhatsAppStickerMarker,
   extractBlockStreamingMarkerDirectives,
+  extractSlackProgressCommentaryDirectives,
+  QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
   hasDeclaredTool,
   hasToolDefinition,
   isQaToolSearchFixture,
@@ -556,6 +558,16 @@ async function buildResponsesPayload(
     const command = execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
     return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
   };
+  const slackProgressTurn = extractLastMatchingUserTurn(
+    input,
+    QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
+  );
+  const slackProgressDirectives = slackProgressTurn
+    ? extractSlackProgressCommentaryDirectives(slackProgressTurn.text)
+    : null;
+  const hasSlackProgressToolOutput = slackProgressTurn
+    ? hasToolOutput(input.slice(slackProgressTurn.index))
+    : false;
   if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
     if (!hasCompletedToolOutput) {
       scenarioState.toolLoopReadAttempts = 0;
@@ -959,6 +971,30 @@ async function buildResponsesPayload(
         text: scenarioFamilyReplyDirective,
       },
     ]);
+  }
+  if (slackProgressDirectives) {
+    if (hasSlackProgressToolOutput) {
+      return buildAssistantEvents([
+        {
+          id: "msg_mock_slack_progress_final",
+          phase: "final_answer",
+          streamDeltas: splitMockStreamingText(slackProgressDirectives.finalMarker),
+          text: slackProgressDirectives.finalMarker,
+        },
+      ]);
+    }
+    if (hasDeclaredTool(body, "exec")) {
+      return buildAssistantThenToolCallEvents(
+        {
+          id: "msg_mock_slack_progress_commentary",
+          phase: "commentary",
+          streamDeltas: splitMockStreamingText(slackProgressDirectives.commentaryMarker),
+          text: slackProgressDirectives.commentaryMarker,
+        },
+        "exec",
+        { command: slackProgressDirectives.execCommand },
+      );
+    }
   }
   const toolProgressReplyDirective =
     extractExactReplyDirective(toolProgressToolOutput) ??

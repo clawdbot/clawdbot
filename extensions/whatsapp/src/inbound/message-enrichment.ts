@@ -5,7 +5,7 @@ import {
   formatLocationText,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createSubsystemLogger, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getStatusCode } from "../session-errors.js";
 import {
@@ -24,7 +24,7 @@ const MAX_MEDIA_ERROR_MESSAGE_CHARS = 256;
 
 function sanitizeMediaErrorMessage(error: unknown): string {
   const rawMessage = error instanceof Error ? error.message : String(error);
-  const redacted = redactSensitiveText(rawMessage)
+  const redacted = redactToolPayloadText(rawMessage)
     .replace(/https?:\/\/\S+/giu, "[redacted-url]")
     .replace(/\b[^@\s]+@[a-z][a-z\d.-]*\b/giu, "[redacted-jid]")
     .replace(/\+?\d[\d ().-]{6,}\d/gu, "[redacted-phone]");

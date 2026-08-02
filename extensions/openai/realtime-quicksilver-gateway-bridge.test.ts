@@ -4,6 +4,7 @@ import { OPENAI_QUICKSILVER_RELAY_FRAME_BYTES } from "./realtime-quicksilver-aud
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
   OpenAIQuicksilverAudioPeer,
+  type OpenAIQuicksilverAudioPeerCallbacks,
   type OpenAIQuicksilverAudioPeerContract,
 } from "./realtime-quicksilver-peer.runtime.js";
 import {
@@ -546,9 +547,13 @@ describe("GPT-Live werift audio peer", () => {
 });
 
 describe("GPT-Live gateway relay bridge", () => {
-  function createPendingPeerBridge() {
+  function createPendingPeerBridge(params?: {
+    onClose?: (reason: "completed" | "error") => void;
+    onError?: (error: Error) => void;
+  }) {
     let resolvePeer: ((peer: OpenAIQuicksilverAudioPeerContract) => void) | undefined;
     let rejectPeer: ((error: Error) => void) | undefined;
+    let peerCallbacks: OpenAIQuicksilverAudioPeerCallbacks | undefined;
     const peerPromise = new Promise<OpenAIQuicksilverAudioPeerContract>((resolve, reject) => {
       resolvePeer = resolve;
       rejectPeer = reject;
@@ -567,7 +572,8 @@ describe("GPT-Live gateway relay bridge", () => {
       audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
-      onClose,
+      onClose: params?.onClose ?? onClose,
+      onError: params?.onError,
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       logger: { debug: vi.fn(), warn: vi.fn() },
       resolveAuth: vi.fn(async () => ({
@@ -575,7 +581,10 @@ describe("GPT-Live gateway relay bridge", () => {
         token: "oauth-token",
         accountId: "account-1",
       })),
-      createPeer: vi.fn(() => peerPromise),
+      createPeer: vi.fn((callbacks) => {
+        peerCallbacks = callbacks;
+        return peerPromise;
+      }),
       fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
       webSocketFactory: () => new FakeSocket(),
     });
@@ -587,6 +596,7 @@ describe("GPT-Live gateway relay bridge", () => {
       peer,
       rejectPeer: (error: Error) => rejectPeer?.(error),
       resolvePeer: () => resolvePeer?.(peer),
+      triggerPeerError: (error: Error) => peerCallbacks?.onError(error),
     };
   }
 
@@ -642,6 +652,53 @@ describe("GPT-Live gateway relay bridge", () => {
     bridge.sendAudio(Buffer.from([0x43, 0x44]));
     expect(pendingAudioState.pendingAudio).toHaveLength(0);
     expect(peer.sendAudio).not.toHaveBeenCalled();
+  });
+
+  it("keeps error precedence when onError reentrantly closes the bridge", async () => {
+    const onClose = vi.fn();
+    const bridgeRef: { current?: OpenAIQuicksilverGatewayBridge } = {};
+    const harness = createPendingPeerBridge({
+      onClose,
+      onError: () => bridgeRef.current?.close(),
+    });
+    bridgeRef.current = harness.bridge;
+    const connectionRejected = expect(harness.connection).rejects.toThrow(
+      "GPT-Live gateway relay bridge closed",
+    );
+
+    harness.triggerPeerError(new Error("media peer failed"));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+    await connectionRejected;
+  });
+
+  it("releases queued audio and rejects a late peer when onError throws", async () => {
+    const callbackError = new Error("error callback failed");
+    const onClose = vi.fn();
+    const harness = createPendingPeerBridge({
+      onClose,
+      onError: () => {
+        throw callbackError;
+      },
+    });
+    const testBridge = harness.bridge as unknown as TestableGatewayBridge;
+    harness.bridge.sendAudio(Buffer.from([0x41, 0x42]));
+    const connectionRejected = expect(harness.connection).rejects.toThrow(
+      "GPT-Live gateway relay bridge closed",
+    );
+
+    expect(() => harness.triggerPeerError(new Error("media peer failed"))).toThrow(callbackError);
+    const retainedAudioBytes = testBridge.pendingAudio.byteLength;
+    const closeReason = onClose.mock.calls[0]?.[0];
+    harness.bridge.close();
+    harness.resolvePeer();
+
+    await connectionRejected;
+    await vi.waitFor(() => expect(harness.peer.close).toHaveBeenCalledOnce());
+    expect(retainedAudioBytes).toBe(0);
+    expect(closeReason).toBe("error");
+    expect(harness.peer.sendAudio).not.toHaveBeenCalled();
   });
 
   it("closes a sideband that opens in the abort handoff", async () => {

@@ -7,6 +7,7 @@ import { toErrorObject } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { resolveCliName } from "./cli-name.js";
+import { publishOutputFileAtomically } from "./media-output.js";
 import {
   asBoolean,
   asNumber,
@@ -254,7 +255,13 @@ export async function writeBase64ToFile(
   if (buf.length > maxBytes) {
     throw new Error(`writeBase64ToFile: decoded ${buf.length} bytes, exceeds max ${maxBytes}`);
   }
-  await fs.writeFile(filePath, buf);
+  await fs.stat(path.dirname(filePath));
+  await publishOutputFileAtomically({
+    filePath,
+    writeTemp: async (tempPath) => {
+      await fs.writeFile(tempPath, buf, { flag: "wx" });
+    },
+  });
   return { path: filePath, bytes: buf.length };
 }
 

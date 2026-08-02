@@ -7,6 +7,10 @@ import { shouldMigrateStateFromPath } from "../argv.js";
 import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
 import { setCommandJsonMode } from "./json-mode.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
+import {
+  COLD_READ_COMMAND_PATHS,
+  registerColdReadCommandFixtures,
+} from "./preaction.test-helpers.js";
 
 const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 
@@ -228,6 +232,7 @@ describe("registerPreActionHooks", () => {
         .option("--json")
         .action(() => {});
     }
+    registerColdReadCommandFixtures(programLocal, skills);
     for (const skillCommand of ["install", "verify"]) {
       skills
         .command(skillCommand)
@@ -362,6 +367,7 @@ describe("registerPreActionHooks", () => {
     ["skills"],
     ["skills", "list"],
     ["skills", "check"],
+    ...COLD_READ_COMMAND_PATHS,
     ["agents", "bindings"],
     ["gateway", "stability"],
     ["gateway", "usage-cost"],

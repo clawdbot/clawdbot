@@ -7,6 +7,7 @@ import { constants } from "node:fs";
 import {
   access as fsAccess,
   readFile as fsReadFile,
+  stat as fsStat,
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
@@ -32,6 +33,7 @@ import {
   validateNoOpEditTargets,
 } from "./edit-diff.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
+import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
 import { resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
@@ -98,6 +100,8 @@ export interface EditOperations {
   readFile: (absolutePath: string) => Promise<Buffer>;
   /** Write content to a file */
   writeFile: (absolutePath: string, content: string) => Promise<void>;
+  /** Stat the target before reporting success */
+  statFile: (absolutePath: string) => Promise<PersistedFileStat | null>;
   /** Check if file is readable and writable (throw if not) */
   access: (absolutePath: string) => Promise<void>;
 }
@@ -105,6 +109,26 @@ export interface EditOperations {
 const defaultEditOperations: EditOperations = {
   readFile: (path) => fsReadFile(path),
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
+  statFile: async (path) => {
+    try {
+      const stat = await fsStat(path);
+      return {
+        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      } as const;
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as { code?: unknown }).code === "ENOENT"
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  },
   access: (path) => fsAccess(path, constants.R_OK | constants.W_OK),
 };
 
@@ -159,38 +183,6 @@ function validateEditInput(input: EditToolInput): {
     throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
   }
   return { path: input.path, edits: input.edits };
-}
-
-function removeExactOccurrences(content: string, needle: string): string {
-  return needle.length > 0 ? content.split(needle).join("") : content;
-}
-
-function didEditLikelyApply(params: {
-  originalContent: string;
-  currentContent: string;
-  edits: Edit[];
-}): boolean {
-  if (params.edits.length === 0) {
-    return false;
-  }
-  const normalizedOriginal = normalizeToLF(params.originalContent);
-  const normalizedCurrent = normalizeToLF(params.currentContent);
-  if (normalizedOriginal === normalizedCurrent) {
-    return false;
-  }
-
-  let withoutInsertedNewText = normalizedCurrent;
-  for (const edit of params.edits) {
-    const normalizedNew = normalizeToLF(edit.newText);
-    if (normalizedNew.length > 0 && !normalizedCurrent.includes(normalizedNew)) {
-      return false;
-    }
-    withoutInsertedNewText = removeExactOccurrences(withoutInsertedNewText, normalizedNew);
-  }
-
-  return params.edits.every(
-    (edit) => !withoutInsertedNewText.includes(normalizeToLF(edit.oldText)),
-  );
 }
 
 function appendMismatchHint(error: Error, currentContent: string): Error {
@@ -422,6 +414,7 @@ export function createEditToolDefinition(
         }
 
         let realEdits: Edit[] = [];
+        let expectedContent: string | undefined;
 
         try {
           await ops.access(absolutePath);
@@ -462,9 +455,15 @@ export function createEditToolDefinition(
             realEdits,
             path,
           );
-          await ops.writeFile(absolutePath, bom + finalContent);
+          expectedContent = bom + finalContent;
+          await ops.writeFile(absolutePath, expectedContent);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
+          }
+          if (!(await verifyPersistedUtf8File(absolutePath, expectedContent, ops))) {
+            throw new Error(
+              `Edit verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
+            );
           }
 
           const diffResult = generateDiffString(baseContent, newContent);
@@ -492,11 +491,8 @@ export function createEditToolDefinition(
             .then((current) => current.toString("utf-8"))
             .catch(() => rawContent);
           if (
-            didEditLikelyApply({
-              originalContent: rawContent,
-              currentContent,
-              edits: realEdits,
-            })
+            expectedContent !== undefined &&
+            (await verifyPersistedUtf8File(absolutePath, expectedContent, ops))
           ) {
             return {
               content: [

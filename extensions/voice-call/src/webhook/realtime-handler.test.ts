@@ -1993,17 +1993,20 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("restores the prior transcript owner when replacement bridge creation fails", async () => {
+  it("preserves the predecessor when replacement closes with error during creation", async () => {
     const callbacks: RealtimeBridgeRequest[] = [];
+    const oldTriggerGreeting = vi.fn();
     const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
       callbacks.push(request);
       if (callbacks.length === 1) {
-        return makeBridge();
+        return makeBridge({ triggerGreeting: oldTriggerGreeting });
       }
       request.onTranscript?.("user", "Failed ", false);
+      request.onClose?.("error");
       throw new Error("replacement bridge failed");
     });
     const processEvent = vi.fn();
+    const hangupCall = vi.fn(async () => {});
     const sharedCallSid = "CA-transcript-rollback";
     const call = makeCallRecord(sharedCallSid);
     const handler = makeHandler(undefined, {
@@ -2011,6 +2014,7 @@ describe("RealtimeCallHandler path routing", () => {
         getCallByProviderCallId: vi.fn(() => call),
         processEvent,
       },
+      provider: { hangupCall },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
     const oldServer = await startRealtimeServer(handler);
@@ -2042,6 +2046,17 @@ describe("RealtimeCallHandler path routing", () => {
         await waitForRealtimeTest(() => {
           expect(createBridge).toHaveBeenCalledTimes(2);
         });
+
+        expect(handler.speak(call.callId, "Continue the existing call.")).toEqual({
+          success: true,
+        });
+        expect(oldTriggerGreeting).toHaveBeenCalledWith("Continue the existing call.");
+        expect(hangupCall).not.toHaveBeenCalled();
+        expect(
+          processEvent.mock.calls
+            .map(([event]) => event as NormalizedEvent)
+            .filter((event) => event.type === "call.ended"),
+        ).toHaveLength(0);
 
         callbacks[0]?.onTranscript?.("user", "caller", true);
         await waitForRealtimeTest(() => {

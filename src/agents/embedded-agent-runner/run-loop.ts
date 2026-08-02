@@ -283,8 +283,6 @@ export async function runPreparedEmbeddedLoop(
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
     let latestMcpAppChannelView: McpAppChannelView | undefined;
-    // Hoisted so the retry-limit error path can use the most recent API total.
-    let lastTurnTotal: number | undefined;
     while (true) {
       refreshPreparedRuntimeSnapshot();
       if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
@@ -316,7 +314,6 @@ export async function runPreparedEmbeddedLoop(
             ...outerContextTokenMeta,
             usageAccumulator,
             lastRunPromptUsage,
-            lastTurnTotal,
           }),
           replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
           livenessState: "blocked",
@@ -368,7 +365,6 @@ export async function runPreparedEmbeddedLoop(
         bootstrapPromptWarningSignaturesSeen,
         usageAccumulator,
         lastRunPromptUsage,
-        lastTurnTotal,
         idleTimeoutBreakerState,
         contextRecoveryState,
         replayState: accumulatedReplayState,
@@ -381,13 +377,11 @@ export async function runPreparedEmbeddedLoop(
         bootstrapPromptWarningSignaturesSeen =
           normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
         lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
-        lastTurnTotal = normalizedAttempt.lastTurnTotal;
         accumulatedReplayState = normalizedAttempt.replayState;
         continue;
       }
       bootstrapPromptWarningSignaturesSeen = normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
       lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
-      lastTurnTotal = normalizedAttempt.lastTurnTotal;
       accumulatedReplayState = normalizedAttempt.replayState;
       const {
         attempt,
@@ -421,7 +415,6 @@ export async function runPreparedEmbeddedLoop(
         armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
         usageAccumulator,
         lastRunPromptUsage,
-        lastTurnTotal,
         runtimeAuthRetry,
         codexAppServerRecoveryRetryAvailable,
         codexAppServerRecoveryRetries,
@@ -520,7 +513,6 @@ export async function runPreparedEmbeddedLoop(
           resolvedToolResultFormat,
         },
         lastRunPromptUsage,
-        lastTurnTotal,
         finalization: {
           preparedAttempt: dispatchedAttempt.preparedAttempt,
           harness: agentHarness,
@@ -539,7 +531,6 @@ export async function runPreparedEmbeddedLoop(
         finalizationAttempted: settledTurnFinalizationAttempted,
       } = finalizedTerminal;
       lastRunPromptUsage = finalizedTerminal.lastRunPromptUsage;
-      lastTurnTotal = finalizedTerminal.lastTurnTotal;
       if (finalizedTerminal.finalizationSucceeded) {
         assistantProfileFailureReason = null;
       }
