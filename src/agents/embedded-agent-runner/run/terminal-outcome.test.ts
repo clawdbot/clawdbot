@@ -1,7 +1,13 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
-import { resolveEmbeddedRunAttemptTerminalOutcome } from "./terminal-outcome.js";
+import {
+  isEmbeddedRunTerminalAbort,
+  isEmbeddedRunTerminalInterrupted,
+  isEmbeddedRunTerminalTimeout,
+  resolveEmbeddedRunAttemptTerminalOutcome,
+  resolveEmbeddedRunAttemptTerminalState,
+} from "./terminal-outcome.js";
 
 type EmbeddedRunAttemptTerminalInput = Parameters<
   typeof resolveEmbeddedRunAttemptTerminalOutcome
@@ -38,6 +44,127 @@ function makeAssistant(stopReason: AssistantMessage["stopReason"]): AssistantMes
 }
 
 describe("embedded run attempt terminal outcome", () => {
+  it.each([
+    {
+      name: "run-budget prompt timeout",
+      terminal: { kind: "timeout", phase: "prompt", source: "run_budget" },
+      reason: "hard_timeout",
+      aborted: false,
+      timedOut: true,
+    },
+    {
+      name: "idle prompt timeout",
+      terminal: { kind: "timeout", phase: "prompt", source: "idle" },
+      reason: "hard_timeout",
+      aborted: false,
+      timedOut: true,
+    },
+    {
+      name: "recovered compaction observation",
+      terminal: { kind: "timeout", phase: "compaction", source: "observation" },
+      reason: "completed",
+      aborted: false,
+      timedOut: false,
+    },
+    {
+      name: "yield-only cleanup",
+      terminal: { kind: "aborted", source: "yield_cleanup" },
+      reason: "completed",
+      aborted: false,
+      timedOut: false,
+    },
+    {
+      name: "external attempt cancellation",
+      terminal: { kind: "aborted", source: "external" },
+      reason: "aborted",
+      aborted: true,
+      timedOut: false,
+    },
+  ] as const)("carries $name through canonical interruption predicates", (testCase) => {
+    const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
+      attempt: makeAttempt({ terminal: testCase.terminal }),
+      assistant: makeAssistant("stop"),
+    });
+
+    expect(outcome.reason).toBe(testCase.reason);
+    expect(isEmbeddedRunTerminalAbort(outcome)).toBe(testCase.aborted);
+    expect(isEmbeddedRunTerminalTimeout(outcome)).toBe(testCase.timedOut);
+    expect(isEmbeddedRunTerminalInterrupted(outcome)).toBe(testCase.aborted || testCase.timedOut);
+  });
+
+  it("keeps user-signal cancellation authoritative before assistant completion", () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
+      attempt: makeAttempt(),
+      assistant: undefined,
+      abortSignal: controller.signal,
+    });
+
+    expect(outcome).toMatchObject({
+      reason: "aborted",
+      status: "error",
+      stopReason: "aborted",
+    });
+    expect(isEmbeddedRunTerminalAbort(outcome)).toBe(true);
+    expect(isEmbeddedRunTerminalTimeout(outcome)).toBe(false);
+    expect(isEmbeddedRunTerminalInterrupted(outcome)).toBe(true);
+  });
+
+  it("captures signal ownership before a later cancellation can reclassify completion", () => {
+    const controller = new AbortController();
+    const terminal = resolveEmbeddedRunAttemptTerminalState({
+      attempt: makeAttempt(),
+      assistant: makeAssistant("stop"),
+      abortSignal: controller.signal,
+    });
+
+    controller.abort();
+
+    expect(terminal).toEqual({
+      outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+      signalOwnedInterruption: false,
+    });
+  });
+
+  it("captures user cancellation with the same terminal that owns the interruption", () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    expect(
+      resolveEmbeddedRunAttemptTerminalState({
+        attempt: makeAttempt(),
+        assistant: undefined,
+        abortSignal: controller.signal,
+      }),
+    ).toMatchObject({
+      outcome: { reason: "aborted", status: "error", stopReason: "aborted" },
+      signalOwnedInterruption: true,
+    });
+  });
+
+  it("starts successful settled finalization without inheriting the original abort signal", () => {
+    const controller = new AbortController();
+    controller.abort();
+    const originalTerminal = resolveEmbeddedRunAttemptTerminalState({
+      attempt: makeAttempt(),
+      assistant: undefined,
+      abortSignal: controller.signal,
+    });
+
+    expect(originalTerminal.signalOwnedInterruption).toBe(true);
+    expect(
+      resolveEmbeddedRunAttemptTerminalState({
+        attempt: makeAttempt(),
+        assistant: makeAssistant("stop"),
+      }),
+    ).toEqual({
+      outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+      signalOwnedInterruption: false,
+    });
+  });
+
   it("keeps prompt timeout ownership ahead of generic abort metadata", () => {
     const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
       attempt: makeAttempt({

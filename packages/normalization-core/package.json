@@ -24,6 +24,11 @@
       "import": "./dist/boolean-coercion.mjs",
       "default": "./dist/boolean-coercion.mjs"
     },
+    "./cjk-chars": {
+      "types": "./dist/cjk-chars.d.mts",
+      "import": "./dist/cjk-chars.mjs",
+      "default": "./dist/cjk-chars.mjs"
+    },
     "./error-coercion": {
       "types": "./dist/error-coercion.d.mts",
       "import": "./dist/error-coercion.mjs",
@@ -38,6 +43,11 @@
       "types": "./dist/number-coercion.d.mts",
       "import": "./dist/number-coercion.mjs",
       "default": "./dist/number-coercion.mjs"
+    },
+    "./json-schema": {
+      "types": "./dist/json-schema.d.mts",
+      "import": "./dist/json-schema.mjs",
+      "default": "./dist/json-schema.mjs"
     },
     "./phone-presentation": {
       "types": "./dist/phone-presentation.d.mts",
@@ -64,6 +74,16 @@
       "import": "./dist/string-normalization.mjs",
       "default": "./dist/string-normalization.mjs"
     },
+    "./stable-node-path": {
+      "types": "./dist/stable-node-path.d.mts",
+      "import": "./dist/stable-node-path.mjs",
+      "default": "./dist/stable-node-path.mjs"
+    },
+    "./stable-stringify": {
+      "types": "./dist/stable-stringify.d.mts",
+      "import": "./dist/stable-stringify.mjs",
+      "default": "./dist/stable-stringify.mjs"
+    },
     "./utf16-slice": {
       "types": "./dist/utf16-slice.d.mts",
       "import": "./dist/utf16-slice.mjs",
@@ -71,9 +91,10 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/error-coercion.ts src/expect.ts src/number-coercion.ts src/phone-presentation.ts src/record-coerce.ts src/result.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/cjk-chars.ts src/error-coercion.ts src/expect.ts src/json-schema.ts src/number-coercion.ts src/phone-presentation.ts src/record-coerce.ts src/result.ts src/stable-node-path.ts src/stable-stringify.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
-    "libphonenumber-js": "1.13.9"
+    "libphonenumber-js": "1.13.9",
+    "typebox": "1.3.6"
   }
 }

@@ -1,7 +1,10 @@
 import type { ReactiveControllerHost } from "lit";
 import { t } from "../i18n/index.ts";
-import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
-import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import {
+  moveSessionSection,
+  normalizeSessionSectionOrder,
+  type SidebarSessionsGrouping,
+} from "../lib/sessions/grouping.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
@@ -35,6 +38,8 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
+  knownSessionCatalogIds(): string[];
+  knownSectionOrder(): string[];
   pruneSidebarSessionEntry(key: string): void;
   reconciledSidebarZone(): { sidebarEntries: readonly string[] };
   replaceCurrentSession(sessionKey: string): void;
@@ -80,18 +85,6 @@ export async function patchSession(
         return "stale";
       }
     }
-    if (patch.archived !== true || !session.active) {
-      return "completed";
-    }
-    host.replaceCurrentSession(
-      buildAgentMainSessionKey({
-        agentId,
-        mainKey: resolveUiConfiguredMainKey({
-          agentsList: scope.context.agents.state.agentsList,
-          hello: scope.gateway.snapshot.hello,
-        }),
-      }),
-    );
     return "completed";
   } catch (error) {
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -231,7 +224,6 @@ async function restoreArchivedSessions(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  let restoredActiveKey: string | null = null;
   for (const { session, pinned } of archived) {
     const result = await patchSession(
       host,
@@ -243,18 +235,12 @@ async function restoreArchivedSessions(
     if (result === "stale") {
       return;
     }
-    if (result === "completed" && session.active) {
-      restoredActiveKey = session.key;
-    }
   }
-  const refreshed = await refreshSessionsAfterBatch(
+  await refreshSessionsAfterBatch(
     host,
     scope,
     archived.map((entry) => entry.session),
   );
-  if (restoredActiveKey && refreshed !== "stale") {
-    host.replaceCurrentSession(restoredActiveKey);
-  }
 }
 
 /** One confirm and one preserved-worktrees alert for the whole selection. */
@@ -444,10 +430,10 @@ export async function deleteSessionGroup(
   }
 }
 
-export async function reorderSessionGroup(
+export async function reorderSidebarSection(
   host: SessionOrganizerControllerHost,
-  source: string,
-  target: string,
+  sourceSectionId: string,
+  targetSectionId: string,
   position: "before" | "after",
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
@@ -455,12 +441,26 @@ export async function reorderSessionGroup(
     return;
   }
   try {
-    await scope.sessions.groupsPut(
-      reorderSessionCustomGroups(host.knownSessionGroups(), source, target, position),
+    // knownSessionGroups() is the full discovered set (gateway catalog plus
+    // row-discovered categories), so normalize only prunes deleted groups.
+    const knownGroups = host.knownSessionGroups();
+    const knownCatalogIds = host.knownSessionCatalogIds();
+    const next = moveSessionSection(
+      normalizeSessionSectionOrder(host.knownSectionOrder(), knownGroups, knownCatalogIds),
+      sourceSectionId,
+      targetSectionId,
+      position,
     );
-    if (host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      host.requestUpdate();
+    const nextGroups = next.flatMap((token) =>
+      token.startsWith("category:") ? [token.slice("category:".length)] : [],
+    );
+    // No capability gate: the gateway serves this UI from its own dist, so a
+    // newer UI never talks to an older gateway's closed put schema outside dev.
+    await scope.sessions.groupsPut(nextGroups, next);
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return;
     }
+    host.requestUpdate();
   } catch (error) {
     host.sessionData.publishSessionMutationError(scope, error);
   }

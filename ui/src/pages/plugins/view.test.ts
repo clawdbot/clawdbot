@@ -235,6 +235,44 @@ describe("renderPlugins", () => {
     expect(onFilterChange).toHaveBeenCalledWith("issues");
   });
 
+  it.each(["@openclaw/workboard", "  @OPENCLAW/WORKBOARD  "])(
+    "finds an installed plugin by its scoped package name %s",
+    (query) => {
+      const plugin = createPlugin({ packageName: "@openclaw/workboard" });
+      const container = mount(createProps({ query, result: createResult([plugin]) }));
+
+      expect(container.querySelector('[data-plugin-id="workboard"]')).not.toBeNull();
+      expect(normalizedText(container)).toContain("@openclaw/workboard");
+    },
+  );
+
+  it.each([
+    { shelf: "featured", featured: true },
+    { shelf: "official", featured: false },
+  ])("finds an official $shelf plugin by its scoped package name", ({ featured }) => {
+    const plugin = createPlugin({
+      id: "calendar-runtime",
+      name: "Shared Calendar",
+      packageName: "@openclaw/calendar-runtime",
+      description: "Schedule team events.",
+      origin: "official",
+      installed: false,
+      enabled: false,
+      state: "not-installed",
+      featured,
+      install: { source: "official", pluginId: "calendar-runtime" },
+    });
+    const container = mount(
+      createProps({
+        activeTab: "discover",
+        query: "@openclaw/calendar-runtime",
+        result: createResult([plugin]),
+      }),
+    );
+
+    expect(container.querySelector('[data-plugin-id="calendar-runtime"]')).not.toBeNull();
+  });
+
   it("offers enable and remove through direct row actions", () => {
     const onSetEnabled = vi.fn();
     const onRequestUninstall = vi.fn();
@@ -297,8 +335,19 @@ describe("renderPlugins", () => {
   it("opens the detail overlay from a row and renders actions and metadata", () => {
     const onShowDetails = vi.fn();
     const clickable = mount(createProps({ onShowDetails }));
-    clickable.querySelector<HTMLElement>('[data-plugin-id="workboard"]')?.click();
+    const row = clickable.querySelector<HTMLElement>('[data-plugin-id="workboard"]');
+    const detailButton = row?.querySelector<HTMLButtonElement>(".plugins-item__detail-button");
+    expect(detailButton).toBeInstanceOf(HTMLButtonElement);
+    expect(detailButton?.type).toBe("button");
+    expect(detailButton?.getAttribute("aria-label")).toBe("Workboard");
+    detailButton?.focus();
+    expect(document.activeElement).toBe(detailButton);
+    detailButton?.click();
+    expect(onShowDetails).toHaveBeenCalledOnce();
     expect(onShowDetails).toHaveBeenCalledWith("workboard");
+
+    row?.click();
+    expect(onShowDetails).toHaveBeenCalledTimes(2);
 
     const onSetEnabled = vi.fn();
     const container = mount(
@@ -624,6 +673,7 @@ describe("renderPlugins", () => {
       install: undefined,
     });
     const onSetEnabled = vi.fn();
+    const onShowDetails = vi.fn();
     const container = mount(
       createProps({
         activeTab: "discover",
@@ -642,6 +692,7 @@ describe("renderPlugins", () => {
           },
         ],
         onSetEnabled,
+        onShowDetails,
       }),
     );
 
@@ -650,6 +701,13 @@ describe("renderPlugins", () => {
     expect(row.querySelector(".plugins-install")).toBeNull();
     actionButton(row, "Disable")?.click();
     expect(onSetEnabled).toHaveBeenCalledWith("calendar-runtime", false, clawHubKey(packageName));
+    expect(onShowDetails).not.toHaveBeenCalled();
+    const detailButton = row.querySelector<HTMLButtonElement>(".plugins-item__detail-button");
+    expect(detailButton).toBeInstanceOf(HTMLButtonElement);
+    expect(detailButton?.getAttribute("aria-label")).toBe("Calendar Plus");
+    detailButton?.click();
+    expect(onShowDetails).toHaveBeenCalledOnce();
+    expect(onShowDetails).toHaveBeenCalledWith("calendar-runtime");
   });
 
   it("does not present an empty catalog alongside an initial list failure", () => {

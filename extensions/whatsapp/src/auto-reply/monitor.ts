@@ -27,14 +27,14 @@ import {
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
-import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import {
-  attachWebInboxToSocket,
   readWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
   type WhatsAppBaileysMessageCache,
-  type WhatsAppGroupMetadataCache,
-} from "../inbound/monitor.js";
+} from "../inbound/baileys-cache.js";
+import type { WhatsAppGroupMetadataCache } from "../inbound/group-metadata-cache.js";
+import { normalizeAdmittedWebInboundMessage } from "../inbound/message-aliases.js";
+import { attachWebInboxToSocket } from "../inbound/monitor.js";
 import type { WebInboundMessageInput } from "../inbound/types.js";
 import {
   newConnectionId,
@@ -231,16 +231,12 @@ export async function monitorWebChannel(
         channel: "whatsapp",
       });
       const shouldDebounce = (msg: WebInboundMessageInput) => {
-        const normalized = normalizeWebInboundMessage(msg);
+        const admitted = normalizeAdmittedWebInboundMessage(msg);
         return shouldDebounceTextInbound({
-          text: normalized.payload.commandBody ?? normalized.payload.body,
+          text: admitted.payload.commandBody ?? admitted.payload.body,
           cfg,
-          hasMedia: Boolean(normalized.payload.media?.path || normalized.payload.media?.type),
-          allowDebounce: !(
-            normalized.payload.location ||
-            normalized.quote?.id ||
-            normalized.quote?.body
-          ),
+          hasMedia: Boolean(admitted.payload.media?.path || admitted.payload.media?.type),
+          allowDebounce: !(admitted.payload.location || admitted.quote?.id || admitted.quote?.body),
         });
       };
 
@@ -300,11 +296,13 @@ export async function monitorWebChannel(
               recentMessageKeys,
               baileysGroupMetaCache,
               onMessage: async (msg: WebInboundMessageInput) => {
-                const normalized = normalizeWebInboundMessage(msg);
+                // Keep the deprecated injected-listener input contract at the WhatsApp edge.
+                // Auto-reply only receives the admitted canonical message.
+                const admitted = normalizeAdmittedWebInboundMessage(msg);
                 const inboundAt = Date.now();
                 controller.noteInbound(inboundAt);
                 statusController.noteInbound(inboundAt);
-                await onMessage(normalized);
+                await onMessage(admitted);
               },
               onPendingWorkChanged: (pendingWorkCount, at) => {
                 statusController.noteBusy(pendingWorkCount > 0, at);

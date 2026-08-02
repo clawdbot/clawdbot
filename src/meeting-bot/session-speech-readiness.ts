@@ -5,7 +5,6 @@ type SpeechMessages<TReason extends string> = {
   audioBridgeUnavailableReason: TReason;
   browserUnverified: string;
   browserUnverifiedReason: TReason;
-  manualActionFallback: string;
   microphoneMuted: string;
   microphoneMutedReason: TReason;
   notInCall: string;
@@ -37,11 +36,11 @@ export function evaluateMeetingSpeechReadiness<TReason extends string>(params: {
         };
   }
   const health = browser.health;
-  if (health?.manualActionRequired) {
+  if (health?.manualAction) {
     return {
       ready: false,
-      reason: (health.manualActionReason ?? speech.browserUnverifiedReason) as TReason,
-      message: health.manualActionMessage ?? speech.manualActionFallback,
+      reason: health.manualAction.reason as TReason,
+      message: health.manualAction.message,
     };
   }
   if (health?.inCall === true) {

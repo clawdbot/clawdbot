@@ -196,7 +196,6 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
     "file": "/path/to/openclaw.log",
     "consoleLevel": "info",
     "consoleStyle": "pretty",
-    "redactSensitive": "tools",
     "redactPatterns": ["sk-.*"]
   }
 }
@@ -289,11 +288,15 @@ OTEL model-call spans/metrics when diagnostics export is enabled.
 
 ### Console styles
 
-`logging.consoleStyle`:
+`logging.consoleStyle` accepts `pretty` or `json`:
 
 - `pretty`: human-friendly, colored, with timestamps.
-- `compact`: tighter output (best for long sessions).
 - `json`: JSON per line (for log processors).
+
+A third rendering style, `compact` (tighter output, best for long sessions), is
+applied automatically when stdout is not a TTY. It is no longer a settable
+config value; `openclaw doctor --fix` maps a stored `consoleStyle: "compact"`
+to `"pretty"`.
 
 ### Redaction
 

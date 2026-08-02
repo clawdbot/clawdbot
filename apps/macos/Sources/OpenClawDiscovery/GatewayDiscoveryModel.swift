@@ -69,7 +69,7 @@ public final class GatewayDiscoveryModel {
     }
 
     public var gateways: [DiscoveredGateway] = []
-    public var statusText: String = "Idle"
+    public var statusText: String = GatewayDiscoveryStatusText.idle
 
     private var browsers: [String: NWBrowser] = [:]
     private var resultsByDomain: [String: Set<NWBrowser.Result>] = [:]
@@ -126,7 +126,7 @@ public final class GatewayDiscoveryModel {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return }
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            let beacons = WideAreaGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
+            let beacons = await WideAreaGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.wideAreaFallbackGateways = self.mapWideAreaBeacons(beacons, domain: domain)
@@ -170,7 +170,7 @@ public final class GatewayDiscoveryModel {
         self.tailscaleServeFallbackTask = nil
         self.tailscaleServeFallbackGateways = []
         self.gateways = []
-        self.statusText = "Stopped"
+        self.statusText = GatewayDiscoveryStatusText.stopped
     }
 
     private func mapWideAreaBeacons(_ beacons: [WideAreaGatewayBeacon], domain: String) -> [DiscoveredGateway] {
@@ -325,7 +325,7 @@ public final class GatewayDiscoveryModel {
 
                 // Wide-area discovery can be racy (Tailscale not yet up, DNS zone not
                 // published yet). Retry with a short backoff while onboarding is open.
-                let beacons = WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0)
+                let beacons = await WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0)
                 if !beacons.isEmpty {
                     await MainActor.run { [weak self] in
                         guard let self else { return }

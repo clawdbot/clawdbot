@@ -21,6 +21,8 @@ const repositoryScriptEntries = [
   "scripts/check-package-dist-imports.mjs!",
   "scripts/dev/ios-node-e2e.ts!",
   "scripts/diffs-shiki-curated.ts!",
+  // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
+  "scripts/docker-e2e.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs!",
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs!",
@@ -52,6 +54,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs!",
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs!",
   "scripts/e2e/lib/run-with-pty.mjs!",
+  "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
@@ -64,6 +67,7 @@ const repositoryScriptEntries = [
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
+  "scripts/memory-index-manager.sync-repro.ts!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
@@ -80,6 +84,7 @@ const repositoryScriptEntries = [
   "scripts/qa-parity-report.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
+  "scripts/sqlite-session-entry-cache-lifetime-proof.ts!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mjs!",
   "scripts/update-clawtributors.ts!",
@@ -100,6 +105,10 @@ const rootEntries = [
   "openclaw.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Built as the official image's Docker HEALTHCHECK entrypoint.
+  "src/docker-healthcheck.ts!",
+  // Shipped compatibility facade for statusCommand and getStatusSummary.
+  "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
@@ -108,6 +117,7 @@ const rootEntries = [
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
   "scripts/bench-transcript-cursors.ts!",
+  "scripts/bench-codex-transcript-mirror.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
@@ -161,7 +171,6 @@ const rootEntries = [
   "apps/android/app/src/main/assets/katex/renderer.js!",
   "apps/linux/ui/main.js!",
   "apps/linux/ui/quickchat.js!",
-  "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
@@ -248,6 +257,7 @@ const rootToolingAndWorkspaceDependencies = [
   "@copilotkit/aimock",
   "@lit-labs/signals",
   "@lit/context",
+  "@lit/task",
   // scripts/ui.js anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",
@@ -256,6 +266,8 @@ const rootToolingAndWorkspaceDependencies = [
   "ipaddr.js",
   "jscpd",
   "lit",
+  // Runtime postbuild resolves this build input from its caller-selected root.
+  "marked",
   "oxlint",
   "oxlint-tsgolint",
   "signal-utils",
@@ -350,27 +362,37 @@ const config = {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
-    "src/boards/board-layout.ts": ["types"],
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
     // Test and E2E callers reach these hooks through runtime.test-support.ts;
     // the full-tree companion config still audits their actual consumers.
     "src/commitments/runtime.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
-    // GatewayBoardProvider and boardExists are constructed/asserted by the
-    // focused Control UI provider tests, not by a separate production module.
-    "ui/src/lib/board/provider.ts": ["exports"],
+    // Focused startup tests consume this explicit seam; production imports only the bootstrap.
+    "src/gateway/server-startup-bootstrap.ts": ["exports"],
+    // Registry facades retain direct registration/reset compatibility seams used by focused
+    // tests; the full-tree scan still audits every named export against those consumers.
+    "src/agents/harness/registry.ts": ["exports"],
+    "src/context-engine/registry.ts": ["exports", "types"],
+    "src/plugins/compaction-provider.ts": ["exports"],
+    "src/plugins/interactive-registry.ts": ["exports"],
+    "src/plugins/memory-state.ts": ["exports", "types"],
+    "src/plugins/session-discussion-registry.ts": ["exports"],
+    "src/tasks/detached-task-runtime-state.ts": ["exports"],
+    // Focused media tests consume these explicit seams; production uses the helpers in-module.
+    "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
+    "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
     // Focused tests consume these diagnostic/test seams; production code uses
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],
-    // The resolver's executable-path validation is covered through focused tests;
-    // production imports only the narrower op resolver.
-    "extensions/onepassword/onepassword-op-path.js": ["exports"],
     // Focused CLI tests exercise plan construction through this explicit test seam.
     "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
+    // Mirror config parsing, redaction mapping, cap fitting, and the runner are
+    // asserted by the focused Beam mirror tests; production wires only the service.
+    "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {
@@ -399,6 +421,8 @@ const config = {
       ],
       // Platform tools and shell builtins used by package scripts and process-boundary tests.
       ignoreBinaries: ["mint", "open", "sleep", "xcrun"],
+      // The stylelint config lives under config/, not a root default path.
+      stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -488,6 +512,21 @@ const config = {
       ],
       project: ["src/**/*.ts!"],
     },
+    "packages/model-catalog-core": {
+      // Mirror the published export map so package-owned runtime dependencies
+      // are traced from the TypeScript sources instead of the JS fallback.
+      entry: [
+        "src/index.ts!",
+        "src/configured-model-refs.ts!",
+        "src/model-catalog-normalize.ts!",
+        "src/model-catalog-refs.ts!",
+        "src/model-catalog-types.ts!",
+        "src/provider-id.ts!",
+        "src/provider-model-id-normalization.ts!",
+        "src/provider-model-id-normalize.ts!",
+      ],
+      project: ["src/**/*.ts!"],
+    },
     "packages/normalization-core": {
       // Mirror package.json exports; root and UI builds consume these source subpaths directly.
       entry: [
@@ -542,10 +581,7 @@ const config = {
     "packages/acp-core": {
       entry: [
         "src/index.ts!",
-        "src/normalize-text.ts!",
         "src/meta.ts!",
-        "src/numeric-options.ts!",
-        "src/record-shared.ts!",
         "src/session.ts!",
         "src/session-interaction-mode.ts!",
         "src/session-lineage-meta.ts!",

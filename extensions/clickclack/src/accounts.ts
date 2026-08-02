@@ -7,7 +7,6 @@ import {
   hasConfiguredAccountValue,
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
@@ -18,7 +17,12 @@ import {
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } from "./types.js";
+import type {
+  ClickClackAccountConfig,
+  ClickClackGroupConfig,
+  CoreConfig,
+  ResolvedClickClackAccount,
+} from "./types.js";
 
 const DEFAULT_RECONNECT_MS = 1_500;
 const MIN_RECONNECT_MS = 100;
@@ -28,8 +32,11 @@ const DEFAULT_DISCUSSIONS_SECTION = "Sessions";
 const {
   listAccountIds: listClickClackAccountIds,
   resolveDefaultAccountId: resolveDefaultClickClackAccountId,
-} = createAccountListHelpers("clickclack", {
+  resolveAccountConfig: resolveMergedClickClackAccountConfig,
+} = createAccountListHelpers<ClickClackAccountConfig>("clickclack", {
   normalizeAccountId,
+  omitKeys: ["defaultAccount"],
+  nestedObjectKeys: ["discussions"],
   hasImplicitDefaultAccount: (cfg) => {
     const channel = cfg.channels?.clickclack;
     return Boolean(
@@ -44,36 +51,56 @@ const {
 
 export { DEFAULT_ACCOUNT_ID, listClickClackAccountIds, resolveDefaultClickClackAccountId };
 
+function mergeClickClackGroups(
+  ...sources: Array<Record<string, ClickClackGroupConfig> | undefined>
+): Record<string, ClickClackGroupConfig> {
+  const merged = new Map<string, ClickClackGroupConfig>();
+  for (const source of sources) {
+    for (const [rawKey, value] of Object.entries(source ?? {})) {
+      const key = rawKey.trim();
+      if (!key) {
+        continue;
+      }
+      merged.set(key, {
+        ...merged.get(key),
+        ...(value.requireMention !== undefined ? { requireMention: value.requireMention } : {}),
+        ...(value.mentionPatterns !== undefined ? { mentionPatterns: value.mentionPatterns } : {}),
+      });
+    }
+  }
+  return Object.fromEntries(merged);
+}
+
 export function resolveClickClackAccountConfig(
   cfg: CoreConfig,
   accountId: string,
 ): ClickClackAccountConfig {
   const channel = cfg.channels?.clickclack;
-  const merged = resolveMergedAccountConfig<ClickClackAccountConfig>({
-    channelConfig: cfg.channels?.clickclack as ClickClackAccountConfig | undefined,
-    accounts: channel?.accounts,
-    accountId,
-    omitKeys: ["defaultAccount"],
-    nestedObjectKeys: ["discussions"],
-    normalizeAccountId,
-  });
+  const merged = resolveMergedClickClackAccountConfig(cfg, accountId);
   const account = resolveNormalizedAccountEntry(channel?.accounts, accountId, normalizeAccountId);
+  const mergedWithGroups =
+    channel?.groups || account?.groups
+      ? {
+          ...merged,
+          groups: mergeClickClackGroups(channel?.groups, account?.groups),
+        }
+      : merged;
   const accountTokenFile = account?.tokenFile?.trim();
   if (accountTokenFile) {
     return {
-      ...merged,
+      ...mergedWithGroups,
       token: account?.token,
       tokenFile: accountTokenFile,
     };
   }
   if (hasConfiguredAccountValue(account?.token)) {
     return {
-      ...merged,
+      ...mergedWithGroups,
       token: account?.token,
       tokenFile: undefined,
     };
   }
-  return merged;
+  return mergedWithGroups;
 }
 
 function resolveClickClackToken(params: {
@@ -199,6 +226,9 @@ export function resolveClickClackAccount(params: {
       ...(controlUrlBase ? { controlUrlBase } : {}),
       section: merged.discussions?.section?.trim() || DEFAULT_DISCUSSIONS_SECTION,
     },
+    requireMention: merged.requireMention === true,
+    mentionPatterns: merged.mentionPatterns ?? [],
+    groups: mergeClickClackGroups(merged.groups),
     config: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],

@@ -1,10 +1,10 @@
 // Matrix plugin module implements status behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
-import { formatMatrixErrorMessage } from "../errors.js";
 import {
   isMatrixDisconnectedSyncState,
   isMatrixReadySyncState,
@@ -29,7 +29,7 @@ function formatSyncError(error: unknown): string | null {
   if (error instanceof Error) {
     return error.message || error.name || "unknown";
   }
-  return formatMatrixErrorMessage(error);
+  return formatErrorMessage(error);
 }
 
 export type MatrixMonitorStatusController = ReturnType<typeof createMatrixMonitorStatusController>;

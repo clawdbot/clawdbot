@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   loadTranscriptEventsSync,
-  parseSqliteSessionFileMarker,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -169,7 +168,7 @@ describe("qa suite runtime agent session helpers", () => {
     const tempRoot = await makeTempDir("qa-session-store-");
     await seedQaSession({
       tempRoot,
-      sessionKey: "session-1",
+      sessionKey: "agent:qa:session-1",
       sessionId: "session-1",
       entry: { status: "running" },
     });
@@ -179,7 +178,7 @@ describe("qa suite runtime agent session helpers", () => {
         gateway: { tempRoot },
       } as never),
     ).resolves.toEqual({
-      "session-1": {
+      "agent:qa:session-1": {
         sessionId: "session-1",
         status: "running",
         updatedAt: 10,
@@ -281,11 +280,6 @@ describe("qa suite runtime agent session helpers", () => {
         origin: { label: "Seeded QA transcript" },
       },
     });
-    expect(parseSqliteSessionFileMarker(sessionStore[sessionKey]?.sessionFile)).toMatchObject({
-      agentId: "qa",
-      sessionId,
-    });
-
     const transcriptEvents = loadTranscriptEventsSync({
       agentId: "qa",
       env: qaSessionEnv(tempRoot),
@@ -371,6 +365,7 @@ describe("qa suite runtime agent session helpers", () => {
       assistantToolCallCounts: { message: 1 },
       completedToolCallCounts: {},
       eventCursor: 2,
+      userMessageCount: 0,
       successfulToolCallCounts: {},
       finalText: "",
       hasDirectReplySelfMessage: false,
@@ -398,6 +393,7 @@ describe("qa suite runtime agent session helpers", () => {
       assistantToolCallCounts: { message: 1 },
       completedToolCallCounts: {},
       eventCursor: 3,
+      userMessageCount: 0,
       successfulToolCallCounts: {},
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
@@ -453,6 +449,7 @@ describe("qa suite runtime agent session helpers", () => {
       assistantToolCallCounts: { message: 1 },
       completedToolCallCounts: {},
       eventCursor: 4,
+      userMessageCount: 1,
       successfulToolCallCounts: {},
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
@@ -626,6 +623,7 @@ describe("qa suite runtime agent session helpers", () => {
       assistantToolCallCounts: {},
       completedToolCallCounts: {},
       eventCursor: 0,
+      userMessageCount: 0,
       successfulToolCallCounts: {},
       finalText: "",
       hasDirectReplySelfMessage: false,

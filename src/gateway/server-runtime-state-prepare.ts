@@ -13,6 +13,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
@@ -201,6 +202,19 @@ export async function prepareGatewayRuntimeState(params: {
     tailscaleConfig,
     tailscaleMode,
   } = runtimeConfig;
+  if (bootstrap.generatedStartupAuthToken && isLoopbackHost(bindHost)) {
+    const { ensureStartupLocalCliPairing } = await import("./startup-local-cli-pairing.js");
+    const pairingResult = await startupTrace.measure("runtime.local-cli-pairing", () =>
+      ensureStartupLocalCliPairing(),
+    );
+    if (pairingResult === "created") {
+      log.info("runtime-only gateway auth paired the local CLI device before readiness");
+    } else if (pairingResult === "unavailable") {
+      log.warn(
+        "runtime-only gateway auth could not prepare local CLI device credentials; configure gateway.auth.token or gateway.auth.password for CLI access",
+      );
+    }
+  }
   const getResolvedAuth = () =>
     resolveGatewayAuth({
       authConfig:
@@ -332,7 +346,6 @@ export async function prepareGatewayRuntimeState(params: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   } = {};
   const {
-    releasePluginRouteRegistry,
     httpServer,
     httpServers,
     httpBindHosts,
@@ -381,8 +394,8 @@ export async function prepareGatewayRuntimeState(params: {
         runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
       pluginRegistry: pluginRuntime.registry,
       getPluginRouteRegistry: () => pluginRuntime.registry,
+      isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
       getGatewayRequestContext: () => pluginGatewayContext.current,
-      pinChannelRegistry: !minimalTestGateway,
       deps,
       log,
       logHooks,
@@ -449,7 +462,6 @@ export async function prepareGatewayRuntimeState(params: {
     isGatewayStartupPending,
     pluginGatewayContext,
     watchNodeRequestHandler,
-    releasePluginRouteRegistry,
     httpServer,
     httpServers,
     httpBindHosts,

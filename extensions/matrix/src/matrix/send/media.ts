@@ -108,6 +108,64 @@ export function buildMediaContent(params: {
 
 const THUMBNAIL_MAX_SIDE = 800;
 const THUMBNAIL_QUALITY = 80;
+const AIFC_IMA4_BYTES_PER_CHANNEL_PACKET = 34;
+const AIFC_IMA4_FRAMES_PER_PACKET = 64;
+
+function resolveAifcIma4DurationSeconds(buffer: Buffer, sampleRate?: number): number | undefined {
+  if (
+    !sampleRate ||
+    !Number.isFinite(sampleRate) ||
+    buffer.length < 12 ||
+    buffer.toString("ascii", 0, 4) !== "FORM" ||
+    buffer.toString("ascii", 8, 12) !== "AIFC"
+  ) {
+    return undefined;
+  }
+
+  let channels: number | undefined;
+  let declaredFrameCount: number | undefined;
+  let soundDataBytes: number | undefined;
+  for (let offset = 12; offset + 8 <= buffer.length;) {
+    const chunkType = buffer.toString("ascii", offset, offset + 4);
+    const chunkSize = buffer.readUInt32BE(offset + 4);
+    const chunkStart = offset + 8;
+    if (chunkSize > buffer.length - chunkStart) {
+      return undefined;
+    }
+    if (chunkType === "COMM") {
+      if (chunkSize < 22 || buffer.toString("ascii", chunkStart + 18, chunkStart + 22) !== "ima4") {
+        return undefined;
+      }
+      channels = buffer.readUInt16BE(chunkStart);
+      declaredFrameCount = buffer.readUInt32BE(chunkStart + 2);
+    } else if (chunkType === "SSND") {
+      if (chunkSize < 8) {
+        return undefined;
+      }
+      const soundDataOffset = buffer.readUInt32BE(chunkStart);
+      if (soundDataOffset > chunkSize - 8) {
+        return undefined;
+      }
+      soundDataBytes = chunkSize - 8 - soundDataOffset;
+    }
+    offset = chunkStart + chunkSize + (chunkSize & 1);
+  }
+
+  if (!channels || !declaredFrameCount || !soundDataBytes) {
+    return undefined;
+  }
+  const packetSize = channels * AIFC_IMA4_BYTES_PER_CHANNEL_PACKET;
+  if (soundDataBytes % packetSize !== 0) {
+    return undefined;
+  }
+  const packetCount = soundDataBytes / packetSize;
+  if (packetCount !== declaredFrameCount) {
+    return undefined;
+  }
+  // Apple AIFC stores IMA4 packet count in COMM; each packet decodes to 64
+  // sample frames. Other encoders can store decoded frames, so verify SSND first.
+  return (packetCount * AIFC_IMA4_FRAMES_PER_PACKET) / sampleRate;
+}
 
 export async function prepareImageInfo(params: {
   buffer: Buffer;
@@ -180,7 +238,9 @@ export async function resolveMediaDurationMs(params: {
       duration: true,
       skipCovers: true,
     });
-    const durationSeconds = metadata.format.duration;
+    const durationSeconds =
+      resolveAifcIma4DurationSeconds(params.buffer, metadata.format.sampleRate) ??
+      metadata.format.duration;
     if (typeof durationSeconds === "number" && Number.isFinite(durationSeconds)) {
       return Math.max(0, Math.round(durationSeconds * 1000));
     }

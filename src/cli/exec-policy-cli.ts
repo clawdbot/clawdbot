@@ -287,7 +287,7 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
   );
   const baseNote = hasNodeRuntimeScope
     ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
-    : "Effective exec policy is the host approvals file intersected with requested tools.exec policy.";
+    : "Effective exec policy is the host approvals policy intersected with requested tools.exec policy.";
   return {
     configPath: configSnapshot.path,
     approvalsPath: approvalsSnapshot.path,
@@ -349,8 +349,10 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
         { Field: "Config", Value: sanitizeExecPolicyTableCell(payload.configPath) },
         { Field: "Approvals", Value: sanitizeExecPolicyTableCell(payload.approvalsPath) },
         {
-          Field: "Approvals File",
-          Value: sanitizeExecPolicyTableCell(payload.approvalsExists ? "present" : "missing"),
+          Field: "Approvals State",
+          Value: sanitizeExecPolicyTableCell(
+            payload.approvalsExists ? "stored" : "defaults (no stored overrides)",
+          ),
         },
       ],
     }).trimEnd(),

@@ -1,5 +1,11 @@
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  stripInternalRuntimeContext,
+} from "../../agents/internal-runtime-context.js";
 import { escapeRegExp } from "../../shared/regexp.js";
+import { findCodeRegions } from "../../shared/text/code-regions.js";
 
 const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
 const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");
@@ -15,31 +21,40 @@ const INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE = new RegExp(
   `<\\s*\\/?\\s*(?:${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*>`,
   "gi",
 );
-const INTERNAL_RUNTIME_DELIMITED_BLOCKS = [
-  ["<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"],
-] as const;
 const INTERNAL_RUNTIME_MARKER_LINES = [
   "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
   "<<<END_UNTRUSTED_CHILD_RESULT>>>",
 ] as const;
+const ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN = escapeRegExp(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+// Runtime producers escape nested opening delimiters. Consume every closing
+// marker before the next opener so marker-shaped payload text cannot escape.
+const INLINE_INTERNAL_RUNTIME_CONTEXT_BLOCK_RE = new RegExp(
+  `${ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN}(?:(?!${ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN})[\\s\\S])*${escapeRegExp(INTERNAL_RUNTIME_CONTEXT_END)}`,
+  "g",
+);
 const PROMPT_DATA_TAG_NAMES = ["prompt-data", "untrusted-text"] as const;
+
+function isStandaloneMarkerAt(text: string, marker: string, offset: number): boolean {
+  const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
+  const lineEnd = text.indexOf("\n", offset + marker.length);
+  return (
+    text.slice(lineStart, offset).trim().length === 0 &&
+    text.slice(offset + marker.length, lineEnd === -1 ? undefined : lineEnd).trim().length === 0
+  );
+}
+
+function stripInlineInternalRuntimeContextBlocks(text: string): string {
+  // Keep standalone blocks with their canonical stripping owner and preserve
+  // ordinary prose that only mentions a single internal marker.
+  return text.replace(
+    INLINE_INTERNAL_RUNTIME_CONTEXT_BLOCK_RE,
+    (block, offset: number, value: string) =>
+      isStandaloneMarkerAt(value, INTERNAL_RUNTIME_CONTEXT_BEGIN, offset) ? block : "",
+  );
+}
 
 function standaloneLinePattern(token: string): string {
   return `(?:^|\\r?\\n)[ \\t]*${escapeRegExp(token)}[ \\t]*(?=\\r?\\n|$)`;
-}
-
-function stripDelimitedRuntimeBlock(text: string, begin: string, end: string): string {
-  const closedBlockRe = new RegExp(
-    `${standaloneLinePattern(begin)}[\\s\\S]*?${standaloneLinePattern(end)}`,
-    "g",
-  );
-  // If the closing delimiter is missing, drop the rest rather than leaking
-  // internal runtime context to user-visible outbound text.
-  const unmatchedBeginRe = new RegExp(`${standaloneLinePattern(begin)}[\\s\\S]*$`, "g");
-  return stripStandaloneMarkerLine(
-    text.replace(closedBlockRe, "").replace(unmatchedBeginRe, ""),
-    end,
-  );
 }
 
 function stripStandaloneMarkerLine(text: string, marker: string): string {
@@ -78,15 +93,15 @@ function unwrapPromptDataWrapperLines(text: string): string {
 }
 
 export function stripInternalRuntimeScaffolding(text: string): string {
-  let stripped = unwrapPromptDataWrapperLines(text)
-    .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
-    .replace(INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
-    .replace(INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "");
-  for (const [begin, end] of INTERNAL_RUNTIME_DELIMITED_BLOCKS) {
-    stripped = stripDelimitedRuntimeBlock(stripped, begin, end);
-  }
+  let stripped = stripInternalRuntimeContext(
+    unwrapPromptDataWrapperLines(stripInlineInternalRuntimeContextBlocks(text))
+      .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
+      .replace(INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
+      .replace(INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, ""),
+    { preserveSurroundingWhitespace: true },
+  );
   for (const marker of INTERNAL_RUNTIME_MARKER_LINES) {
     stripped = stripStandaloneMarkerLine(stripped, marker);
   }
-  return stripPlainTextToolCallBlocks(stripped);
+  return stripPlainTextToolCallBlocks(stripped, { resolveProtectedRanges: findCodeRegions });
 }

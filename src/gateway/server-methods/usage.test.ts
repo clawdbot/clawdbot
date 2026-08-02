@@ -122,6 +122,7 @@ describe("gateway usage helpers", () => {
 
   beforeEach(() => {
     testApi.costUsageCache.clear();
+    testApi.sessionsUsageCache.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
   });

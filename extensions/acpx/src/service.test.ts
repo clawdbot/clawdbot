@@ -421,6 +421,46 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
+  it("keeps PID-bearing leases when startup process listing is unavailable", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = createMockRuntime();
+    const wrapperRoot = path.join(ctx.stateDir, "acpx");
+    await openGatewayInstanceStore(ctx).register(ACPX_GATEWAY_INSTANCE_KEY, {
+      instanceId: "gw-test",
+      createdAt: 1,
+    });
+    const lease: AcpxProcessLease = {
+      leaseId: "lease-process-list-unavailable",
+      gatewayInstanceId: "gw-test",
+      sessionKey: "agent:codex:acp:test",
+      wrapperRoot,
+      wrapperPath: path.join(wrapperRoot, "codex-acp-wrapper.mjs"),
+      rootPid: 101,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    };
+    await openProcessLeaseStore(ctx).register(lease.leaseId, lease);
+    cleanupOpenClawOwnedAcpxProcessTreeMock.mockResolvedValueOnce({
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "process-list-unavailable",
+    });
+    const service = createAcpxRuntimeService(ctx, {
+      runtimeFactory: () => runtime as never,
+    });
+
+    await service.start(ctx);
+
+    await expect(openProcessLeaseStore(ctx).lookup(lease.leaseId)).resolves.toMatchObject({
+      leaseId: lease.leaseId,
+      rootPid: 101,
+      state: "open",
+    });
+    await service.stop?.(ctx);
+  });
+
   it("runs wrapper-root orphan cleanup before dropping pending ACPX leases", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);

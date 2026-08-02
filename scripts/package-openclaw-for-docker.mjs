@@ -30,6 +30,8 @@ const PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES = [
   "OPENCLAW_EXTENSIONS",
   "OPENCLAW_DOCKER_BUILD_EXTENSIONS",
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
+  // Public package builds must not inherit a smoke lane's private QA entrypoints.
+  "OPENCLAW_BUILD_PRIVATE_QA",
 ];
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -669,6 +671,40 @@ export async function prepareBundledAiRuntimePackage(
   }
 }
 
+async function restorePackageSourceArtifacts(sourceDir, restoreDocsMap, restoreChangelog) {
+  await restoreChangelog(sourceDir);
+  // Release the lifecycle receipt only after every other source mutation settles.
+  await restoreDocsMap(sourceDir);
+}
+
+async function loadSourceDocsMapLifecycle(sourceDir) {
+  const modulePath = path.join(sourceDir, "scripts", "package-docs-map.mjs");
+  try {
+    await fs.access(modulePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  const lifecycle = await import(pathToFileURL(modulePath).href);
+  if (
+    typeof lifecycle.preparePackageDocsMap !== "function" ||
+    typeof lifecycle.restorePackageDocsMap !== "function"
+  ) {
+    throw new Error(`source package docs-map lifecycle is invalid: ${modulePath}`);
+  }
+  return lifecycle;
+}
+
+function packagePreparationRestoreError(error, restoreError) {
+  return new AggregateError(
+    [error, restoreError],
+    "Package preparation failed and source artifacts could not be restored.",
+    { cause: error },
+  );
+}
+
 export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
   const runCaptureImpl = options.runCaptureImpl ?? runCapture;
   const prepareChangelog =
@@ -678,13 +714,33 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
         allowUnreleased: options.allowUnreleasedChangelog,
       }));
   const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
+  // Frozen refs own their package contents. Only refs carrying this lifecycle ship a generated map.
+  const sourceDocsMapLifecycle =
+    options.prepareDocsMap && options.restoreDocsMap
+      ? null
+      : await loadSourceDocsMapLifecycle(sourceDir);
+  const prepareDocsMap =
+    options.prepareDocsMap ?? sourceDocsMapLifecycle?.preparePackageDocsMap ?? (async () => false);
+  const restoreDocsMap =
+    options.restoreDocsMap ?? sourceDocsMapLifecycle?.restorePackageDocsMap ?? (async () => false);
   const prepareBundledAiRuntime = options.prepareBundledAiRuntime ?? prepareBundledAiRuntimePackage;
   const packTool = options.pnpmPack ? "pnpm" : "npm";
   if (options.packJsonPath && options.pnpmPack) {
     throw new Error("packJsonPath cannot be combined with pnpmPack");
   }
   console.error("==> Packing OpenClaw package");
-  await prepareChangelog(sourceDir);
+  // This receipt is the package lifecycle lock; acquire it before touching CHANGELOG.md.
+  await prepareDocsMap(sourceDir);
+  try {
+    await prepareChangelog(sourceDir);
+  } catch (error) {
+    try {
+      await restorePackageSourceArtifacts(sourceDir, restoreDocsMap, restoreChangelog);
+    } catch (restoreError) {
+      throw packagePreparationRestoreError(error, restoreError);
+    }
+    throw error;
+  }
   let packOutput;
   let cleanupBundledAiRuntime = async () => {};
   try {
@@ -712,7 +768,7 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
     try {
       await cleanupBundledAiRuntime();
     } finally {
-      await restoreChangelog(sourceDir);
+      await restorePackageSourceArtifacts(sourceDir, restoreDocsMap, restoreChangelog);
     }
   }
   // pnpm reports an absolute destination path. The directory was emptied before packing,
@@ -795,7 +851,10 @@ async function main() {
   process.stdout.write(`${tarball}\n`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  (await fs.realpath(process.argv[1])) === (await fs.realpath(fileURLToPath(import.meta.url)))
+) {
   await main().catch(
     /** @param {unknown} error */ (error) => {
       console.error(error instanceof Error ? error.message : String(error));

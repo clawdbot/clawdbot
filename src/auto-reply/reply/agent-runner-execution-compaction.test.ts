@@ -4,7 +4,7 @@ import { loggingState } from "../../logging/state.js";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   expectBlockReplyCall,
@@ -17,7 +17,7 @@ import type {
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: compaction events", () => {
+describe("executeAgentTurn: compaction events", () => {
   it("keeps compaction start notices silent by default", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -25,8 +25,8 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -66,8 +66,8 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -144,8 +144,8 @@ describe("runAgentTurnWithFallback: compaction events", () => {
         return { payloads: [{ text: "final" }], meta: {} };
       });
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback({
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
         ...createMinimalRunAgentTurnParams({
           opts: { onBlockReply },
         }),
@@ -181,8 +181,8 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       },
     };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -237,8 +237,8 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       },
     };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -301,8 +301,8 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       },
     };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -377,8 +377,8 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       },
     };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -439,8 +439,8 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       },
     };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -496,8 +496,8 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       },
     };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {

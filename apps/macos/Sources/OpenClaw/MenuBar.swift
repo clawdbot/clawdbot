@@ -121,6 +121,7 @@ struct OpenClawApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            DashboardGatewayCommands(dashboardManager: DashboardManager.shared)
             SidebarCommands()
             CommandMenu("Navigate") {
                 Button("Back") {
@@ -511,6 +512,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationDidFinishLaunching(_: Notification) {
+        #if DEBUG
+        if CommandLine.arguments.contains("--swarm-chat-fixture") {
+            AppActivationPolicy.apply(showDockIcon: true)
+            WebChatManager.shared.showSwarmFixture()
+            return
+        }
+        #endif
         let environment = ProcessInfo.processInfo.environment
         let launchPolicy = AppLaunchPresentationPolicy.current
         let hasReplacementHandoff = ApplicationRelocator.hasReplacementHandoffMetadata(
@@ -613,16 +621,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if launchPolicy.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
-            Task { @MainActor in
-                if DashboardManager.shared.showConfiguredWindowIfPossible() {
-                    return
-                }
-                do {
-                    try await DashboardManager.shared.show()
-                } catch {
-                    DashboardManager.shared.showFailure(error)
-                }
-            }
+            self.openDashboardAction()
         }
     }
 

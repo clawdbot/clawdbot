@@ -9,9 +9,9 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
-  DEFAULT_AGENT_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
+  resolveAgentMaxConcurrent,
 } from "./agent-limits.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
@@ -454,7 +454,7 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   let mutated = false;
   const nextDefaults = defaults ? { ...defaults } : {};
   if (!hasMax) {
-    nextDefaults.maxConcurrent = DEFAULT_AGENT_MAX_CONCURRENT;
+    nextDefaults.maxConcurrent = resolveAgentMaxConcurrent();
     mutated = true;
   }
 

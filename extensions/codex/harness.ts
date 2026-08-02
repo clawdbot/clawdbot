@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { completeWithPreparedSimpleCompletionModel } from "openclaw/plugin-sdk/simple-completion-runtime";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import type { CodexSessionCatalogControl } from "./src/session-catalog-types.js";
 
@@ -113,6 +114,11 @@ export function createCodexAppServerAgentHarness(options: {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
+    loadMcpToolCatalog: async (params) => {
+      const { loadCodexEffectiveMcpCatalog } =
+        await import("./src/app-server/effective-mcp-catalog.js");
+      return await loadCodexEffectiveMcpCatalog(params, { bindingStore: options.bindingStore });
+    },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
       if (!providerIds.has(provider)) {
@@ -179,6 +185,32 @@ export function createCodexAppServerAgentHarness(options: {
         nativeHookRelay: { enabled: true },
       });
     },
+    runIsolatedCompletion: async (params) => {
+      // Codex app-server always exposes update_plan. Pure inference therefore
+      // uses the already-prepared OpenAI/ChatGPT transport and credential
+      // directly, without entering a Codex thread or re-resolving the route.
+      const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
+      const signal = params.abortSignal
+        ? AbortSignal.any([params.abortSignal, timeoutSignal])
+        : timeoutSignal;
+      const assistant = await completeWithPreparedSimpleCompletionModel({
+        model: params.model,
+        auth: params.auth,
+        cfg: params.config,
+        context: {
+          systemPrompt: params.systemPrompt,
+          messages: [{ role: "user", content: params.prompt, timestamp: Date.now() }],
+          tools: [],
+        },
+        options: {
+          maxTokens: params.streamParams?.maxTokens,
+          temperature: params.streamParams?.temperature,
+          reasoning: params.thinkLevel,
+          signal,
+        },
+      });
+      return { assistant };
+    },
     finalizeSettledTurn: async (params) => {
       const { runCodexSettledTurnFinalization } =
         await import("./src/app-server/settled-turn-finalizer.js");
@@ -218,18 +250,22 @@ export function createCodexAppServerAgentHarness(options: {
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
         });
-        let retired = await options.bindingStore.retireSessionGeneration(identity);
-        if (retired === "conflict") {
+        const resetGeneration =
+          params.reason === "deleted"
+            ? options.bindingStore.retireSessionGeneration.bind(options.bindingStore)
+            : options.bindingStore.resetSessionGeneration.bind(options.bindingStore);
+        let reset = await resetGeneration(identity);
+        if (reset === "conflict") {
           const reclaimed = await reclaimCurrentCodexSessionGeneration({
             bindingStore: options.bindingStore,
             identity,
             config: options.resolveConfig?.(),
           });
           if (reclaimed) {
-            retired = await options.bindingStore.retireSessionGeneration(identity);
+            reset = await resetGeneration(identity);
           }
         }
-        if (retired === "conflict") {
+        if (reset === "conflict") {
           throw new Error(
             `Codex binding generation changed before session ${params.sessionId} could reset`,
           );

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
@@ -21,6 +22,10 @@ import {
 const workshopMocks = vi.hoisted(() => ({
   detectToolPolicyDiagnostic: vi.fn(),
 }));
+
+const cleanDoctorMessage =
+  "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
+  'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.';
 
 vi.mock("../skills/workshop/tool-policy-diagnostic.js", () => ({
   detectSkillWorkshopToolPolicyDiagnostic: workshopMocks.detectToolPolicyDiagnostic,
@@ -93,7 +98,134 @@ describe("plugins cli list", () => {
     await runPluginsCommand(["plugins", "doctor"]);
 
     expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ config: {}, effectiveOnly: true });
-    expect(runtimeLogs).toContain("No plugin issues detected.");
+    expect(runtimeLogs).toContain(cleanDoctorMessage);
+  });
+
+  it("emits one sanitized JSON doctor report without human decoration", async () => {
+    const homeDir = "/tmp/openclaw-plugin-doctor-home";
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [
+        createPluginRecord({
+          id: "broken",
+          origin: "config",
+          source: `${homeDir}/plugins/broken/index.ts`,
+          status: "error",
+          error: `failed to load ${homeDir}/plugins/broken/runtime.ts`,
+        }),
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "broken",
+          source: `${homeDir}/plugins/shadowed/index.ts`,
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; " +
+            `global plugin will be overridden by config plugin (${homeDir}/plugins/broken/index.ts)`,
+        },
+        {
+          level: "warn",
+          message: `failed to inspect ${homeDir}/plugins/unreadable`,
+        },
+      ],
+    });
+
+    await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
+      await runPluginsCommand(["plugins", "doctor", "--json"]);
+    });
+
+    expect(runtimeLogs).toHaveLength(1);
+    expect(runtimeErrors).toEqual([]);
+    expect(runtimeLogs[0]).not.toContain(homeDir);
+    expect(runtimeLogs[0]).not.toContain("Plugin errors:");
+    expect(runtimeLogs[0]).not.toContain("Docs:");
+    expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
+      ok: false,
+      pluginErrors: [
+        {
+          id: "broken",
+          error: "failed to load $OPENCLAW_HOME/plugins/broken/runtime.ts",
+          source: "$OPENCLAW_HOME/plugins/broken/index.ts",
+        },
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          message: "failed to inspect $OPENCLAW_HOME/plugins/unreadable",
+        },
+      ],
+      sourceShadowing: [
+        {
+          pluginId: "broken",
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; " +
+            "global plugin will be overridden by config plugin ($OPENCLAW_HOME/plugins/broken/index.ts)",
+          active: {
+            source: "$OPENCLAW_HOME/plugins/broken/index.ts",
+            origin: "config",
+            status: "error",
+            error: "failed to load $OPENCLAW_HOME/plugins/broken/runtime.ts",
+          },
+          shadowedSource: "$OPENCLAW_HOME/plugins/shadowed/index.ts",
+          repair: [
+            "openclaw plugins inspect broken",
+            "edit or remove the config-selected plugin source",
+            "openclaw plugins registry --refresh",
+            "openclaw gateway restart --force",
+          ],
+        },
+      ],
+      compatibility: [],
+      configurationWarnings: [],
+    });
+  });
+
+  it.each([
+    {
+      description: "a required plugin is missing",
+      diagnostic: {
+        level: "warn" as const,
+        pluginId: "calendar",
+        message: 'plugin "calendar" requires plugin "contacts"; install "contacts" to use it',
+      },
+      expected: 'calendar: plugin "calendar" requires plugin "contacts"',
+    },
+    {
+      description: "discovery cannot read an extensions directory",
+      diagnostic: {
+        level: "warn" as const,
+        message: "failed to read extensions dir: /tmp/plugins (permission denied)",
+      },
+      expected: "failed to read extensions dir: /tmp/plugins (permission denied)",
+    },
+  ])(
+    "reports actionable discovery warnings when $description",
+    async ({ diagnostic, expected }) => {
+      buildPluginDiagnosticsReport.mockReturnValue({ plugins: [], diagnostics: [diagnostic] });
+
+      await runPluginsCommand(["plugins", "doctor"]);
+
+      const output = runtimeLogs.join("\n");
+      expect(output).toContain("Diagnostics:");
+      expect(output).toContain(expected);
+      expect(output).not.toContain(cleanDoctorMessage);
+    },
+  );
+
+  it("keeps actionable discovery warnings alongside existing errors", async () => {
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        { level: "error", pluginId: "broken", message: "plugin manifest invalid" },
+        { level: "warn", pluginId: "calendar", message: "required plugin contacts is missing" },
+      ],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("broken: plugin manifest invalid");
+    expect(output).toContain("calendar: required plugin contacts is missing");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports stale plugin config in doctor output without claiming full plugin health", async () => {
@@ -145,7 +277,7 @@ describe("plugins cli list", () => {
     expect(output).toContain(
       "No plugin install-tree issues detected; configuration warnings remain.",
     );
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports missing configured Codex runtime plugin in doctor output", async () => {
@@ -191,7 +323,7 @@ describe("plugins cli list", () => {
     expect(output).toContain(
       "No plugin install-tree issues detected; configuration warnings remain.",
     );
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports missing configured ACPX runtime plugin in doctor output", async () => {
@@ -213,7 +345,7 @@ describe("plugins cli list", () => {
     expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
     expect(output).toContain("openclaw doctor --fix");
     expect(output).toContain("openclaw plugins install @openclaw/acpx");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports blocked configured ACPX runtime with ACP-specific guidance", async () => {
@@ -241,7 +373,7 @@ describe("plugins cli list", () => {
     expect(output).toContain("disable ACP/acpx in acp config");
     expect(output).not.toContain('runtime policy to "openclaw"');
     expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports disabled configured ACPX runtime with ACP-specific guidance", async () => {
@@ -264,7 +396,7 @@ describe("plugins cli list", () => {
     expect(output).toContain("disable ACP/acpx in acp config");
     expect(output).not.toContain('runtime policy to "openclaw"');
     expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("does not report implicit OpenAI Codex preference as configured runtime", async () => {
@@ -285,7 +417,7 @@ describe("plugins cli list", () => {
 
     const output = runtimeLogs.join("\n");
     expect(output).not.toContain('Configured runtime "codex"');
-    expect(output).toContain("No plugin issues detected.");
+    expect(output).toContain(cleanDoctorMessage);
   });
 
   it("does not report configured Codex runtime when the plugin is enabled", async () => {
@@ -308,7 +440,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(runtimeLogs).toContain("No plugin issues detected.");
+    expect(runtimeLogs).toContain(cleanDoctorMessage);
   });
 
   it("reports configured Codex runtime when the plugin record is disabled", async () => {
@@ -336,7 +468,7 @@ describe("plugins cli list", () => {
     expect(output).toContain('but "codex" is disabled');
     expect(output).toContain('Enable the "codex" plugin');
     expect(output).not.toContain("openclaw plugins install @openclaw/codex");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports blocked configured Codex runtime without install advice", async () => {
@@ -368,7 +500,7 @@ describe("plugins cli list", () => {
     expect(output).toContain('Remove "codex" from plugins.deny');
     expect(output).not.toContain('Run "openclaw doctor --fix" to install');
     expect(output).not.toContain("openclaw plugins install @openclaw/codex");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports disabled configured Codex runtime entry without install advice", async () => {
@@ -402,7 +534,7 @@ describe("plugins cli list", () => {
     expect(output).toContain("Set plugins.entries.codex.enabled=true");
     expect(output).not.toContain('Run "openclaw doctor --fix" to install');
     expect(output).not.toContain("openclaw plugins install @openclaw/codex");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports config-selected plugin source shadowing in doctor output", async () => {
@@ -462,7 +594,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(runtimeLogs).toContain("No plugin issues detected.");
+    expect(runtimeLogs).toContain(cleanDoctorMessage);
   });
 
   it("reports persisted plugin registry state without refreshing", async () => {

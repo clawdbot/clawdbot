@@ -144,6 +144,14 @@ has `visibleReplySent: false`, does not emit `message_sent`, and does not count
 as a visible queued reply. This lets plugins distinguish hook cancellation
 from provider failure without inventing a native message identity.
 
+By default, routed turns record inbound metadata against
+`ctxPayload.SessionKey ?? route.sessionKey`. Set `record.sessionKey` only when a
+native command intentionally executes in one command session while updating a
+different provider-routed target session. The override affects inbound metadata,
+transcript-context merge, and record-stage diagnostics; it does not change dispatch
+routing or hook correlation. An explicit override must be non-empty and contain no
+surrounding whitespace.
+
 Reject `deliver` or `finalization` when native delivery fails. If no provider
 send was attempted, throw `PlatformMessageNotDispatchedError` from
 `openclaw/plugin-sdk/error-runtime`; core suppresses a false `message_sent`

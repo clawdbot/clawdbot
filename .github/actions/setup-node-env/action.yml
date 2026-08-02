@@ -482,7 +482,7 @@ runs:
         path: .artifacts/build-all-cache
         # Exact keys deduplicate concurrent jobs. Coarse restore supplies the
         # newest declaration groups; build-all rehashes every group's inputs.
-        key: ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'tsconfig*.json', 'tsdown*.config.ts', 'scripts/build-all.mjs', 'scripts/tsdown-build.mjs', 'scripts/lib/tsdown-*.mjs', 'scripts/lib/plugin-sdk-*', 'scripts/lib/bundled-plugin-*', 'scripts/lib/optional-bundled-clusters.mjs', 'src/**', 'packages/**', 'extensions/**') }}
+        key: ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'tsconfig*.json', 'tsdown*.config.ts', 'scripts/build-all.mjs', 'scripts/tsdown-build.mjs', 'scripts/lib/tsdown-*.mjs', 'scripts/lib/plugin-sdk-*', 'scripts/lib/bundled-plugin-*', 'scripts/lib/optional-bundled-clusters.mjs', 'src/**', 'packages/**', 'extensions/**') }}
         restore-keys: |
           ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 

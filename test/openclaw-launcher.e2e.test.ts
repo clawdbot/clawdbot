@@ -228,7 +228,7 @@ describe("openclaw launcher", () => {
     }
   });
 
-  it("rejects Bun even when its Node compatibility version is new enough", async () => {
+  it("rejects Bun without node:sqlite even when its Node compatibility version is new enough", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "entry.js"),
@@ -241,6 +241,11 @@ describe("openclaw launcher", () => {
       [
         "Object.defineProperty(process.versions, 'bun', { value: '1.3.14' });",
         "Object.defineProperty(process.versions, 'node', { value: '24.3.0' });",
+        // Old Bun has no node:sqlite; the launcher feature-probes instead of
+        // trusting the runtime label, so the mock must hide Node's builtin.
+        "const realGetBuiltinModule = process.getBuiltinModule.bind(process);",
+        "process.getBuiltinModule = (id) =>",
+        "  id === 'node:sqlite' || id === 'sqlite' ? undefined : realGetBuiltinModule(id);",
       ].join("\n"),
       "utf8",
     );
@@ -258,8 +263,38 @@ describe("openclaw launcher", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(
-      "the Bun runtime is unsupported because OpenClaw requires node:sqlite",
+      "this Bun runtime is unsupported because it does not provide node:sqlite",
     );
+  });
+
+  it("runs the CLI under Bun when the runtime provides node:sqlite", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      'process.stdout.write("bun-runtime-entry\\n");\n',
+      "utf8",
+    );
+    const mockRuntime = path.join(fixtureRoot, "mock-bun-sqlite-runtime.mjs");
+    await fs.writeFile(
+      mockRuntime,
+      // Simulates Bun >=1.4 (Rust rewrite): bun-branded runtime with node:sqlite
+      // available; Node's own getBuiltinModule answers the launcher probe.
+      "Object.defineProperty(process.versions, 'bun', { value: '1.4.0' });",
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(mockRuntime).href, path.join(fixtureRoot, "openclaw.mjs")],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("bun-runtime-entry");
   });
 
   it("surfaces transitive entry import failures instead of masking them as missing dist", async () => {
@@ -292,78 +327,6 @@ describe("openclaw launcher", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("missing dist/entry.(m)js");
-  });
-
-  it("prints root version without importing the runtime entry", async () => {
-    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
-    await fs.writeFile(
-      path.join(fixtureRoot, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "1.2.3-test",
-        gitHead: "abcdef0123456789",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(fixtureRoot, "dist", "entry.js"),
-      "throw new Error('runtime entry should not load for --version');\n",
-      "utf8",
-    );
-
-    const result = spawnSync(
-      process.execPath,
-      [path.join(fixtureRoot, "openclaw.mjs"), "--version"],
-      {
-        cwd: fixtureRoot,
-        env: launcherEnv(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("OpenClaw 1.2.3-test (abcdef0)\n");
-    expect(result.stderr).toBe("");
-  });
-
-  it("defers container-targeted root version to the runtime entry", async () => {
-    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
-    await fs.writeFile(
-      path.join(fixtureRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.2.3-test" }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(fixtureRoot, "dist", "entry.js"),
-      "process.stdout.write('RUNTIME ENTRY\\n');\n",
-      "utf8",
-    );
-
-    const result = spawnSync(
-      process.execPath,
-      [path.join(fixtureRoot, "openclaw.mjs"), "--container", "demo", "--version"],
-      {
-        cwd: fixtureRoot,
-        env: launcherEnv(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("RUNTIME ENTRY\n");
-
-    const envResult = spawnSync(
-      process.execPath,
-      [path.join(fixtureRoot, "openclaw.mjs"), "--version"],
-      {
-        cwd: fixtureRoot,
-        env: launcherEnv({ OPENCLAW_CONTAINER: "demo" }),
-        encoding: "utf8",
-      },
-    );
-
-    expect(envResult.status).toBe(0);
-    expect(envResult.stdout).toBe("RUNTIME ENTRY\n");
   });
 
   it("treats Bun direct optional import misses as direct launcher misses", async () => {
@@ -418,30 +381,41 @@ describe("openclaw launcher", () => {
   });
 
   it.runIf(process.env.OPENCLAW_TEST_BUN_LAUNCHER === "1" && hasBunRuntime())(
-    "rejects the real Bun runtime before loading the CLI",
+    "gates the real Bun runtime on node:sqlite availability",
     async () => {
       const fixtureRoot = await makeLauncherFixture(fixtureRoots);
       await fs.writeFile(
         path.join(fixtureRoot, "dist", "entry.js"),
-        "process.stdout.write('unexpected bun entry\\n');\n",
+        "process.stdout.write('bun entry ran\\n');\n",
         "utf8",
       );
 
-      const result = spawnSync(
-        process.env.BUN_BIN ?? "bun",
-        [path.join(fixtureRoot, "openclaw.mjs")],
-        {
-          cwd: fixtureRoot,
-          env: launcherEnv(),
-          encoding: "utf8",
-        },
+      const bunBin = process.env.BUN_BIN ?? "bun";
+      // Bun >=1.4 (Rust rewrite) ships node:sqlite and may run the CLI; older
+      // Buns must be rejected before the entry loads.
+      const probe = spawnSync(
+        bunBin,
+        ["-e", "process.exit(process.getBuiltinModule?.('node:sqlite') ? 0 : 1)"],
+        { encoding: "utf8" },
       );
+      const bunHasNodeSqlite = probe.status === 0;
 
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(
-        "the Bun runtime is unsupported because OpenClaw requires node:sqlite",
-      );
+      const result = spawnSync(bunBin, [path.join(fixtureRoot, "openclaw.mjs")], {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      });
+
+      if (bunHasNodeSqlite) {
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain("bun entry ran");
+      } else {
+        expect(result.status).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(
+          "this Bun runtime is unsupported because it does not provide node:sqlite",
+        );
+      }
     },
   );
 

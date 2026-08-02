@@ -7,22 +7,9 @@ import { RESPONSE_FAILED_NO_DETAILS_MESSAGE } from "./openai-responses-contracts
 import { log, type MutableAssistantOutput } from "./openai-transport-shared.js";
 import { redactIdentifier, redactSensitiveText } from "./transport-utils.js";
 
-export function stringifyUnknown(value: unknown, fallback = ""): string {
+function stringifyUnknown(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
     return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return fallback;
-}
-
-export function stringifyJsonLike(value: unknown, fallback = ""): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value && typeof value === "object") {
-    return JSON.stringify(value);
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);

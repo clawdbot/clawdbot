@@ -266,7 +266,7 @@ export function stopSubagentsForRequester(params: {
     }
     seenChildKeys.add(childKey);
 
-    if (!run.endedAt || run.pauseReason === "sessions_yield") {
+    if (!run.execution.endedAt || run.pauseReason === "sessions_yield") {
       const cleared = clearSessionQueues([childKey]);
       const parsed = parseAgentSessionKey(childKey);
       const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });

@@ -179,6 +179,7 @@ export function registerMatrixMonitorEvents(params: {
     invalidateRoom: (roomId: string) => void;
     rememberInvite?: (roomId: string, remoteUserId: string) => void;
   };
+  invalidateMemberDisplayName?: (roomId: string, userId: string) => void;
   logVerboseMessage: (message: string) => void;
   warnedEncryptedRooms: Set<string>;
   warnedCryptoMissingRooms: Set<string>;
@@ -199,6 +200,7 @@ export function registerMatrixMonitorEvents(params: {
     dmPolicy,
     readStoreAllowFrom,
     directTracker,
+    invalidateMemberDisplayName,
     logVerboseMessage,
     warnedEncryptedRooms,
     warnedCryptoMissingRooms,
@@ -386,6 +388,9 @@ export function registerMatrixMonitorEvents(params: {
       directTracker?.invalidateRoom(roomId);
       const membership = (event?.content as { membership?: string } | undefined)?.membership;
       const stateKey = (event as { state_key?: string }).state_key ?? "";
+      if (stateKey) {
+        invalidateMemberDisplayName?.(roomId, stateKey);
+      }
       logVerboseMessage(
         `matrix: member event room=${roomId} stateKey=${stateKey} membership=${membership ?? "unknown"}`,
       );

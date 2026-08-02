@@ -48,6 +48,7 @@ const MATURITY_GENERATED_PR_PATHS = [
 
 type WorkflowStep = {
   env?: Record<string, unknown>;
+  id?: string;
   if?: string;
   name?: string;
   run?: string;
@@ -71,6 +72,46 @@ function runCiGateFixture(requiredResults: string, selectedResults: string) {
       SELECTED_RESULTS: selectedResults,
     },
   });
+}
+
+function quoteShell(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function runWorkflowShellScript(
+  script: string,
+  options: { cwd?: string; env?: NodeJS.ProcessEnv },
+) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-workflow-shell-"));
+  const modulePaths: string[] = [];
+  try {
+    let moduleIndex = 0;
+    const moduleRoot = options.cwd ?? process.cwd();
+    const rewritten = script.replace(
+      /node --input-type=module <<'EOF'\n([\s\S]*?)\nEOF/gu,
+      (_match, body: string) => {
+        const modulePath = path.join(
+          moduleRoot,
+          `.openclaw-${path.basename(root)}-${moduleIndex}.mjs`,
+        );
+        moduleIndex += 1;
+        modulePaths.push(modulePath);
+        writeFileSync(modulePath, `${body}\n`, "utf8");
+        return `${quoteShell(process.execPath)} ${quoteShell(modulePath)}`;
+      },
+    );
+    const scriptPath = path.join(root, "run.sh");
+    writeFileSync(scriptPath, rewritten.endsWith("\n") ? rewritten : `${rewritten}\n`, "utf8");
+    return spawnSync("bash", [scriptPath], {
+      ...options,
+      encoding: "utf8",
+    });
+  } finally {
+    for (const modulePath of modulePaths) {
+      rmSync(modulePath, { force: true });
+    }
+    rmSync(root, { force: true, recursive: true });
+  }
 }
 
 function runCiManifestFixture(options: {
@@ -215,9 +256,8 @@ function runCiManifestFixture(options: {
     const manifestStep = readCiWorkflow().jobs.preflight.steps.find(
       (step: { name?: string }) => step.name === "Build CI manifest",
     );
-    const run = spawnSync("bash", ["-c", manifestStep.run], {
+    const run = runWorkflowShellScript(manifestStep.run, {
       cwd: root,
-      encoding: "utf8",
       env: {
         ...process.env,
         GITHUB_OUTPUT: outputPath,
@@ -509,6 +549,54 @@ function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts
   }
 }
 
+function runControlUiI18nSourceFixture(options: {
+  compatibilityTarget: boolean;
+  hasVerifyScript: boolean;
+}): { calls: string[]; output: string; summary: string; status: number | null } {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-control-ui-i18n-"));
+  try {
+    const fakeBin = path.join(root, "bin");
+    const callsPath = path.join(root, "pnpm-calls.txt");
+    const summaryPath = path.join(root, "summary.md");
+    mkdirSync(fakeBin);
+    writeFileSync(
+      path.join(root, "package.json"),
+      `${JSON.stringify({
+        scripts: options.hasVerifyScript ? { "ui:i18n:verify": "true" } : {},
+      })}\n`,
+    );
+    writeExecutable(path.join(fakeBin, "pnpm"), [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+    ]);
+    const sourceStep = readCiWorkflow().jobs["control-ui-i18n"].steps.find(
+      (step: WorkflowStep) => step.name === "Verify Control UI i18n source",
+    );
+    const run = spawnSync("bash", ["-c", sourceStep.run], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        COMPATIBILITY_TARGET: options.compatibilityTarget ? "true" : "false",
+        GITHUB_STEP_SUMMARY: summaryPath,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        PNPM_CALLS: callsPath,
+      },
+    });
+    return {
+      calls: existsSync(callsPath)
+        ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
+        : [],
+      output: `${run.stdout}${run.stderr}`,
+      status: run.status,
+      summary: existsSync(summaryPath) ? readFileSync(summaryPath, "utf8") : "",
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 function runGeneratedPublisherScenario(
   baseChangePath: "a" | "b" | null,
   options: {
@@ -790,6 +878,75 @@ describe("ci workflow guards", () => {
     });
   });
 
+  it("routes stale bug issues through ClawSweeper instead of Barnacle closure", () => {
+    const staleWorkflow = readWorkflow(".github/workflows/stale.yml");
+    const staleSteps = staleWorkflow.jobs.stale.steps as WorkflowStep[];
+    const stepNamed = (name: string) =>
+      expectDefined(
+        staleSteps.find((step) => step.name === name),
+        name,
+      );
+
+    for (const name of [
+      "Mark stale unassigned issues and pull requests (primary)",
+      "Mark stale assigned issues (primary)",
+      "Mark stale unassigned issues and pull requests (fallback)",
+      "Mark stale assigned issues (fallback)",
+    ]) {
+      const exemptLabels = String(stepNamed(name).with?.["exempt-issue-labels"])
+        .split(",")
+        .map((label) => label.trim());
+      expect(exemptLabels, name).toContain("bug");
+    }
+
+    const bugJob = staleWorkflow.jobs["stale-bug-verification"];
+    expect(bugJob.permissions).toEqual({ issues: "write" });
+    expect(bugJob["runs-on"]).toBe("ubuntu-24.04");
+    const bugScript = String(
+      (bugJob.steps as WorkflowStep[]).find(
+        (step) => step.name === "Mark inactive bugs for ClawSweeper verification",
+      )?.with?.script,
+    );
+    expect(bugScript).toContain("const maxMarks = 25;");
+    expect(bugScript).toContain('labels: "bug"');
+    expect(bugScript).toContain("github.rest.issues.addLabels");
+    expect(bugScript).toContain("github.rest.issues.removeLabel");
+    expect(bugScript).toContain("Inactivity alone will not close a bug report.");
+    expect(bugScript).toContain("requires separate backfill approval");
+    expect(bugScript).toContain("slice(staleEventIndex + 1)");
+    expect(bugScript).toContain("updatedAtMs > lastAutomationAtMs");
+    expect(bugScript).toContain('item.state !== "open"');
+    expect(bugScript).not.toContain("15_000");
+    expect(bugScript).not.toContain("github.rest.issues.update");
+
+    const backfillScript = String(
+      (staleWorkflow.jobs["backfill-stale-closures"].steps as WorkflowStep[]).find(
+        (step) => step.name === "Backfill stale closures",
+      )?.with?.script,
+    );
+    expect(backfillScript).toMatch(/issueExemptLabels[\s\S]*"bug"/);
+
+    const dispatchWorkflow = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
+    const dispatchCondition = String(dispatchWorkflow.jobs.dispatch.if);
+    expect(dispatchCondition).toContain("github.event.label.name == 'stale'");
+    expect(dispatchCondition).toContain("contains(github.event.issue.labels.*.name, 'bug')");
+    expect(dispatchCondition).toContain("github.actor_id == '257215752'");
+    expect(dispatchCondition).toContain("github.actor_id == '264559031'");
+
+    const auditJob = staleWorkflow.jobs["audit-bug-closure-reasons"];
+    expect(auditJob.permissions).toEqual({ issues: "read" });
+    const auditScript = String((auditJob.steps as WorkflowStep[])[0]?.with?.script);
+    expect(auditScript).toContain('item.state_reason !== "not_planned"');
+    expect(auditScript).toContain("github.rest.issues.listEventsForTimeline");
+    expect(auditScript).toContain("github.paginate.iterator(");
+    expect(auditScript).toContain("new Set([257215752, 264559031])");
+    expect(auditScript).toContain("escapeSummaryCell(violation.title)");
+    expect(auditScript).toContain('.replaceAll("<", "&lt;")');
+    expect(auditScript).toContain("core.setFailed(");
+    expect(auditScript).not.toContain("github.rest.issues.update");
+    expect(auditScript).not.toContain("github.rest.issues.createComment");
+  });
+
   it("makes the hosted release-gate fallback explicit and exact-SHA only", () => {
     const workflow = readCiWorkflow();
     const releaseGate = workflow.on.workflow_dispatch.inputs.release_gate;
@@ -888,6 +1045,13 @@ describe("ci workflow guards", () => {
   it("keeps Testbox pull request validation off leased runner capacity", () => {
     const workflow = readTestboxWorkflow();
 
+    expect(workflow.on.pull_request).toEqual({
+      types: ["opened", "reopened", "synchronize", "ready_for_review"],
+      paths: [".github/workflows/**"],
+    });
+    expect(workflow.jobs.check.if).toBe(
+      "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
+    );
     expect(workflow.jobs.check["runs-on"]).toBe(
       "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
     );
@@ -1014,7 +1178,6 @@ describe("ci workflow guards", () => {
     );
     expect(nativePublishStep.with["generated-paths"].trim().split("\n")).toEqual([
       "apps/.i18n/native",
-      "apps/.i18n/apple-translation-contradictions.json",
       "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
       "apps/android/app/src/main/res/values*/assistant.xml",
       "apps/android/app/src/main/res/values*/strings.xml",
@@ -1050,11 +1213,29 @@ describe("ci workflow guards", () => {
     expect(controlUiArtifactStep.run).toContain(
       ":(exclude)ui/src/i18n/.i18n/catalog-fallbacks.json",
     );
+    expect(controlUiArtifactStep.run).toContain("ui/src/i18n/.i18n/${LOCALE}.tm.jsonl");
+    expect(controlUiArtifactStep.run).toContain("ui/src/i18n/.i18n/${LOCALE}.meta.json");
+    expect(controlUiArtifactStep.run).not.toContain("git add -A ui/src/i18n");
     expect(controlUiAggregateStep.run).toBe(
       "node --import tsx scripts/control-ui-i18n.ts sync --write",
     );
     const controlUiPublishStep = controlUiFinalize.steps.find(
       (step: { name?: string }) => step.name === "Open or update generated locale PR",
+    );
+    expect(controlUiPublishStep.with["generated-paths"].trim().split("\n")).toEqual([
+      "ui/src/i18n/.i18n/*.tm.jsonl",
+      "ui/src/i18n/.i18n/*.meta.json",
+      "ui/src/i18n/.i18n/catalog-fallbacks.json",
+    ]);
+    expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
+      "scripts/lib/control-ui-i18n-catalog.ts",
+    );
+    expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
+      "scripts/lib/control-ui-i18n-sync-plan.ts",
+    );
+    expect(controlUiPublishStep.with["invalidation-paths"]).toContain("ui/src/i18n/locales/*.ts");
+    expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
+      "ui/src/i18n/locales/en-agents.ts",
     );
     expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
       "scripts/control-ui-i18n-verify.ts",
@@ -1701,24 +1882,39 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("downloads the opengrep installer completely before execution", () => {
+  it("verifies the pinned OpenGrep release binary before installing it", () => {
     for (const workflowPath of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
       const workflow = parse(readFileSync(workflowPath, "utf8"));
-      const run = expectDefined(
-        workflow.jobs.scan.steps.find((step: WorkflowStep) => step.name === "Install opengrep")
-          ?.run,
+      const installStep = expectDefined(
+        workflow.jobs.scan.steps.find((step: WorkflowStep) => step.name === "Install opengrep"),
         `Install opengrep step in ${workflowPath}`,
       );
+      const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
+      expect(installStep.env, workflowPath).toMatchObject({
+        OPENGREP_VERSION: "v1.25.0",
+        OPENGREP_LINUX_X64_SHA256:
+          "9ac4aebb47ba3f7b0d8fc641ac8749cb6c2f253f616131a67d9631e00d4bea33",
+      });
+      expect(run, workflowPath).toContain('binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"');
+      expect(run, workflowPath).toContain("trap 'rm -f \"$binary\"' EXIT");
       expect(run, workflowPath).toContain(
-        'installer="$(mktemp "${RUNNER_TEMP}/opengrep-install.XXXXXX")"',
+        "curl -fsSL --retry 4 --retry-all-errors --retry-delay 2",
       );
-      expect(run, workflowPath).toContain("curl -fsSL --connect-timeout 10 --max-time 120 \\");
-      expect(run, workflowPath).toContain('-o "$installer"');
-      expect(run, workflowPath).toContain('bash "$installer" -v "$OPENGREP_VERSION"');
-      expect(run, workflowPath).toContain("trap 'rm -f \"$installer\"' EXIT");
-      expect(run.indexOf('-o "$installer"'), workflowPath).toBeLessThan(
-        run.indexOf('bash "$installer"'),
+      expect(run, workflowPath).toContain("--connect-timeout 10 --max-time 300");
+      expect(run, workflowPath).toContain('-o "$binary"');
+      expect(run, workflowPath).toContain(
+        "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86",
+      );
+      expect(run, workflowPath).toContain(
+        'printf \'%s  %s\\n\' "$OPENGREP_LINUX_X64_SHA256" "$binary" | sha256sum --check',
+      );
+      expect(run, workflowPath).toContain('install -m 0755 "$binary" "$install_dir/opengrep"');
+      expect(run.indexOf('-o "$binary"'), workflowPath).toBeLessThan(
+        run.indexOf("sha256sum --check"),
+      );
+      expect(run.indexOf("sha256sum --check"), workflowPath).toBeLessThan(
+        run.indexOf('install -m 0755 "$binary"'),
       );
       expect(run, workflowPath).not.toMatch(/\|\s*bash/u);
     }
@@ -1978,6 +2174,7 @@ describe("ci workflow guards", () => {
       "checks-fast-plugin-contracts-shard",
       "checks-node-core-test-nondist-shard",
       "checks-ui",
+      "checks-ui-e2e",
       "control-ui-i18n",
       "native-i18n",
       "qa-smoke-ci-profile",
@@ -2268,6 +2465,14 @@ describe("ci workflow guards", () => {
       const source = readFileSync(workflowPath, "utf8");
       expect(source, workflowPath).not.toContain("build-all-cache-scope:");
     }
+
+    const releaseChecks = parse(
+      readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
+    );
+    expect(releaseChecks.jobs.validate_repo_e2e.env).toMatchObject({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+    });
   });
 
   it("persists Node 22 declarations through trusted bounded artifacts", () => {
@@ -2969,8 +3174,7 @@ describe("ci workflow guards", () => {
     expect(validateStep.run).toContain("requestedRegion !== process.env.BLACKSMITH_REGION");
     expect(validateStep.run).toContain("requestedKey !== requestedKey.trim()");
     expect(validateStep.run).toContain("disk?.key === requestedKey");
-    const rejectedKey = spawnSync("bash", ["-c", validateStep.run], {
-      encoding: "utf8",
+    const rejectedKey = runWorkflowShellScript(validateStep.run, {
       env: {
         ...process.env,
         BLACKSMITH_ENV: "production-amd64",
@@ -2982,8 +3186,7 @@ describe("ci workflow guards", () => {
     });
     expect(rejectedKey.status).not.toBe(0);
     expect(rejectedKey.stderr).toContain("identity is not allowlisted for retirement");
-    const paddedKey = spawnSync("bash", ["-c", validateStep.run], {
-      encoding: "utf8",
+    const paddedKey = runWorkflowShellScript(validateStep.run, {
       env: {
         ...process.env,
         BLACKSMITH_ENV: "production-amd64",
@@ -3122,9 +3325,6 @@ describe("ci workflow guards", () => {
     const workflowPaths = [
       [".github/workflows/ci.yml", "120s"],
       [".github/workflows/workflow-sanity.yml", "30s"],
-      [".github/workflows/ci-check-testbox.yml", "120s"],
-      [".github/workflows/ci-check-arm-testbox.yml", "120s"],
-      [".github/workflows/ci-build-artifacts-testbox.yml", "120s"],
       [".github/workflows/crabbox-hydrate.yml", "30s"],
     ] as const;
 
@@ -3145,6 +3345,20 @@ describe("ci workflow guards", () => {
         workflowPath,
       ).toBe(true);
     }
+  });
+
+  it("bounds mantis discord smoke validation git fetches", () => {
+    const workflowPath = ".github/workflows/mantis-discord-smoke.yml";
+    const source = readFileSync(workflowPath, "utf8");
+    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+
+    expect(gitFetchLines, workflowPath).toHaveLength(2);
+    expect(
+      gitFetchLines.every((line) =>
+        line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
+      ),
+      workflowPath,
+    ).toBe(true);
   });
 
   it("bounds release ref validation fetches across checkout auth modes", () => {
@@ -3183,10 +3397,10 @@ describe("ci workflow guards", () => {
     expect(action).toContain("::error title=ensure-base-commit missing base::");
   });
 
-  it("bounds early unauthenticated checkout fetches", () => {
+  it("bounds specialized early checkout fetches", () => {
     const workflow = readCiWorkflow();
 
-    for (const jobName of ["preflight", "security-fast", "skills-python"]) {
+    for (const jobName of ["preflight", "skills-python"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find(
         (step: WorkflowStep) => step.name === "Checkout",
       );
@@ -3198,17 +3412,14 @@ describe("ci workflow guards", () => {
       expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
       expect(checkoutStep.run, jobName).not.toContain("if timeout --signal=TERM");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
-      // preflight fetches the head at depth 1 and supplements the parents
-      // blob-less; security-fast keeps depth 2 for its diff-base needs.
-      const expectedDepth = jobName === "security-fast" ? 2 : 1;
       expect(checkoutStep.run, jobName).toContain(
-        `fetch --no-tags --prune --no-recurse-submodules --depth=${expectedDepth} origin`,
+        "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
       );
       if (jobName === "preflight") {
         expect(checkoutStep.run, jobName).toContain("--filter=blob:none");
         expect(checkoutStep.run, jobName).toContain("fetch_parent_metadata");
       }
-      if (jobName !== "skills-python") {
+      if (jobName === "preflight") {
         expect(checkoutStep.run, jobName).toContain('if [ "$fetch_status" = "124" ]');
         expect(checkoutStep.run, jobName).toContain("timed out");
       }
@@ -3216,6 +3427,26 @@ describe("ci workflow guards", () => {
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+  });
+
+  it("uses the maintained authenticated checkout for security-fast", () => {
+    const workflow = readCiWorkflow();
+    const checkoutStep = workflow.jobs["security-fast"].steps.find(
+      (step: WorkflowStep) => step.name === "Checkout",
+    );
+    const manualCheckoutStep = workflow.jobs["security-fast"].steps.find(
+      (step: WorkflowStep) => step.name === "Checkout manual target",
+    );
+
+    expect(checkoutStep.uses).toBe(CHECKOUT_V6);
+    expect(checkoutStep.if).toBe(
+      "github.event_name != 'workflow_dispatch' || inputs.target_ref == ''",
+    );
+    expect(checkoutStep.with).toEqual({ "fetch-depth": 2, "persist-credentials": false });
+    expect(manualCheckoutStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.target_ref != ''",
+    );
+    expect(manualCheckoutStep.run).toContain("workflow_dispatch target_ref");
   });
 
   it("refetches an exact manual target when the workflow branch moves", () => {
@@ -3237,7 +3468,7 @@ describe("ci workflow guards", () => {
     expect(finalCheck).toBeGreaterThan(exactFetch);
   });
 
-  it("retries workflow sanity checkout fetch timeouts", () => {
+  it("uses the maintained checkout across workflow sanity jobs", () => {
     const workflow = readWorkflowSanityWorkflow();
 
     for (const jobName of ["no-tabs", "actionlint", "generated-doc-baselines"]) {
@@ -3245,19 +3476,47 @@ describe("ci workflow guards", () => {
         (step: WorkflowStep) => step.name === "Checkout",
       );
 
-      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
-      expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
-      expect(checkoutStep.run, jobName).toContain(
-        'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
+      expect(checkoutStep.uses, jobName).toBe(CHECKOUT_V6);
+      expect(checkoutStep.with, jobName).toEqual({
+        "fetch-depth": 1,
+        "persist-credentials": false,
+      });
+    }
+  });
+
+  it("prepares all Testbox checkouts from one maintained owner", () => {
+    const workflowPaths = [
+      ".github/workflows/ci-check-testbox.yml",
+      ".github/workflows/ci-check-arm-testbox.yml",
+      ".github/workflows/ci-build-artifacts-testbox.yml",
+    ];
+
+    for (const workflowPath of workflowPaths) {
+      const workflow = parse(readFileSync(workflowPath, "utf8"));
+      const job = Object.values(workflow.jobs)[0] as { steps: WorkflowStep[] };
+      const checkoutStep = job.steps.find((step) => step.name === "Checkout");
+      const prepareStep = job.steps.find((step) => step.name === "Prepare Testbox shell");
+
+      expect(checkoutStep?.uses, workflowPath).toBe(CHECKOUT_V6);
+      expect(checkoutStep?.with, workflowPath).toEqual({
+        "fetch-depth": "${{ github.event_name == 'pull_request' && '2' || '0' }}",
+        "persist-credentials": false,
+      });
+      expect(prepareStep?.uses, workflowPath).toBe("./.github/actions/prepare-testbox-shell");
+      expect(prepareStep?.with?.["base-ref"], workflowPath).toBe(
+        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
       );
-      expect(checkoutStep.run, jobName).toContain(
-        'if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then',
-      );
-      expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
-      expect(checkoutStep.run, jobName).toContain(
-        "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
+      expect(JSON.stringify(job.steps), workflowPath).not.toContain(
+        "+refs/heads/main:refs/remotes/origin/main",
       );
     }
+
+    const action = parse(readFileSync(".github/actions/prepare-testbox-shell/action.yml", "utf8"));
+    const run = action.runs.steps[0].run as string;
+    expect(run).toContain('base_ref="${TESTBOX_BASE_REF:-HEAD}"');
+    expect(run).toContain('git rev-parse --verify "${base_ref}^{commit}"');
+    expect(run).toContain('git update-ref refs/remotes/origin/main "$base_sha"');
+    expect(run).not.toContain("git fetch");
   });
 
   it("bounds the workflow sanity tool downloads", () => {
@@ -3427,6 +3686,27 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("serializes macOS Swift tests only on hosted dispatches and retries", () => {
+    const workflow = readCiWorkflow();
+    const macosSwift = workflow.jobs["macos-swift"];
+    const testStep = macosSwift.steps.find((step: WorkflowStep) => step.name === "Swift test");
+
+    expect(macosSwift.env.SWIFT_TEST_EXECUTION).toBe(
+      "${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}",
+    );
+    expect(testStep.run).toContain(
+      "swift_test_args=(--package-path apps/macos --enable-code-coverage)",
+    );
+    expect(testStep.run).toContain('if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]');
+    expect(testStep.run).toContain("swift_test_args+=(--parallel)");
+    expect(testStep.run).toContain("else\n  swift_test_args+=(--no-parallel)");
+    expect(testStep.run).toContain('swift test "${swift_test_args[@]}"');
+    expect(testStep.run).not.toContain(
+      "swift test --package-path apps/macos --parallel --enable-code-coverage",
+    );
+    expect(testStep.run).toContain("for attempt in 1 2 3");
+  });
+
   it("bounds the Windows Crabbox hydrate main fetch", () => {
     const workflow = readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8");
 
@@ -3585,22 +3865,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const preflightGuards = workflow.slice(
       workflow.indexOf("guards)"),
-      workflow.indexOf("shrinkwrap)"),
+      workflow.indexOf("npm-lock)"),
     );
-    const shrinkwrapGuards = workflow.slice(
-      workflow.indexOf("shrinkwrap)"),
+    const npmLockGuards = workflow.slice(
+      workflow.indexOf("npm-lock)"),
       workflow.indexOf("prod-types)"),
     );
 
     expect(workflow).toContain("check-guards");
-    expect(workflow).toContain("check-shrinkwrap");
+    expect(workflow).toContain("check-npm-lock");
     expect(preflightGuards).toContain('has_package_script "check:script-declarations"');
     expect(preflightGuards).toContain("pnpm check:script-declarations");
     expect(preflightGuards).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
     expect(preflightGuards).toContain(
       "Current CI targets must provide the check:script-declarations package script.",
     );
-    expect(shrinkwrapGuards).toContain("pnpm deps:shrinkwrap:check");
+    expect(npmLockGuards).toContain("pnpm deps:npm-lock:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
     expect(parsedWorkflow.jobs.preflight.outputs.diff_base_revision).toBe(
       "${{ steps.diff_base.outputs.sha }}",
@@ -3704,6 +3984,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(coverageStep.run).toBe("node scripts/check-protocol-event-coverage.mjs");
     expect(coverageStep.if).toBe("steps.manifest.outputs.run_protocol_event_coverage == 'true'");
     expect(checkShardRun).not.toContain("check:protocol-coverage");
+  });
+
+  it("keeps type-aware oxlint within hosted fork-runner resources", () => {
+    const workflow = readCiWorkflow();
+    const checkShardRun = workflow.jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run check shard",
+    ).run;
+
+    expect(checkShardRun).toContain('if [ "$(nproc)" -lt 8 ]; then');
+    expect(checkShardRun).toContain("lint_args=(--split-core --threads=1)");
+    expect(checkShardRun).toContain('pnpm lint "${lint_args[@]}"');
+    expect(checkShardRun).toContain('node scripts/run-oxlint-shards.mjs "${lint_args[@]}"');
   });
 
   it("runs the suppression-baseline max-lines ratchet against the exact tested tree", () => {
@@ -4162,6 +4454,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(checkShard.run).toContain("pnpm tsgo:scripts");
     expect(checkShard.run).toContain('elif [[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(checkShard.run).toContain('has_package_script "deps:npm-lock:check"');
+    expect(checkShard.run).toContain(
+      "Current CI targets must provide the deps:npm-lock:check package script.",
+    );
+    expect(checkShard.run).toContain(
+      "[skip] historical target predates the transient npm lock contract",
+    );
     expect(checkShard.run).toContain('has_package_script "deadcode:dependencies"');
     expect(checkShard.run).toContain('has_package_script "deadcode:unused-files"');
     expect(checkShard.run).toContain('has_package_script "deadcode:exports"');
@@ -4194,6 +4493,61 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiTest.run).toContain("pnpm --dir ui test");
   });
 
+  it("gates current Control UI changes on the full mocked Chromium E2E suite", () => {
+    const workflow = readCiWorkflow();
+    const ui = workflow.jobs["checks-ui"];
+    const uiE2e = workflow.jobs["checks-ui-e2e"];
+
+    expect(uiE2e.permissions).toEqual({ contents: "read" });
+    expect(uiE2e.needs).toEqual(["preflight"]);
+    expect(uiE2e.if).toBe(
+      "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
+    );
+    expect(uiE2e["runs-on"]).toContain("blacksmith-8vcpu-ubuntu-2404");
+    expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
+    // Each Chromium worker keeps serial file ownership while all four shards
+    // together remain required by the aggregate CI gate.
+    expect(uiE2e["timeout-minutes"]).toBe(25);
+    expect(uiE2e.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 4,
+      matrix: { shard: [1, 2, 3, 4] },
+    });
+    expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
+
+    const uiSetup = expectDefined(
+      ui.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "Control UI Node setup",
+    );
+    const uiE2eSetup = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "Control UI E2E Node setup",
+    );
+    expect(uiE2eSetup.uses).toBe("./.github/actions/setup-node-env");
+    expect(uiE2eSetup.with).toEqual(uiSetup.with);
+
+    const chromiumInstall = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Install Playwright Chromium"),
+      "Control UI E2E Chromium installation",
+    );
+    expect(chromiumInstall.run).toBe("node scripts/ensure-playwright-chromium.mjs");
+
+    const scenario = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
+      "Control UI E2E suite",
+    );
+    expect(scenario.run).toBe(
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard ${{ matrix.shard }}/4",
+    );
+    const browserCopilot = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test browser copilot end-to-end"),
+      "browser copilot E2E suite",
+    );
+    expect(browserCopilot.if).toBe("matrix.shard == 1");
+    expect(browserCopilot.run).toBe("pnpm test:e2e:browser-copilot");
+    expect(JSON.stringify(uiE2e)).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+  });
+
   it("does not rebuild Control UI after build:ci-artifacts", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
@@ -4215,6 +4569,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const workflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
     const localeJob = workflow.jobs["control-ui-i18n"];
+    const sourceStep = localeJob.steps.find(
+      (step: WorkflowStep) => step.name === "Verify Control UI i18n source",
+    );
     const localeStep = localeJob.steps.find(
       (step: WorkflowStep) => step.name === "Check Control UI locale parity",
     );
@@ -4225,6 +4582,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(JSON.parse(readFileSync("package.json", "utf8")).scripts["test:ui"]).not.toContain(
       "ui:i18n:check",
     );
+    expect(workflowSource.match(/pnpm ui:i18n:verify/gu)).toHaveLength(1);
     expect(workflowSource.match(/pnpm ui:i18n:check/gu)).toHaveLength(1);
     expect(readFileSync("ui/src/i18n/test/translate.test.ts", "utf8")).not.toContain(
       "keeps shipped locales structurally aligned with English",
@@ -4232,6 +4590,36 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(localeJob.needs).toEqual(["preflight"]);
     expect(localeJob.if).toBe("needs.preflight.outputs.run_control_ui_i18n == 'true'");
     expect(localeJob["continue-on-error"]).toBeUndefined();
+    expect(localeJob.env.COMPATIBILITY_TARGET).toBe(
+      "${{ needs.preflight.outputs.compatibility_target }}",
+    );
+    expect(sourceStep["continue-on-error"]).toBeUndefined();
+    const compatibilityWithoutVerify = runControlUiI18nSourceFixture({
+      compatibilityTarget: true,
+      hasVerifyScript: false,
+    });
+    expect(compatibilityWithoutVerify.status, compatibilityWithoutVerify.output).toBe(0);
+    expect(compatibilityWithoutVerify.calls).toEqual([]);
+    expect(compatibilityWithoutVerify.summary).toContain(
+      "Skipping ui:i18n:verify: unavailable on the selected compatibility target.",
+    );
+
+    const currentWithoutVerify = runControlUiI18nSourceFixture({
+      compatibilityTarget: false,
+      hasVerifyScript: false,
+    });
+    expect(currentWithoutVerify.status).toBe(1);
+    expect(currentWithoutVerify.calls).toEqual([]);
+    expect(currentWithoutVerify.output).toContain(
+      "ui:i18n:verify is required for non-compatibility targets.",
+    );
+
+    const currentWithVerify = runControlUiI18nSourceFixture({
+      compatibilityTarget: false,
+      hasVerifyScript: true,
+    });
+    expect(currentWithVerify.status, currentWithVerify.output).toBe(0);
+    expect(currentWithVerify.calls).toEqual(["ui:i18n:verify"]);
     expect(localeStep["continue-on-error"]).toBe(
       "${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}",
     );
@@ -4408,27 +4796,29 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'shard.groups?.some((group) => group.shard_name.startsWith("core-tooling"))',
     );
     expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
-    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
+    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
+      "${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}",
+    );
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON).toBe(
-      "${{ needs.preflight.outputs.compatibility_target == 'true' && '[\"--hookTimeout=300000\"]' || '[]' }}",
+      "${{ needs.preflight.outputs.compatibility_target == 'true' && '[\"--hookTimeout=600000\"]' || '[]' }}",
     );
-    expect(runStep.env.JOB_CONTEXT_JSON).toBe("${{ toJSON(job) }}");
-    // Shard execution policy lives in the unit-tested wrapper script. Frozen
-    // release targets load that wrapper from the exact trusted workflow SHA.
-    for (const expected of [
-      'runner="scripts/ci-run-node-test-shard.mjs"',
-      'if [[ ! -f "$runner" ]]',
-      "job_workflow_repository=$(jq -r '.workflow_repository // empty' <<<\"$JOB_CONTEXT_JSON\")",
-      "job_workflow_sha=$(jq -r '.workflow_sha // empty' <<<\"$JOB_CONTEXT_JSON\")",
-      'timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"',
-      'git show "${job_workflow_sha}:${file}" > "${harness_root}/${file}"',
-      'node "$runner"',
-    ]) {
-      expect(runStep.run).toContain(expected);
-    }
+    const trustedRunnerStep = nodeTestJob.steps.find(
+      (step: WorkflowStep) => step.name === "Checkout trusted Node shard runner",
+    );
+    expect(trustedRunnerStep).toMatchObject({
+      if: "${{ hashFiles('scripts/ci-run-node-test-shard.mjs') == '' }}",
+      uses: CHECKOUT_V6,
+      with: {
+        ref: "${{ github.workflow_sha }}",
+        path: ".ci-workflow",
+        "sparse-checkout": expect.stringContaining("scripts/ci-run-node-test-shard.mjs"),
+        "sparse-checkout-cone-mode": false,
+        "persist-credentials": false,
+      },
+    });
     expect(existsSync("scripts/ci-run-node-test-shard.mjs")).toBe(true);
   });
 
@@ -4441,6 +4831,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "build-artifacts",
       "native-i18n",
       "checks-ui",
+      "checks-ui-e2e",
       "control-ui-i18n",
       "checks-fast-core",
       "qa-smoke-ci-profile",
@@ -4514,6 +4905,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(failedSelected.status).not.toBe(0);
       expect(failedSelected.stdout).toContain("checks-ui finished with failure");
       expect(failedSelected.stdout).toContain("macos-swift finished with cancelled");
+
+      const failedUiE2e = runCiGateFixture(
+        "preflight=success\nsecurity-fast=success",
+        "checks-ui=success\nchecks-ui-e2e=failure",
+      );
+      expect(failedUiE2e.status).not.toBe(0);
+      expect(failedUiE2e.stdout).toContain("checks-ui-e2e finished with failure");
     },
   );
 
@@ -4597,9 +4995,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
-    expect(qaRunJob["timeout-minutes"]).toBe(60);
+    expect(qaRunJob["timeout-minutes"]).toBe(90);
     const validateProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA profile input",
+    );
+    expect(validateProfileStep.run).toContain(
+      "readQaScorecardTaxonomyReport(readQaScenarioPack().scenarios)",
     );
     expect(validateProfileStep.run).toContain(
       "taxonomy.profiles.find((entry) => entry.id === requested)",
@@ -4612,6 +5013,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const runProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Run QA profile",
     );
+    expect(runProfileStep.env?.OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF).toBe("1");
     expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
     expect(runProfileStep.run).toContain("--concurrency 3");
     expect(runProfileStep.run).toContain("--fast");
@@ -5066,10 +5468,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(smokeBuildStep.run).toContain("node scripts/build-all.mjs qaRuntime");
     expect(smokeBuildStep.run).toContain("pnpm ui:build");
     expect(smokeBuildStep.env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
-    expect(smokeBuildStep.run).toContain("--skip-build");
+    expect(smokeBuildStep.run).not.toContain("--skip-build");
     expect(smokeBuildStep.run).toContain("--allow-unreleased-changelog");
     expect(smokeBuildStep.run).toContain("grep -Fq");
     expect(smokeBuildStep.run).toContain('"${package_args[@]}"');
+    expect(smokeBuildStep.run.indexOf("node scripts/package-openclaw-for-docker.mjs")).toBeLessThan(
+      smokeBuildStep.run.indexOf("node scripts/build-all.mjs qaRuntime"),
+    );
     expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
     expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
     expect(smokeProfileJob.needs).toEqual(["preflight"]);
@@ -5108,7 +5513,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const compatibilityScenarioBlock = smokeRunStep.run.match(
       /const compatibilityScenarioIds = new Set\(\[([\s\S]*?)\]\);/u,
     )?.[1];
-    expect(compatibilityScenarioBlock?.match(/^\s+"[^"]+",$/gmu)).toHaveLength(12);
+    expect(compatibilityScenarioBlock?.match(/^\s+"[^"]+",$/gmu)).toHaveLength(11);
+    expect(compatibilityScenarioBlock).not.toContain('"dreaming-shadow-trial-report"');
     expect(compatibilityScenarioBlock).toContain('"control-ui-chat-flow-playwright"');
     expect(compatibilityScenarioBlock).toContain('"gateway-smoke"');
     expect(compatibilityScenarioBlock).toContain('"matrix-restart-resume"');

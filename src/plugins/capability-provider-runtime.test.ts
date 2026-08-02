@@ -80,8 +80,8 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./plugin-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-registry.js")>();
+vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-registry-snapshot.js")>();
   return {
     ...actual,
     loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
@@ -126,7 +126,7 @@ vi.mock("./bundled-compat.js", () => ({
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 let resolvePluginCapabilityProvider: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider;
 let prepareMediaCapabilityProviders: typeof import("./capability-provider-runtime.js").prepareMediaCapabilityProviders;
-let clearCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
+let clearCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-state.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
 
@@ -288,8 +288,8 @@ describe("resolvePluginCapabilityProviders", () => {
       resolvePluginCapabilityProvider,
       resolvePluginCapabilityProviders,
     } = await import("./capability-provider-runtime.js"));
-    ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
-      await import("./current-plugin-metadata-snapshot.js"));
+    ({ clearCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-state.js"));
+    ({ setCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-snapshot.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
   });
 

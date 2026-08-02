@@ -9,7 +9,10 @@ import {
   getModelProviderRequestTransport,
   type ModelProviderRequestTransportOverrides,
 } from "../agents/provider-request-config.js";
-import { unwrapSecretSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
+import {
+  unwrapModelHeaderSentinelsForProviderEgress,
+  unwrapSecretSentinelsForProviderEgress,
+} from "../agents/provider-secret-egress.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
 import {
   coerceImageAssistantText,
@@ -18,7 +21,6 @@ import {
 import { isSecretRef } from "../config/types.secrets.js";
 import { complete } from "../llm/stream.js";
 import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
-import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "../plugin-sdk/provider-auth.js";
 import { getResolvedImageRuntimeContext, resolveImageRuntime } from "./image-model-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
@@ -176,9 +178,6 @@ function buildImageRequestHeaders(model: Model): Record<string, string> | undefi
     return undefined;
   }
   return {
-    ...buildCopilotIdeHeaders(),
-    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
-    "Openai-Organization": "github-copilot",
     "x-initiator": "user",
     "Copilot-Vision-Request": "true",
   };
@@ -495,8 +494,14 @@ async function describeImagesWithModelInternal(
     }
 
     const resolvedRuntimeContext = getResolvedImageRuntimeContext(model);
-    const providerStreamFn = registerProviderStreamForModel({
+    // Prepared auth may carry sentinel-protected request headers. Resolve them only at this
+    // final direct-completion boundary so provider SDKs never receive sentinel placeholders.
+    const requestModel = unwrapModelHeaderSentinelsForProviderEgress(
       model,
+      "image description provider request",
+    );
+    const providerStreamFn = registerProviderStreamForModel({
+      model: requestModel,
       cfg: resolvedRuntimeContext?.cfg ?? params.cfg,
       agentDir: resolvedRuntimeContext?.agentDir ?? params.agentDir,
       ...(resolvedRuntimeContext?.workspaceDir
@@ -515,7 +520,7 @@ async function describeImagesWithModelInternal(
       params.signal?.throwIfAborted();
       const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
       const timeoutMs = configuredTimeoutMs;
-      const headers = buildImageRequestHeaders(model);
+      const headers = buildImageRequestHeaders(requestModel);
       const streamOptions = {
         apiKey,
         maxTokens,
@@ -525,8 +530,9 @@ async function describeImagesWithModelInternal(
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),
       };
       const task: Promise<AssistantMessage> = providerStreamFn
-        ? (async () => await (await providerStreamFn(model, context, streamOptions)).result())()
-        : complete(model, context, streamOptions);
+        ? (async () =>
+            await (await providerStreamFn(requestModel, context, streamOptions)).result())()
+        : complete(requestModel, context, streamOptions);
       return await withImageDescriptionTimeout({
         controller,
         signal: params.signal,

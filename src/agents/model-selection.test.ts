@@ -4,12 +4,17 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import {
+  getModelRefStatus as getNarrowModelRefStatus,
+  resolveAllowedModelRef as resolveNarrowAllowedModelRef,
+} from "./model-selection-resolve.js";
 import { isModelKeyAllowedBySet } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
   buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   inferUniqueProviderFromConfiguredModels,
+  getModelRefStatus,
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
@@ -326,6 +331,17 @@ function resolveConfiguredRefForTest(cfg: Partial<OpenClawConfig>) {
 }
 
 describe("model-selection", () => {
+  it("shares the lightweight runtime resolver with the public selection facade", () => {
+    expect(getModelRefStatus).toBe(getNarrowModelRefStatus);
+    const params = {
+      cfg: {} as OpenClawConfig,
+      catalog: [],
+      raw: "anthropic/claude-sonnet-4-6",
+      defaultProvider: "anthropic",
+    };
+    expect(resolveAllowedModelRef(params)).toEqual(resolveNarrowAllowedModelRef(params));
+  });
+
   describe("normalizeProviderId", () => {
     it("should normalize provider names", () => {
       expect(normalizeProviderId("Anthropic")).toBe("anthropic");
@@ -2371,6 +2387,38 @@ describe("model-selection", () => {
       ]);
       const result = resolveConfiguredRefForTest(cfg);
       expect(result).toEqual({ provider: "n1n", model: "gpt-5.4" });
+    });
+
+    it("uses a configured custom provider when the default is only an empty overlay", () => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: { baseUrl: "https://openai.example.com/v1", models: [] },
+            "local-provider": {
+              baseUrl: "http://127.0.0.1:9191/v1",
+              models: [
+                {
+                  id: "local-good",
+                  name: "Local Good",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4_096,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: "openai",
+          defaultModel: "missing-default-model",
+        }),
+      ).toEqual({ provider: "local-provider", model: "local-good" });
     });
 
     it("should keep default provider when it is in models.providers", () => {

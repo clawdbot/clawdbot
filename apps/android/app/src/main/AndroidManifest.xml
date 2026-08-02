@@ -69,6 +69,13 @@
                     android:host="*"
                     android:path="/openclaw/wear/v1/realtime/audio" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.CHANNEL_EVENT" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/openclaw/wear/v1/realtime/audio/" />
+            </intent-filter>
         </service>
         <service
             android:name="androidx.appcompat.app.AppLocalesMetadataHolderService"
@@ -130,6 +137,12 @@
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="audio/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="video/*" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

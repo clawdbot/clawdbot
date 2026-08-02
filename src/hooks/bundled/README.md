@@ -20,7 +20,7 @@ openclaw hooks enable session-memory
 
 ### 📎 bootstrap-extra-files
 
-Injects extra bootstrap files (for example monorepo `AGENTS.md`/`TOOLS.md`) during prompt assembly.
+Injects extra bootstrap files (for example monorepo `AGENTS.md`) during prompt assembly.
 
 **Events**: `agent:bootstrap`
 **What it does**: Expands configured workspace glob/path patterns and appends matching bootstrap files to injected context.

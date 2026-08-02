@@ -41,9 +41,11 @@ import { renderMessageImages, resolveRenderableMessageImages } from "./chat-mess
 import {
   detectJson,
   jsonSummaryLabel,
+  renderAssistantMessageMarkdown,
   renderMarkdownText,
   renderUserMessageMarkdown,
   resolveNormalizedMessageMarkdown,
+  type AssistantMessageDisclosure,
 } from "./chat-message-markdown.ts";
 import {
   extractImages,
@@ -51,6 +53,7 @@ import {
   extractTranscriptAttachments,
   schedulePairingQrExpiryRefresh,
   type AttachmentItem,
+  type ArtifactDownloadResolver,
   type PairingQrExpiryNotice,
 } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -117,9 +120,9 @@ function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
     <div class="chat-reply-pill">
       <span class="chat-reply-pill__icon">${icons.messageSquare}</span>
       <span class="chat-reply-pill__label">
-        ${replyTarget.kind === "current"
-          ? "Replying to current message"
-          : `Replying to ${replyTarget.id}`}
+        ${t("chat.messages.replyingTo", {
+          name: replyTarget.kind === "current" ? t("chat.messages.currentMessage") : replyTarget.id,
+        })}
       </span>
     </div>
   `;
@@ -169,6 +172,7 @@ export function renderGroupedMessage(
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
     isUserMessageExpanded?: (messageId: string) => boolean;
     onToggleUserMessageExpanded?: (messageId: string) => void;
+    assistantMessageDisclosure?: AssistantMessageDisclosure;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
     onRequestUpdate?: () => void;
@@ -176,6 +180,7 @@ export function renderGroupedMessage(
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
+    resolveArtifactDownload?: ArtifactDownloadResolver;
     onAssistantAttachmentLoaded?: () => void;
     onRequestOpenImage?: () => number;
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
@@ -209,6 +214,7 @@ export function renderGroupedMessage(
     onRequestUpdate: opts.onRequestUpdate,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
+    resolveArtifactDownload: opts.resolveArtifactDownload,
   };
   schedulePairingQrExpiryRefresh(messageKey, message, opts.onRequestUpdate);
   const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
@@ -359,7 +365,9 @@ export function renderGroupedMessage(
         ${duplicateCount > 1
           ? html`<div
               class="chat-duplicate-count"
-              aria-label=${`${duplicateCount} consecutive identical messages collapsed`}
+              aria-label=${t("chat.messages.duplicatesCollapsed", {
+                count: String(duplicateCount),
+              })}
             >
               ×${duplicateCount}
             </div>`
@@ -417,6 +425,7 @@ export function renderGroupedMessage(
                         opts.onAssistantAttachmentLoaded,
                         opts.onRequestOpenImage,
                         opts.onOpenImage,
+                        opts.resolveArtifactDownload,
                       )}
                       ${assistantViewContent}
                       ${reasoningMarkdown
@@ -483,6 +492,7 @@ export function renderGroupedMessage(
               opts.onAssistantAttachmentLoaded,
               opts.onRequestOpenImage,
               opts.onOpenImage,
+              opts.resolveArtifactDownload,
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
@@ -501,7 +511,14 @@ export function renderGroupedMessage(
               : markdown
                 ? normalizedRole === "user"
                   ? renderUserMessageMarkdown(markdown, messageKey, opts, markdownRenderOptions)
-                  : renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+                  : normalizedRole === "assistant"
+                    ? renderAssistantMessageMarkdown(
+                        markdown,
+                        opts.isStreaming,
+                        opts.assistantMessageDisclosure,
+                        markdownRenderOptions,
+                      )
+                    : renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                 : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {
@@ -522,7 +539,9 @@ export function renderGroupedMessage(
       ${duplicateCount > 1
         ? html`<div
             class="chat-duplicate-count"
-            aria-label=${`${duplicateCount} consecutive identical messages collapsed`}
+            aria-label=${t("chat.messages.duplicatesCollapsed", {
+              count: String(duplicateCount),
+            })}
           >
             ×${duplicateCount}
           </div>`

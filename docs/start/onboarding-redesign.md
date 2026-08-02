@@ -260,6 +260,12 @@ extraction); event-reactive commentary and channel summon/agent-down recovery
 (phase 6 PR2); automatic `localModelLean` for weak models; whether existing
 users' saved sidebar pins should adopt the OpenClaw entry.
 
+The macOS app now follows the same browser-first principle: native onboarding
+ends once inference verifies (install + AI setup pages), and Finish opens the
+dashboard at `/custodian?onboarding=1`. The native memory-import and
+permissions pages left the first-run flow (Settings → Permissions remains);
+deleting the now-unreachable native memory-import module is a follow-up.
+
 ## Testing and landing playbook (hard-won; read before phases 4-6)
 
 - **`OPENCLAW_STATE_DIR` does not isolate the Gateway service.** The
@@ -300,8 +306,8 @@ restart` from the real environment and verify the plist. Product follow-up:
   `CI release gate <sha>`, which `scripts/verify-pr-hosted-gates.mjs`
   accepts. Then `scripts/pr` prepare/merge as usual.
 
-- **Gates that CI enforces beyond focused tests**: docs map
-  (`pnpm docs:map:gen` after adding any docs page), oxlint (`no-map-spread`,
+- **Gates that CI enforces beyond focused tests**: docs consistency
+  (`pnpm check:docs` after changing docs), oxlint (`no-map-spread`,
   `max-lines` — split files, never suppress), `check:test-types`, knip
   deadcode (export only what prod consumes; route tests through public APIs),
   and the live-test shard classifier

@@ -3,8 +3,7 @@ import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
-import type { AgentsRouteData } from "./agents/agents-page.ts";
-import { page as agentsPage } from "./agents/route.ts";
+import { page as agentsPage, type AgentsRouteData } from "./agents/route.ts";
 import type { ModelProvidersRouteData } from "./model-providers/model-providers-page.ts";
 import { page as modelProvidersPage } from "./model-providers/route.ts";
 import type { NodesRouteData } from "./nodes/nodes-page.ts";
@@ -47,6 +46,7 @@ function snapshot(
     client,
     phase: connected ? "connected" : "reconnecting",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",

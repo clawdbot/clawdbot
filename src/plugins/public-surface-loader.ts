@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
   createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
@@ -32,6 +33,10 @@ const publicSurfaceLocationCache = new Map<
   }
 >();
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  publicSurfaceLocationCache.clear();
+});
 
 function isSourceArtifactPath(modulePath: string): boolean {
   switch (path.extname(modulePath).toLowerCase()) {

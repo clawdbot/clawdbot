@@ -14,6 +14,25 @@ const matcher: PlainTextToolCallNameMatcher = {
 
 type Terminal = "done" | "eof" | "error";
 
+function resolveTestFenceRanges(text: string): Array<{ end: number; start: number }> {
+  const ranges: Array<{ end: number; start: number }> = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const backtick = text.indexOf("```", cursor);
+    const tilde = text.indexOf("~~~", cursor);
+    const start = backtick === -1 ? tilde : tilde === -1 ? backtick : Math.min(backtick, tilde);
+    if (start === -1) {
+      break;
+    }
+    const marker = text.slice(start, start + 3);
+    const close = text.indexOf(marker, start + marker.length);
+    const end = close === -1 ? text.length : close + marker.length;
+    ranges.push({ start, end });
+    cursor = end;
+  }
+  return ranges;
+}
+
 function parseSplitCall(parts: readonly string[]) {
   let offset = 0;
   const lineBreakOffsets = new Set(
@@ -40,16 +59,20 @@ function textDelta(delta: string, snapshot: string) {
   };
 }
 
-async function normalize(events: readonly unknown[]): Promise<Record<string, unknown>[]> {
+async function normalize(
+  events: readonly unknown[],
+  options: { protectFences?: boolean } = {},
+): Promise<Record<string, unknown>[]> {
   async function* source() {
     yield* events;
   }
   const normalized: Record<string, unknown>[] = [];
-  const scrubMessage = (message: unknown, options?: { preserveEmptyTextBlocks?: boolean }) =>
+  const scrubMessage = (message: unknown, scrubOptions?: { preserveEmptyTextBlocks?: boolean }) =>
     projectScrubbedPlainTextToolCallMessage({
       matcher,
       message,
-      preserveEmptyTextBlocks: options?.preserveEmptyTextBlocks,
+      preserveEmptyTextBlocks: scrubOptions?.preserveEmptyTextBlocks,
+      resolveProtectedRanges: options.protectFences ? resolveTestFenceRanges : undefined,
     });
   for await (const event of normalizePlainTextToolCallStreamEvents(source(), {
     matcher,
@@ -61,6 +84,7 @@ async function normalize(events: readonly unknown[]): Promise<Record<string, unk
       const scrubbed = scrubMessage(message, { preserveEmptyTextBlocks });
       return scrubbed ? { kind: "scrubbed", ...scrubbed } : undefined;
     },
+    resolveProtectedRanges: options.protectFences ? resolveTestFenceRanges : undefined,
   })) {
     if (event && typeof event === "object") {
       normalized.push(event as Record<string, unknown>);
@@ -618,6 +642,186 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(projectScrubbedPlainTextToolCallMessage({ matcher, message })?.message).toEqual({
       ...message,
       content: "Visible answer\n",
+    });
+  });
+
+  it("preserves a fenced call in terminal projections", () => {
+    const text = ["```json", "[read]", '{"path":"example.txt"}', "[/read]", "```"].join("\n");
+    const message = { role: "assistant", content: text };
+
+    expect(
+      projectScrubbedPlainTextToolCallMessage({
+        matcher,
+        message,
+        resolveProtectedRanges: resolveTestFenceRanges,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves fenced calls when the opener and call are split across live deltas", async () => {
+    const parts = ["`", "``json\n", "[re", 'ad]\n{"path":"example.txt"}\n[/read]\n', "```"];
+    const text = parts.join("");
+    const events = await normalize(
+      [
+        ...parts.map((delta) => ({ type: "text_delta", contentIndex: 0, delta })),
+        {
+          type: "done",
+          reason: "stop",
+          message: { role: "assistant", content: textContent(text), stopReason: "stop" },
+        },
+      ],
+      { protectFences: true },
+    );
+
+    expect(textDeltas(events).join("")).toBe(text);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: { content: textContent(text), stopReason: "stop" },
+    });
+    expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
+  });
+
+  it("preserves fence ownership across adjacent text content blocks", async () => {
+    const first = "```json\n";
+    const second = ["[read]", '{"path":"example.txt"}', "[/read]", "```"].join("\n");
+    const content = [
+      { type: "text", text: first },
+      { type: "text", text: second },
+    ];
+    const events = await normalize(
+      [
+        { type: "text_delta", contentIndex: 0, delta: first },
+        { type: "text_end", contentIndex: 0, content: first },
+        { type: "text_delta", contentIndex: 1, delta: second },
+        { type: "text_end", contentIndex: 1, content: second },
+        {
+          type: "done",
+          reason: "stop",
+          message: { role: "assistant", content, stopReason: "stop" },
+        },
+      ],
+      { protectFences: true },
+    );
+
+    expect(textDeltas(events).join("")).toBe(first + second);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: { content, stopReason: "stop" },
+    });
+    expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
+  });
+
+  it("uses cumulative partials when earlier fenced blocks were not streamed", async () => {
+    const candidate = ["[read]", '{"path":"example.txt"}', "[/read]", "```"].join("\n");
+    const content = [
+      { type: "text", text: "```json\n" },
+      { type: "text", text: candidate },
+    ];
+    const events = await normalize(
+      [
+        {
+          type: "text_delta",
+          contentIndex: 1,
+          delta: candidate,
+          partial: { role: "assistant", content },
+        },
+      ],
+      { protectFences: true },
+    );
+
+    expect(textDeltas(events)).toEqual([candidate]);
+    expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
+  });
+
+  it("preserves candidate bytes after bounded protection history overflows", async () => {
+    const opening = `\`\`\`text\n${"x".repeat(1_000_000)}`;
+    const candidate = ["[read]", '{"path":"example.txt"}', "[/read]"].join("\n");
+    const events = await normalize(
+      [
+        { type: "text_delta", contentIndex: 0, delta: opening },
+        { type: "text_delta", contentIndex: 0, delta: candidate },
+      ],
+      { protectFences: true },
+    );
+
+    expect(textDeltas(events).join("")).toBe(opening + candidate);
+  });
+
+  it("does not resolve Markdown protection for ordinary streamed text", async () => {
+    let resolverCalls = 0;
+    const visibleChunks = Array.from({ length: 1_000 }, () => "ordinary prose\n");
+
+    async function* source() {
+      for (const delta of visibleChunks) {
+        yield { type: "text_delta", contentIndex: 0, delta };
+      }
+    }
+
+    const events: Record<string, unknown>[] = [];
+    for await (const event of normalizePlainTextToolCallStreamEvents(source(), {
+      matcher,
+      createPromotedToolCallEvents: () => [],
+      normalizeTerminalMessage: () => undefined,
+      resolveProtectedRanges: () => {
+        resolverCalls += 1;
+        return [];
+      },
+    })) {
+      events.push(event as Record<string, unknown>);
+    }
+
+    expect(resolverCalls).toBe(0);
+    expect(textDeltas(events).join("")).toBe(visibleChunks.join(""));
+  });
+
+  it("materializes accumulated Markdown only after a candidate-shaped delta", async () => {
+    const resolvedLengths: number[] = [];
+    const visibleChunks = Array.from({ length: 1_000 }, () => "ordinary prose\n");
+    const candidate = ["[read]", '{"path":"example.txt"}', "[/read]"].join("\n");
+
+    async function* source() {
+      for (const delta of visibleChunks) {
+        yield { type: "text_delta", contentIndex: 0, delta };
+      }
+      yield { type: "text_delta", contentIndex: 0, delta: candidate };
+    }
+
+    const events: Record<string, unknown>[] = [];
+    for await (const event of normalizePlainTextToolCallStreamEvents(source(), {
+      matcher,
+      createPromotedToolCallEvents: () => [],
+      normalizeTerminalMessage: () => undefined,
+      resolveProtectedRanges: (text) => {
+        resolvedLengths.push(text.length);
+        return [];
+      },
+    })) {
+      events.push(event as Record<string, unknown>);
+    }
+
+    expect(resolvedLengths).toContain(visibleChunks.join("").length + candidate.length);
+    expect(resolvedLengths.length).toBeLessThanOrEqual(3);
+    expect(textDeltas(events).join("")).toBe(visibleChunks.join(""));
+  });
+
+  it("still scrubs an unfenced call from live deltas and the terminal message", async () => {
+    const text = ["[read]", '{"path":"secret.txt"}', "[/read]"].join("\n");
+    const events = await normalize(
+      [
+        { type: "text_delta", contentIndex: 0, delta: text },
+        {
+          type: "done",
+          reason: "length",
+          message: { role: "assistant", content: textContent(text), stopReason: "length" },
+        },
+      ],
+      { protectFences: true },
+    );
+
+    expect(textDeltas(events)).toEqual([]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: { content: [{ type: "text", text: "" }], stopReason: "length" },
     });
   });
 

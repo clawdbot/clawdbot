@@ -247,8 +247,8 @@ it contains the device keypair and auth tokens.
 
 `system.run` is gated by local exec approvals:
 
-- `$OPENCLAW_STATE_DIR/exec-approvals.json`, or
-  `~/.openclaw/exec-approvals.json` when the variable is unset
+- `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config`, or
+  `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` when the variable is unset
 - [Exec approvals](/tools/exec-approvals)
 - `openclaw approvals --node <id|name|ip>` (edit from the Gateway)
 

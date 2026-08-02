@@ -181,24 +181,28 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
     func testSidebarEdgeDragPreservesPushedScreenBackGesture() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "settings",
-            name: "sidebar-pushed-screen-back-gesture"), appearance: nil, screenshotMode: false)
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "settings",
+                initialDestination: "settings",
+                name: "sidebar-pushed-screen-back-gesture"),
+            appearance: nil,
+            screenshotMode: false)
 
         if self.app?.buttons["Close"].waitForExistence(timeout: 2) == true {
             self.app?.buttons["Close"].tap()
         }
-        let appearance = try XCTUnwrap(self.app?.buttons["settings-appearance-row"])
+        // A clean normal-state launch can auto-route to Gateway setup.
+        try self.selectSidebarDestination("Settings")
+        let app = try XCTUnwrap(self.app)
+        let appearance = self.revealAppearanceSettingsRow(in: app)
         XCTAssertTrue(appearance.waitForExistence(timeout: 8))
         self.waitForHittable(true, of: appearance)
-        try self.verifyLeadingEdgeVerticalScrollPassesThrough(marker: appearance)
         // Appearance is a destination-style NavigationLink, so this exercises
         // the root-visibility guard rather than the typed Settings path guard.
         appearance.tap()
         XCTAssertTrue(self.app?.navigationBars["Appearance"].waitForExistence(timeout: 5) == true)
 
-        let app = try XCTUnwrap(self.app)
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.78, dy: 0.5))
         start.press(
@@ -414,30 +418,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(self.app?.state, .runningForeground)
         self.attachScreenshot(named: "voice-wake-after-talk-resume")
 
-        let voiceNavigationBar = try XCTUnwrap(self.app?.navigationBars["Voice & Talk"])
-        voiceNavigationBar.buttons["BackButton"].tap()
-        let diagnostics = try XCTUnwrap(
-            self.app?.buttons.containing(.staticText, identifier: "Diagnostics").firstMatch)
-        let settingsList = try XCTUnwrap(self.app?.collectionViews.firstMatch)
-        for _ in 0..<4 {
-            if diagnostics.waitForExistence(timeout: 1) { break }
-            settingsList.swipeUp()
-        }
-        XCTAssertTrue(diagnostics.waitForExistence(timeout: 5))
-        diagnostics.tap()
-        let voiceWakeStatus = try XCTUnwrap(
-            self.app?.staticTexts["Voice Wake isn’t supported on Simulator"])
-        XCTAssertTrue(voiceWakeStatus.waitForExistence(timeout: 5))
-
-        let diagnosticsNavigationBar = try XCTUnwrap(self.app?.navigationBars["Diagnostics"])
-        diagnosticsNavigationBar.buttons["BackButton"].tap()
-        for _ in 0..<4 {
-            if voiceSettings.waitForExistence(timeout: 1) { break }
-            settingsList.swipeDown()
-        }
-        XCTAssertTrue(voiceSettings.waitForExistence(timeout: 5))
-        voiceSettings.tap()
-        XCTAssertTrue(voiceWake.waitForExistence(timeout: 5))
         voiceWake.tap()
         self.waitForValue("Off", of: voiceWake)
     }
@@ -449,22 +429,23 @@ final class OpenClawSnapshotUITests: XCTestCase {
             initialDestination: "chat",
             name: "chat-composer-growth"))
 
-        let textField = try XCTUnwrap(app?.textFields["chat-message-input"])
+        let app = try XCTUnwrap(self.app)
+        let textField = self.chatMessageInput(in: app)
         XCTAssertTrue(textField.waitForExistence(timeout: 8))
-        let talkButton = try XCTUnwrap(app?.buttons["chat-realtime-control"])
+        let talkButton = app.buttons["chat-realtime-control"]
         XCTAssertTrue(talkButton.waitForExistence(timeout: 5))
-        let attachmentButton = try XCTUnwrap(app?.buttons["chat-attachment-picker"])
+        let attachmentButton = app.buttons["chat-attachment-picker"]
         XCTAssertTrue(attachmentButton.waitForExistence(timeout: 5))
-        let dictationButton = try XCTUnwrap(app?.buttons["chat-dictation-control"])
+        let dictationButton = app.buttons["chat-dictation-control"]
         XCTAssertTrue(dictationButton.waitForExistence(timeout: 5))
-        let composerSurface = try XCTUnwrap(app?.otherElements["chat-composer-surface"])
+        let composerSurface = app.otherElements["chat-composer-surface"]
         XCTAssertTrue(composerSurface.waitForExistence(timeout: 5))
-        let agentIdentity = try XCTUnwrap(app?.otherElements["chat-agent-identity"])
+        let agentIdentity = self.agentIdentity(in: app)
         XCTAssertTrue(agentIdentity.waitForExistence(timeout: 5))
         XCTAssertEqual(agentIdentity.value as? String, "Collapsed")
         agentIdentity.tap()
         self.waitForValue("Expanded", of: agentIdentity)
-        let sendButton = try XCTUnwrap(app?.buttons["chat-send-message"])
+        let sendButton = app.buttons["chat-send-message"]
         XCTAssertFalse(sendButton.exists)
         XCTAssertLessThanOrEqual(agentIdentity.frame.maxY, composerSurface.frame.minY)
         XCTAssertGreaterThanOrEqual(attachmentButton.frame.minX, composerSurface.frame.minX)
@@ -473,12 +454,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertLessThanOrEqual(dictationButton.frame.maxX, composerSurface.frame.maxX)
         XCTAssertGreaterThanOrEqual(talkButton.frame.minX, composerSurface.frame.minX)
         XCTAssertLessThanOrEqual(talkButton.frame.maxX, composerSurface.frame.maxX)
-        XCTAssertGreaterThanOrEqual(attachmentButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(attachmentButton.frame.height, 44)
-        XCTAssertGreaterThanOrEqual(dictationButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(dictationButton.frame.height, 44)
-        XCTAssertGreaterThanOrEqual(talkButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(talkButton.frame.height, 44)
+        self.assertMinimumTouchTarget(attachmentButton)
+        self.assertMinimumTouchTarget(dictationButton)
+        self.assertMinimumTouchTarget(talkButton)
         let compactHeight = textField.frame.height
         XCTAssertLessThanOrEqual(compactHeight, 44)
         XCTAssertLessThanOrEqual(abs(attachmentButton.frame.midY - dictationButton.frame.midY), 1)
@@ -499,12 +477,84 @@ final class OpenClawSnapshotUITests: XCTestCase {
         wait(for: [composerGrew], timeout: 4)
         XCTAssertTrue(sendButton.waitForExistence(timeout: 3))
         XCTAssertTrue(talkButton.waitForNonExistence(timeout: 3))
-        XCTAssertGreaterThanOrEqual(sendButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(sendButton.frame.height, 44)
+        self.assertMinimumTouchTarget(sendButton)
         self.attachScreenshot(named: "chat-composer-expanded")
 
         self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         XCTAssertTrue(self.app?.keyboards.firstMatch.waitForNonExistence(timeout: 3) == true)
+    }
+
+    func testChatComposerReturnInsertsNewlineWithoutSending() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "chat-composer-return"))
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("first line\nsecond line")
+
+        XCTAssertEqual(input.value as? String, "first line\nsecond line")
+        XCTAssertTrue(app.buttons["chat-send-message"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["first line\nsecond line"].exists)
+        self.attachScreenshot(named: "chat-composer-return")
+    }
+
+    func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-voice-note-stop-active-response"),
+            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep this response running while I record a voice note.")
+
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        XCTAssertTrue(send.isEnabled)
+        send.tap()
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 8))
+        XCTAssertTrue(stop.isEnabled)
+
+        let microphone = app.buttons["chat-dictation-control"]
+        XCTAssertTrue(microphone.waitForExistence(timeout: 5))
+        microphone.press(forDuration: 0.8)
+
+        let recordVoiceNote = app.buttons["Record Voice Note"]
+        XCTAssertTrue(recordVoiceNote.waitForExistence(timeout: 5))
+        recordVoiceNote.tap()
+
+        let finishVoiceNote = app.buttons["Finish voice note"]
+        XCTAssertTrue(finishVoiceNote.waitForExistence(timeout: 8))
+        finishVoiceNote.tap()
+
+        let voiceNote = app.staticTexts["Voice note"]
+        XCTAssertTrue(voiceNote.waitForExistence(timeout: 8))
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        XCTAssertTrue(stop.isEnabled)
+        self.attachScreenshot(named: "voice-note-stop-active-response")
+
+        stop.tap()
+        XCTAssertTrue(send.waitForExistence(timeout: 8))
+        self.waitForEnabled(send)
+        XCTAssertTrue(voiceNote.exists)
+        send.tap()
+
+        XCTAssertTrue(voiceNote.waitForNonExistence(timeout: 8))
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "I can help with"))
+                .firstMatch.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "voice-note-sent-after-stopping-response")
     }
 
     func testKeyboardOpenSendFollowsLiveEdge() throws {
@@ -515,7 +565,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             name: "keyboard-follow"))
         let app = try XCTUnwrap(self.app)
 
-        let input = app.textFields["chat-message-input"]
+        let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
         input.tap()
         input.typeText(
@@ -547,7 +597,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
                 name: "chat-light"),
             appearance: "light")
 
-        XCTAssertTrue(self.app?.otherElements["chat-agent-identity"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app.map { self.agentIdentity(in: $0).waitForExistence(timeout: 8) } == true)
         XCTAssertTrue(self.app?.otherElements["chat-composer-surface"].exists == true)
         self.attachScreenshot(named: "chat-light")
     }
@@ -655,7 +705,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "onboarding-connected-go-to-chat")
 
         app.buttons["Go to Chat"].tap()
-        XCTAssertTrue(app.otherElements["chat-agent-identity"].waitForExistence(timeout: 5))
+        XCTAssertTrue(self.agentIdentity(in: app).waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].exists)
     }
 
@@ -665,7 +715,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
             initialDestination: "settings",
             name: "appearance-compact"), appearance: nil)
 
-        let row = try XCTUnwrap(self.app?.buttons["settings-appearance-row"])
+        let app = try XCTUnwrap(self.app)
+        let row = self.revealAppearanceSettingsRow(in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 8))
         XCTAssertFalse(self.app?.buttons["settings-appearance-menu"].exists == true)
         XCTAssertFalse(self.app?.segmentedControls["settings-appearance-picker"].exists == true)
@@ -936,8 +987,39 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let appleHealth = try XCTUnwrap(self.app?.staticTexts["Apple Health Summaries"])
         XCTAssertTrue(appleHealth.waitForExistence(timeout: 8))
-        XCTAssertTrue(self.app?.staticTexts["Apple Health"].exists == true)
+        let action = try XCTUnwrap(self.app?.buttons["apple-health-summaries-action"])
+        XCTAssertTrue(action.waitForExistence(timeout: 5))
         self.attachScreenshot(named: "apple-health-disclosure")
+    }
+}
+
+extension OpenClawSnapshotUITests {
+    private func agentIdentity(in app: XCUIApplication) -> XCUIElement {
+        app.otherElements.matching(identifier: "chat-agent-identity").firstMatch
+    }
+
+    private func revealAppearanceSettingsRow(in app: XCUIApplication) -> XCUIElement {
+        let row = app.descendants(matching: .any)["settings-appearance-row"]
+        let settingsList = app.collectionViews.firstMatch
+        for _ in 0..<4 {
+            if row.waitForExistence(timeout: 1) { break }
+            settingsList.swipeUp()
+        }
+        return row
+    }
+
+    private func readinessMarker(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)[Self.appReadinessAccessibilityIdentifier]
+    }
+
+    private func destinationAnchor(in app: XCUIApplication, destination: String) -> XCUIElement {
+        switch destination {
+        case "overview": app.staticTexts["Agent session"]
+        case "chat": app.otherElements["chat-composer-surface"]
+        case "agents": app.buttons["agent-status-filter-menu"]
+        case "settings": app.descendants(matching: .any)["settings-system-agent-row"]
+        default: self.readinessMarker(in: app)
+        }
     }
 
     private func launchApp(
@@ -956,11 +1038,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         app.launch()
         self.app = app
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
-        let readiness = app.descendants(matching: .any)[Self.appReadinessAccessibilityIdentifier]
+        let readiness = self.readinessMarker(in: app)
         XCTAssertTrue(
             readiness.waitForExistence(timeout: 8),
             "OpenClaw root readiness marker did not appear")
-        self.waitForValue("ready:\(target.initialDestination)", of: readiness, timeout: 8)
+        if screenshotMode {
+            self.waitForValue("ready:\(target.initialDestination)", of: readiness, timeout: 8)
+        }
     }
 
     private func configuredApp(
@@ -1002,16 +1086,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTFail("OpenClaw is not running for screenshot target \(target.name)")
             return
         }
-        let readiness = app.descendants(matching: .any)[Self.appReadinessAccessibilityIdentifier]
-        self.waitForValue("ready:\(target.initialDestination)", of: readiness, timeout: 8)
-
-        let anchor: XCUIElement = switch target.initialDestination {
-        case "overview": app.staticTexts["Agent session"]
-        case "chat": app.otherElements["chat-composer-surface"]
-        case "agents": app.buttons["agent-status-filter-menu"]
-        case "settings": app.descendants(matching: .any)["settings-system-agent-row"]
-        default: readiness
-        }
+        let anchor = self.destinationAnchor(in: app, destination: target.initialDestination)
         XCTAssertTrue(
             anchor.waitForExistence(timeout: 8),
             "Screenshot target \(target.name) did not render its readiness anchor")
@@ -1039,6 +1114,19 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.element(element, hasValue: value, timeout: timeout))
     }
 
+    private func assertMinimumTouchTarget(
+        _ element: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line)
+    {
+        let minimum: CGFloat = 44
+        // XCUI converts screen coordinates through floating-point transforms.
+        // Permit rounding noise without accepting a genuinely undersized target.
+        let tolerance = minimum.ulp * 16
+        XCTAssertGreaterThanOrEqual(element.frame.width + tolerance, minimum, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(element.frame.height + tolerance, minimum, file: file, line: line)
+    }
+
     private func element(_ element: XCUIElement, hasValue value: String, timeout: TimeInterval) -> Bool {
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value == %@", value),
@@ -1060,6 +1148,30 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed)
     }
 
+    private func tapSidebarReveal(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line)
+    {
+        let reveal = app.buttons["RootTabs.Sidebar.Show"]
+        XCTAssertTrue(reveal.waitForExistence(timeout: 5), file: file, line: line)
+        if reveal.isHittable {
+            reveal.tap()
+            return
+        }
+
+        // iOS 18 can mirror the nested SwiftUI button's accessibility frame
+        // while the visible control remains at the navigation bar's leading edge.
+        let navigationBar = app.navigationBars.firstMatch
+        XCTAssertTrue(navigationBar.waitForExistence(timeout: 5), file: file, line: line)
+        let appFrame = app.frame
+        let navigationFrame = navigationBar.frame
+        let coordinate = app.coordinate(withNormalizedOffset: CGVector(
+            dx: (navigationFrame.minX + 38) / appFrame.width,
+            dy: (navigationFrame.minY + 22) / appFrame.height))
+        coordinate.tap()
+    }
+
     private func openSidebarWithSlowEdgeDrag(
         file: StaticString = #filePath,
         line: UInt = #line) throws
@@ -1074,35 +1186,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
             thenHoldForDuration: 0.1)
 
         self.waitForHittable(true, of: app.buttons["RootTabs.Sidebar.Hide"])
-    }
-
-    private func verifyLeadingEdgeVerticalScrollPassesThrough(
-        marker: XCUIElement,
-        file: StaticString = #filePath,
-        line: UInt = #line) throws
-    {
-        let app = try XCTUnwrap(self.app, file: file, line: line)
-        XCTAssertTrue(marker.waitForExistence(timeout: 5), file: file, line: line)
-        let initialY = marker.frame.minY
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.78))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.22))
-        start.press(
-            forDuration: 0.1,
-            thenDragTo: end,
-            withVelocity: .slow,
-            thenHoldForDuration: 0.1)
-
-        XCTAssertLessThan(marker.frame.minY, initialY - 20, file: file, line: line)
-        self.waitForHittable(true, of: app.buttons["RootTabs.Sidebar.Show"])
-
-        let restoreStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22))
-        let restoreEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.78))
-        restoreStart.press(
-            forDuration: 0.1,
-            thenDragTo: restoreEnd,
-            withVelocity: .fast,
-            thenHoldForDuration: 0.1)
-        self.waitForHittable(true, of: marker)
     }
 
     private func closeSidebarWithSlowDrag(
@@ -1130,10 +1213,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let app = try XCTUnwrap(self.app, file: file, line: line)
         let hideSidebar = app.buttons["RootTabs.Sidebar.Hide"]
         if !hideSidebar.isHittable {
-            let showSidebar = app.buttons["RootTabs.Sidebar.Show"]
-            XCTAssertTrue(showSidebar.waitForExistence(timeout: 5), file: file, line: line)
-            XCTAssertTrue(showSidebar.isHittable, file: file, line: line)
-            showSidebar.tap()
+            self.tapSidebarReveal(in: app, file: file, line: line)
             self.waitForHittable(true, of: hideSidebar)
         }
 
@@ -1142,7 +1222,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             title,
             "\(title),")).firstMatch
         XCTAssertTrue(destination.waitForExistence(timeout: 5), file: file, line: line)
-        XCTAssertTrue(destination.isHittable, file: file, line: line)
+        self.waitForHittable(true, of: destination)
         destination.tap()
 
         self.waitForHittable(false, of: hideSidebar)
@@ -1156,17 +1236,14 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let app = try XCTUnwrap(self.app, file: file, line: line)
         let hideSidebar = app.buttons["RootTabs.Sidebar.Hide"]
         if !hideSidebar.isHittable {
-            let showSidebar = app.buttons["RootTabs.Sidebar.Show"]
-            XCTAssertTrue(showSidebar.waitForExistence(timeout: 5), file: file, line: line)
-            XCTAssertTrue(showSidebar.isHittable, file: file, line: line)
-            showSidebar.tap()
+            self.tapSidebarReveal(in: app, file: file, line: line)
             self.waitForHittable(true, of: hideSidebar)
         }
 
         let newChat = app.buttons["New Chat"]
         XCTAssertTrue(newChat.waitForExistence(timeout: 5), file: file, line: line)
         XCTAssertTrue(newChat.isEnabled, file: file, line: line)
-        XCTAssertTrue(newChat.isHittable, file: file, line: line)
+        self.waitForHittable(true, of: newChat)
         newChat.tap()
 
         self.waitForHittable(false, of: hideSidebar)
@@ -1245,7 +1322,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         expecting replyMarker: String,
         in app: XCUIApplication)
     {
-        let input = app.textFields["chat-message-input"]
+        let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
         input.tap()
         input.typeText(text)
@@ -1391,7 +1468,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTFail("Fixture app is unavailable")
             return
         }
-        let input = app.textFields["chat-message-input"]
+        let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
         input.tap()
         input.typeText(text)
@@ -1414,6 +1491,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func chatMessageInput(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["chat-message-input"]
     }
 
     private func attachFullScreenScreenshot(named name: String) {

@@ -2,7 +2,6 @@
 
 export {
   buildBootstrapContextFiles,
-  ensureSessionHeader,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,

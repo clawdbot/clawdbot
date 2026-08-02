@@ -11,7 +11,7 @@ session** without adding it to conversation history. It is modeled after
 Claude Code's `/btw`, adapted to OpenClaw's Gateway and multi-channel
 architecture.
 
-In the Control UI, both commands route to the session rail companion instead of the detached BTW runner. The companion keeps a bounded multi-turn thread in Gateway memory and can use read-only session-history/search and workspace-read tools. TUI and external-channel behavior is unchanged.
+The two side-question contracts are deliberately separate. BTW is a one-shot question on the session's actual model, preserving harness behavior and Codex thread-fork continuity for channel ingress (WhatsApp, Telegram, and Discord), the TUI, and embedded `tui --local`; the TUI stays on BTW by design. The companion is a persistent, read-only RPC thread for Control UI-class clients. Channels cannot use the companion because they do not have an RPC connection.
 
 ```text
 /btw what changed?

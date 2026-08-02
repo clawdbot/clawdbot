@@ -1,9 +1,15 @@
 // Qa Channel tests cover inbound plugin behavior.
+import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
 import { deleteQaBusMessage, editQaBusMessage, sendQaBusMessage } from "./bus-client.js";
 import { handleQaInbound } from "./inbound.js";
+
+const QA_GENERATED_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 
 vi.mock("./bus-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bus-client.js")>();
@@ -14,6 +20,28 @@ vi.mock("./bus-client.js", async (importOriginal) => {
     sendQaBusMessage: vi.fn(async () => ({ message: { id: "preview-1" } })),
   };
 });
+
+vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/outbound-media")>();
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: vi.fn(async (mediaUrl: string) => ({
+      buffer: Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64"),
+      kind: "image" as const,
+      contentType: "image/png",
+      fileName: path.basename(mediaUrl),
+    })),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  saveMediaBuffer: vi.fn(async () => ({
+    id: "stored-audio.ogg",
+    path: "/tmp/openclaw-media/stored-audio.ogg",
+    contentType: "audio/ogg",
+  })),
+}));
 
 type HandleQaInboundParams = Parameters<typeof handleQaInbound>[0];
 
@@ -69,6 +97,35 @@ function firstRunAssembledParams(runtime: ReturnType<typeof createPluginRuntimeM
 describe("handleQaInbound", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("delivers generated image bytes and their caption in one final bus message", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+    const mediaPath = path.join(process.cwd(), "qa-channel-inbound-generated.png");
+
+    await handleQaInbound(createQaInboundParams());
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver(
+      { text: "Here is your generated image.", mediaUrls: [mediaPath] },
+      { kind: "final" },
+    );
+
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here is your generated image.",
+        replyToId: "msg-1",
+        attachments: [
+          expect.objectContaining({
+            kind: "image",
+            mimeType: "image/png",
+            contentBase64: QA_GENERATED_IMAGE_BASE64,
+          }),
+        ],
+      }),
+    );
   });
 
   it("publishes partial replies as one edited preview before final delivery", async () => {
@@ -159,6 +216,111 @@ describe("handleQaInbound", () => {
         text: "final answer",
         toolCalls: [{ name: "search", arguments: { query: "[redacted]" } }],
       }),
+    );
+  });
+
+  it("delivers identical block and final replies exactly once", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
+
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "single answer" }),
+    );
+  });
+
+  it("delivers an identical final when it adds tool-call trace data", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
+    await assembled.replyOptions?.onToolStart?.({ phase: "start", name: "search" });
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
+
+    expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
+    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "single answer", toolCalls: [{ name: "search" }] }),
+    );
+  });
+
+  it("suppresses an identical normalized tool-call snapshot", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.replyOptions?.onToolStart?.({
+      phase: "start",
+      name: "search",
+      args: { second: 2, first: 1 },
+    });
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
+    const toolCalls = vi.mocked(sendQaBusMessage).mock.calls[0]?.[0].toolCalls;
+    if (!toolCalls?.[0]) {
+      throw new Error("expected durable tool-call trace");
+    }
+    toolCalls[0].arguments = { first: 1, second: 2 };
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
+
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+  });
+
+  it("delivers a same-count final when its tool-call record changes", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.replyOptions?.onToolStart?.({
+      phase: "start",
+      name: "search",
+      args: { attempt: 1 },
+    });
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
+    const toolCalls = vi.mocked(sendQaBusMessage).mock.calls[0]?.[0].toolCalls;
+    if (!toolCalls?.[0]) {
+      throw new Error("expected durable tool-call trace");
+    }
+    toolCalls[0] = { name: "search", arguments: { attempt: 2 } };
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
+
+    expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
+    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "single answer",
+        toolCalls: [{ name: "search", arguments: { attempt: 2 } }],
+      }),
+    );
+  });
+
+  it("clears an active preview before suppressing an identical final", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
+    await assembled.replyOptions?.onPartialReply?.({ text: "new preview" });
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
+
+    expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
+    expect(deleteQaBusMessage).toHaveBeenCalledOnce();
+    expect(deleteQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "preview-1" }),
     );
   });
 
@@ -356,6 +518,37 @@ describe("handleQaInbound", () => {
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
     expect(ctxPayload.media?.every((fact) => fact.path === undefined)).toBe(true);
+  });
+
+  it("projects saved inline attachments through a media-store URL", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(
+      createQaInboundParams({
+        message: {
+          attachments: [
+            {
+              id: "audio-1",
+              kind: "audio",
+              mimeType: "audio/ogg",
+              fileName: "voice-note.ogg",
+              contentBase64: Buffer.alloc(2048, 0x52).toString("base64"),
+              mediaFactCarrier: "media-store-url",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(saveMediaBuffer).toHaveBeenCalledOnce();
+    const media = firstRunAssembledParams(runtime).ctxPayload.media;
+    expect(media).toHaveLength(1);
+    expect(media?.[0]).toMatchObject({
+      path: undefined,
+      url: "media://inbound/stored-audio.ogg",
+      contentType: "audio/ogg",
+    });
   });
 
   it("rejects non-http attachment URLs without dropping the message", async () => {

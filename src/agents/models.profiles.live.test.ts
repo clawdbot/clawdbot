@@ -7,7 +7,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
@@ -57,6 +56,7 @@ import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
+  readLiveTestConfig,
   requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
@@ -1704,7 +1704,7 @@ describeLive("live models (profile keys)", () => {
     async () => {
       logProgress("[live-models] loading config");
       const loadedCfg = await withLiveStageTimeout(
-        Promise.resolve().then(() => getRuntimeConfig()),
+        readLiveTestConfig(),
         "[live-models] load config",
       );
       const rawModels = process.env.OPENCLAW_LIVE_MODELS?.trim();

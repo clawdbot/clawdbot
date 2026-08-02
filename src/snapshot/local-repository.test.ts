@@ -8,9 +8,9 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createPrivateSqliteDirectory } from "../infra/sqlite-private-directory.js";
 import { runExec } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { hashSnapshotArtifact, readSnapshotManifest } from "./manifest.js";
 import {
   SNAPSHOT_MANIFEST_FILENAME,
@@ -1540,6 +1540,42 @@ describe("local SQLite snapshot repository", () => {
       await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
     } finally {
       lstatSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+  });
+
+  it("cleans an entry linked from a replaced staging pathname", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const originalLink = fs.link.bind(fs);
+    let raced = false;
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
+      if (
+        !raced &&
+        path.basename(String(target)) === SNAPSHOT_SQLITE_FILENAME &&
+        !path.basename(path.dirname(String(target))).startsWith(".tmp-")
+      ) {
+        await fs.unlink(source);
+        await fs.writeFile(source, "raced staging bytes");
+        raced = true;
+      }
+      await originalLink(source, target);
+    });
+
+    try {
+      await expect(
+        provider.create({
+          path: sourcePath,
+          identity: { role: "generic", id: "replaced-entry-staging" },
+        }),
+      ).rejects.toThrow(/publication|staging|target/u);
+      expect(raced).toBe(true);
+      await expect(provider.list()).resolves.toEqual([]);
+      await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+    } finally {
       linkSpy.mockRestore();
     }
   });

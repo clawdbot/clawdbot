@@ -5,6 +5,7 @@
 // consumers get safe, dependency-free behavior without wiring anything.
 import type { Api, Context, Model, StreamFn } from "@openclaw/llm-core";
 import type { ApiRegistry } from "./api-registry.js";
+import { transformMessages } from "./transcript-transform.js";
 
 /** Provider capability facts needed by the package-owned transports. */
 export interface AiProviderRequestCapabilities {
@@ -247,7 +248,8 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   resolveModelRequestTimeoutMs: () => undefined,
   requiresManagedTransport: () => false,
   inheritManagedTransport: (_source, target) => target,
-  transformTransportMessages: (messages) => messages,
+  transformTransportMessages: (messages, model, normalizeToolCallId) =>
+    transformMessages(messages, model, normalizeToolCallId),
   registerCustomApi: queueCustomApiRegistration,
   prepareGoogleSimpleCompletionModel: (_registry, model) => model,
   logDebug: () => {},

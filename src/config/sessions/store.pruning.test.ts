@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -212,15 +212,11 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
   it("preserves the active session and cleans artifacts using the final referenced session set", async () => {
     const now = Date.now();
     const store = makeStore([
-      [
-        "stale",
-        { sessionId: "stale-session", sessionFile: "stale.jsonl", updatedAt: now - 30 * DAY_MS },
-      ],
+      ["stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
       [
         "stale-shared",
         {
           sessionId: "shared-session",
-          sessionFile: "shared-old.jsonl",
           updatedAt: now - 30 * DAY_MS,
         },
       ],
@@ -270,13 +266,55 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     expect(archiveCalls).toEqual([
       {
         removedSessionFiles: [
-          ["stale-session", "stale.jsonl"],
-          ["shared-session", "shared-old.jsonl"],
+          ["stale-session", undefined],
+          ["shared-session", undefined],
         ],
         referencedSessionIds: new Set(["shared-session", "active-session"]),
       },
     ]);
     expect(trajectoryCleanupReferencedIds).toEqual(new Set(["shared-session", "active-session"]));
+  });
+
+  it("reports archive retention failure without aborting file-backed maintenance", async () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
+      ["fresh", { sessionId: "fresh-session", updatedAt: now }],
+    ]);
+    const cleanupError = new Error("archive cleanup denied");
+    const warn = vi.fn();
+    const onMaintenanceApplied = vi.fn();
+
+    const result = await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/sessions.json",
+      store,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 7 * DAY_MS,
+        maxEntries: 500,
+        modelRunPruneAfterMs: DAY_MS,
+        resetArchiveRetentionMs: 0,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      onMaintenanceApplied,
+      log: { warn, info: () => {} },
+      artifacts: {
+        archiveRemovedSessionTranscripts: async () => new Set(),
+        removeRemovedSessionTrajectoryArtifacts: async () => {},
+        cleanupArchivedSessionTranscripts: async () => {
+          throw cleanupError;
+        },
+      },
+    });
+
+    expect(result.changedStore).toBe(true);
+    expect(store.stale).toBeUndefined();
+    expect(store).toHaveProperty("fresh");
+    expect(onMaintenanceApplied).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith("session transcript archive retention cleanup failed", {
+      error: String(cleanupError),
+    });
   });
 
   it("forced cleanup prunes stale model-run probes before the cap evicts real sessions", async () => {

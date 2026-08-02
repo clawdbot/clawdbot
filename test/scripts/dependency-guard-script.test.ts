@@ -21,11 +21,13 @@ import {
   isDependencyManifest,
   isDependencyGuardTrustedForHead,
   isPackageLockfile,
+  isRemovalOnlyDependencyGraphChange,
   readBoundedGitHubErrorText,
   renderAuthorizedDependencyComment,
   renderAutoscrubbedDependencyComment,
   renderBlockedDependencyComment,
   renderClearedDependencyGuardComment,
+  renderRemovalOnlyDependencyComment,
   renderTrustedDependencyComment,
   sanitizeDisplayValue,
   securityApproverSet,
@@ -46,11 +48,11 @@ describe("dependency guard script", () => {
     expect(isDependencyFile("ui/package.json")).toBe(false);
     expect(isDependencyFile("packages/core/package.json")).toBe(false);
     expect(isDependencyFile("qa/convex-credential-broker/package.json")).toBe(false);
-    expect(isDependencyFile("extensions/slack/npm-shrinkwrap.json")).toBe(true);
+    expect(isDependencyFile("package-lock.json")).toBe(true);
     expect(isDependencyFile("tools/nested/pnpm-lock.yaml")).toBe(true);
     expect(isDependencyFile("src/index.ts")).toBe(false);
     expect(isPackageLockfile("pnpm-lock.yaml")).toBe(true);
-    expect(isPackageLockfile("extensions/slack/npm-shrinkwrap.json")).toBe(true);
+    expect(isPackageLockfile("package-lock.json")).toBe(true);
     expect(isPackageLockfile("package.json")).toBe(false);
   });
 
@@ -91,6 +93,43 @@ describe("dependency guard script", () => {
         },
       ),
     ).toEqual(["optionalDependencies", "peerDependencies", "overrides", "packageManager", "pnpm"]);
+  });
+
+  it("allows only dependency graph removals without approval", () => {
+    expect(
+      isRemovalOnlyDependencyGraphChange([
+        { change_type: "removed", name: "a" },
+        { change_type: "removed", name: "b" },
+      ]),
+    ).toBe(true);
+    expect(
+      isRemovalOnlyDependencyGraphChange([
+        { change_type: "removed", name: "a" },
+        { change_type: "added", name: "b" },
+      ]),
+    ).toBe(false);
+    expect(isRemovalOnlyDependencyGraphChange([{ change_type: "changed", name: "a" }])).toBe(false);
+    expect(isRemovalOnlyDependencyGraphChange([])).toBe(false);
+  });
+
+  it("renders dependency removals as informational", () => {
+    const body = renderRemovalOnlyDependencyComment({
+      dependencyGraphChanges: [
+        {
+          change_type: "removed",
+          manifest: "extensions/example/package.json",
+          name: "example-dependency",
+        },
+      ],
+      headSha,
+    });
+
+    expect(body).toContain("Dependency removals noted");
+    expect(body).toContain("does not require `/allow-dependencies-change`");
+    expect(body).toContain("Removed `example-dependency`");
+    expect(body).toContain("`extensions/example/package.json`");
+    expect(body).toContain(headSha);
+    expect(body).not.toContain("changes are blocked");
   });
 
   it("accepts only security-member override commands for the current head sha", () => {
@@ -352,7 +391,7 @@ describe("dependency guard script", () => {
     const body = renderBlockedDependencyComment({
       baseBranch: "main",
       headSha,
-      lockfileChanges: ["pnpm-lock.yaml", "extensions/slack/npm-shrinkwrap.json"],
+      lockfileChanges: ["pnpm-lock.yaml", "tools/nested/pnpm-lock.yaml"],
       dependencyManifestChanges: [
         {
           path: "package.json",
@@ -364,10 +403,10 @@ describe("dependency guard script", () => {
     expect(body).toContain("<!-- openclaw:dependency-graph-guard -->");
     expect(body).toContain("Dependency graph changes are blocked");
     expect(body).toContain("`pnpm-lock.yaml` changed.");
-    expect(body).toContain("`extensions/slack/npm-shrinkwrap.json` changed.");
+    expect(body).toContain("`tools/nested/pnpm-lock.yaml` changed.");
     expect(body).toContain("`package.json` changed `dependencies`.");
     expect(body).toContain(
-      "git checkout 'origin/main' -- 'pnpm-lock.yaml' 'extensions/slack/npm-shrinkwrap.json'",
+      "git checkout 'origin/main' -- 'pnpm-lock.yaml' 'tools/nested/pnpm-lock.yaml'",
     );
     expect(body).toContain("/allow-dependencies-change");
     expect(body).toContain(`current head SHA (\`${headSha}\`)`);
@@ -479,14 +518,14 @@ describe("dependency guard script", () => {
     const body = renderAutoscrubbedDependencyComment({
       baseBranch: "main",
       commitSha: staleSha,
-      lockfileChanges: ["pnpm-lock.yaml", "extensions/slack/npm-shrinkwrap.json"],
+      lockfileChanges: ["pnpm-lock.yaml", "tools/nested/pnpm-lock.yaml"],
     });
 
     expect(body).toContain("<!-- openclaw:dependency-graph-guard -->");
     expect(body).toContain("Dependency lockfile changes were removed");
     expect(body).toContain("did not change dependency graph fields in package manifests");
     expect(body).toContain("`pnpm-lock.yaml`");
-    expect(body).toContain("`extensions/slack/npm-shrinkwrap.json`");
+    expect(body).toContain("`tools/nested/pnpm-lock.yaml`");
     expect(body).toContain(`Cleanup commit: \`${staleSha}\``);
     expect(body).toContain(
       "restored each listed lockfile from the target branch and pushed the cleanup commit to this PR head",

@@ -23,6 +23,7 @@ import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-
 import { resolveTelegramAdoptionStallTimeoutMs } from "./telegram-ingress-drain.js";
 import {
   resolveTelegramIngressSpoolDir,
+  resolveTelegramUpdateId,
   telegramSpooledUpdateLaneKey,
   writeTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
@@ -292,7 +293,10 @@ export class TelegramPollingSession {
     const updateOffset = {
       lastUpdateId,
       persistenceFloorUpdateId: persistedLastUpdateId,
-      onUpdateId: this.opts.persistUpdateId,
+      // In isolated mode the offset is persisted as soon as the update is
+      // durably spooled (see #runIsolatedIngressCycle), so the bot's update
+      // tracker does not need to persist it again after dispatch.
+      ...(this.opts.isolatedIngress?.enabled ? {} : { onUpdateId: this.opts.persistUpdateId }),
     };
     try {
       return createTelegramBot({
@@ -349,6 +353,7 @@ export class TelegramPollingSession {
   /** Long-lived monitor for this session; stop only when the cycle ends. */
   #getOrCreateSpooledMonitor(params: {
     bot: TelegramBot;
+    botInfo: TelegramBot["botInfo"];
     spoolDir: string;
     pollIntervalMs: number;
     abortSignal?: AbortSignal;
@@ -361,7 +366,7 @@ export class TelegramPollingSession {
       bot: params.bot,
       cfg: this.opts.config,
       accountId: this.opts.accountId,
-      botInfo: this.opts.botInfo,
+      botInfo: params.botInfo,
       adoptionStallTimeoutMs: this.#spooledUpdateHandlerTimeoutMs,
       pollIntervalMs: params.pollIntervalMs,
       ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
@@ -396,6 +401,9 @@ export class TelegramPollingSession {
       );
       return shouldRetry ? "continue" : "exit";
     }
+    // A pre-probed or cached bot may already be initialized; admission and replay
+    // must share grammY's actual capability snapshot instead of a second source.
+    const botInfo = bot.botInfo;
     const spoolDir =
       ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
     const workerFactory = ingress.createWorker ?? createTelegramIngressWorker;
@@ -452,6 +460,7 @@ export class TelegramPollingSession {
       : this.opts.abortSignal;
     const ingressMonitor = this.#getOrCreateSpooledMonitor({
       bot,
+      botInfo,
       spoolDir,
       pollIntervalMs: drainIntervalMs,
       ...(ingressAbortSignal ? { abortSignal: ingressAbortSignal } : {}),
@@ -476,6 +485,9 @@ export class TelegramPollingSession {
         }
       };
       if (message.type === "poll-start") {
+        this.opts.log(
+          `[telegram][diag] isolated polling worker poll-start offset=${message.offset ?? "null"}`,
+        );
         liveness.noteGetUpdatesStarted({ offset: message.offset }, message.startedAt);
         pollState.startedAt = message.startedAt;
         pollState.offset = message.offset;
@@ -505,22 +517,45 @@ export class TelegramPollingSession {
         return;
       }
       if (message.type === "update") {
-        void writeTelegramSpooledUpdate({
-          spoolDir,
-          update: message.update,
-          laneKey: telegramSpooledUpdateLaneKey(message.update, this.opts.botInfo),
-        }).then(
-          (updateId) => {
-            ackSpooledUpdate(message.requestId, { ok: true, updateId });
-            requestImmediateDrain();
-          },
-          (err: unknown) => {
+        const updateIdHint = resolveTelegramUpdateId(message.update) ?? "unknown";
+        this.opts.log(
+          `[telegram][diag] isolated polling worker update received updateId=${updateIdHint} queued=${message.queued}`,
+        );
+        // The worker waits for this request's ACK before emitting the next update.
+        // Keep spool, offset persistence, and ACK on that single ordered path.
+        void (async () => {
+          let updateId: number;
+          try {
+            updateId = await writeTelegramSpooledUpdate({
+              spoolDir,
+              update: message.update,
+              laneKey: telegramSpooledUpdateLaneKey(message.update, botInfo),
+            });
+            this.opts.log(`[telegram][diag] isolated polling update spooled updateId=${updateId}`);
+          } catch (err: unknown) {
+            this.opts.log(
+              `[telegram] isolated polling update spool failed updateId=${updateIdHint}: ${formatErrorMessage(err)}`,
+            );
             ackSpooledUpdate(message.requestId, {
               ok: false,
               message: formatErrorMessage(err),
             });
-          },
-        );
+            return;
+          }
+
+          try {
+            await this.opts.persistUpdateId(updateId);
+            this.opts.log(
+              `[telegram][diag] isolated polling offset persisted updateId=${updateId}`,
+            );
+          } catch (err: unknown) {
+            this.opts.log(
+              `[telegram] isolated polling offset persist failed updateId=${updateId}: ${formatErrorMessage(err)}`,
+            );
+          }
+          ackSpooledUpdate(message.requestId, { ok: true, updateId });
+          requestImmediateDrain();
+        })();
         return;
       }
       if (message.type === "spooled") {

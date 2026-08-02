@@ -9,6 +9,7 @@ import {
 } from "../../channels/plugins/index.js";
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
+import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
   isAnnounceSkip,
@@ -30,7 +31,31 @@ export type AnnounceTarget = {
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
   const parsed = resolveSessionConversationRef(sessionKey);
   if (!parsed) {
-    return null;
+    const directRoute = parseSessionDeliveryRoute(sessionKey);
+    if (!directRoute || (directRoute.peerKind !== "direct" && directRoute.peerKind !== "dm")) {
+      return null;
+    }
+
+    const normalizedChannel =
+      normalizeAnyChannelId(directRoute.channel) ?? normalizeChatChannelId(directRoute.channel);
+    const channel = normalizedChannel ?? directRoute.channel;
+    const messaging = normalizedChannel
+      ? getChannelPlugin(normalizedChannel)?.messaging
+      : undefined;
+    // Session peers are canonical; adapters restore API casing at their boundary.
+    // Channel-style resolvers must not turn an explicit direct user into a room.
+    const resolvedTarget =
+      messaging?.directTargetStyle === "user-prefixed"
+        ? undefined
+        : messaging?.resolveDeliveryTarget?.({ conversationId: directRoute.peerId });
+    const directTarget = `user:${directRoute.peerId}`;
+
+    return {
+      channel,
+      to: resolvedTarget?.to?.trim() || messaging?.normalizeTarget?.(directTarget) || directTarget,
+      ...(directRoute.accountId ? { accountId: directRoute.accountId } : {}),
+      threadId: resolvedTarget?.threadId ?? directRoute.threadId,
+    };
   }
   const normalizedChannel =
     normalizeAnyChannelId(parsed.channel) ?? normalizeChatChannelId(parsed.channel);

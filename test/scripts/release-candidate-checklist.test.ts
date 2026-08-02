@@ -9,6 +9,7 @@ import {
   buildReleaseCandidateState,
   buildPublishCommand,
   buildTelegramArtifactInputs,
+  assertPlannedReleaseTagIsAbsent,
   candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
@@ -94,6 +95,19 @@ describe("release candidate checklist", () => {
       fullReleaseRunId: "111",
       npmPreflightRunId: "222",
     });
+  });
+
+  it("treats the release tag as a planned post-validation identity", () => {
+    const options = parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "a".repeat(40)]);
+
+    expect(options.targetSha).toBe("a".repeat(40));
+    expect(() => assertPlannedReleaseTagIsAbsent("v2026.7.1-beta.4", () => true)).toThrow(
+      "already exists",
+    );
+    expect(() => assertPlannedReleaseTagIsAbsent("v2026.7.1-beta.4", () => false)).not.toThrow();
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "not-a-sha"])).toThrow(
+      "--target-sha must be a full lowercase commit SHA",
+    );
   });
 
   it("rejects stale or conflicting release candidate state", () => {
@@ -543,6 +557,7 @@ describe("release candidate checklist", () => {
         [".artifacts/preflight/openclaw-ai.tgz"],
         "/trusted",
         [".artifacts/preflight/openclaw-codex.tgz"],
+        "macOS 26.5 Node 24",
       ),
     ).toEqual([
       "exec",
@@ -554,6 +569,8 @@ describe("release candidate checklist", () => {
       ".artifacts/preflight/openclaw-ai.tgz",
       "--registry-package-tarball",
       ".artifacts/preflight/openclaw-codex.tgz",
+      "--macos-snapshot-hint",
+      "macOS 26.5 Node 24",
       "--json",
     ]);
   });

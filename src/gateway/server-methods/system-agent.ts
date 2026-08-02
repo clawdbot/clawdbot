@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 // OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
+  buildSystemAgentInferenceUnavailableErrorDetails,
   buildSystemAgentSessionInvalidatedErrorDetails,
   ErrorCodes,
   errorShape,
@@ -19,6 +20,7 @@ import {
 } from "../../infra/system-agent-approvals.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
@@ -45,6 +47,7 @@ import {
   handlePendingApprovalRequest,
   listVisiblePendingApprovalRequests,
 } from "./approval-shared.js";
+import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -235,15 +238,19 @@ function queueDelegatedApproval(params: {
     deliverRequest: () => false,
     keepPendingWithoutRoute: true,
     requireDeliveryRoute: false,
-    afterDecision: async (decision) => {
-      if (params.sessions.get(params.sessionId) !== params.session) {
-        return;
-      }
-      if (params.session.pendingApproval?.id === record.id) {
-        params.session.pendingApproval = undefined;
-      }
-      await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
-    },
+    afterDecision: async (decision) =>
+      await runWithGatewayIndependentRootWorkContinuation(() =>
+        runSystemAgentGatewayTask(async () => {
+          // The original request has returned; keep approval, audit, and restart drain-visible.
+          if (params.sessions.get(params.sessionId) !== params.session) {
+            return;
+          }
+          if (params.session.pendingApproval?.id === record.id) {
+            params.session.pendingApproval = undefined;
+          }
+          await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
+        }),
+      ),
     afterDecisionErrorLabel: "OpenClaw approval apply failed",
   });
   return record.id;
@@ -491,7 +498,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "openclaw.chat": async ({ params, respond, client, context }) => {
+  "openclaw.chat": async ({ params: rawParams, respond, client, context }) => {
+    const params = sanitizeSystemAgentChatParams(rawParams);
     if (!assertValidParams(params, validateSystemAgentChatParams, "openclaw.chat", respond)) {
       return;
     }
@@ -557,6 +565,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               errorShape(
                 ErrorCodes.UNAVAILABLE,
                 `OpenClaw requires working inference: ${inference.error}`,
+                {
+                  details: buildSystemAgentInferenceUnavailableErrorDetails(),
+                },
               ),
             );
             return;
@@ -660,7 +671,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         const historyStart = session.engine.historyLength();
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
         try {
-          reply = await session.engine.handle(params.message);
+          reply =
+            params.delegation === undefined && params.context
+              ? await session.engine.handle(params.message, { uiContext: params.context })
+              : await session.engine.handle(params.message);
         } catch (error) {
           persistEngineHistory(session.engine, historyStart);
           if (!isSystemAgentInferenceUnavailableError(error)) {

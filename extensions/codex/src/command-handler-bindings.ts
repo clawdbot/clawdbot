@@ -43,7 +43,8 @@ export function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext):
   }
   // SessionEntry is the durable authority even when a native binding is absent or stale.
   // Never infer this lock from binding model metadata such as preserveNativeModel.
-  const storePath = resolveStorePath(ctx.config.session?.store, { agentId: ctx.agentId });
+  const { agentId } = resolveCodexConversationControlScope(ctx);
+  const storePath = resolveStorePath(ctx.config.session?.store, { agentId });
   return isModelSelectionLocked(
     getSessionEntry({
       storePath,

@@ -80,12 +80,6 @@ export type ArmedDialogResponse = {
   timer?: ReturnType<typeof setTimeout>;
 };
 
-export type TargetInfoResponse = {
-  targetInfo?: {
-    targetId?: string;
-  };
-};
-
 export type ConnectedBrowser = {
   browser: Browser;
   cdpUrl: string;

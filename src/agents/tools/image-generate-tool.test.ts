@@ -915,6 +915,140 @@ describe("createImageGenerateTool", () => {
     expect(resultDetails(duplicateResult).duplicateGuard).toBe(true);
   });
 
+  it.each([
+    { mode: "inline", agentSessionKey: undefined },
+    { mode: "detached", agentSessionKey: "agent:main:discord:direct:123" },
+  ])(
+    "does not start $mode image generation when its caller aborts during preparation",
+    async ({ agentSessionKey }) => {
+      stubImageGenerationProviders();
+      vi.stubEnv("OPENAI_API_KEY", "openai-test");
+      const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+      taskRuntimeMocks.createRunningTaskRun.mockReturnValue({ taskId: "task-image-aborted" });
+      const scheduleBackgroundWork = vi.fn();
+      const tool = requireImageGenerateTool(
+        createImageGenerateTool({
+          config: {
+            agents: { defaults: { imageGenerationModel: { primary: "openai/gpt-image-1" } } },
+          },
+          agentSessionKey,
+          requesterOrigin: { channel: "discord", to: "dm:123" },
+          scheduleBackgroundWork,
+        }),
+      );
+      const controller = new AbortController();
+      const abortReason = new Error("image requester cancelled");
+
+      const pending = tool.execute("call-image-aborted", { prompt: "an image" }, controller.signal);
+      controller.abort(abortReason);
+
+      await expect(pending).rejects.toBe(abortReason);
+      expect(taskRuntimeMocks.createRunningTaskRun).not.toHaveBeenCalled();
+      expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+      expect(generateImage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("stops loading later image references when the caller aborts a pending reference", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("GEMINI_API_KEY", "google-test");
+    const generateImage = stubEditedImageFlow();
+    let releaseReference!: (value: Awaited<ReturnType<typeof webMedia.loadWebMedia>>) => void;
+    const firstReference = new Promise<Awaited<ReturnType<typeof webMedia.loadWebMedia>>>(
+      (resolve) => {
+        releaseReference = resolve;
+      },
+    );
+    vi.mocked(webMedia.loadWebMedia).mockImplementationOnce(() => firstReference);
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({ taskId: "task-image-references" });
+    const scheduleBackgroundWork = vi.fn();
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: { imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" } },
+          },
+        },
+        workspaceDir: process.cwd(),
+        agentSessionKey: "agent:main:discord:direct:123",
+        requesterOrigin: { channel: "discord", to: "dm:123" },
+        scheduleBackgroundWork,
+      }),
+    );
+    const controller = new AbortController();
+    const abortReason = new Error("image requester cancelled while loading a reference");
+
+    const pending = tool.execute(
+      "call-image-references-aborted",
+      {
+        prompt: "an image with references",
+        images: ["https://example.test/first.png", "https://example.test/second.png"],
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(webMedia.loadWebMedia).toHaveBeenCalledOnce());
+    controller.abort(abortReason);
+    releaseReference({
+      kind: "image",
+      buffer: Buffer.from("first-image"),
+      contentType: "image/png",
+    });
+
+    await expect(pending).rejects.toBe(abortReason);
+    expect(webMedia.loadWebMedia).toHaveBeenCalledOnce();
+    expect(taskRuntimeMocks.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
+    const loadOptions = vi.mocked(webMedia.loadWebMedia).mock.calls[0]?.[1] as
+      | { requestInit?: { signal?: AbortSignal } }
+      | undefined;
+    expect(loadOptions?.requestInit?.signal).toBe(controller.signal);
+  });
+
+  it("keeps an accepted detached image task running after its requester aborts", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [{ buffer: Buffer.from("image"), mimeType: "image/png", fileName: "image.png" }],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/accepted-image.png",
+      id: "accepted-image.png",
+      size: 5,
+      contentType: "image/png",
+    });
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({ taskId: "task-image-accepted" });
+    const controller = new AbortController();
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: { defaults: { imageGenerationModel: { primary: "openai/gpt-image-1" } } },
+        },
+        agentSessionKey: "agent:main:discord:direct:123",
+        requesterOrigin: { channel: "discord", to: "dm:123" },
+        scheduleBackgroundWork: (work) => scheduled.push(work),
+        onAsyncTaskStarted: () => controller.abort(new Error("requester ended after acceptance")),
+      }),
+    );
+
+    const result = await tool.execute(
+      "call-image-accepted",
+      { prompt: "an accepted image" },
+      controller.signal,
+    );
+
+    expect(resultDetails(result).status).toBe("started");
+    expect(scheduled).toHaveLength(1);
+    await scheduled[0]?.();
+    expect(generateImage).toHaveBeenCalledOnce();
+    expect(taskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledOnce();
+  });
+
   it("starts run-scoped cron image generation as a tracked async task", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");

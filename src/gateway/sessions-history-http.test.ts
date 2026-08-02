@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -16,6 +16,9 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { SSE_CONTENT_TYPE } from "./http-common.js";
+import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
+import { SessionHistorySseState } from "./session-history-state.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -299,14 +302,6 @@ async function readSessionHistoryBody(
   return (await res.json()) as SessionHistoryBody;
 }
 
-async function expectSessionHistoryText(params: { sessionKey: string; expectedText: string }) {
-  await withGatewayHarness(async (harness) => {
-    const body = await readSessionHistoryBody(harness.port, params.sessionKey);
-    expect(body.sessionKey).toBe(params.sessionKey);
-    expect(body.messages?.[0]?.content?.[0]?.text).toBe(params.expectedText);
-  });
-}
-
 async function readSseEvent(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   state: { buffer: string },
@@ -449,7 +444,203 @@ async function openBoundedHistoryStreamWithSecondMessage(
   return stream;
 }
 
+describe("session history Accept parsing", () => {
+  test.each([
+    { accept: undefined, expected: false, name: "missing field" },
+    { accept: "", expected: false, name: "empty field" },
+    { accept: "application/json", expected: false, name: "JSON only" },
+    { accept: "text/event-stream", expected: true, name: "exact media type" },
+    { accept: "TEXT/EVENT-STREAM", expected: true, name: "case-insensitive media type" },
+    { accept: "  text/event-stream  ", expected: true, name: "optional whitespace" },
+    { accept: "text/event-stream;", expected: true, name: "omitted trailing parameter" },
+    {
+      accept: "text/event-stream; ; q=0.5;",
+      expected: true,
+      name: "omitted parameter slots",
+    },
+    {
+      accept: "text/event-stream; charset=utf-8",
+      expected: true,
+      name: "media parameter",
+    },
+    {
+      accept: 'text/event-stream; note="quoted,comma;semicolon\\\"quote"; q=0.5',
+      expected: false,
+      name: "quoted and escaped unmatched parameter delimiters",
+    },
+    {
+      accept: 'text/event-stream; profile="quoted,comma;semicolon\\\"quote"; q=0.5',
+      expected: true,
+      name: "quoted and escaped matching parameter delimiters",
+      representation: 'text/event-stream; profile="quoted,comma;semicolon\\\"quote"',
+    },
+    {
+      accept: 'text/event-stream; profile="https://example.test/profile"',
+      expected: false,
+      name: "case-sensitive parameter mismatch",
+      representation: 'text/event-stream; profile="https://example.test/Profile"',
+    },
+    {
+      accept: "text/event-stream; charset=UTF-8",
+      expected: true,
+      name: "case-insensitive charset parameter",
+    },
+    { accept: "text/event-stream;q=0.001", expected: true, name: "minimum positive qvalue" },
+    { accept: "text/event-stream;Q=1.000", expected: true, name: "maximum qvalue" },
+    {
+      accept: "application/json, text/event-stream;q=0.5",
+      expected: true,
+      name: "explicit media range in a list",
+    },
+    {
+      accept: "text/event-stream;q=0, text/event-stream;q=0.5",
+      expected: true,
+      name: "duplicate exact ranges with a positive quality",
+    },
+    {
+      accept: "text/event-stream;q=1, text/event-stream;charset=utf-8;q=0",
+      expected: false,
+      name: "more-specific matching parameter rejection",
+    },
+    {
+      accept: "text/event-stream;q=0, text/event-stream;charset=utf-8;q=0.5",
+      expected: true,
+      name: "more-specific matching parameter acceptance",
+    },
+    {
+      accept: "text/event-stream;q=0.5;charset=utf-8",
+      expected: true,
+      name: "matching media parameter after q",
+    },
+    {
+      accept: "text/event-stream;q=1;charset=utf-16",
+      expected: false,
+      name: "mismatched media parameter after q",
+    },
+    {
+      accept: "text/event-stream; charset=utf-16",
+      expected: false,
+      name: "mismatched representation parameter",
+    },
+    { accept: "text/event-streaming", expected: false, name: "lookalike subtype" },
+    { accept: "text/event-streamx", expected: false, name: "suffixed subtype" },
+    {
+      accept: 'application/json; note="text/event-stream"',
+      expected: false,
+      name: "quoted parameter decoy",
+    },
+    { accept: "text/*", expected: false, name: "type wildcard" },
+    { accept: "*/*", expected: false, name: "all wildcard" },
+    { accept: "text/event-stream;q=0", expected: false, name: "zero qvalue" },
+    { accept: "text/event-stream;q=0.000", expected: false, name: "zero decimal qvalue" },
+    {
+      accept: "text/event-stream;q=0, */*;q=1",
+      expected: false,
+      name: "explicit rejection overriding wildcard",
+    },
+    { accept: "text/event-stream;q=.5", expected: false, name: "missing leading zero" },
+    { accept: "text/event-stream;q =0.5", expected: false, name: "whitespace before equals" },
+    { accept: "text/event-stream;q= 0.5", expected: false, name: "whitespace after equals" },
+    {
+      accept: "text/event-stream;\u00a0q=0.5",
+      expected: false,
+      name: "non-HTTP parameter whitespace",
+    },
+    { accept: "text/event-stream;q=0.1234", expected: false, name: "too many q digits" },
+    { accept: "text/event-stream;q=1.001", expected: false, name: "qvalue above one" },
+    { accept: "text/event-stream;q=1e0", expected: false, name: "exponent qvalue" },
+    { accept: 'text/event-stream;q="0.5"', expected: false, name: "quoted qvalue" },
+    { accept: "text/event-stream;q=0.5;q=1", expected: false, name: "duplicate q parameter" },
+    {
+      accept: 'text/event-stream;q=0.5;legacy;note="quoted,comma;semicolon"',
+      expected: false,
+      name: "obsolete bare Accept extension after q",
+    },
+    {
+      accept: 'text/event-stream; note="unterminated',
+      expected: false,
+      name: "unterminated quoted parameter",
+    },
+  ])("returns $expected for $name", ({ accept, expected, representation }) => {
+    expect(hasExplicitAcceptableMediaRange(accept, representation ?? SSE_CONTENT_TYPE)).toBe(
+      expected,
+    );
+  });
+});
+
 describe("session history HTTP endpoints", () => {
+  test("uses SSE only for an explicit acceptable event-stream media range", async () => {
+    const expectedText = "accept negotiation sentinel";
+    await seedSession({ text: expectedText });
+    await withGatewayHarness(async (harness) => {
+      const cases = [
+        { accept: "text/event-stream", expected: "sse" },
+        { accept: "TEXT/EVENT-STREAM", expected: "sse" },
+        { accept: "  text/event-stream  ", expected: "sse" },
+        { accept: "text/event-stream;", expected: "sse" },
+        { accept: "text/event-stream; ; q=0.5;", expected: "sse" },
+        { accept: "text/event-stream; charset=utf-8", expected: "sse" },
+        {
+          accept: 'text/event-stream; note="quoted,comma;semicolon\\\"quote"; q=0.5',
+          expected: "json",
+        },
+        { accept: "text/event-stream;q=0.001", expected: "sse" },
+        { accept: "text/event-stream;Q=1.000", expected: "sse" },
+        { accept: "text/event-stream;q=0, text/event-stream;q=0.5", expected: "sse" },
+        {
+          accept: "text/event-stream;q=1, text/event-stream;charset=utf-8;q=0",
+          expected: "json",
+        },
+        {
+          accept: "text/event-stream;q=0, text/event-stream;charset=utf-8;q=0.5",
+          expected: "sse",
+        },
+        { accept: "text/event-stream;q=0.5;charset=utf-8", expected: "sse" },
+        { accept: "text/event-stream;q=1;charset=utf-16", expected: "json" },
+        { accept: "text/event-stream;charset=utf-16", expected: "json" },
+        { accept: "text/event-streaming", expected: "json" },
+        { accept: "text/event-streamx", expected: "json" },
+        { accept: 'application/json; note="text/event-stream"', expected: "json" },
+        { accept: "text/*", expected: "json" },
+        { accept: "*/*", expected: "json" },
+        { accept: "text/event-stream;q=0", expected: "json" },
+        { accept: "text/event-stream;q=0, */*;q=1", expected: "json" },
+        { accept: "text/event-stream;q=0.1234", expected: "json" },
+        { accept: "text/event-stream;q =0.5", expected: "json" },
+        { accept: "text/event-stream;q= 0.5", expected: "json" },
+        { accept: "text/event-stream;\u00a0q=0.5", expected: "json" },
+        {
+          accept: 'text/event-stream;q=0.5;legacy;note="quoted,comma;semicolon"',
+          expected: "json",
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        const response = await fetchSessionHistory(harness.port, "agent:main:main", {
+          headers: { Accept: testCase.accept },
+        });
+        expect(response.status, testCase.accept).toBe(200);
+        const contentType = response.headers.get("content-type") ?? "";
+        if (testCase.expected === "sse") {
+          expect(contentType, testCase.accept).toContain("text/event-stream");
+          const reader = response.body?.getReader();
+          expect(reader, testCase.accept).toBeDefined();
+          const event = await readSseEvent(reader!, { buffer: "" });
+          expect(event.event, testCase.accept).toBe("history");
+          expect(
+            (event.data as SessionHistoryBody).messages?.[0]?.content?.[0]?.text,
+            testCase.accept,
+          ).toBe(expectedText);
+          await reader!.cancel();
+          continue;
+        }
+        expect(contentType, testCase.accept).toContain("application/json");
+        const body = (await response.json()) as SessionHistoryBody;
+        expect(body.messages?.[0]?.content?.[0]?.text, testCase.accept).toBe(expectedText);
+      }
+    });
+  });
+
   test("returns session history over direct REST", async () => {
     await seedSession({ text: "hello from history" });
     await withGatewayHarness(async (harness) => {
@@ -542,8 +733,13 @@ describe("session history HTTP endpoints", () => {
           throw new Error(`append failed: ${appended.reason}`);
         }
         emitSessionTranscriptUpdate({
-          sessionFile: appended.sessionFile,
+          sessionFile: appended.target.sessionKey,
           sessionKey: "agent:main:main",
+          target: {
+            agentId: appended.target.agentId ?? "main",
+            sessionId: appended.target.sessionId,
+            sessionKey: appended.target.sessionKey,
+          },
           message: activeMessage,
           messageId: appended.messageId,
           messageSeq: 2,
@@ -597,7 +793,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("prefers the freshest duplicate row for direct history reads", async () => {
+  test("rejects duplicate canonical rows with an actionable migration error", async () => {
     testState.sessionConfig = { mainKey: "work" };
     const storePath = await createSessionStoreFile();
     await replaceTranscriptEvents(
@@ -644,9 +840,14 @@ describe("session history HTTP endpoints", () => {
       ],
     });
 
-    await expectSessionHistoryText({
-      sessionKey: "agent:main:work",
-      expectedText: "fresh history",
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:work");
+      expect(res.status).toBe(409);
+      expectErrorResponse(await res.json(), {
+        type: "migration_required",
+        message:
+          "duplicate rows resolve to canonical session key agent:main:work; stop the Gateway and run openclaw doctor --fix",
+      });
     });
   });
 
@@ -894,6 +1095,116 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("bounds retained SSE history without truncating full history or live updates", async () => {
+    const retainedMessageLimit = 1_000;
+    const initialMessageCount = retainedMessageLimit + 2;
+    const sessionKey = "agent:main:main";
+    const { storePath } = await seedSession();
+    await replaceTranscriptEvents(
+      {
+        agentId: AGENT_ID,
+        sessionId: "sess-main",
+        sessionKey,
+        storePath,
+      },
+      [
+        { type: "session", version: 1, id: "sess-main" },
+        ...Array.from({ length: initialMessageCount }, (_, index) => ({
+          id: `history-message-${index + 1}`,
+          parentId: index === 0 ? null : `history-message-${index}`,
+          message: makeTranscriptAssistantMessage({ text: `history message ${index + 1}` }),
+        })),
+      ],
+    );
+
+    const snapshotSpy = vi.spyOn(SessionHistorySseState.prototype, "snapshot");
+    try {
+      await withGatewayHarness(async (harness) => {
+        const stream = await openSessionHistorySse(harness.port, sessionKey);
+        try {
+          const initialEvent = await readSseEvent(stream.reader, stream.streamState);
+          expect(initialEvent.event).toBe("history");
+          const initialMessages = (initialEvent.data as SessionHistoryBody).messages ?? [];
+          expect(initialMessages).toHaveLength(initialMessageCount);
+          expect(initialMessages[0]?.content?.[0]?.text).toBe("history message 1");
+
+          const retained = snapshotSpy.mock.results.at(-1)?.value as
+            | { messages?: SessionHistoryMessage[] }
+            | undefined;
+          expect(retained?.messages).toHaveLength(retainedMessageLimit);
+          expect(retained?.messages?.[0]?.content?.[0]?.text).toBe("history message 3");
+
+          const cursorStream = await openSessionHistorySse(harness.port, sessionKey, {
+            query: `?cursor=${initialMessageCount + 1}`,
+          });
+          try {
+            const cursorEvent = await readSseEvent(cursorStream.reader, cursorStream.streamState);
+            expect(cursorEvent.event).toBe("history");
+            expect((cursorEvent.data as SessionHistoryBody).messages).toHaveLength(
+              initialMessageCount,
+            );
+            const cursorSnapshot = snapshotSpy.mock.results.at(-1)?.value as
+              | { messages?: SessionHistoryMessage[] }
+              | undefined;
+            expect(cursorSnapshot?.messages).toHaveLength(retainedMessageLimit);
+            expect(cursorSnapshot?.messages?.[0]?.content?.[0]?.text).toBe("history message 3");
+
+            const messageId = await appendVisibleAssistantMessage({
+              sessionKey,
+              text: "live history message",
+              storePath,
+            });
+            const lastSequence = initialMessages.at(-1)?.["__openclaw"]?.seq;
+            expect(lastSequence).toEqual(expect.any(Number));
+            await expectMessageEventMatch(stream, {
+              text: "live history message",
+              seq: (lastSequence ?? 0) + 1,
+              id: messageId,
+            });
+
+            const liveRetained = snapshotSpy.mock.results.findLast((result) => {
+              const snapshot = result.value as { messages?: SessionHistoryMessage[] } | undefined;
+              return snapshot?.messages?.at(-1)?.content?.[0]?.text === "live history message";
+            })?.value as { messages?: SessionHistoryMessage[] } | undefined;
+            expect(liveRetained?.messages).toHaveLength(retainedMessageLimit);
+            expect(liveRetained?.messages?.at(-1)?.content?.[0]?.text).toBe("live history message");
+
+            const refreshedCursorEvent = await readSseEvent(
+              cursorStream.reader,
+              cursorStream.streamState,
+            );
+            expect(refreshedCursorEvent.event).toBe("history");
+            const refreshedCursorMessages =
+              (refreshedCursorEvent.data as SessionHistoryBody).messages ?? [];
+            expect(refreshedCursorMessages).toHaveLength(initialMessageCount);
+            expect(refreshedCursorMessages[0]?.content?.[0]?.text).toBe("history message 1");
+
+            const refreshedCursorSnapshot = snapshotSpy.mock.results.at(-1)?.value as
+              | { messages?: SessionHistoryMessage[] }
+              | undefined;
+            expect(refreshedCursorSnapshot?.messages).toHaveLength(retainedMessageLimit);
+
+            const completeHistory = await vi.waitFor(
+              async () => await readSessionHistoryBody(harness.port, sessionKey),
+              { interval: 25, timeout: 5_000 },
+            );
+            expect(completeHistory.messages).toHaveLength(initialMessageCount + 1);
+            expect(completeHistory.messages?.[0]?.content?.[0]?.text).toBe("history message 1");
+            expect(completeHistory.messages?.at(-1)?.content?.[0]?.text).toBe(
+              "live history message",
+            );
+          } finally {
+            await cursorStream.reader.cancel();
+          }
+        } finally {
+          await stream.reader.cancel();
+        }
+      });
+    } finally {
+      snapshotSpy.mockRestore();
+    }
+  });
+
   test("streams identity-only transcript updates over SSE", async () => {
     await seedSession({ text: "first message" });
 
@@ -958,8 +1269,12 @@ describe("session history HTTP endpoints", () => {
       await expectHistoryEventTexts(stream, ["first message", "second message"]);
 
       emitSessionTranscriptUpdate({
-        sessionFile: `sqlite:main:sess-main:${storePath}`,
-        sessionKey: "agent:main:main",
+        target: {
+          agentId: AGENT_ID,
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        },
         message: makeTranscriptAssistantMessage({ text: "rewound branch message" }),
         messageId: "msg-rewound",
         messageSeq: 1,

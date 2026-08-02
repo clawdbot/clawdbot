@@ -73,6 +73,7 @@
       "gmi": {
         "baseUrl": "https://api.gmi-serving.com/v1",
         "api": "openai-completions",
+        "defaultModel": "openai/gpt-5.6-sol",
         "models": [
           {
             "id": "zai-org/GLM-5.2-FP8",
@@ -116,6 +117,9 @@
               "output": 1.357,
               "cacheRead": 0.056,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -160,6 +164,9 @@
               "output": 10,
               "cacheRead": 0.2,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -190,6 +197,9 @@
               "output": 30,
               "cacheRead": 0.5,
               "cacheWrite": 6.25
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           }
         ]

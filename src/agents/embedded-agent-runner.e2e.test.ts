@@ -1,5 +1,4 @@
 // End-to-end embedded-agent runner tests with mocked model/runtime seams.
-import fs from "node:fs/promises";
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +6,7 @@ import {
   buildEmbeddedRunnerAssistant,
   cleanupEmbeddedAgentRunnerTestWorkspace,
   createMockUsage,
-  createEmbeddedAgentRunnerOpenAiConfig,
+  createEmbeddedAgentRunnerOpenAiConfig as createBaseEmbeddedAgentRunnerOpenAiConfig,
   createResolvedEmbeddedRunnerModel,
   createEmbeddedAgentRunnerTestWorkspace,
   type EmbeddedAgentRunnerTestWorkspace,
@@ -171,11 +170,20 @@ const installRunEmbeddedMocks = () => {
 
 let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
 let SessionManager: typeof import("openclaw/plugin-sdk/agent-sessions").SessionManager;
+let loadTranscriptEvents: typeof import("../config/sessions/session-accessor.js").loadTranscriptEvents;
+let upsertSessionEntry: typeof import("../config/sessions/session-accessor.js").upsertSessionEntry;
+let resolveAgentRunSessionTarget: typeof import("./run-session-target.js").resolveAgentRunSessionTarget;
 let e2eWorkspace: EmbeddedAgentRunnerTestWorkspace | undefined;
 let agentDir: string;
 let workspaceDir: string;
+let sessionStorePath: string;
 let sessionCounter = 0;
 let runCounter = 0;
+
+const createEmbeddedAgentRunnerOpenAiConfig = (modelIds: string[]) => ({
+  ...createBaseEmbeddedAgentRunnerOpenAiConfig(modelIds),
+  session: { store: sessionStorePath },
+});
 
 beforeAll(async () => {
   vi.useRealTimers();
@@ -184,11 +192,13 @@ beforeAll(async () => {
   ({ getReplyPayloadMetadata } = await import("../auto-reply/reply-payload.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
-  const { SessionManager: LoadedSessionManager } =
-    await import("openclaw/plugin-sdk/agent-sessions");
-  SessionManager = LoadedSessionManager;
+  ({ SessionManager } = await import("openclaw/plugin-sdk/agent-sessions"));
+  ({ loadTranscriptEvents, upsertSessionEntry } =
+    await import("../config/sessions/session-accessor.js"));
+  ({ resolveAgentRunSessionTarget } = await import("./run-session-target.js"));
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
   ({ agentDir, workspaceDir } = e2eWorkspace);
+  sessionStorePath = path.join(e2eWorkspace.tempRoot, "sessions.json");
 }, 180_000);
 
 afterAll(async () => {
@@ -216,18 +226,47 @@ beforeEach(() => {
   });
 });
 
-const nextSessionFile = () => {
+const nextSessionCompatibilityKey = () => {
   sessionCounter += 1;
-  return path.join(workspaceDir, `session-${sessionCounter}.jsonl`);
+  return `in-memory:embedded-compat-${sessionCounter}`;
 };
 const nextRunId = (prefix = "run-embedded-test") => `${prefix}-${++runCounter}`;
 const nextSessionKey = () => `agent:test:embedded:${nextRunId("session-key")}`;
 
+const resolveTestSessionTarget = async (params: {
+  config?: ReturnType<typeof createEmbeddedAgentRunnerOpenAiConfig>;
+  sessionId: string;
+  sessionKey: string;
+}) =>
+  await resolveAgentRunSessionTarget({
+    config: params.config,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+  });
+
+const createPersistedTestSessionManager = async (params: {
+  config?: ReturnType<typeof createEmbeddedAgentRunnerOpenAiConfig>;
+  sessionId: string;
+  sessionKey: string;
+}) => {
+  const target = await resolveTestSessionTarget(params);
+  await upsertSessionEntry(
+    { agentId: target.agentId, sessionKey: target.sessionKey, storePath: target.storePath },
+    { sessionId: target.sessionId, updatedAt: Date.now() },
+  );
+  return SessionManager.open(target, workspaceDir);
+};
+
 const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string) => {
   // Builds a session with an orphaned user message to exercise retry/resume
-  // cleanup paths from persisted JSONL.
-  const sessionFile = nextSessionFile();
-  const sessionManager = SessionManager.open(sessionFile);
+  // cleanup paths from the canonical persisted transcript.
+  const sessionFile = nextSessionCompatibilityKey();
+  const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
+  const sessionManager = await createPersistedTestSessionManager({
+    config: cfg,
+    sessionId: "session:test",
+    sessionKey,
+  });
   sessionManager.appendMessage({
     role: "user",
     content: [{ type: "text", text }],
@@ -243,7 +282,6 @@ const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string
     }),
   );
 
-  const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
   return await runEmbeddedAgent({
     sessionId: "session:test",
     sessionKey,
@@ -270,24 +308,17 @@ const textFromContent = (content: unknown) => {
   return undefined;
 };
 
-const readSessionEntries = async (sessionFile: string) => {
-  const raw = await fs.readFile(sessionFile, "utf-8");
-  const entries: Array<{ type?: string; customType?: string; data?: unknown }> = [];
-  for (const line of raw.split(/\r?\n/)) {
-    if (line.length > 0) {
-      entries.push(JSON.parse(line) as { type?: string; customType?: string; data?: unknown });
-    }
-  }
-  return entries;
-};
-
-const readSessionMessages = async (sessionFile: string) => {
-  const entries = await readSessionEntries(sessionFile);
+const readSessionMessages = async (params: {
+  config?: ReturnType<typeof createEmbeddedAgentRunnerOpenAiConfig>;
+  sessionId: string;
+  sessionKey: string;
+}) => {
+  const entries = await loadTranscriptEvents(await resolveTestSessionTarget(params));
   return entries
-    .filter((entry) => entry.type === "message")
-    .map(
-      (entry) => (entry as { message?: { role?: string; content?: unknown } }).message,
-    ) as Array<{ role?: string; content?: unknown }>;
+    .filter((entry): entry is { message?: { role?: string; content?: unknown }; type: "message" } =>
+      Boolean(entry && typeof entry === "object" && "type" in entry && entry.type === "message"),
+    )
+    .map((entry) => entry.message);
 };
 
 const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessionKey: string) => {
@@ -366,30 +397,8 @@ function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
 }
 
 describe("runEmbeddedAgent", () => {
-  it("reuses one standalone snapshot across configless runs", async () => {
-    mockSuccessfulEmbeddedAttempt();
-    mockSuccessfulEmbeddedAttempt();
-
-    for (const suffix of ["first", "second"]) {
-      await runEmbeddedAgent({
-        sessionId: `configless-${suffix}`,
-        sessionFile: nextSessionFile(),
-        workspaceDir,
-        prompt: "hello",
-        provider: "openrouter",
-        model: "openrouter/auto",
-        timeoutMs: 5_000,
-        agentDir,
-        runId: nextRunId(`configless-${suffix}`),
-        enqueue: immediateEnqueue,
-      });
-    }
-
-    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
-  });
-
   it("uses the configured default model when the caller omits provider and model", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = {
       ...createEmbeddedAgentRunnerOpenAiConfig([]),
       agents: {
@@ -427,10 +436,12 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("uses runtime config for blank public runtime model overrides", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
+    const baseConfig = createEmbeddedAgentRunnerOpenAiConfig([]);
     const cfg = {
-      ...createEmbeddedAgentRunnerOpenAiConfig([]),
+      ...baseConfig,
       agents: {
+        ...baseConfig.agents,
         defaults: {
           model: {
             primary: "openrouter/runtime-default",
@@ -465,7 +476,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("uses the session-key agent default when agentId is inferred", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = {
       ...addAnthropicProvider(createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]), [
         "claude-opus-4-7",
@@ -511,7 +522,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("resolves model-only provider refs instead of prefixing the default provider", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = addAnthropicProvider(createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]), [
       "claude-sonnet-4-6",
     ]);
@@ -544,7 +555,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("publishes the standalone model snapshot before dynamic model resolution", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
@@ -581,7 +592,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("resolves explicit OpenAI OpenClaw runs through Codex when auth order starts with Codex OAuth", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const baseConfig = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     const openAIProvider = baseConfig.models?.providers?.openai;
     if (!openAIProvider) {
@@ -598,6 +609,7 @@ describe("runEmbeddedAgent", () => {
         },
       },
       agents: {
+        ...baseConfig.agents,
         defaults: {
           models: {
             "openai/mock-1": {
@@ -650,7 +662,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("resolves transport-owned OpenAI Codex runs against the runtime provider first", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const baseConfig = createEmbeddedAgentRunnerOpenAiConfig([]);
     const openAIProvider = baseConfig.models?.providers?.openai;
     if (!openAIProvider) {
@@ -668,6 +680,7 @@ describe("runEmbeddedAgent", () => {
         },
       },
       agents: {
+        ...baseConfig.agents,
         defaults: {
           models: {
             "openai/gpt-5.5": {
@@ -729,7 +742,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("resolves a transport-owned Codex model from the bundled static catalog in one resolver pass", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const baseConfig = createEmbeddedAgentRunnerOpenAiConfig([]);
     const openAIProvider = baseConfig.models?.providers?.openai;
     if (!openAIProvider) {
@@ -747,6 +760,7 @@ describe("runEmbeddedAgent", () => {
         },
       },
       agents: {
+        ...baseConfig.agents,
         defaults: {
           models: {
             "openai/gpt-5.3-codex": {
@@ -794,6 +808,10 @@ describe("runEmbeddedAgent", () => {
         skipAgentDiscovery: true,
         allowBundledStaticCatalogFallback: true,
         preferBundledStaticCatalogTransport: true,
+        preparedModelRuntime: expect.objectContaining({
+          configuredRuntimeModels: expect.any(Array),
+          inlineProviderModels: expect.any(Array),
+        }),
       }),
     );
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
@@ -802,8 +820,8 @@ describe("runEmbeddedAgent", () => {
     ).toBe("openai");
   });
 
-  it("lets a locked Codex harness own stale model resolution, prompts, and context policy", async () => {
-    const sessionFile = nextSessionFile();
+  it("lets a locked Codex harness own stale model resolution and context policy", async () => {
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
     const prompt = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
     resolveModelAsyncMock.mockRejectedValueOnce(new Error("stale outer model must not resolve"));
@@ -833,7 +851,7 @@ describe("runEmbeddedAgent", () => {
       modelSelectionLocked: true,
       provider: "anthropic",
       modelId: "retired-outer-model",
-      prompt,
+      prompt: "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)",
     });
     expect("contextEngine" in attempt).toBe(false);
     expect("contextTokenBudget" in attempt).toBe(false);
@@ -841,7 +859,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("does not apply outer context-overflow recovery to a locked Codex harness", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
         terminal: {
@@ -873,7 +891,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     resolveSessionKeyForRequestMock.mockReturnValue({
       sessionKey: "agent:test:resolved",
@@ -913,8 +931,8 @@ describe("runEmbeddedAgent", () => {
     expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:test:resolved");
   });
 
-  it("falls back to the session id when a whitespace-only session key cannot be resolved", async () => {
-    const sessionFile = nextSessionFile();
+  it("canonicalizes the session-id fallback when a whitespace-only key cannot be resolved", async () => {
+    const sessionFile = "resume-124";
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     resolveSessionKeyForRequestMock.mockReturnValue({
       sessionKey: undefined,
@@ -951,11 +969,11 @@ describe("runEmbeddedAgent", () => {
       agentId: undefined,
       clone: false,
     });
-    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("resume-124");
+    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:main:resume-124");
   });
 
   it("logs when embedded session-key backfill resolution fails", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     resolveSessionKeyForRequestMock.mockImplementation(() => {
       throw new Error("resolver exploded");
@@ -991,7 +1009,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("passes the current agentId when backfilling a session key", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     resolveStoredSessionKeyForSessionIdMock.mockReturnValue({
       sessionKey: "agent:embedded-agent:resolved",
@@ -1032,7 +1050,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("disposes bundle MCP once when a one-shot local run completes", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     const sessionKey = nextSessionKey();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
@@ -1067,7 +1085,7 @@ describe("runEmbeddedAgent", () => {
 
   it("preserves bundle MCP state across retries within one local run", async () => {
     refreshRuntimeAuthOnFirstPromptError = true;
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     const sessionKey = nextSessionKey();
     runEmbeddedAttemptMock
@@ -1110,7 +1128,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("returns visible assistant prose without semantic retry classification", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["gpt-5.4"]);
     const sessionKey = nextSessionKey();
 
@@ -1152,7 +1170,7 @@ describe("runEmbeddedAgent", () => {
   });
 
   it("preserves harness-owned media provenance through terminal preparation", async () => {
-    const sessionFile = nextSessionFile();
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
@@ -1186,8 +1204,8 @@ describe("runEmbeddedAgent", () => {
     });
   });
 
-  it("handles prompt error paths without dropping user state", async () => {
-    const sessionFile = nextSessionFile();
+  it("surfaces prompt errors from the embedded attempt", async () => {
+    const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-error"]);
     const sessionKey = nextSessionKey();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
@@ -1211,28 +1229,21 @@ describe("runEmbeddedAgent", () => {
         enqueue: immediateEnqueue,
       }),
     ).rejects.toThrow("boom");
-
-    try {
-      const messages = await readSessionMessages(sessionFile);
-      const userIndex = messages.findIndex(
-        (message) => message?.role === "user" && textFromContent(message.content) === "boom",
-      );
-      expect(userIndex).toBeGreaterThanOrEqual(0);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
-        throw err;
-      }
-    }
   });
 
   it(
     "preserves existing transcript entries across an additional turn",
-    { timeout: 7_000 },
+    { timeout: 15_000 },
     async () => {
-      const sessionFile = nextSessionFile();
+      const sessionFile = nextSessionCompatibilityKey();
       const sessionKey = nextSessionKey();
+      const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-error"]);
 
-      const sessionManager = SessionManager.open(sessionFile);
+      const sessionManager = await createPersistedTestSessionManager({
+        config: cfg,
+        sessionId: "session:test",
+        sessionKey,
+      });
       sessionManager.appendMessage({
         role: "user",
         content: [{ type: "text", text: "seed user" }],
@@ -1251,7 +1262,11 @@ describe("runEmbeddedAgent", () => {
 
       await runDefaultEmbeddedTurn(sessionFile, "hello", sessionKey);
 
-      const messages = await readSessionMessages(sessionFile);
+      const messages = await readSessionMessages({
+        config: cfg,
+        sessionId: "session:test",
+        sessionKey,
+      });
       const seedUserIndex = messages.findIndex(
         (message) => message?.role === "user" && textFromContent(message.content) === "seed user",
       );

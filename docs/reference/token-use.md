@@ -20,7 +20,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   Bounded by `skills.limits.maxSkillsPromptChars`, with optional per-agent
   override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`,
   `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md` when new, plus
   `MEMORY.md` when present). Large injected files are truncated by
   `agents.defaults.bootstrapMaxChars` (default: `20000`); total bootstrap
@@ -183,11 +183,10 @@ auth: non-API-key providers such as `aws-sdk` can show estimated cost when
 their configured model entry includes local pricing and the provider
 returns usage metadata.
 
-After sidecars and channels reach the Gateway ready path, OpenClaw starts an
-optional background pricing bootstrap for configured model refs that do not
-already have local pricing. That bootstrap fetches remote OpenRouter and
-LiteLLM pricing catalogs. Set `models.pricing.enabled: false` to skip those
-catalog fetches on offline or restricted networks; explicit
+Pricing updates ship in the hosted model catalog alongside model metadata.
+OpenClaw does not fetch OpenRouter or LiteLLM directly. Set
+`models.catalogRefresh.enabled: false` to disable hosted catalog traffic on
+offline or restricted networks; bundled pricing and explicit
 `models.providers.*.models[].cost` entries still drive local cost estimates.
 
 ## Cache TTL and pruning impact
@@ -213,7 +212,7 @@ For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
 For Anthropic API pricing, cache reads are significantly cheaper than input
 tokens, while cache writes are billed at a higher multiplier. See Anthropic's
 prompt caching pricing for the latest rates and TTL multipliers:
-[https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
+[https://platform.claude.com/docs/en/build-with-claude/prompt-caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 
 ### Example: keep 1h cache warm with heartbeat
 

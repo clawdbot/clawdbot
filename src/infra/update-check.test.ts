@@ -768,6 +768,82 @@ describe("checkUpdateStatus", () => {
     });
   });
 
+  it.each([
+    {
+      name: "text lockfile",
+      lockfiles: ["bun.lock"],
+      expectedLockfile: "bun.lock",
+    },
+    {
+      name: "binary lockfile",
+      lockfiles: ["bun.lockb"],
+      expectedLockfile: "bun.lockb",
+    },
+    {
+      name: "text lockfile when both formats exist",
+      lockfiles: ["bun.lock", "bun.lockb"],
+      expectedLockfile: "bun.lock",
+    },
+  ])("reports dependency status for Bun's $name", async ({ lockfiles, expectedLockfile }) => {
+    await withTempDir({ prefix: "openclaw-update-check-bun-" }, async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "bun@1.2.0" }),
+        "utf8",
+      );
+      for (const lockfile of lockfiles) {
+        await fs.writeFile(path.join(root, lockfile), "lock", "utf8");
+      }
+      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+
+      const status = await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
+      });
+
+      expect(status).toMatchObject({
+        installKind: "package",
+        packageManager: "bun",
+        deps: {
+          manager: "bun",
+          lockfilePath: path.join(root, expectedLockfile),
+          markerPath: path.join(root, "node_modules"),
+          status: "ok",
+        },
+      });
+    });
+  });
+
+  it("detects lockless OpenClaw npm installs despite packed pnpm metadata", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-lockless-npm-" }, async (base) => {
+      const root = path.join(base, "prefix", "node_modules", "openclaw");
+      await fs.mkdir(root, { recursive: true });
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
+        "utf8",
+      );
+
+      const status = await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
+      });
+
+      expect(status.installKind).toBe("package");
+      expect(status.packageManager).toBe("npm");
+      expect(status.deps).toMatchObject({
+        manager: "npm",
+        lockfilePath: path.join(root, "package-lock.json"),
+        status: "unknown",
+        reason: "lockfile missing",
+      });
+    });
+  });
+
   it("reports missing and stale dependency markers for package installs", async () => {
     await withTempDir({ prefix: "openclaw-update-check-deps-" }, async (root) => {
       await fs.writeFile(
@@ -819,30 +895,6 @@ describe("checkUpdateStatus", () => {
         timeoutMs: 1000,
       });
       expect(ok.deps?.status).toBe("ok");
-    });
-  });
-
-  it("detects npm package installs that ship pnpm package metadata with shrinkwrap", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-npm-shrinkwrap-" }, async (root) => {
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
-        "utf8",
-      );
-      await fs.writeFile(path.join(root, "npm-shrinkwrap.json"), "{}", "utf8");
-      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
-
-      const status = await checkUpdateStatus({
-        root,
-        includeRegistry: false,
-        fetchGit: false,
-        timeoutMs: 1000,
-      });
-
-      expect(status.installKind).toBe("package");
-      expect(status.packageManager).toBe("npm");
-      expect(status.deps?.manager).toBe("npm");
-      expect(status.deps?.lockfilePath).toBe(path.join(root, "npm-shrinkwrap.json"));
     });
   });
 

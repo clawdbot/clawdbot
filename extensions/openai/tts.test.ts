@@ -306,6 +306,60 @@ describe("openai tts", () => {
       ).rejects.toThrow("OpenAI TTS API error (503): temporary upstream outage");
     });
 
+    it.each([
+      { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+      { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+      { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+      { name: "empty audio", contentType: "audio/mpeg", body: "" },
+    ])(
+      "rejects a successful $name response as synthesized audio",
+      async ({ contentType, body }) => {
+        globalThis.fetch = vi
+          .fn()
+          .mockResolvedValue(
+            new Response(body, { status: 200, headers: { "content-type": contentType } }),
+          ) as unknown as typeof fetch;
+
+        await expect(
+          openaiTTS({
+            text: "hello",
+            apiKey: "test-key",
+            baseUrl: "https://api.openai.com/v1",
+            model: "gpt-4o-mini-tts",
+            voice: "alloy",
+            responseFormat: "mp3",
+            timeoutMs: 5_000,
+          }),
+        ).rejects.toThrow("OpenAI TTS API error: malformed audio response");
+      },
+    );
+
+    it.each([
+      { name: "audio content type", contentType: "audio/mpeg" },
+      { name: "generic binary content type", contentType: "application/octet-stream" },
+      { name: "missing content type", contentType: undefined },
+    ])("preserves nonempty $name speech responses", async ({ contentType }) => {
+      const audio = Buffer.from("audio-bytes");
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        new Response(audio, {
+          status: 200,
+          ...(contentType ? { headers: { "content-type": contentType } } : {}),
+        }),
+      ) as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "test-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).resolves.toEqual(audio);
+    });
+
     it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
       const streamed = createStreamingErrorResponse({
         status: 200,

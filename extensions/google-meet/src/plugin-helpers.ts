@@ -7,6 +7,7 @@ import {
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -47,10 +48,6 @@ export function normalizeMode(value: unknown): GoogleMeetMode | undefined {
     return "agent";
   }
   return value === "agent" || value === "bidi" || value === "transcribe" ? value : undefined;
-}
-
-function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
-  return mode === "agent" || mode === "bidi";
 }
 
 export function resolveMeetingInput(config: GoogleMeetConfig, value: unknown): string {
@@ -133,7 +130,7 @@ function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
     action === "test_speech"
       ? "agent"
       : (normalizeMode(params.raw.mode) ?? params.config.defaultMode);
-  return transport === "chrome" && isGoogleMeetTalkBackMode(mode);
+  return transport === "chrome" && MeetingPlatformAdapter.isTalkBackMode(mode);
 }
 
 export function assertGoogleMeetAgentToolActionSupported(params: {

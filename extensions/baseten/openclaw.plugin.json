@@ -24,6 +24,7 @@
       "baseten": {
         "baseUrl": "https://inference.baseten.co/v1",
         "api": "openai-completions",
+        "defaultModel": "thinkingmachines/inkling",
         "models": [
           {
             "id": "deepseek-ai/DeepSeek-V4-Pro",
@@ -39,6 +40,9 @@
               "output": 3.48,
               "cacheRead": 0.145,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -71,6 +75,9 @@
               "output": 4.4,
               "cacheRead": 0.14,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {

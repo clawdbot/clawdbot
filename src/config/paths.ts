@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isValidProfileName } from "../cli/profile-utils.js";
+import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { isFastTestRuntimeEnv } from "../infra/test-runtime-env.js";
@@ -34,6 +36,10 @@ export function isNamedProfile(env: NodeJS.ProcessEnv = process.env): boolean {
 
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
+}
+
+function resolveSystemAccountHomeDir(): string {
+  return os.userInfo().homedir;
 }
 
 /** Build a homedir thunk that respects OPENCLAW_HOME for the given env. */
@@ -91,6 +97,118 @@ export function resolveStateDir(
     return existingLegacy;
   }
   return newDir;
+}
+
+function normalizePathForComparison(candidate: string): string {
+  const resolved = path.resolve(candidate);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    // Missing paths have no filesystem identity yet; exact resolution is the safe fallback.
+    return resolved;
+  }
+}
+
+/** Whether the process uses the default home-scoped state directory. */
+export function isDefaultStateDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): boolean {
+  const override = env.OPENCLAW_STATE_DIR?.trim();
+  if (!override) {
+    // Preserve the default install path, including automatic legacy-state discovery.
+    return true;
+  }
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
+  return (
+    normalizePathForComparison(resolveStateDir(env, effectiveHomedir)) ===
+    normalizePathForComparison(newStateDir(effectiveHomedir))
+  );
+}
+
+/** Canonical state directory name for the selected profile, mirroring root `--profile`. */
+function profileStateDirName(env: NodeJS.ProcessEnv): string | null {
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  if (!profile || profile.toLowerCase() === "default") {
+    return NEW_STATE_DIRNAME;
+  }
+  if (!isValidProfileName(profile)) {
+    return null;
+  }
+  return `${NEW_STATE_DIRNAME}-${profile}`;
+}
+
+export function resolveNativeServiceProfileConflict(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (platform !== "darwin" && platform !== "win32") {
+    return null;
+  }
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  if (!profile || profile.toLowerCase() === "default") {
+    return null;
+  }
+  // Normal macOS and Windows filesystems fold case, so case-distinct profile
+  // names can share state and native-service paths even though the CLI keeps
+  // them distinct. Leave the runtime profile valid, but deny service mutation.
+  if (profile !== profile.toLowerCase()) {
+    return profile;
+  }
+  if (platform !== "darwin") {
+    return null;
+  }
+  // These names map to the shipped default Gateway and node-host LaunchAgent
+  // labels, so authorizing them would let one profile control another service.
+  return profile === "gateway" || profile === "node" ? profile : null;
+}
+
+/** Whether host service management belongs to the active default install identity. */
+export function isDefaultInstallIdentity(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = resolveSystemAccountHomeDir,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const accountHome = resolveRequiredHomeDir({}, homedir);
+  // Profiles have distinct host-service names; relocated homes do not. Keep
+  // OPENCLAW_HOME isolated so an alternate state tree cannot adopt that service.
+  if (env.OPENCLAW_HOME?.trim()) {
+    return false;
+  }
+  if (
+    normalizePathForComparison(resolveRequiredHomeDir(env, homedir)) !==
+    normalizePathForComparison(accountHome)
+  ) {
+    return false;
+  }
+  if (
+    resolveNativeServiceProfileConflict(env, platform) ||
+    resolveGatewayNativeServiceIdentityConflict(env, platform)
+  ) {
+    return false;
+  }
+  const stateDirName = profileStateDirName(env);
+  // Environment profiles can bypass root CLI parsing. Reject them before path
+  // construction so separators or dot segments cannot authorize a host service.
+  if (!stateDirName) {
+    return false;
+  }
+  const canonicalStateDir = path.join(accountHome, stateDirName);
+  if (
+    normalizePathForComparison(resolveStateDir(env, envHomedir(env))) !==
+    normalizePathForComparison(canonicalStateDir)
+  ) {
+    return false;
+  }
+  // Default installs historically allow implicit legacy config discovery.
+  // Named profiles must resolve their own config so they cannot inherit the default profile.
+  if (stateDirName === NEW_STATE_DIRNAME && !env.OPENCLAW_CONFIG_PATH?.trim()) {
+    return true;
+  }
+  return (
+    normalizePathForComparison(resolveConfigPathCandidate(env, envHomedir(env))) ===
+    normalizePathForComparison(path.join(canonicalStateDir, CONFIG_FILENAME))
+  );
 }
 
 export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {
@@ -303,15 +421,7 @@ export function resolveDeliveryQueueMediaDir(stateDir?: string): string {
   return path.join(stateDir ?? resolveStateDir(), "delivery-queue-media");
 }
 
-const OAUTH_FILENAME = "oauth.json";
-
-/**
- * OAuth credentials storage directory.
- *
- * Precedence:
- * - `OPENCLAW_OAUTH_DIR` (explicit override)
- * - `$*_STATE_DIR/credentials` (canonical server/default)
- */
+/** Resolves the legacy credentials directory retained for Doctor and backup ownership. */
 export function resolveOAuthDir(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, envHomedir(env)),
@@ -321,13 +431,6 @@ export function resolveOAuthDir(
     return resolveUserPath(override, env, envHomedir(env));
   }
   return path.join(stateDir, "credentials");
-}
-
-export function resolveOAuthPath(
-  env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, envHomedir(env)),
-): string {
-  return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
 }
 
 function parseGatewayPortEnvValue(raw: string | undefined): number | null {

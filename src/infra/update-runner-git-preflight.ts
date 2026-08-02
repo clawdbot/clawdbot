@@ -392,7 +392,7 @@ async function testPreflightCandidates(params: {
           `preflight build (${shortSha})`,
           managerScriptArgs(manager.manager, "build"),
           params.worktreeDir,
-          resolveBuildEnv(manager.env),
+          resolveBuildEnv(manager.env, path.join(params.gitRoot, ".artifacts", "build-all-cache")),
         ),
       );
       params.steps.push(buildStep);

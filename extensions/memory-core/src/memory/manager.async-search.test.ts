@@ -55,7 +55,7 @@ describe("memory search async sync", () => {
       assertRequiredProviderAvailable: vi.fn(),
       dirty: true,
       sessionsDirty: false,
-      sync: syncMock,
+      syncAdmitted: syncMock,
       provider: null,
       providerLifecycle: { mode: "fts-only", reason: "test" },
       refreshIndexIdentityDirty: () => ({ status: "valid" }),

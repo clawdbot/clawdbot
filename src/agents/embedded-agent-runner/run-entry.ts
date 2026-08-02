@@ -1,9 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
+import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
-import { runWithModelFallback, type ModelFallbackResultClassification } from "../model-fallback.js";
-import type { FallbackAttempt } from "../model-fallback.types.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
+import type { FallbackAttempt, ModelFallbackRouteResolution } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
@@ -69,6 +71,7 @@ type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     cfg: OpenClawConfig;
     provider: string;
     model: string;
+    requestedRouteResolution?: ModelFallbackRouteResolution;
     fallbacksOverride?: string[];
     agentDir?: string;
   } & ModelManifestNormalizationContext;
@@ -193,6 +196,21 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   let candidateIndex = 0;
   const committedSideEffect =
     params.behavior.kind === "command-rpc" ? params.behavior.hasCommittedSideEffect : undefined;
+  const readChannelDeliveryEvidence =
+    params.behavior.kind === "channel-delivery" ? params.behavior.readDeliveryEvidence : undefined;
+  // Thrown candidate errors skip result classification, so without an error-path
+  // backstop the loop advances to the next candidate even when the attempt already
+  // delivered its reply, producing a duplicate visible answer (#113788). Consult the
+  // same live delivery evidence the result classifier already uses so both exit
+  // paths suppress fallback after a delivered reply.
+  const canFallbackAfterError = committedSideEffect
+    ? () => !committedSideEffect()
+    : readChannelDeliveryEvidence
+      ? () => {
+          const evidence = readChannelDeliveryEvidence();
+          return !evidence.hasDirectlySentBlockReply && !evidence.hasBlockReplyPipelineOutput;
+        }
+      : undefined;
   const fallbackResult = await runWithModelFallback<T>({
     ...params.selection,
     ...params.identity,
@@ -209,6 +227,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
           agentHarnessId: agentHarnessRuntimeOverride,
           agentHarnessRuntimeOverride,
           workspaceDir: params.harness.workspaceDir,
+          pluginRegistry: requireActivePluginRegistry(),
         });
       if (params.harness.preparation.kind === "measured") {
         await params.harness.preparation.run(prepare);
@@ -248,7 +267,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
               : effectiveClassification;
           },
         }),
-    ...(committedSideEffect ? { canFallbackAfterError: () => !committedSideEffect() } : {}),
+    ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
     ...(params.behavior.kind === "maintenance"
       ? {}
       : {

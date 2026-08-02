@@ -48,6 +48,7 @@
       "groq": {
         "baseUrl": "https://api.groq.com/openai/v1",
         "api": "openai-completions",
+        "defaultModel": "openai/gpt-oss-120b",
         "models": [
           {
             "id": "groq/compound",

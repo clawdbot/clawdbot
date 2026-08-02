@@ -53,6 +53,17 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 
 - The heartbeat monitor's cron scratch can hold a tiny checklist for heartbeat runs; keep it small.
 
+## Tools
+
+Skills define how tools work. Keep environment-specific details here so shared skills can update independently without exposing your local setup.
+
+Example placeholders (replace or remove them):
+
+```markdown
+- SSH: dev-server -> 192.168.1.100, user admin
+- TTS: preferred voice "Nova"; default speaker Office
+```
+
 ## Customize
 
 - Add your preferred style, rules, and "memory" here.

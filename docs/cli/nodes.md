@@ -45,7 +45,7 @@ These commands drive the gateway-owned `node.pair.*` store, separate from device
 - `approve` scope requirements follow the pending request's declared commands:
   - commandless request: `operator.pairing`
   - ordinary node commands: `operator.pairing` + `operator.write`
-  - admin-sensitive commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, and `system.execApprovals.get/set`): `operator.pairing` + `operator.admin`
+  - admin-sensitive commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, and `system.execApprovals.get/set`): `operator.pairing` + `operator.admin`
 - `remove` scope: `operator.pairing` can remove non-operator node rows; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 
 ## Invoke
@@ -73,7 +73,7 @@ openclaw nodes screen record --node <id> --duration 10s --fps 10 --out ./clip.mp
 ```
 
 - `notify` sends a local notification on a node that declares `system.notify`, including macOS, iOS, Android, and direct watchOS nodes. Direct watchOS delivery requires OpenClaw to be active. Requires `--title` or `--body`. Options: `--sound <name>`, `--priority <passive|active|timeSensitive>`, `--delivery <system|overlay|auto>` (default `system`), `--invoke-timeout <ms>` (default `15000`).
-- `push` sends an APNs test push to an iOS node. Options: `--title <text>` (default `OpenClaw`), `--body <text>`, `--environment <sandbox|production>` to override the detected APNs environment.
+- `push` sends an APNs test push to an iOS node. Options: `--title <text>` (default `OpenClaw`), `--body <text>`, `--environment <sandbox|production>` to override the detected APNs environment. Accepted delivery exits `0`; a typed APNs rejection preserves the complete text or JSON diagnostic and exits non-zero.
 - `location get` fetches the node's current location. Options: `--max-age <ms>` (reuse a cached fix), `--accuracy <coarse|balanced|precise>`, `--location-timeout <ms>` (default `10000`), `--invoke-timeout <ms>` (default `20000`).
 - `screen record` captures a short clip and prints the saved path (or writes JSON with `--json`). Options: `--screen <index>` (default `0`), `--duration <ms|10s>` (default `10000`), `--fps <fps>` (default `10`), `--no-audio`, `--out <path>`, `--invoke-timeout <ms>` (default `120000`).
 

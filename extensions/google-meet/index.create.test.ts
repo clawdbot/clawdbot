@@ -96,7 +96,7 @@ async function runCreateMeetBrowserScript(params: { buttonText: string }) {
   vi.stubGlobal("location", location);
   type BrowserScriptResult = {
     meetingUri?: string;
-    manualActionReason?: string;
+    manualAction?: { reason: string; message: string };
     notes?: string[];
     retryAfterMs?: number;
   };
@@ -138,8 +138,10 @@ async function runCreateMeetBrowserScript(params: { buttonText: string }) {
                 ok: true,
                 targetId: "create-script-tab",
                 result: {
-                  manualActionReason: "meet-permission-required",
-                  manualAction: "Stop after exercising the browser script.",
+                  manualAction: {
+                    reason: "meet-permission-required",
+                    message: "Stop after exercising the browser script.",
+                  },
                   browserUrl: location.href,
                   browserTitle: document.title,
                 },
@@ -420,9 +422,11 @@ describe("google-meet create flow", () => {
                   ok: true,
                   targetId: "login-tab",
                   result: {
-                    manualActionReason: "google-login-required",
-                    manualAction:
-                      "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+                    manualAction: {
+                      reason: "google-login-required",
+                      message:
+                        "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+                    },
                     browserUrl: "https://accounts.google.com/signin",
                     browserTitle: "Sign in - Google Accounts",
                     notes: ["Sign-in page detected."],
@@ -450,11 +454,10 @@ describe("google-meet create flow", () => {
     expect(payload.error).toBe(
       "google-login-required: Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
     );
-    expect(payload.manualActionRequired).toBe(true);
-    expect(payload.manualActionReason).toBe("google-login-required");
-    expect(payload.manualActionMessage).toBe(
-      "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
-    );
+    expect(payload.manualAction).toEqual({
+      reason: "google-login-required",
+      message: "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+    });
     const browser = requireRecord(payload.browser, "browser payload");
     expect(browser.nodeId).toBe("node-1");
     expect(browser.targetId).toBe("login-tab");
@@ -594,9 +597,11 @@ describe("google-meet create flow", () => {
                   ok: true,
                   targetId: "permission-tab",
                   result: {
-                    manualActionReason: "meet-permission-required",
-                    manualAction:
-                      "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+                    manualAction: {
+                      reason: "meet-permission-required",
+                      message:
+                        "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+                    },
                     browserUrl: "https://meet.google.com/new",
                     browserTitle: "Meet",
                   },
@@ -615,11 +620,11 @@ describe("google-meet create flow", () => {
     const result = await tool.execute("id", { action: "create" });
 
     expect(result.details.source).toBe("browser");
-    expect(result.details.manualActionRequired).toBe(true);
-    expect(result.details.manualActionReason).toBe("meet-permission-required");
-    expect(result.details.manualActionMessage).toBe(
-      "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
-    );
+    expect(result.details.manualAction).toEqual({
+      reason: "meet-permission-required",
+      message:
+        "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+    });
     const browser = requireRecord(result.details.browser, "browser details");
     expect(browser.nodeId).toBe("node-1");
     expect(browser.targetId).toBe("permission-tab");
@@ -835,7 +840,7 @@ describe("google-meet create flow", () => {
       expect(result.notes).toEqual([note]);
       expect(button.click).toHaveBeenCalledTimes(1);
       expect(result.meetingUri).toBeUndefined();
-      expect(result.manualActionReason).toBeUndefined();
+      expect(result.manualAction).toBeUndefined();
     },
   );
 });

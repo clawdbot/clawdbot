@@ -411,25 +411,36 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
-describe("models.pricing", () => {
-  it("accepts the model pricing bootstrap toggle", () => {
-    for (const enabled of [true, false]) {
-      const result = OpenClawSchema.safeParse({
-        models: {
-          pricing: { enabled },
-        },
-      });
-      expect(result.success).toBe(true);
-    }
+describe("models.catalogRefresh", () => {
+  it("accepts the refresh toggle and an http(s) override", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { enabled: false, url: "https://catalog.example.test/v1.json" } },
+      }).success,
+    ).toBe(true);
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { url: "http://localhost:8080/catalog.json" } },
+      }).success,
+    ).toBe(true);
   });
 
-  it("rejects non-boolean model pricing bootstrap values", () => {
-    const result = OpenClawSchema.safeParse({
-      models: {
-        pricing: { enabled: "false" },
-      },
-    });
-    expect(result.success).toBe(false);
+  it("rejects invalid refresh values", () => {
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { enabled: "false" } } }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { url: "file:///tmp/catalog.json" } } })
+        .success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { url: "not a url" } } }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { url: "http://catalog.internal.example/catalog.json" } },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -458,7 +469,7 @@ describe("diagnostics.otel.captureContent", () => {
     expect(invalid.success).toBe(false);
   });
 
-  it("accepts boolean and granular OTEL content capture config", () => {
+  it("accepts boolean OTEL content capture config", () => {
     for (const captureContent of [true, false]) {
       const result = OpenClawSchema.safeParse({
         diagnostics: {
@@ -730,6 +741,8 @@ describe("plugins.entries.*.llm", () => {
             llm: {
               allowModelOverride: true,
               allowedModels: ["anthropic/claude-haiku-4-5"],
+              allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
+              allowAuthProfileOverride: true,
               allowAgentIdOverride: true,
             },
           },
@@ -747,6 +760,8 @@ describe("plugins.entries.*.llm", () => {
             llm: {
               allowModelOverride: "yes",
               allowedModels: [1],
+              allowedCompletionModels: [1],
+              allowAuthProfileOverride: "yes",
               allowAgentIdOverride: "yes",
             },
           },

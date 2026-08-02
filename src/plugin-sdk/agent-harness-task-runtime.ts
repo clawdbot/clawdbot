@@ -44,11 +44,21 @@ type SetDeliveryStatusParams = Parameters<typeof setDetachedTaskDeliveryStatusBy
 
 /** Scope and naming options used to bind task operations to one requester session. */
 export type AgentHarnessTaskRuntimeScopeParams = {
-  runtime: AgentHarnessTaskRuntimeId;
   scope: AgentHarnessTaskRuntimeScope;
-  taskKind?: string;
   runIdPrefix?: string;
-};
+} & (
+  | {
+      // Core identifies harness-owned subagent rows by the taskKind stamped here
+      // (isHarnessOwnedSubagentTask); a subagent row created without one would be
+      // read as an OpenClaw-owned child session and reclaimed on the short grace.
+      runtime: Extract<AgentHarnessTaskRuntimeId, "subagent">;
+      taskKind: string;
+    }
+  | {
+      runtime: Exclude<AgentHarnessTaskRuntimeId, "subagent">;
+      taskKind?: string;
+    }
+);
 
 /** Create-task params with runtime and requester scope supplied by the scoped task runtime. */
 export type AgentHarnessScopedCreateRunningTaskRunParams = Omit<

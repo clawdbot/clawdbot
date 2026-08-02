@@ -6,6 +6,7 @@ import {
   type OverlayHandle,
   type SelectItem,
 } from "@earendil-works/pi-tui";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { isApprovalStaleError } from "../infra/approval-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { selectListTheme, theme } from "./theme/theme.js";
@@ -126,10 +127,6 @@ const DECISION_ITEMS: Record<TuiApprovalDecision, SelectItem> = {
   },
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function parseDecision(value: unknown): TuiApprovalDecision | null {
   return value === "allow-once" || value === "allow-always" || value === "deny" ? value : null;
 }
@@ -154,13 +151,15 @@ function parseSeverity(value: unknown): TuiPluginApproval["request"]["severity"]
 
 /** Parses the gateway event/list shape used for pending plugin approvals. */
 function parseTuiPluginApproval(payload: unknown): TuiPluginApproval | null {
-  if (!isRecord(payload) || !isRecord(payload.request)) {
+  const record = asOptionalObjectRecord(payload);
+  const request = asOptionalObjectRecord(record?.request);
+  if (!record || !request) {
     return null;
   }
-  const id = typeof payload.id === "string" ? payload.id.trim() : "";
-  const title = typeof payload.request.title === "string" ? payload.request.title.trim() : "";
-  const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
-  const expiresAtMs = typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : 0;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  const title = typeof request.title === "string" ? request.title.trim() : "";
+  const createdAtMs = typeof record.createdAtMs === "number" ? record.createdAtMs : 0;
+  const expiresAtMs = typeof record.expiresAtMs === "number" ? record.expiresAtMs : 0;
   if (!id || !title || !createdAtMs || !expiresAtMs) {
     return null;
   }
@@ -168,15 +167,13 @@ function parseTuiPluginApproval(payload: unknown): TuiPluginApproval | null {
     id,
     request: {
       title,
-      description:
-        typeof payload.request.description === "string" ? payload.request.description : null,
-      pluginId: typeof payload.request.pluginId === "string" ? payload.request.pluginId : null,
-      severity: parseSeverity(payload.request.severity),
-      toolName: typeof payload.request.toolName === "string" ? payload.request.toolName : null,
-      allowedDecisions: parseAllowedDecisions(payload.request.allowedDecisions),
-      agentId: typeof payload.request.agentId === "string" ? payload.request.agentId : null,
-      sessionKey:
-        typeof payload.request.sessionKey === "string" ? payload.request.sessionKey : null,
+      description: typeof request.description === "string" ? request.description : null,
+      pluginId: typeof request.pluginId === "string" ? request.pluginId : null,
+      severity: parseSeverity(request.severity),
+      toolName: typeof request.toolName === "string" ? request.toolName : null,
+      allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
+      agentId: typeof request.agentId === "string" ? request.agentId : null,
+      sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
     },
     createdAtMs,
     expiresAtMs,
@@ -184,10 +181,11 @@ function parseTuiPluginApproval(payload: unknown): TuiPluginApproval | null {
 }
 
 function parseResolvedApprovalId(payload: unknown): string | null {
-  if (!isRecord(payload) || typeof payload.id !== "string") {
+  const id = asOptionalObjectRecord(payload)?.id;
+  if (typeof id !== "string") {
     return null;
   }
-  return payload.id.trim() || null;
+  return id.trim() || null;
 }
 
 function decisionLabel(decision: TuiApprovalDecision): string {

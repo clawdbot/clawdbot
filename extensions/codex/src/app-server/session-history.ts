@@ -11,22 +11,27 @@ import {
   parseSessionEntries,
 } from "openclaw/plugin-sdk/agent-sessions";
 import {
-  listSessionEntries,
+  getSessionEntry,
   parseSqliteSessionFileMarker,
+  resolveTranscriptSessionKeyBySessionId,
   type SqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  readSessionTranscriptEvents,
+  type SessionTranscriptTargetParams,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
 function isMissingFileError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
 
-type CodexMirroredSessionHistoryTarget = {
+export type CodexMirroredSessionHistoryTarget = {
   agentId?: string;
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: Partial<SessionTranscriptTargetParams>;
 };
 
 /** Returns sanitized session-context messages for a Codex mirrored session file. */
@@ -77,6 +82,26 @@ export async function readCodexMirroredSessionHistoryMessages(
 async function readCodexMirroredSessionEntries(
   target: CodexMirroredSessionHistoryTarget,
 ): Promise<SessionEntry[]> {
+  if (target.sessionTarget) {
+    const { agentId, sessionId, sessionKey, storePath } = target.sessionTarget;
+    if (
+      !agentId ||
+      !sessionId ||
+      !sessionKey ||
+      !storePath ||
+      sessionId !== target.sessionId ||
+      (target.agentId !== undefined && agentId !== target.agentId) ||
+      (target.sessionKey !== undefined && sessionKey !== target.sessionKey)
+    ) {
+      return [];
+    }
+    return (await readSessionTranscriptEvents({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+    })) as SessionEntry[];
+  }
   const sqliteMarker = parseSqliteSessionFileMarker(target.sessionFile);
   if (sqliteMarker) {
     if (
@@ -105,20 +130,19 @@ function resolveSqliteMarkerSessionKey(
 ): string | undefined {
   const explicitSessionKey = target.sessionKey?.trim();
   if (explicitSessionKey) {
-    return explicitSessionKey;
+    // The SDK exact-entry accessor uses a read-only database handle.
+    const explicitEntry = getSessionEntry({
+      agentId: marker.agentId,
+      sessionKey: explicitSessionKey,
+      storePath: marker.storePath,
+    });
+    if (explicitEntry) {
+      return explicitEntry.sessionId === marker.sessionId ? explicitSessionKey : undefined;
+    }
   }
-  const entries = listSessionEntries({
+  return resolveTranscriptSessionKeyBySessionId({
     agentId: marker.agentId,
-    readOnly: true,
+    sessionId: marker.sessionId,
     storePath: marker.storePath,
   });
-  const exactEntry = entries.find(({ entry }) => {
-    return entry.sessionId === marker.sessionId && entry.sessionFile === target.sessionFile;
-  });
-  const sessionEntry =
-    exactEntry ??
-    entries.find(({ entry }) => {
-      return entry.sessionId === marker.sessionId;
-    });
-  return sessionEntry?.sessionKey;
 }

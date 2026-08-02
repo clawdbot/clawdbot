@@ -19,6 +19,7 @@ import {
   tableHasColumn,
   tablePrimaryKeyColumns,
 } from "./openclaw-state-db-schema-helpers.js";
+import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 
 export function dropLegacyStateTables(db: DatabaseSync): void {
@@ -147,15 +148,19 @@ export function markCurrentStateSchemaVersion(
 export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
   operatorApprovalMigration.assertCanonicalOperatorApprovalKinds(db, pathname);
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
+    if (canRepairAgentDatabasesPrimaryKey(db)) {
+      throw new OpenClawStateDatabaseSchemaMigrationRequiredError(
+        "agent-databases-composite-primary-key",
+        pathname,
+      );
+    }
     throw new Error(
-      `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
+      `OpenClaw state database ${pathname} has a noncanonical agent database registry schema that cannot be repaired automatically; restore the canonical agent_databases shape before retrying.`,
     );
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     if (canRepairLegacyAuditEventsSchema(db)) {
-      throw new Error(
-        `OpenClaw state database ${pathname} has a legacy audit event schema; run openclaw doctor --fix to migrate it.`,
-      );
+      throw new OpenClawStateDatabaseSchemaMigrationRequiredError("audit-events-v2", pathname);
     }
     throw new Error(
       `OpenClaw state database ${pathname} has a noncanonical audit event schema that cannot be repaired automatically; restore the canonical audit_events shape before retrying.`,
@@ -171,25 +176,36 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
   }
   const db = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {
-    const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
-    const userVersion = readSqliteUserVersion(db);
-    if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
-      migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
-    }
-    if (!hasCanonicalAuditEventsSchema(db)) {
-      migrations.push({ kind: "audit-events-v2", path: pathname });
-    }
-    if (tableExists(db, "audit_events") && userVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
-      migrations.push({ kind: "strict-tables-v3", path: pathname });
-    }
-    if (sessionWatchMigration.needsSessionWatchCursorProvenanceMigration(db, userVersion)) {
-      migrations.push({ kind: "session-watch-cursor-provenance-v4", path: pathname });
-    }
-    migrations.push(
-      ...operatorApprovalMigration.detectOperatorApprovalSchemaMigration(db, pathname),
-    );
-    return migrations;
+    return detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname);
   } finally {
     db.close();
   }
+}
+
+/**
+ * Detect migrations against a caller-owned handle.
+ *
+ * Registry discovery runs this per lookup while already holding a state
+ * connection; opening a second one there made reads scale with row count.
+ */
+export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
+  db: DatabaseSync,
+  pathname: string,
+): OpenClawStateDatabaseSchemaMigration[] {
+  const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
+  const userVersion = readSqliteUserVersion(db);
+  if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
+    migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
+  }
+  if (!hasCanonicalAuditEventsSchema(db)) {
+    migrations.push({ kind: "audit-events-v2", path: pathname });
+  }
+  if (tableExists(db, "audit_events") && userVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
+    migrations.push({ kind: "strict-tables-v3", path: pathname });
+  }
+  if (sessionWatchMigration.needsSessionWatchCursorProvenanceMigration(db, userVersion)) {
+    migrations.push({ kind: "session-watch-cursor-provenance-v4", path: pathname });
+  }
+  migrations.push(...operatorApprovalMigration.detectOperatorApprovalSchemaMigration(db, pathname));
+  return migrations;
 }

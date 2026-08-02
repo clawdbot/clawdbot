@@ -1,5 +1,6 @@
 // Control UI module implements session display behavior.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { t } from "../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -79,13 +80,25 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
+/** Machine identity of a typed session, derived from the session key. */
+type SessionTypedKind = "subagent" | "automation";
+
 /** Parsed type / context extracted from a session key. */
 type SessionKeyInfo = {
-  /** Prefix for typed sessions (Subagent:/Cron:). Empty for others. */
+  /** Typed-session identity; display branching keys off this, not label text. */
+  kind?: SessionTypedKind;
+  /** Catalog-backed prefix for typed sessions. Empty for others. */
   prefix: string;
   /** Human-readable fallback when no label / displayName is available. */
   fallbackName: string;
 };
+
+/** Typed-session prefixes come from the i18n catalog (RFC 0026). */
+function typedSessionPrefix(kind: SessionTypedKind): string {
+  return kind === "subagent"
+    ? t("sessionsView.subagentPrefix")
+    : t("sessionsView.automationPrefix");
+}
 
 type SessionDisplayRow = {
   label?: string;
@@ -109,18 +122,21 @@ function parseSessionKey(key: string): SessionKeyInfo {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   // Main session.
-  if (key === "main" || key === "agent:main:main") {
+  if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {
     return { prefix: "", fallbackName: "Main Thread" };
   }
 
   // Subagent.
   if (key.includes(":subagent:")) {
-    return { prefix: "Subagent:", fallbackName: "Subagent:" };
+    const prefix = typedSessionPrefix("subagent");
+    return { kind: "subagent", prefix, fallbackName: prefix };
   }
 
-  // Cron job.
+  // Automation (cron) job. Session keys keep the `cron:` prefix; only the
+  // display strings use the Automations feature name.
   if (normalized.startsWith("cron:") || key.includes(":cron:")) {
-    return { prefix: "Cron:", fallbackName: "Cron Job:" };
+    const prefix = typedSessionPrefix("automation");
+    return { kind: "automation", prefix, fallbackName: prefix };
   }
 
   // Direct chat: agent:<x>:<channel>:direct:<id>. Never render the raw peer
@@ -182,14 +198,21 @@ export function resolveSessionDisplayName(
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
   const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
-  const { prefix, fallbackName } = parseSessionKey(key);
+  const { kind, prefix, fallbackName } = parseSessionKey(key);
 
-  const applyTypedPrefix = (name: string): string => {
-    if (!prefix) {
-      return name;
+  const applyTypedPrefix = (rawName: string): string => {
+    if (!kind || !prefix) {
+      return rawName;
     }
+    // Persisted automation sessions carry pre-rename "Cron:"/"Cron Job:"
+    // labels; strip them so the renamed prefix does not double up as
+    // "Automation: Cron: …".
+    const name =
+      kind === "automation"
+        ? rawName.replace(/^cron(\s+job)?:\s*/i, "").trim() || rawName
+        : rawName;
     const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
-    if (prefix === "Subagent:" && options.includeSubagentPrefix === false) {
+    if (kind === "subagent" && options.includeSubagentPrefix === false) {
       return name.replace(prefixPattern, "").trim() || fallbackName;
     }
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;

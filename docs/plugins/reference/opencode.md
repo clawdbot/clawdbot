@@ -12,7 +12,7 @@ Adds OpenCode model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/opencode-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/opencode-provider`
 
 ## Surface
 
@@ -28,8 +28,10 @@ browsing through the official `opencode --pure db ... --format json` and
 `opencode --pure export` commands. Local rows also offer **Continue**, which
 creates an OpenClaw session whose first turn resumes the native OpenCode session
 through ACP. OpenCode retains the full server-side model context, and the catalog
-viewer continues to show that history. The new OpenClaw transcript starts empty
-and records only subsequent turns. Paired-node rows remain view-only.
+viewer continues to show that history. OpenClaw also imports the recent native
+history into the adopted session transcript. Very long transcripts import only
+their most recent 200 items using a 512 KiB serialized-item budget. Paired-node
+rows remain view-only.
 
 The restricted environment and `--pure` mode prevent catalog browsing from
 loading project plugins or inheriting unrelated Gateway credentials.

@@ -66,6 +66,7 @@ describe("chat selection popup", () => {
 
     const popup = document.body.querySelector(".chat-selection-popup");
     expect(popup).not.toBeNull();
+    expect(popup?.getAttribute("aria-label")).toBe("Selection actions");
     const buttons = [...(popup?.querySelectorAll("button") ?? [])];
     expect(buttons.map((button) => button.textContent)).toEqual([
       "More details",

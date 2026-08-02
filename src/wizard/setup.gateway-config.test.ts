@@ -1,7 +1,6 @@
 // Setup gateway config tests cover gateway prompt choices and config output.
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
@@ -104,11 +103,7 @@ describe("configureGatewayForSetup", () => {
     const result = await runGatewayConfig();
 
     expect(result.settings.gatewayToken).toBe("generated-token");
-    expect(result.nextConfig.gateway?.nodes?.commands?.deny).toEqual(
-      DEFAULT_DANGEROUS_NODE_COMMANDS,
-    );
-    expect(result.nextConfig.gateway?.nodes?.commands?.deny).not.toContain("screen.snapshot");
-    expect(result.nextConfig.gateway?.nodes?.commands?.deny).toContain("screen.record");
+    expect(result.nextConfig.gateway?.nodes?.commands).toBeUndefined();
   });
 
   it.each(["1e3", "0x1000"])("rejects loose gateway port input: %s", async (port) => {

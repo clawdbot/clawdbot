@@ -137,8 +137,8 @@ function loadExternalChannelSecretContractFromRecord(
   } catch (error) {
     if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
       const detail = error instanceof Error ? error.message : String(error);
-      process.stderr.write(
-        `[channel-contract-api] failed to load ${record.id} contract ${safePath}: ${detail}\n`,
+      console.warn(
+        `[channel-contract-api] failed to load ${record.id} contract ${safePath}: ${detail}`,
       );
     }
   }

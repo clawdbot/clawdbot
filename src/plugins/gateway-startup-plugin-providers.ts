@@ -12,7 +12,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
 import { listRegisteredEmbeddingProviders } from "./embedding-providers.js";
 import type {
@@ -84,9 +84,10 @@ type ManifestModelProviderLookup = {
 
 function buildManifestModelProviderLookup(
   manifestRegistry: PluginManifestRegistry,
+  config: OpenClawConfig,
 ): ManifestModelProviderLookup {
   const modelApis = new Map(
-    planManifestModelCatalogRows({ registry: manifestRegistry }).rows.flatMap((row) =>
+    planEffectiveModelCatalogRows({ registry: manifestRegistry, config }).rows.flatMap((row) =>
       row.api ? [[row.mergeKey, row.api] as const] : [],
     ),
   );
@@ -103,7 +104,7 @@ export function collectConfiguredAgentModelProviderIds(
   manifestRegistry: PluginManifestRegistry,
 ): ReadonlySet<string> {
   const modelIdsByProvider = new Map<string, Set<string>>();
-  const manifestModelProviders = buildManifestModelProviderLookup(manifestRegistry);
+  const manifestModelProviders = buildManifestModelProviderLookup(manifestRegistry, config);
   const addModelProviderRefs = (value: unknown) => {
     for (const { providerId, modelId } of listModelProviderRefParts(value)) {
       const modelIds = modelIdsByProvider.get(providerId) ?? new Set<string>();

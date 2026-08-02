@@ -1,12 +1,25 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+import org.gradle.process.ExecOperations
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Properties
+import javax.inject.Inject
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
+val openClawRepositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
+val canvasA2uiAssetsDir = layout.buildDirectory.dir("generated/canvasA2uiAssets")
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
@@ -118,6 +131,56 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.ksp)
 }
+
+abstract class StageCanvasA2uiTask
+  @Inject
+  constructor(
+    private val execOperations: ExecOperations,
+  ) : DefaultTask() {
+    @get:Internal abstract val repoRoot: DirectoryProperty
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sourceFiles: ConfigurableFileCollection
+
+    @get:OutputDirectory abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction
+    fun stage() {
+      val root = repoRoot.get().asFile
+      execOperations.exec {
+        workingDir(root)
+        commandLine(
+          "node",
+          "scripts/sync-native-a2ui.mjs",
+          "--write",
+          "--output",
+          outputDirectory
+            .get()
+            .dir("CanvasA2UI")
+            .asFile.absolutePath,
+        )
+      }
+    }
+  }
+
+val stageCanvasA2ui =
+  tasks.register<StageCanvasA2uiTask>("stageCanvasA2ui") {
+    group = "build"
+    description = "Stages the plugin-owned Canvas A2UI renderer for native apps."
+    repoRoot.set(openClawRepositoryRoot)
+    sourceFiles.from(
+      openClawRepositoryRoot.resolve("package.json"),
+      openClawRepositoryRoot.resolve("pnpm-lock.yaml"),
+      openClawRepositoryRoot.resolve("scripts/bundle-a2ui.mjs"),
+      openClawRepositoryRoot.resolve("scripts/sync-native-a2ui.mjs"),
+      openClawRepositoryRoot.resolve("extensions/canvas/package.json"),
+      openClawRepositoryRoot.resolve("extensions/canvas/scripts/bundle-a2ui.mjs"),
+      openClawRepositoryRoot.resolve("extensions/canvas/src/host/a2ui/index.html"),
+    )
+    sourceFiles.from(openClawRepositoryRoot.resolve("extensions/canvas/src/host/a2ui-app"))
+    outputDirectory.set(canvasA2uiAssetsDir)
+  }
 
 ksp {
   arg("room.schemaLocation", "$projectDir/schemas")
@@ -269,6 +332,10 @@ android {
 
 androidComponents {
   onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(
+      stageCanvasA2ui,
+      StageCanvasA2uiTask::outputDirectory,
+    )
     variant.outputs
       .filterIsInstance<VariantOutputImpl>()
       .forEach { output ->
@@ -318,6 +385,7 @@ dependencies {
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.compose.material3)
+  implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
   // material-icons-extended pulled in full icon set (~20 MB DEX). Only ~18 icons used.
   // R8 will tree-shake unused icons when minify is enabled on release builds.
   implementation(libs.androidx.compose.material.icons.extended)
@@ -336,6 +404,10 @@ dependencies {
   ksp(libs.androidx.room.compiler)
   implementation(libs.androidx.exifinterface)
   implementation(libs.okhttp)
+  implementation(libs.media3.datasource.okhttp)
+  implementation(libs.media3.exoplayer)
+  implementation(libs.media3.session)
+  implementation(libs.media3.ui)
   implementation(libs.bcprov)
   implementation(libs.coil.compose)
   implementation(libs.coil.svg)
@@ -362,6 +434,7 @@ dependencies {
   testImplementation(libs.kotest.assertions.core)
   testImplementation(libs.mockwebserver)
   testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.compose.ui.test.junit4)
   testRuntimeOnly(libs.junit.vintage.engine)
 
   androidTestImplementation(libs.androidx.test.ext.junit)

@@ -73,6 +73,8 @@ export type ChannelCapabilitiesDiagnostics = {
 
 type ChannelAdapterCallback<T extends (...args: never[]) => unknown> = T;
 
+export type ChannelAccountLinkState = "linked" | "not-linked" | "unknown";
+
 export type ChannelConfigAdapter<ResolvedAccount> = {
   listAccountIds: (cfg: OpenClawConfig) => string[];
   resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
@@ -91,7 +93,16 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
   isConfigured?: ChannelAdapterCallback<
     (account: ResolvedAccount, cfg: OpenClawConfig) => boolean | Promise<boolean>
   >;
+  isLinked?: ChannelAdapterCallback<
+    (
+      account: ResolvedAccount,
+      cfg: OpenClawConfig,
+    ) => ChannelAccountLinkState | Promise<ChannelAccountLinkState>
+  >;
   unconfiguredReason?: ChannelAdapterCallback<
+    (account: ResolvedAccount, cfg: OpenClawConfig) => string
+  >;
+  unlinkedReason?: ChannelAdapterCallback<
     (account: ResolvedAccount, cfg: OpenClawConfig) => string
   >;
   describeAccount?: ChannelAdapterCallback<
@@ -203,6 +214,8 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   log?: ChannelLogSink;
   getStatus: () => ChannelAccountSnapshot;
   setStatus: (next: ChannelAccountSnapshot) => void;
+  /** Clear cached outbound directory lookups after the channel accepts newer directory data. */
+  invalidateDirectoryCache?: () => void;
   /**
    * Optional channel runtime helpers for external channel plugins.
    *

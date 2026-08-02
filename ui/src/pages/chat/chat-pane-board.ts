@@ -1,38 +1,158 @@
 import {
   GATEWAY_SERVER_CAPS,
+  type SessionObserverDigest,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { t } from "../../i18n/index.ts";
+import {
   acquireBoardProviderForSession,
   boardProviderCacheKey,
   boardProviderForSession,
-  buildAgentMainSessionKey,
-  hasOperatorApprovalsAccess,
-  hasOperatorWriteAccess,
-  isGatewayCapabilityAdvertised,
-  isGatewayMethodAdvertised,
-  isWorkboardEnabledInConfigSnapshot,
-  loadSettings,
-  normalizeSessionKeyForUiComparison,
-  patchSettings,
-  renderChatResizableDivider,
-  resolveAgentIdFromSessionKey,
-  resolveSessionKey,
-  t,
-  updateBoardSessionView,
   type BoardCommandEvent,
   type BoardProvider,
-  type BoardSessionView,
-  type BoardTab,
-  type BoardViewSnapshot,
-  type SessionObserverDigest,
-  type WorkboardCardChipProps,
-} from "./chat-pane-deps.ts";
+} from "../../lib/board/provider.ts";
+import { updateBoardSessionView, type BoardSessionView } from "../../lib/board/settings.ts";
+import type { BoardTab } from "../../lib/board/types.ts";
+import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import {
+  isGatewayCapabilityAdvertised,
+  isGatewayMethodAdvertised,
+} from "../../lib/gateway-methods.ts";
+import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import {
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+  normalizeSessionKeyForUiComparison,
+  resolveAgentIdFromSessionKey,
+  resolveUiGlobalAliasAgentId,
+} from "../../lib/sessions/session-key.ts";
+import type { WorkboardCardChipProps } from "./board-session-surface.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import {
   boardChatDockLayout,
   type ResolvedBoardView,
   type VisibleBoardDock,
 } from "./chat-pane-shared.ts";
+import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
+import {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  detachPanelToColumn,
+  fitSidebarLayout,
+  openSlot,
+  resizeColumn,
+  type SidebarLayout,
+  type SidebarSide,
+} from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
+  protected commitSidebarLayout(layout: SidebarLayout): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const fitted =
+      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
+        ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
+        : layout;
+    state.updateSidebarLayout(fitted);
+  }
+
+  protected commitSidebarPanelMove(
+    layout: SidebarLayout,
+    panelId: string,
+    targetSide: SidebarSide,
+    board: ResolvedBoardView,
+  ): void {
+    const panel = layout.columns
+      .flatMap((column) => column.panels)
+      .find((candidate) => candidate.id === panelId);
+    if (panel?.slot !== "chat" || board.dock === targetSide) {
+      this.commitSidebarLayout(layout);
+      this.commitSidebarMovedPanelActive(panelId);
+      return;
+    }
+    if (!board.provider.canMutate || board.activeTabReadOnly) {
+      return;
+    }
+    this.commitSidebarLayout(layout);
+    this.commitSidebarMovedPanelActive(panelId);
+    this.handleBoardDockChange(targetSide);
+  }
+
+  // A move activates the panel in its destination column, but the collapsed layout
+  // reads a separate persisted selection. Without this the narrow view foregrounds
+  // a stale panel after a drag, and the stale choice survives reload.
+  private commitSidebarMovedPanelActive(panelId: string): void {
+    this.state?.updateSidebarActivePanel(panelId);
+  }
+
+  protected commitSidebarColumnResize(
+    renderedLayout: SidebarLayout,
+    columnId: string,
+    width: number,
+  ): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const resizedProjection = resizeColumn(renderedLayout, columnId, width);
+    const fittedProjection =
+      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
+        ? (fitSidebarLayout(resizedProjection, this.paneWidth) ?? resizedProjection)
+        : resizedProjection;
+    const fittedWidth = fittedProjection.columns.find((column) => column.id === columnId)?.width;
+    if (
+      fittedWidth !== undefined &&
+      state.sidebarLayout.columns.some((column) => column.id === columnId)
+    ) {
+      state.updateSidebarLayout(resizeColumn(state.sidebarLayout, columnId, fittedWidth));
+      return;
+    }
+    this.commitSidebarLayout(fittedProjection);
+  }
+
+  protected syncChatSidebarForDock(dock: BoardTab["chatDock"]): boolean {
+    const state = this.state;
+    if (!state) {
+      return false;
+    }
+    if (dock !== "left" && dock !== "right") {
+      return true;
+    }
+    const beforeOpen = state.sidebarLayout;
+    let layout = openSlot(beforeOpen, "chat", dock);
+    const chatColumn = layout.columns.find((column) =>
+      column.panels.some((panel) => panel.slot === "chat"),
+    );
+    if (chatColumn && chatColumn.side !== dock) {
+      const panel = chatColumn.panels.find((candidate) => candidate.slot === "chat");
+      if (panel) {
+        layout = detachPanelToColumn(layout, panel.id, dock, 0);
+      }
+    }
+    const chatPanel = layout.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === "chat");
+    if (chatPanel) {
+      layout = activatePanel(layout, chatPanel.id);
+    }
+    const newColumn = layout.columns.find(
+      (column) => !beforeOpen.columns.some((current) => current.id === column.id),
+    );
+    const fitted =
+      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
+        ? (fitSidebarLayout(layout, this.paneWidth, newColumn?.id) ?? layout)
+        : layout;
+    state.updateSidebarLayout(fitted);
+    if (chatPanel) {
+      state.updateSidebarActivePanel(chatPanel.id);
+    }
+    return true;
+  }
+
   protected resolveBoardProvider(): BoardProvider {
     const sessionKey = resolveSessionKey(
       this.state?.sessionKey ?? this.sessionKey,
@@ -74,30 +194,17 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           sessionKey: key,
         };
       } else {
-        boardProviderForSession(
-          key,
-          client,
-          true,
-          gateway.phase === "connected",
+        this.boardProviderLease.update(client, gateway.phase === "connected", {
           canPinWidgets,
           canPinMcpApps,
           canMutate,
           canGrant,
-        );
+        });
       }
       return this.boardProviderLease.provider;
     }
     this.releaseBoardProviderLease();
-    return boardProviderForSession(
-      sessionKey,
-      client,
-      available,
-      gateway?.phase === "connected",
-      canPinWidgets,
-      canPinMcpApps,
-      canMutate,
-      canGrant,
-    );
+    return boardProviderForSession(sessionKey, available);
   }
 
   protected releaseBoardProviderLease(): void {
@@ -137,6 +244,27 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     );
     const normalized = normalizeSessionKeyForUiComparison(resolved);
     return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
+  }
+
+  protected resolveObserverDigestHistoryKey(snapshotSessionKey = "", agentId?: string): string {
+    const sessionKey = this.resolveBoardSessionKey(snapshotSessionKey);
+    const globalAliasAgentId = resolveUiGlobalAliasAgentId(
+      {
+        agentsList: this.context?.agents?.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      },
+      sessionKey,
+    );
+    if (sessionKey !== "global" && !globalAliasAgentId) {
+      return sessionKey;
+    }
+    const owner = normalizeAgentId(
+      agentId ??
+        globalAliasAgentId ??
+        this.context?.agentSelection?.state.selectedId ??
+        this.state?.assistantAgentId,
+    );
+    return `agent:${owner}:global`;
   }
 
   protected refreshSwarmRoster(): void {
@@ -198,7 +326,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         return;
       }
       const base = this.resolveBoardProvider().snapshot$.value;
-      const sessionKey = this.resolveBoardSessionKey(base.sessionKey);
+      const sessionKey = this.resolveObserverDigestHistoryKey(base.sessionKey);
       this.builtinBoardSnapshotBase = base;
       this.builtinBoardSnapshot = withBuiltinDashboardWidgets(
         base,
@@ -209,7 +337,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected recordObserverDigest(digest: SessionObserverDigest): void {
-    const sessionKey = this.resolveBoardSessionKey(digest.sessionKey);
+    if (
+      normalizeSessionKeyForUiComparison(digest.sessionKey) === "global" &&
+      !digest.agentId?.trim()
+    ) {
+      return;
+    }
+    const sessionKey = this.resolveObserverDigestHistoryKey(digest.sessionKey, digest.agentId);
     if (this.observerDigestHistory.record({ ...digest, sessionKey })) {
       this.refreshBuiltinBoardSnapshot();
     }
@@ -249,7 +383,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       provider,
       snapshot,
       hasBoard,
-      face: hasBoard ? (saved?.face ?? "chat") : "chat",
+      face: hasBoard ? this.routeFace : "chat",
       activeTabId,
       activeTabReadOnly,
       dock,
@@ -258,7 +392,17 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     };
   }
 
-  protected persistBoardSessionView(patch: Partial<BoardSessionView>): void {
+  protected persistBoardSessionView(
+    patch: Partial<BoardSessionView> & { face?: "chat" | "dashboard" },
+  ): void {
+    if (patch.face) {
+      this.onFaceChange?.(patch.face);
+    }
+    const persistedPatch = { ...patch };
+    delete persistedPatch.face;
+    if (Object.keys(persistedPatch).length === 0) {
+      return;
+    }
     const board = this.resolveBoardView();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
     if (!sessionKey) {
@@ -271,7 +415,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       ...persistedSettings.boardSessionViews,
     };
     const next = patchSettings({
-      boardSessionViews: updateBoardSessionView(boardSessionViews, sessionKey, patch),
+      boardSessionViews: updateBoardSessionView(boardSessionViews, sessionKey, persistedPatch),
     });
     if (this.state) {
       this.state.settings = next;
@@ -313,6 +457,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return;
     }
     const reopenDock = command.dock === "hidden" ? board.reopenDock : command.dock;
+    if (!this.syncChatSidebarForDock(command.dock)) {
+      return;
+    }
     this.persistBoardReopenDock(board, reopenDock);
     this.boardCommandDock = {
       sessionKey,
@@ -330,6 +477,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return;
     }
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    if (!this.syncChatSidebarForDock(dock)) {
+      return;
+    }
     this.boardCommandDock = null;
     const reopenDock = dock === "hidden" ? board.reopenDock : dock;
     this.lastVisibleBoardDock.set(`${sessionKey}:${board.activeTabId}`, reopenDock);
@@ -371,6 +521,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     dock: VisibleBoardDock,
     event: CustomEvent<{ splitRatio: number }>,
   ): void {
+    if (dock !== "bottom") {
+      return;
+    }
     const divider = event.currentTarget as HTMLElement | null;
     const previous = divider?.previousElementSibling?.getBoundingClientRect();
     const next = divider?.nextElementSibling?.getBoundingClientRect();
@@ -381,25 +534,15 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (total <= 0) {
       return;
     }
-    if (dock === "bottom") {
-      this.boardChatDockSize = {
-        ...this.boardChatDockSize,
-        height: Math.min(
-          boardChatDockLayout.maxHeight(),
-          Math.max(boardChatDockLayout.minHeight, total * (1 - event.detail.splitRatio)),
-        ),
-      };
-    } else {
-      const dockRatio = dock === "left" ? event.detail.splitRatio : 1 - event.detail.splitRatio;
-      this.boardChatDockSize = {
-        ...this.boardChatDockSize,
-        width: Math.min(
-          boardChatDockLayout.maxWidth(),
-          Math.max(boardChatDockLayout.minWidth, total * dockRatio),
-        ),
-      };
-    }
+    this.boardChatDockSize = {
+      ...this.boardChatDockSize,
+      height: Math.min(
+        boardChatDockLayout.maxHeight(),
+        Math.max(boardChatDockLayout.minHeight, total * (1 - event.detail.splitRatio)),
+      ),
+    };
     boardChatDockLayout.save({
+      ...boardChatDockLayout.load(),
       ...this.boardChatDockSize,
       open: true,
       dock,

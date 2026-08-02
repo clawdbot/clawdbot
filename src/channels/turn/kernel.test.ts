@@ -51,6 +51,7 @@ const getGlobalHookRunner = vi.hoisted(() => vi.fn());
 const createMessageSentEmitter = vi.hoisted(() =>
   vi.fn(() => ({ emitMessageSent, hasMessageSentHooks: true })),
 );
+const readRecentUserAssistantTextForSession = vi.hoisted(() => vi.fn());
 
 vi.mock("../../auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
   const actual =
@@ -99,6 +100,10 @@ vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/hook-runner-global.js")>();
   return { ...actual, getGlobalHookRunner };
 });
+
+vi.mock("../../config/sessions/transcript.js", () => ({
+  readRecentUserAssistantTextForSession,
+}));
 
 const cfg = {} as OpenClawConfig;
 
@@ -260,6 +265,7 @@ describe("channel turn kernel", () => {
       hasMessageSentHooks: true,
     }));
     getGlobalHookRunner.mockReturnValue(null);
+    readRecentUserAssistantTextForSession.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -1420,6 +1426,98 @@ describe("channel turn kernel", () => {
     expect(recordRequest.sessionKey).toBe("agent:main:test:peer");
     expect(recordRequest.storePath).toBe("/tmp/sessions.json");
     expect(deliver).toHaveBeenCalledWith({ text: "reply" }, { kind: "final" });
+  });
+
+  it("can record a target session without changing the command dispatch session", async () => {
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession();
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+    const commandSessionKey = "agent:main:command:telegram:42";
+    const targetSessionKey = "agent:main:telegram:group:42:topic:7";
+
+    const result = await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "telegram",
+      agentId: "main",
+      routeSessionKey: commandSessionKey,
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({
+        AgentId: "main",
+        SessionKey: commandSessionKey,
+        CommandTargetSessionKey: targetSessionKey,
+        SessionTranscriptContext: { historyLimit: 1 },
+      }),
+      recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: { deliver: async () => ({ visibleReplySent: true }) },
+      record: { sessionKey: targetSessionKey },
+      log,
+    });
+
+    expectDispatched(result);
+    expect(result.routeSessionKey).toBe(commandSessionKey);
+    expect(result.ctxPayload.SessionKey).toBe(commandSessionKey);
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: targetSessionKey }),
+    );
+    expect(readRecentUserAssistantTextForSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: targetSessionKey,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+    const recordEvents = log.mock.calls
+      .map(([event]) => event as TurnLogEvent)
+      .filter((event) => event.stage === "record");
+    expect(recordEvents).toEqual([
+      expect.objectContaining({ event: "start", sessionKey: targetSessionKey }),
+      expect.objectContaining({ event: "done", sessionKey: targetSessionKey }),
+    ]);
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({ SessionKey: commandSessionKey }),
+      }),
+    );
+  });
+
+  it("rejects an empty explicit record session before recording or dispatch", async () => {
+    const recordInboundSession = createRecordInboundSession();
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "telegram",
+        agentId: "main",
+        routeSessionKey: "agent:main:command:telegram:42",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx(),
+        recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher,
+        delivery: { deliver: async () => ({ visibleReplySent: true }) },
+        record: { sessionKey: "  " },
+      }),
+    ).rejects.toThrow("Channel turn record.sessionKey must be non-empty.");
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("rejects surrounding whitespace in an explicit record session", async () => {
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "telegram",
+        agentId: "main",
+        routeSessionKey: "agent:main:command:telegram:42",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx(),
+        recordInboundSession: createRecordInboundSession(),
+        dispatchReplyWithBufferedBlockDispatcher: createDispatch(),
+        delivery: { deliver: async () => ({ visibleReplySent: true }) },
+        record: { sessionKey: " agent:main:telegram:group:42 " },
+      }),
+    ).rejects.toThrow("Channel turn record.sessionKey must not include surrounding whitespace.");
   });
 
   it("runs prepared dispatches after recording session metadata", async () => {

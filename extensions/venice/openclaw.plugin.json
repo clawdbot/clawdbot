@@ -43,6 +43,7 @@
       "venice": {
         "baseUrl": "https://api.venice.ai/api/v1",
         "api": "openai-completions",
+        "defaultModel": "zai-org-glm-4.7",
         "models": [
           {
             "id": "zai-org-glm-5-2",
@@ -197,7 +198,8 @@
             "maxTokens": 128000,
             "cost": { "input": 12, "output": 60, "cacheRead": 1.2, "cacheWrite": 15 },
             "compat": {
-              "supportsUsageInStreaming": false
+              "supportsUsageInStreaming": false,
+              "codeMode": "capable"
             }
           },
           {
@@ -209,7 +211,8 @@
             "maxTokens": 128000,
             "cost": { "input": 6, "output": 30, "cacheRead": 0.6, "cacheWrite": 7.5 },
             "compat": {
-              "supportsUsageInStreaming": false
+              "supportsUsageInStreaming": false,
+              "codeMode": "capable"
             }
           },
           {

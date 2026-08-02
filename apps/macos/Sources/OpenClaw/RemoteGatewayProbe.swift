@@ -167,7 +167,7 @@ enum RemoteGatewayProbe {
                 return .failed("Set a gateway URL first")
             }
             guard self.isValidWsUrl(trimmedUrl) else {
-                return .failed("Gateway URL must use wss:// for remote hosts (ws:// only for localhost)")
+                return .failed(GatewayRemoteConfig.directGatewayUrlValidationMessage)
             }
         } else {
             let trimmedTarget = settings.target.trimmingCharacters(in: .whitespacesAndNewlines)

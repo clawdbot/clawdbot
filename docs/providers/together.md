@@ -35,7 +35,7 @@ OpenClaw bundles it as the `together` provider.
       agents: {
         defaults: {
           model: {
-            primary: "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            primary: "together/moonshotai/Kimi-K2.6",
           },
         },
       },
@@ -54,8 +54,8 @@ openclaw onboard --non-interactive \
 ```
 
 <Note>
-Onboarding sets `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` as the
-default model.
+Onboarding sets Together's recommended chat model,
+`together/moonshotai/Kimi-K2.6`, as the default.
 </Note>
 
 ## Built-in catalog
@@ -64,8 +64,8 @@ Cost is USD per million tokens.
 
 | Model ref                                          | Name                         | Input       | Context | Max output | Cost (in/out) | Notes           |
 | -------------------------------------------------- | ---------------------------- | ----------- | ------- | ---------- | ------------- | --------------- |
-| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | Llama 3.3 70B Instruct Turbo | text        | 131,072 | 8,192      | 1.04 / 1.04   | Default model   |
-| `together/moonshotai/Kimi-K2.6`                    | Kimi K2.6 FP4                | text, image | 262,144 | 32,768     | 1.20 / 4.50   | Reasoning model |
+| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | Llama 3.3 70B Instruct Turbo | text        | 131,072 | 8,192      | 1.04 / 1.04   | General model   |
+| `together/moonshotai/Kimi-K2.6`                    | Kimi K2.6 FP4                | text, image | 262,144 | 32,768     | 1.20 / 4.50   | Default model   |
 | `together/deepseek-ai/DeepSeek-V4-Pro`             | DeepSeek V4 Pro              | text        | 512,000 | 384,000    | 1.74 / 3.48   | Reasoning model |
 | `together/zai-org/GLM-5.2`                         | GLM 5.2 FP4                  | text        | 262,144 | 131,072    | 1.40 / 4.40   | Reasoning model |
 

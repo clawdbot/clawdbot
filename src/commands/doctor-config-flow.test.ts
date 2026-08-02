@@ -746,7 +746,7 @@ vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
 }));
 
 vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: vi.fn(() => []),
+  collectActiveToolSchemaProjectionWarnings: vi.fn(async () => []),
 }));
 
 vi.mock("./doctor/shared/plugin-dependency-cleanup.js", () => ({
@@ -1383,7 +1383,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
             exists,
             path: configPath,
             parsed,
-            includeProvenance: { agentRoster: injected?.agentRosterIncludeOwned === true },
+            agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
             sourceConfigBeforeMigrations,
             config: injectedEffectiveConfig,
             sourceConfig: injectedEffectiveConfig,
@@ -1407,7 +1407,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
             exists,
             path: configPath,
             parsed,
-            includeProvenance: { agentRoster: injected?.agentRosterIncludeOwned === true },
+            agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
             sourceConfigBeforeMigrations,
             config: injectedEffectiveConfig,
             sourceConfig: injectedEffectiveConfig,
@@ -1432,7 +1432,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
           exists,
           path: configPath,
           parsed,
-          includeProvenance: { agentRoster: injected?.agentRosterIncludeOwned === true },
+          agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
           sourceConfigBeforeMigrations,
           config: effectiveConfig,
           sourceConfig: effectiveConfig,
@@ -1627,9 +1627,29 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
+    expect(result.explicitSetPaths).toEqual([["agents", "entries"]]);
     expect(result.cfg.agents?.entries).toEqual({
       main: { default: true, workspace: "/tmp/migrated-main" },
     });
+    expect(terminalNoteMock).toHaveBeenCalledWith(
+      "Prepared agents.entries with exactly one explicit default agent for persistence.",
+      "Doctor changes",
+    );
+    expect(terminalNoteMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("Persisted agents.entries"),
+      expect.anything(),
+    );
+  });
+
+  it("drops roster write intent when a preview repair is declined", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { entries: { main: { default: true } } } },
+      parsedConfig: {},
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(false);
+    expect(result.explicitSetPaths).toBeUndefined();
   });
 
   it("removes a legacy list when Doctor persists keyed roster entries", async () => {
@@ -1777,6 +1797,7 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(false);
+    expect(result.explicitSetPaths).toBeUndefined();
     expect(result.cfg.agents?.entries).toEqual({ ops: { default: true } });
   });
 

@@ -185,7 +185,11 @@ describe("buildCliArgs — issue #80374", () => {
   });
 
   it("appends a configured fork argument only to the marked resume", () => {
-    const backend = { ...BACKEND_ALWAYS, forkArg: "--fork-session" } as CliBackendConfig;
+    const backend = {
+      ...BACKEND_ALWAYS,
+      forkArg: "--fork-session",
+      resumeAtArg: "--resume-session-at",
+    } as CliBackendConfig;
     const resumed = buildCliArgs({
       backend,
       baseArgs: ["--resume", "source-session"],
@@ -193,6 +197,7 @@ describe("buildCliArgs — issue #80374", () => {
       sessionId: "source-session",
       useResume: true,
       forkResume: true,
+      resumeAt: "assistant-before-turn",
     });
     const subsequent = buildCliArgs({
       backend,
@@ -203,7 +208,11 @@ describe("buildCliArgs — issue #80374", () => {
       forkResume: false,
     });
     expect(resumed).toContain("--fork-session");
+    expect(resumed).toEqual(
+      expect.arrayContaining(["--resume-session-at", "assistant-before-turn"]),
+    );
     expect(subsequent).not.toContain("--fork-session");
+    expect(subsequent).not.toContain("--resume-session-at");
   });
 
   it("rejects a marked fork when the backend has no fork argument", () => {
@@ -217,6 +226,20 @@ describe("buildCliArgs — issue #80374", () => {
         forkResume: true,
       }),
     ).toThrow("does not support forked session resume");
+  });
+
+  it("rejects a checkpoint when the backend has no resume-at argument", () => {
+    expect(() =>
+      buildCliArgs({
+        backend: { ...BACKEND_ALWAYS, forkArg: "--fork-session" } as CliBackendConfig,
+        baseArgs: ["--resume", "source-session"],
+        modelId: "claude-haiku-4-5",
+        sessionId: "source-session",
+        useResume: true,
+        forkResume: true,
+        resumeAt: "assistant-before-turn",
+      }),
+    ).toThrow("does not support checkpointed session resume");
   });
 });
 

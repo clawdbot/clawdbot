@@ -305,35 +305,13 @@ export type DiagnosticsOtelConfig = {
   sampleRate?: number;
   /** Metric export interval (ms). */
   flushIntervalMs?: number;
-  /**
-   * Opt-in raw content capture for OTEL span attributes.
-   * Boolean `true` captures non-system message/tool content; the object form
-   * can enable each content class explicitly.
-   */
-  captureContent?:
-    | boolean
-    | {
-        enabled?: boolean;
-        inputMessages?: boolean;
-        outputMessages?: boolean;
-        toolInputs?: boolean;
-        toolOutputs?: boolean;
-        systemPrompt?: boolean;
-        toolDefinitions?: boolean;
-      };
+  /** Opt in to raw non-system message/tool content in OTEL span attributes. */
+  captureContent?: boolean;
 };
 
 export type DiagnosticsCacheTraceConfig = {
   /** Write prompt-cache trace artifacts for debugging deterministic cache input. */
   enabled?: boolean;
-  /** @deprecated Doctor-only legacy input. */
-  filePath?: string;
-  /** @deprecated Doctor-only legacy input. */
-  includeMessages?: boolean;
-  /** @deprecated Doctor-only legacy input. */
-  includePrompt?: boolean;
-  /** @deprecated Doctor-only legacy input. */
-  includeSystem?: boolean;
 };
 
 export type AuditConfig = {

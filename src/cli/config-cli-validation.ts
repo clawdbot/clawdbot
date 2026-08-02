@@ -1,7 +1,7 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigFileSnapshot } from "../config/config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { attachConfigIssueDiagnostics } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,7 +13,7 @@ import {
 } from "../config/types.secrets.js";
 import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
+import { type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import {
   isPluginIntegrationSecretProviderConfig,
   resolveSecretProviderIntegrationConfig,
@@ -40,9 +40,23 @@ function formatInvalidConfigRepairHint(
     : `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${doctorMessage}`;
 }
 
-export async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
-  const snapshot = await readConfigFileSnapshot();
+export async function loadValidConfig(
+  runtime: RuntimeEnv = defaultRuntime,
+  options: { observe?: boolean; json?: boolean } = {},
+) {
+  const snapshot =
+    options.observe === false
+      ? await readConfigFileSnapshot({ observe: false })
+      : await readConfigFileSnapshot();
   if (snapshot.valid) {
+    return snapshot;
+  }
+  if (options.json) {
+    writeRuntimeJson(runtime, {
+      error: `OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`,
+      issues: normalizeConfigIssues(snapshot.issues),
+    });
+    runtime.exit(1);
     return snapshot;
   }
   runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);

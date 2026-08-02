@@ -2,7 +2,6 @@
 // Starts delayed maintenance, cron, heartbeat, recovery, and pricing refresh work.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isVitestRuntimeEnv } from "../infra/env.js";
 import {
   resolveHeartbeatAgents,
   startHeartbeatRunner,
@@ -13,11 +12,9 @@ import {
   schedulePendingSessionDeliveries,
   startSessionDeliveryRuntime,
 } from "../infra/session-delivery-queue-runtime.js";
-import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
 import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
-import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
@@ -25,6 +22,7 @@ import {
   createNoopHeartbeatRunner,
   type GatewayRuntimeServiceLogger,
 } from "./server-runtime-service-shared.js";
+export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 export {
   startGatewayChannelHealthMonitor,
   startGatewayRuntimeServices,
@@ -33,9 +31,6 @@ export {
 
 type GatewayPostReadyLogger = {
   warn: (message: string) => void;
-};
-export type GatewayIdleTaskHandle = {
-  stop: () => void;
 };
 export type GatewayMaintenanceHandles = NonNullable<
   Awaited<ReturnType<typeof startGatewayMaintenanceTimers>>
@@ -184,58 +179,6 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   return timer;
 }
 
-/** Schedules one low-priority task, retrying until the gateway has no active request roots. */
-export function scheduleGatewayIdleTask(params: {
-  delayMs: number;
-  retryDelayMs: number;
-  isClosing: () => boolean;
-  isBusy: () => boolean;
-  run: () => Promise<void>;
-  log: GatewayPostReadyLogger;
-  errorMessage: string;
-}): GatewayIdleTaskHandle {
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const schedule = (delayMs: number) => {
-    if (stopped || params.isClosing()) {
-      return;
-    }
-    timer = setTimeout(() => {
-      timer = null;
-      if (stopped || params.isClosing()) {
-        return;
-      }
-      if (params.isBusy()) {
-        schedule(params.retryDelayMs);
-        return;
-      }
-      void runWithGatewayIndependentRootWorkAdmission(async () => {
-        if (stopped || params.isClosing()) {
-          return;
-        }
-        // Recheck inside admission so work that arrived while this task was
-        // joining the root set gets priority over non-urgent maintenance.
-        if (params.isBusy()) {
-          schedule(params.retryDelayMs);
-          return;
-        }
-        await params.run();
-      }).catch((error: unknown) => params.log.warn(`${params.errorMessage}: ${String(error)}`));
-    }, delayMs);
-    timer.unref?.();
-  };
-  schedule(params.delayMs);
-  return {
-    stop: () => {
-      stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-    },
-  };
-}
-
 function recoverPendingOutboundDeliveries(params: {
   cfg: OpenClawConfig;
   log: GatewayRuntimeServiceLogger;
@@ -305,41 +248,6 @@ function startPendingSessionDeliveryRuntime(params: {
   };
 }
 
-function startGatewayModelPricingRefreshOnDemand(params: {
-  config: OpenClawConfig;
-  pluginLookUpTable?: PluginMetadataRegistryView;
-  log: GatewayRuntimeServiceLogger;
-}): () => void {
-  if (!isGatewayModelPricingEnabled(params.config)) {
-    return () => {};
-  }
-  let stopped = false;
-  let stopRefresh: (() => void) | undefined;
-  // Import pricing refresh lazily; many gateway starts never use model-pricing metadata.
-  // The stopped flag closes the race where shutdown happens before the import resolves.
-  void runWithGatewayIndependentRootWorkAdmission(async () => {
-    const { startGatewayModelPricingRefresh } = await import("./model-pricing-cache.js");
-    if (stopped) {
-      return;
-    }
-    stopRefresh = startGatewayModelPricingRefresh({
-      config: params.config,
-      ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
-    });
-    if (stopped) {
-      stopRefresh();
-      stopRefresh = undefined;
-    }
-  }).catch((err: unknown) =>
-    params.log.error(`Model pricing refresh failed to start: ${String(err)}`),
-  );
-  return () => {
-    stopped = true;
-    stopRefresh?.();
-    stopRefresh = undefined;
-  };
-}
-
 /** Activates background gateway services after core runtime startup is ready. */
 export function activateGatewayScheduledServices(params: {
   minimalTestGateway: boolean;
@@ -351,14 +259,12 @@ export function activateGatewayScheduledServices(params: {
   startCron?: boolean;
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
-  pluginLookUpTable?: PluginMetadataRegistryView;
-}): { heartbeatRunner: HeartbeatRunner; stopModelPricingRefresh: () => void } {
+}): { heartbeatRunner: HeartbeatRunner } {
   if (params.minimalTestGateway) {
     // Minimal gateways keep handles callable but inert so tests can share shutdown paths with
     // production starts without launching background loops.
     return {
       heartbeatRunner: createNoopHeartbeatRunner(),
-      stopModelPricingRefresh: () => {},
     };
   }
   if (
@@ -404,15 +310,7 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
-  const stopModelPricingRefresh = !isVitestRuntimeEnv()
-    ? startGatewayModelPricingRefreshOnDemand({
-        config: params.cfgAtStart,
-        ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
-        log: params.log,
-      })
-    : () => {};
   return {
     heartbeatRunner: heartbeatRunnerWithUpstreamMonitor,
-    stopModelPricingRefresh,
   };
 }

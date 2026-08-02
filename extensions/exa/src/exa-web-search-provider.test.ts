@@ -318,6 +318,21 @@ describe("exa web search provider", () => {
     );
   });
 
+  it("rejects invalid UTF-8 in Exa search JSON", async () => {
+    const prefix = new TextEncoder().encode(
+      '{"results":[{"url":"https://example.com","title":"bad',
+    );
+    const suffix = new TextEncoder().encode('"}]}');
+    const body = new Uint8Array(prefix.length + 1 + suffix.length);
+    body.set(prefix);
+    body[prefix.length] = 0xff;
+    body.set(suffix, prefix.length + 1);
+
+    await expect(testing.readExaSearchResults(new Response(body))).rejects.toThrow(
+      "Exa API returned malformed JSON",
+    );
+  });
+
   it("parses well-formed Exa search JSON under the byte cap", async () => {
     const response = new Response(
       JSON.stringify({ results: [{ url: "https://example.com", title: "Example" }] }),

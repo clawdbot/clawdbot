@@ -23,6 +23,7 @@ When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate in
 - Default: `~/.openclaw/workspace`
 - If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes `~/.openclaw/workspace-<profile>`.
 - `OPENCLAW_WORKSPACE_DIR` overrides both of the above when set.
+- `openclaw onboard --non-interactive` uses `<state-dir>/workspace` when `OPENCLAW_STATE_DIR` is non-default, including for the initial `main` agent entry.
 - Non-default agents (`agents.entries.*`) without an explicit workspace resolve to `<state-dir>/workspace-<agentId>`, not the shared default workspace.
 
 Override in `~/.openclaw/openclaw.json`:
@@ -70,14 +71,14 @@ Standard files OpenClaw expects inside the workspace:
   <Accordion title="SOUL.md - persona and tone">
     Persona, tone, and boundaries. Loaded every session. Guide: [SOUL.md personality guide](/concepts/soul).
   </Accordion>
-  <Accordion title="USER.md - who the user is">
-    Who the user is and how to address them. Loaded every session.
+  <Accordion title="USER.md - directive-based user model (optional)">
+    Stable preferences, communication style, relationships, and active-project context. Write entries as dated active or superseded directives. Loaded every session with a separate 4,000-character budget. See [User model](/concepts/user-model).
   </Accordion>
   <Accordion title="IDENTITY.md - name, vibe, emoji">
     The agent's name, vibe, and emoji. Created/updated during the bootstrap ritual.
   </Accordion>
-  <Accordion title="TOOLS.md - local tool conventions">
-    Notes about your local tools and conventions. Does not control tool availability; it is only guidance.
+  <Accordion title="AGENTS.md Tools section - local tool conventions">
+    The `## Tools` section holds local environment notes and conventions. It does not control tool availability; it is only guidance.
   </Accordion>
   <Accordion title="BOOT.md - startup checklist">
     Optional startup checklist run automatically on gateway restart (when [internal hooks](/automation/hooks) are enabled). Keep it short; use the message tool for outbound sends.
@@ -89,7 +90,7 @@ Standard files OpenClaw expects inside the workspace:
     Daily memory log (one file per day). Recommended to read today + yesterday on session start.
   </Accordion>
   <Accordion title="MEMORY.md - curated long-term memory (optional)">
-    Curated long-term memory: durable facts, preferences, decisions, and short summaries. Keep detailed logs in `memory/YYYY-MM-DD.md` so memory tools can retrieve them on demand without injecting them into every prompt. Only load `MEMORY.md` in the main, private session (not shared/group contexts). See [Memory](/concepts/memory) for the workflow and automatic memory flush.
+    Curated long-term memory: durable non-profile facts, decisions, and short summaries. Keep detailed logs in `memory/YYYY-MM-DD.md` so memory tools can retrieve them on demand without injecting them into every prompt. Only load `MEMORY.md` in the main, private session (not shared/group contexts). See [Memory](/concepts/memory) for the workflow and automatic memory flush.
   </Accordion>
   <Accordion title="skills/ - workspace skills (optional)">
     Workspace-specific skills. Highest-precedence skill location for that workspace, ahead of project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
@@ -100,7 +101,7 @@ Standard files OpenClaw expects inside the workspace:
 </AccordionGroup>
 
 <Note>
-If a bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Large bootstrap files are truncated when injected; adjust limits with `agents.defaults.bootstrapMaxChars` (default: `20000`) and `agents.defaults.bootstrapTotalMaxChars` (default: `60000`). `openclaw setup` can recreate missing defaults without overwriting existing files.
+If a required bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Optional `USER.md` and `MEMORY.md` files are omitted when absent. Large bootstrap files are truncated when injected; adjust general limits with `agents.defaults.bootstrapMaxChars` (default: `20000`) and `agents.defaults.bootstrapTotalMaxChars` (default: `60000`). `USER.md` keeps its separate 4,000-character cap. `openclaw setup` can recreate missing defaults without overwriting existing files.
 </Note>
 
 ## What is NOT in the workspace
@@ -109,7 +110,7 @@ These live under `~/.openclaw/` and should NOT be committed to the workspace rep
 
 - `~/.openclaw/openclaw.json` (config)
 - `~/.openclaw/state/openclaw.sqlite` (shared workspace setup state and attestations)
-- `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (model auth profiles: OAuth + API keys)
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (model auth profiles, routing state, standing intents, and other agent-scoped durability)
 - `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (session rows, transcripts, and per-agent runtime state)
 - `~/.openclaw/agents/<agentId>/agent/codex-home/` (per-agent Codex runtime account, config, skills, plugins, and native thread state)
 - `~/.openclaw/credentials/` (channel/provider state plus legacy OAuth import data)
@@ -137,7 +138,7 @@ Run these steps on the machine where the Gateway runs (that is where the workspa
     ```bash
     cd ~/.openclaw/workspace
     git init
-    git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md memory/
+    git add AGENTS.md SOUL.md IDENTITY.md USER.md memory/
     git commit -m "Add agent workspace"
     ```
 

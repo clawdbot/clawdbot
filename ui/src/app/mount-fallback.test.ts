@@ -9,8 +9,12 @@ const indexHtmlPath = path.resolve(
 );
 type TestWindow = Window & typeof globalThis;
 
+async function readIndexHtml(): Promise<string> {
+  return readFile(indexHtmlPath, "utf8");
+}
+
 async function readIndexHtmlWithDelay(delayMs: number): Promise<string> {
-  const html = await readFile(indexHtmlPath, "utf8");
+  const html = await readIndexHtml();
   return html.replace(
     'data-openclaw-mount-timeout-ms="12000"',
     `data-openclaw-mount-timeout-ms="${delayMs}"`,
@@ -73,6 +77,15 @@ function requireElementById<T extends HTMLElement>(
   }
   return element;
 }
+
+describe("Control UI document shell", () => {
+  it("requests the web app manifest with credentials", async () => {
+    const parsed = new DOMParser().parseFromString(await readIndexHtml(), "text/html");
+    const manifest = parsed.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+
+    expect(manifest?.getAttribute("crossorigin")).toBe("use-credentials");
+  });
+});
 
 describe("Control UI mount fallback", () => {
   afterEach(() => {

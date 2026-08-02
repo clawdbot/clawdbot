@@ -28,7 +28,7 @@ export function sendMinimalGatewayConnectChallenge(ws: WebSocket, nonce = "test-
     JSON.stringify({
       type: "event",
       event: "connect.challenge",
-      payload: { nonce },
+      payload: { nonce, ts: Date.now() },
     }),
   );
 }

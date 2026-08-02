@@ -142,8 +142,11 @@ export type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "../plugins/types.js";
-export type { OpenClawPluginGatewayEventScope } from "../plugins/gateway-events.js";
-export type { OpenClawPluginGatewayEvents } from "../plugins/gateway-events.js";
+export type {
+  OpenClawPluginGatewayEventScope,
+  OpenClawPluginGatewayEvents,
+  OpenClawPluginSessionsChangedEvent,
+} from "../plugins/gateway-events.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
@@ -499,6 +502,7 @@ type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   setRuntime?: (runtime: PluginRuntime) => void;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
+  registerCapabilities?: (api: OpenClawPluginApi) => void;
 };
 
 type DefinedChannelPluginEntry<TPlugin> = {
@@ -572,6 +576,7 @@ export function defineChannelPluginEntry<TPlugin>({
   setRuntime,
   registerCliMetadata,
   registerFull,
+  registerCapabilities,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
   const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
     typeof configSchema === "function"
@@ -589,12 +594,14 @@ export function defineChannelPluginEntry<TPlugin>({
       }
       if (api.registrationMode === "tool-discovery") {
         registerFull?.(api);
+        registerCapabilities?.(api);
         return;
       }
       api.registerChannel({ plugin: plugin as ChannelPlugin });
       setRuntime?.(api.runtime);
       if (api.registrationMode === "discovery") {
         registerCliMetadata?.(api);
+        registerCapabilities?.(api);
         return;
       }
       if (api.registrationMode !== "full") {
@@ -602,6 +609,7 @@ export function defineChannelPluginEntry<TPlugin>({
       }
       registerCliMetadata?.(api);
       registerFull?.(api);
+      registerCapabilities?.(api);
     },
   };
   return {

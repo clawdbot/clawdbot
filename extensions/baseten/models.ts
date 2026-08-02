@@ -1,22 +1,17 @@
 /**
- * Baseten model catalog, compat metadata, and authenticated live discovery.
+ * Baseten model catalog, compat metadata, and live row projection.
  */
 import {
-  getCachedLiveProviderModelRows,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+  buildManifestModelDefinition,
+  readManifestProviderDefaultModelRef,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelCompatConfig,
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const log = createSubsystemLogger("baseten-models");
 const BASETEN_MANIFEST_CATALOG = manifest.modelCatalog.providers.baseten;
-const CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
 
@@ -49,9 +44,9 @@ const BASE_COMPAT: ModelCompatConfig = {
 /** Base URL for Baseten's OpenAI-compatible Model APIs. */
 export const BASETEN_BASE_URL = BASETEN_MANIFEST_CATALOG.baseUrl;
 /** Default Baseten model id used for onboarding. */
-export const BASETEN_DEFAULT_MODEL_ID = "thinkingmachines/inkling";
+export const BASETEN_DEFAULT_MODEL_ID = BASETEN_MANIFEST_CATALOG.defaultModel;
 /** Default Baseten model ref used for onboarding. */
-export const BASETEN_DEFAULT_MODEL_REF = `baseten/${BASETEN_DEFAULT_MODEL_ID}`;
+export const BASETEN_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "baseten")!;
 /** Bundled fallback rows for all Baseten Model APIs available at release time. */
 export const BASETEN_MODEL_CATALOG = BASETEN_MANIFEST_CATALOG.models;
 
@@ -110,27 +105,18 @@ export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
   };
 }
 
-/** Builds one normalized Baseten model definition from a manifest entry. */
-export function buildBasetenModelDefinition(
-  model: (typeof BASETEN_MODEL_CATALOG)[number],
-): ModelDefinitionConfig {
-  const provider = buildManifestModelProviderConfig({
-    providerId: "baseten",
-    catalog: { ...BASETEN_MANIFEST_CATALOG, models: [model] },
-  });
-  const normalized = provider.models[0];
-  if (!normalized) {
-    throw new Error(`Missing normalized Baseten model ${model.id}`);
-  }
-  return {
-    ...normalized,
-    compat: buildBasetenModelCompat(normalized.id),
-  };
-}
-
 /** Builds the network-free fallback catalog. */
 export function buildStaticBasetenModels(): ModelDefinitionConfig[] {
-  return BASETEN_MODEL_CATALOG.map(buildBasetenModelDefinition);
+  return BASETEN_MODEL_CATALOG.map(
+    buildManifestModelDefinition({
+      providerId: "baseten",
+      catalog: BASETEN_MANIFEST_CATALOG,
+      decorate: (normalized) => ({
+        ...normalized,
+        compat: buildBasetenModelCompat(normalized.id),
+      }),
+    }),
+  );
 }
 
 type BasetenLiveModelRow = {
@@ -251,49 +237,6 @@ export function projectBasetenLiveModels(rows: readonly unknown[]): ModelDefinit
     models.push(model);
   }
   return models;
-}
-
-/** Discovers every model enabled for a Baseten account, with a static fallback. */
-export async function discoverBasetenModels(
-  params: {
-    discoveryApiKey?: string;
-    env?: Record<string, string | undefined>;
-    forceLive?: boolean;
-    fetchGuard?: LiveModelCatalogFetchGuard;
-    signal?: AbortSignal;
-  } = {},
-): Promise<ModelDefinitionConfig[]> {
-  const staticModels = buildStaticBasetenModels();
-  const env = params.env ?? process.env;
-  if (
-    !params.discoveryApiKey?.trim() ||
-    (!params.forceLive && (env.NODE_ENV === "test" || env.VITEST === "true"))
-  ) {
-    return staticModels;
-  }
-
-  try {
-    const rows = await getCachedLiveProviderModelRows({
-      providerId: "baseten",
-      endpoint: `${BASETEN_BASE_URL}/models`,
-      discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
-      timeoutMs: 10_000,
-      ttlMs: CACHE_TTL_MS,
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(BASETEN_BASE_URL),
-      auditContext: "baseten-model-discovery",
-      shouldCacheRows: (candidateRows) => projectBasetenLiveModels(candidateRows).length > 0,
-    });
-    const models = projectBasetenLiveModels(rows);
-    if (models.length > 0) {
-      return models;
-    }
-    log.warn("Baseten returned no usable models; using bundled catalog");
-  } catch (error) {
-    log.warn(`Baseten model discovery failed; using bundled catalog: ${String(error)}`);
-  }
-  return staticModels;
 }
 
 /** Resolves a forward-compatible Baseten model id not yet in the bundled catalog. */

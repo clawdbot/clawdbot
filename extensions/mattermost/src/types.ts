@@ -74,9 +74,13 @@ export type MattermostAccountConfig = {
   replyToModeByChatType?: Partial<Record<MattermostChatTypeKey, MattermostReplyToMode>>;
   /** Action toggles for this account. */
   actions?: {
+    /** Enable channel message reads. Default: false. */
+    messages?: boolean;
     /** Enable message reaction actions. Default: true. */
     reactions?: boolean;
   };
+  /** Channel IDs allowed for delegated cross-channel reads and inbound routing. */
+  groups?: Record<string, { requireMention?: boolean } | undefined>;
   /** Native slash command configuration. */
   commands?: {
     /** Enable native slash commands. "auto" resolves to false (opt-in). */

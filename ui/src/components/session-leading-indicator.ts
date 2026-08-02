@@ -42,7 +42,7 @@ export function renderSessionLeadingState(
   ownerActor: SessionCreatedActor | null | undefined,
   attribution: "created" | "archived",
 ) {
-  const running = session.hasActiveRun || session.status === "running";
+  const running = session.hasActiveRun;
 
   if (session.attention.kind !== "none") {
     return {

@@ -47,9 +47,9 @@ function containsBrokenSurrogate(value: string): boolean {
 }
 
 async function openBuildDetails(page: Page) {
-  const buildLink = page
-    .locator("openclaw-app-sidebar")
-    .getByRole("link", { name: "Control UI build details", exact: true });
+  const sidebar = page.locator("openclaw-app-sidebar");
+  await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
+  const buildLink = sidebar.getByRole("link", { name: "Control UI build details", exact: true });
   await buildLink.waitFor();
   const compactText = (await buildLink.textContent()) ?? "";
   expect(compactText).toContain(`${COMPACT_BRANCH}@0123456`);
@@ -85,6 +85,7 @@ describeControlUiE2e("Control UI Unicode build identity mocked Gateway E2E", () 
       builtAt: "2026-07-10T12:34:56.000Z",
       branch: RAW_BRANCH,
       dirty: true,
+      release: false,
       buildId: "build-info-unicode-e2e",
     });
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });

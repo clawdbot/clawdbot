@@ -287,7 +287,7 @@ export class TerminalPanelSessionController
         parent: host,
         readOnly: false,
         terminalOptions: {
-          fontSize: 13,
+          fontSize: 11,
           fontFamily: TERMINAL_FONT_FAMILY,
           cursorBlink: true,
           theme: terminalTheme(this.host.themeMode),

@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  isMainSessionRecoveryExhausted,
-  transitionMainSessionRecovery,
-} from "../../agents/main-session-recovery-state.js";
+import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
 import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery-store.js";
+import { MAX_RECOVERY_RETRIES } from "../../agents/main-session-restart-recovery-shared.js";
 import {
   mergeSessionEntry,
   resolveSessionLifecycleTimestamps,
@@ -132,6 +130,7 @@ export async function persistAgentSessionPhase(params: {
           entry: params.entry,
           storePath: params.storePath,
           agentId: params.sessionAgentId,
+          sessionKey: params.canonicalSessionKey,
         }).sessionStartedAt
       : undefined;
 
@@ -187,7 +186,10 @@ export async function persistAgentSessionPhase(params: {
               !params.isRestartRecoveryResumeRun &&
               internalFreshEntry &&
               (internalFreshEntry.mainRestartRecovery?.tombstone ||
-                isMainSessionRecoveryExhausted(internalFreshEntry))
+                (internalFreshEntry.status === "running" &&
+                  internalFreshEntry.abortedLastRun === true &&
+                  (internalFreshEntry.mainRestartRecovery?.chargedAttempts ?? 0) >=
+                    MAX_RECOVERY_RETRIES))
             ) {
               restartRecoveryReservationConflict =
                 `Session "${params.canonicalSessionKey}" is quarantined after restart recovery ` +
@@ -466,10 +468,9 @@ export async function persistAgentSessionPhase(params: {
       sessionKey: params.canonicalSessionKey,
       sessionId: resolvedSessionId,
       storePath: params.storePath,
-      sessionFile: sessionEntry?.sessionFile,
       agentId: params.sessionAgentId,
+      workspaceDir: params.entry?.spawnedWorkspaceDir,
       previousSessionId,
-      previousSessionFile: previousSessionId ? params.entry?.sessionFile : undefined,
       previousEndReason: previousSessionId
         ? (freshness?.staleReason ??
           (usableRequestedSessionId && params.entry?.sessionId !== usableRequestedSessionId

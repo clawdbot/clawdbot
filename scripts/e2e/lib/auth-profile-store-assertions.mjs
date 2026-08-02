@@ -1,7 +1,5 @@
 // Shared auth profile store assertions for install/onboard E2E proof.
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "../../lib/record-shared.mjs";
 
 function hasExpectedOpenAiEnvRef(profile) {
   if (!isRecord(profile)) {

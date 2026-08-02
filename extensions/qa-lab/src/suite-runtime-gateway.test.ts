@@ -1,7 +1,4 @@
 // Qa Lab tests cover suite runtime gateway plugin behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyConfig,
@@ -14,13 +11,18 @@ import {
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const writeGatewayRestartIntentSyncMock = vi.hoisted(() => vi.fn());
 
+vi.mock("openclaw/plugin-sdk/qa-runtime", () => ({
+  writeGatewayRestartIntentSync: writeGatewayRestartIntentSyncMock,
+}));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
+  writeGatewayRestartIntentSyncMock.mockReset();
   vi.useRealTimers();
 });
 
@@ -51,47 +53,94 @@ function createConfigMutationEnv(
 }
 
 describe("qa suite gateway helpers", () => {
-  it("replaces the gateway process after writing the requested config", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-gateway-restart-"));
-    const configPath = path.join(tempDir, "openclaw.json");
-    await fs.writeFile(configPath, '{"gateway":{"auth":{"token":"keep-me"}}}\n', "utf8");
-    const restartAfterStateMutation = vi.fn(
-      async (
-        mutateState: (context: {
-          configPath: string;
-          runtimeEnv: NodeJS.ProcessEnv;
-          stateDir: string;
-          tempRoot: string;
-        }) => Promise<void>,
-      ) => {
-        await mutateState({
-          configPath,
-          runtimeEnv: {},
-          stateDir: path.join(tempDir, "state"),
-          tempRoot: tempDir,
-        });
-      },
-    );
-    try {
-      await restartGatewayWithConfigPatch({
-        env: { gateway: { restartAfterStateMutation } } as never,
-        patch: { tools: { codeMode: { enabled: false } } },
-      });
-
-      await expect(fs.readFile(configPath, "utf8")).resolves.toBe(
-        `${JSON.stringify(
-          {
+  it.each([
+    {
+      name: "restarts through the authenticated gateway config patch",
+      alreadyApplied: false,
+    },
+    {
+      name: "forces a restart when the authenticated gateway config patch was already applied",
+      alreadyApplied: true,
+    },
+  ])("$name", async ({ alreadyApplied }) => {
+    vi.useFakeTimers();
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: true },
+      release,
+    });
+    writeGatewayRestartIntentSyncMock.mockReturnValue(true);
+    const patch = { tools: { codeMode: { enabled: false } } };
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
             gateway: { auth: { token: "keep-me" } },
-            tools: { codeMode: { enabled: false } },
+            ...(alreadyApplied ? patch : {}),
           },
-          null,
-          2,
-        )}\n`,
-      );
-      expect(restartAfterStateMutation).toHaveBeenCalledOnce();
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+        };
+      }
+      if (method === "system.info") {
+        return { pid: 43_123 };
+      }
+      return { ok: true };
+    });
+    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
+    const runtimeEnv = { OPENCLAW_STATE_DIR: "/isolated/qa-gateway" };
+    env.gateway.runtimeEnv = runtimeEnv;
+    const restartAfterStateMutation = vi.fn();
+    env.gateway.restartAfterStateMutation = restartAfterStateMutation;
+
+    const restarting = restartGatewayWithConfigPatch({ env, patch });
+    await vi.advanceTimersByTimeAsync(1_750);
+
+    await expect(restarting).resolves.toEqual({ ok: true });
+    expect(gatewayCall).toHaveBeenNthCalledWith(1, "config.get", {}, { timeoutMs: 60_000 });
+    expect(gatewayCall).toHaveBeenNthCalledWith(2, "system.info", {}, { timeoutMs: 180_000 });
+    expect(gatewayCall).toHaveBeenNthCalledWith(
+      3,
+      "config.patch",
+      {
+        raw: JSON.stringify(patch, null, 2),
+        baseHash: "hash-1",
+        restartDelayMs: 1_000,
+        replacePaths: ["gateway.controlUi.allowedOrigins"],
+      },
+      { timeoutMs: 180_000 },
+    );
+    expect(gatewayCall).toHaveBeenNthCalledWith(
+      4,
+      "gateway.restart.request",
+      { reason: "config.patch", skipDeferral: true },
+      { timeoutMs: 180_000 },
+    );
+    expect(gatewayCall).toHaveBeenCalledTimes(4);
+    expect(writeGatewayRestartIntentSyncMock).toHaveBeenCalledWith({
+      env: runtimeEnv,
+      targetPid: 43_123,
+      reason: "config.patch",
+      intent: { force: true },
+    });
+    expect(writeGatewayRestartIntentSyncMock).toHaveBeenCalledOnce();
+    expect(writeGatewayRestartIntentSyncMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      gatewayCall.mock.invocationCallOrder[2] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(writeGatewayRestartIntentSyncMock.mock.invocationCallOrder[0]).toBeLessThan(
+      gatewayCall.mock.invocationCallOrder[3] ?? Number.NEGATIVE_INFINITY,
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://127.0.0.1:43123/readyz",
+        auditContext: "qa-lab-suite-wait-for-gateway-healthy",
+      }),
+    );
+    expect(waitReady).toHaveBeenCalledWith({
+      gateway: env.gateway,
+      timeoutMs: expect.any(Number),
+    });
+    expect(release).toHaveBeenCalled();
+    expect(restartAfterStateMutation).not.toHaveBeenCalled();
   });
 
   it("bounds oversized suite gateway JSON responses", async () => {

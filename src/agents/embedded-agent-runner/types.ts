@@ -82,6 +82,27 @@ export type EmbeddedAgentMeta = {
     total?: number;
   };
   contextBudgetStatus?: SessionContextBudgetStatus;
+  /**
+   * True when code mode owned the model tool surface for this run. Config
+   * alone is not proof: the "auto" tier engages per model capability, raw
+   * model runs and plugin-harness surfaces can decline engagement, and the
+   * shell tool is also named `exec`, so consumers must read this flag
+   * instead of config or tool names.
+   */
+  codeModeEngaged?: boolean;
+  /** Completed assistant/provider round trips accumulated across run attempts. */
+  assistantTurns?: number;
+  /**
+   * Code-mode/tool-search inner bridge calls for the run's catalog. These are
+   * invisible to the provider; `toolSummary.calls` stays the outer count.
+   */
+  bridgeCalls?: {
+    search: number;
+    describe: number;
+    call: number;
+  };
+  /** Estimated USD cost of the run's accumulated usage. Omitted when the model has no cost data. */
+  costUsd?: number;
 };
 
 export type TraceAttempt = {

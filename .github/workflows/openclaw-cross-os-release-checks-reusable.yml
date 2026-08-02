@@ -485,6 +485,13 @@ jobs:
       - name: Ensure pnpm store cache directory exists
         run: mkdir -p "$(pnpm store path --silent)"
 
+      - name: Install workflow validation dependencies
+        if: inputs.candidate_artifact_name != ''
+        working-directory: workflow
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Build candidate artifact once
         if: inputs.candidate_artifact_name == ''
         env:

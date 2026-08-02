@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { chromium, type CDPSession, type Page, type Worker } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
@@ -12,9 +12,15 @@ import {
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
 import {
+  assertCopilotStaleRunIsolation,
+  countCopilotHistoryRequests,
   copyCopilotSidepanelExtension,
   isSidePanelTarget,
-  resolveChromiumExecutable,
+  rawDataText,
+  resolveChromiumExecutableOverride,
+  textValue,
+  waitForContextExtensionId,
+  waitForLoadedExtensionId,
 } from "./sidepanel.e2e-support.js";
 
 declare const chrome: {
@@ -56,6 +62,7 @@ type GatewayHarness = {
   requests: RequestFrame[];
   close: () => Promise<void>;
   disconnectClients: () => void;
+  emitEvent: (event: string, payload: Record<string, unknown>) => void;
   failNextAbort: () => void;
   holdNextSubscription: () => () => void;
 };
@@ -87,19 +94,6 @@ type PanelTarget = {
   text: (selector: string) => Promise<string>;
   wakeBackground: () => Promise<void>;
 };
-
-function textValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function rawDataText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return data instanceof ArrayBuffer
-    ? Buffer.from(new Uint8Array(data)).toString("utf8")
-    : data.toString("utf8");
-}
 
 const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -211,7 +205,7 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
       JSON.stringify({
         type: "event",
         event: "connect.challenge",
-        payload: { nonce: "browser-copilot-e2e-nonce" },
+        payload: { nonce: "browser-copilot-e2e-nonce", ts: 1_777_777_777_000 },
       }),
     );
     socket.on("message", (data) => {
@@ -319,6 +313,11 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
     disconnectClients: () => {
       for (const client of wss.clients) {
         client.terminate();
+      }
+    },
+    emitEvent: (event, payload) => {
+      for (const client of wss.clients) {
+        client.send(JSON.stringify({ type: "event", event, payload }));
       }
     },
     failNextAbort: () => {
@@ -572,18 +571,18 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
   it("returns one error response when a panel's tab disappears", async () => {
     const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
     const userDataDir = tempDirs.make("openclaw-copilot-missing-tab-profile-");
-    const executablePath = await resolveChromiumExecutable();
+    const executablePath = await resolveChromiumExecutableOverride();
     const context = await chromium.launchPersistentContext(userDataDir, {
       ...(executablePath ? { executablePath } : { channel: "chromium" }),
       headless: true,
       args: [
+        "--enable-unsafe-extension-debugging",
         `--disable-extensions-except=${unpackedExtension}`,
         `--load-extension=${unpackedExtension}`,
       ],
     });
     cleanups.push(async () => await context.close());
-    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
-    const extensionId = new URL(worker.url()).hostname;
+    const extensionId = await waitForContextExtensionId(context, unpackedExtension);
     const popup = context.pages()[0] ?? (await context.newPage());
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
 
@@ -633,11 +632,12 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     cleanups.push(fixture.close);
     const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
     const userDataDir = tempDirs.make("openclaw-copilot-profile-");
-    const executablePath = await resolveChromiumExecutable();
+    const executablePath = await resolveChromiumExecutableOverride();
     const context = await chromium.launchPersistentContext(userDataDir, {
       ...(executablePath ? { executablePath } : { channel: "chromium" }),
       headless: true,
       args: [
+        "--enable-unsafe-extension-debugging",
         `--disable-extensions-except=${unpackedExtension}`,
         `--load-extension=${unpackedExtension}`,
       ],
@@ -648,10 +648,10 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       throw new Error("Chromium browser connection unavailable");
     }
     const browserCdp = await browser.newBrowserCDPSession();
-    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
-    const extensionId = new URL(worker.url()).hostname;
+    const extensionId = await waitForLoadedExtensionId(browserCdp, unpackedExtension);
     const alphaTab = context.pages()[0] ?? (await context.newPage());
     await alphaTab.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
     await alphaTab.evaluate(
       async ({ gatewayPort, relayPort }) =>
         await chrome.runtime.sendMessage({
@@ -914,6 +914,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     ).toBe(true);
     await reopenedBetaPanel.fill("#message-input", "after reconnect marker");
     await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
+    const historiesBeforeReconnectTurn = countCopilotHistoryRequests(gateway);
     await reopenedBetaPanel.click("#send-button");
     await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(4);
     await expect
@@ -921,15 +922,16 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 10_000,
       })
       .toContain("Isolated reply: after reconnect marker");
+    await expect
+      .poll(() => countCopilotHistoryRequests(gateway), { timeout: 10_000 })
+      .toBeGreaterThan(historiesBeforeReconnectTurn);
 
     await reopenedBetaPanel.fill("#message-input", "panel linger marker");
     await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
     await reopenedBetaPanel.click("#send-button");
     await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(5);
     const panelRunId = textValue(gateway.chatSends[4]?.idempotencyKey);
-    const historiesBeforeNavigation = gateway.requests.filter(
-      (request) => request.method === "chat.history",
-    ).length;
+    const historiesBeforeNavigation = countCopilotHistoryRequests(gateway);
     await betaTab.goto(`${fixture.baseUrl}/beta?during-run=1`);
     await expect
       .poll(
@@ -943,9 +945,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 250);
     });
-    expect(gateway.requests.filter((request) => request.method === "chat.history")).toHaveLength(
-      historiesBeforeNavigation,
-    );
+    expect(countCopilotHistoryRequests(gateway)).toBe(historiesBeforeNavigation);
     gateway.failNextAbort();
     await disableTabPanel(worker, betaTabId);
     await expect
@@ -1037,5 +1037,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 15_000,
       })
       .toBe(true);
-  }, 75_000);
+
+    await assertCopilotStaleRunIsolation({ expect, gateway, panel: reopenedBetaPanel });
+  }, 120_000);
 });

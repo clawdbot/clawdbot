@@ -5,8 +5,10 @@ import {
   appendTerminalAssistantMessage,
   historyReplacedVisibleStream,
   materializeVisibleStreamState,
+  persistedCurrentToolStreamIds,
   prunePersistedToolStreamMessages,
 } from "./stream-reconciliation.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 type StreamReconciliationState = Parameters<typeof materializeVisibleStreamState>[1];
 
@@ -23,6 +25,39 @@ function messageText(message: unknown): string | null {
   }
   const first = content[0] as { text?: unknown } | undefined;
   return typeof first?.text === "string" ? first.text : null;
+}
+
+function createConcurrentToolStreamState() {
+  const toolCallId = "call-shared";
+  const foregroundIdentity = buildToolStreamIdentity("run-foreground", toolCallId);
+  const backgroundIdentity = buildToolStreamIdentity("run-background", toolCallId);
+  const foregroundMessage = {
+    role: "assistant",
+    runId: "run-foreground",
+    toolCallId,
+    content: [{ type: "toolcall", name: "read", arguments: { path: "foreground.txt" } }],
+  };
+  const backgroundMessage = {
+    role: "assistant",
+    runId: "run-background",
+    toolCallId,
+    content: [{ type: "toolcall", name: "exec", arguments: { command: "background" } }],
+  };
+  const state = {
+    chatStream: "foreground still running",
+    chatStreamStartedAt: 5,
+    chatStreamSegments: [
+      { text: "before foreground", ts: 2, runId: "run-foreground", toolCallId },
+      { text: "before background", ts: 3, runId: "run-background", toolCallId },
+    ],
+    chatToolMessages: [foregroundMessage, backgroundMessage],
+    toolStreamById: new Map<string, unknown>([
+      [foregroundIdentity, { runId: "run-foreground", toolCallId, message: foregroundMessage }],
+      [backgroundIdentity, { runId: "run-background", toolCallId, message: backgroundMessage }],
+    ]),
+    toolStreamOrder: [foregroundIdentity, backgroundIdentity],
+  };
+  return { state, toolCallId, foregroundIdentity, backgroundIdentity, foregroundMessage };
 }
 
 describe("stream reconciliation", () => {
@@ -183,6 +218,126 @@ describe("stream reconciliation", () => {
     expect(state.chatToolMessages).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
+  });
+
+  it("prunes only the persisted run when sibling tools share a call id", () => {
+    const { state, toolCallId, foregroundIdentity, backgroundIdentity, foregroundMessage } =
+      createConcurrentToolStreamState();
+    const messages = [
+      { role: "user", content: "latest ask", timestamp: 1 },
+      {
+        role: "toolResult",
+        runId: "run-background",
+        toolCallId,
+        content: "background complete",
+      },
+    ];
+
+    const persisted = persistedCurrentToolStreamIds(messages, state);
+
+    expect(persisted).toEqual(new Set([backgroundIdentity]));
+    prunePersistedToolStreamMessages(state, persisted);
+
+    expect(state.toolStreamOrder).toEqual([foregroundIdentity]);
+    expect(state.toolStreamById.has(foregroundIdentity)).toBe(true);
+    expect(state.toolStreamById.has(backgroundIdentity)).toBe(false);
+    expect(state.chatToolMessages).toEqual([foregroundMessage]);
+    expect(state.chatStreamSegments).toEqual([
+      { text: "before foreground", ts: 2, runId: "run-foreground", toolCallId },
+    ]);
+  });
+
+  it("does not attribute an unscoped persisted result to either colliding run", () => {
+    const { state, toolCallId, foregroundIdentity, backgroundIdentity } =
+      createConcurrentToolStreamState();
+    const messages = [
+      { role: "user", content: "latest ask", timestamp: 1 },
+      { role: "toolResult", toolCallId, content: "unscoped output" },
+    ];
+
+    const persisted = persistedCurrentToolStreamIds(messages, state);
+
+    expect(persisted).toEqual(new Set());
+    prunePersistedToolStreamMessages(state, persisted);
+    expect(state.toolStreamOrder).toEqual([foregroundIdentity, backgroundIdentity]);
+    expect(state.toolStreamById.size).toBe(2);
+    expect(state.chatToolMessages).toHaveLength(2);
+    expect(state.chatStreamSegments).toHaveLength(2);
+  });
+
+  it.each([
+    ["camel-case tool-call ID", { toolCallId: "call-persisted" }],
+    ["snake-case tool-call ID", { tool_call_id: "call-persisted" }],
+    ["camel-case tool-use ID", { toolUseId: "call-persisted" }],
+    ["snake-case tool-use ID", { tool_use_id: "call-persisted" }],
+  ])("reconciles a transcript message ID separately from its %s", (_label, toolId) => {
+    const runId = "run-persisted";
+    const toolCallId = "call-persisted";
+    const identity = buildToolStreamIdentity(runId, toolCallId);
+    const liveMessage = {
+      role: "assistant",
+      runId,
+      toolCallId,
+      content: [{ type: "toolcall", name: "read", arguments: { path: "notes.txt" } }],
+    };
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatToolMessages: [liveMessage],
+      chatStreamSegments: [{ text: "Reading notes", ts: 2, runId, toolCallId }],
+      toolStreamById: new Map<string, unknown>([
+        [identity, { runId, toolCallId, message: liveMessage }],
+      ]),
+      toolStreamOrder: [identity],
+    };
+    const messages = [
+      { role: "user", content: "Read the notes", timestamp: 1 },
+      {
+        id: "transcript-message-42",
+        role: "toolResult",
+        runId,
+        ...toolId,
+        toolName: "read",
+        content: "Persisted notes",
+      },
+    ];
+
+    const persisted = persistedCurrentToolStreamIds(messages, state);
+
+    expect(persisted).toEqual(new Set([identity]));
+    prunePersistedToolStreamMessages(state, persisted);
+    expect(state.toolStreamOrder).toEqual([]);
+    expect(state.toolStreamById.size).toBe(0);
+    expect(state.chatToolMessages).toEqual([]);
+    expect(state.chatStreamSegments).toEqual([]);
+  });
+
+  it("does not treat a transcript message ID as a second content-block tool call", () => {
+    const runId = "run-persisted";
+    const actualCallId = "call-persisted";
+    const unrelatedCallId = "transcript-message-42";
+    const actualIdentity = buildToolStreamIdentity(runId, actualCallId);
+    const unrelatedIdentity = buildToolStreamIdentity(runId, unrelatedCallId);
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      toolStreamOrder: [actualIdentity, unrelatedIdentity],
+      toolStreamById: new Map<string, unknown>([
+        [actualIdentity, { runId, toolCallId: actualCallId }],
+        [unrelatedIdentity, { runId, toolCallId: unrelatedCallId }],
+      ]),
+    };
+    const messages = [
+      { role: "user", content: "Run both tools", timestamp: 1 },
+      {
+        id: unrelatedCallId,
+        role: "assistant",
+        runId,
+        content: [{ type: "tool_result", id: actualCallId, name: "read", text: "finished" }],
+      },
+    ];
+
+    expect(persistedCurrentToolStreamIds(messages, state)).toEqual(new Set([actualIdentity]));
   });
 
   it("prunes persisted tool messages across current tool id shapes", () => {

@@ -113,6 +113,17 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Session history or replay state is invalid");
     expect(result).toContain("/new");
   });
+  it("prioritizes thinking-signature replay recovery over invalid-request formatting", () => {
+    // Thinking-signature failures are also invalid_request_error, so the
+    // replay-invalid copy must win before the generic invalid-request path.
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
+    );
+    const replayCopy =
+      "Session history or replay state is invalid. Use /new to start a fresh session and try again.";
+    expect(formatAssistantErrorText(msg)).toBe(replayCopy);
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(replayCopy);
+  });
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
     const result = formatAssistantErrorText(msg);
@@ -146,7 +157,7 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
     );
-    expect(formatAssistantErrorText(msg)).toBe("LLM error invalid_request_error: SECRET\nCANARY");
+    expect(formatAssistantErrorText(msg)).toBe("LLM request rejected: SECRET\nCANARY");
     expect(formatUserFacingAssistantErrorText(msg)).toBe(
       "LLM request failed: provider rejected the request schema or tool payload.",
     );

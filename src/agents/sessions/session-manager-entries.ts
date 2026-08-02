@@ -5,7 +5,7 @@ import {
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
-import { messageSerializesOwnedValues } from "./session-manager-file.js";
+import { isIndexedSessionEntry, isSessionContextMetadataEntry } from "./session-manager-codec.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionManagerPersistence } from "./session-manager-persistence.js";
 import type {
@@ -23,33 +23,102 @@ import type {
   SessionInfoEntry,
   SessionMessageEntry,
   SessionHeader,
+  SessionLeafControl,
   SessionTreeNode,
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
 
 export class SessionManagerEntries extends SessionManagerPersistence {
   protected appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Match the persisted JSON/toJSON shape exactly.
+    const canonicalEntry = JSON.parse(JSON.stringify(entry)) as SessionEntry;
+    if (!isIndexedSessionEntry(canonicalEntry)) {
+      throw new Error(`Invalid session transcript entry: ${entry.type}`);
+    }
+    const activeBranchAppend =
+      !this.pendingDeliberateAppend &&
+      this.appendMode !== "side" &&
+      !isSessionTranscriptSideAppendEntry(canonicalEntry);
+    const persistenceResult = this.persist(canonicalEntry, {
+      ...options,
+      ...(activeBranchAppend ? { appendIntent: "active-branch" } : {}),
+    });
+    if (persistenceResult && typeof persistenceResult === "object") {
+      this.reloadPersistedTranscript();
+      const adoptedMessageId =
+        canonicalEntry.type === "message"
+          ? this.resolveCurrentKeyedUserId(canonicalEntry.message)
+          : undefined;
+      if (adoptedMessageId !== persistenceResult.adoptedMessageId) {
+        throw new Error(`Session transcript parent entry was not persisted: ${canonicalEntry.id}`);
+      }
+      this.pendingDeliberateAppend = false;
+      return;
+    }
+    const effectiveParentId = persistenceResult;
+    if (effectiveParentId !== undefined && effectiveParentId !== canonicalEntry.parentId) {
+      this.reloadPersistedTranscript();
+      this.pendingDeliberateAppend = false;
+      return;
+    }
     if (
-      !isSessionTranscriptSideAppendEntry(entry) &&
-      entry.parentId === this.appendParentId &&
+      !isSessionTranscriptSideAppendEntry(canonicalEntry) &&
+      canonicalEntry.parentId === this.appendParentId &&
       this.leafId !== this.appendParentId
     ) {
-      this.logicalParentsById.set(entry.id, this.leafId);
+      this.logicalParentsById.set(canonicalEntry.id, this.leafId);
     }
-    this.fileEntries.push(entry);
-    this.byId.set(entry.id, entry);
-    this.leafId = entry.id;
-    this.appendParentId = entry.id;
-    this.promptReleasedSideBranchParentId = undefined;
-    this.persist(entry, options);
+    this.fileEntries.push(canonicalEntry);
+    this.byId.set(canonicalEntry.id, canonicalEntry);
+    this.appendParentId = canonicalEntry.id;
+    this.pendingDeliberateAppend = false;
+    if (isSessionTranscriptSideAppendEntry(canonicalEntry)) {
+      this.appendMode = "side";
+      this.promptReleasedSideBranchParentId = canonicalEntry.id;
+    } else {
+      this.leafId = canonicalEntry.id;
+      this.appendMode = undefined;
+      this.promptReleasedSideBranchParentId = undefined;
+    }
+  }
+
+  private resolveCurrentKeyedUserId(message: SessionMessageEntry["message"]): string | undefined {
+    if (
+      message.role !== "user" ||
+      !("idempotencyKey" in message) ||
+      typeof message.idempotencyKey !== "string" ||
+      message.idempotencyKey.length === 0
+    ) {
+      return undefined;
+    }
+    let parent = this.appendParentId ? this.byId.get(this.appendParentId) : undefined;
+    let remainingAncestors = this.byId.size;
+    while (parent && remainingAncestors-- > 0 && isSessionContextMetadataEntry(parent)) {
+      parent = parent.parentId ? this.byId.get(parent.parentId) : undefined;
+    }
+    if (
+      parent?.type === "message" &&
+      parent.message.role === "user" &&
+      "idempotencyKey" in parent.message &&
+      parent.message.idempotencyKey === message.idempotencyKey
+    ) {
+      return parent.id;
+    }
+    return undefined;
   }
 
   appendMessage(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): string {
-    const invalidateSerializedPrefixCache =
-      options?.invalidateSerializedPrefixCache === true || messageSerializesOwnedValues(message);
+    if (options?.idempotencyLookup !== "caller-checked") {
+      const currentUserId = this.resolveCurrentKeyedUserId(message);
+      if (currentUserId) {
+        // Session setup may insert context-free metadata after the ingress-persisted user.
+        // Keep that metadata as the append parent while adopting the canonical user once.
+        return currentUserId;
+      }
+    }
     const entry: SessionMessageEntry = {
       type: "message",
       id: generateSessionEntryId(this.byId),
@@ -57,8 +126,8 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       timestamp: new Date().toISOString(),
       message,
     };
-    this.appendEntry(entry, { ...options, invalidateSerializedPrefixCache });
-    return entry.id;
+    this.appendEntry(entry, options);
+    return this.resolveCurrentKeyedUserId(message) ?? entry.id;
   }
 
   appendThinkingLevelChange(thinkingLevel: string): string {
@@ -181,6 +250,40 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     return this.leafId;
   }
 
+  appendLeafControl(params: {
+    targetId: string | null;
+    appendParentId: string | null;
+    appendMode?: "side";
+  }): SessionLeafControl {
+    if (params.targetId !== null && !this.byId.has(params.targetId)) {
+      throw new Error(`Entry ${params.targetId} not found`);
+    }
+    if (
+      params.appendParentId !== null &&
+      !this.byId.has(params.appendParentId) &&
+      !this.opaqueParentsById.has(params.appendParentId)
+    ) {
+      throw new Error(`Append parent ${params.appendParentId} not found`);
+    }
+    const previousLeafId = this.leafId;
+    this.leafId = params.targetId;
+    const entry = this.createLeafControl(
+      this.appendParentId,
+      params.appendParentId,
+      params.appendMode,
+    );
+    this.leafId = previousLeafId;
+    this.persistRecord(entry);
+    this.rememberLeafControl(entry);
+    this.leafId = params.targetId;
+    this.appendParentId = params.appendParentId;
+    this.appendMode = params.appendMode;
+    this.promptReleasedSideBranchParentId =
+      params.appendMode === "side" ? params.appendParentId : undefined;
+    this.pendingDeliberateAppend = false;
+    return entry;
+  }
+
   getLeafEntry(): SessionEntry | undefined {
     return this.leafId ? this.getEntry(this.leafId) : undefined;
   }
@@ -262,7 +365,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
 
   getEntries(): SessionEntry[] {
     return this.fileEntries
-      .filter((entry): entry is SessionEntry => entry.type !== "session")
+      .filter((entry): entry is SessionEntry => entry.type !== "session" && this.byId.has(entry.id))
       .map((entry) => this.normalizeEntryParent(entry));
   }
 
@@ -311,13 +414,17 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     }
     this.leafId = branchTargetId;
     this.appendParentId = branchTargetId;
+    this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
+    this.pendingDeliberateAppend = true;
   }
 
   resetLeaf(): void {
     this.leafId = null;
     this.appendParentId = null;
+    this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
+    this.pendingDeliberateAppend = true;
   }
 
   branchWithSummary(
@@ -330,8 +437,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
     }
-    this.leafId = branchTargetId;
-    this.appendParentId = branchTargetId;
     const entry: BranchSummaryEntry = {
       type: "branch_summary",
       id: generateSessionEntryId(this.byId),

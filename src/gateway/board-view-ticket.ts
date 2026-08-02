@@ -2,7 +2,9 @@ import { createHmac, randomBytes } from "node:crypto";
 import { safeEqualSecret } from "../security/secret-equal.js";
 
 export const BOARD_HTTP_PATH_PREFIX = "/__openclaw__/board/";
-export const BOARD_VIEW_TICKET_TTL_MS = 2 * 60_000;
+// Bounds residual bearer access after the originating client loses its view authority.
+// Each load rechecks grant state; content changes invalidate through revision and generation.
+export const BOARD_VIEW_TICKET_TTL_MS = 20 * 60_000;
 
 const BOARD_VIEW_TICKET_SCOPE = "board-widget-view";
 const BOARD_VIEW_TICKET_MAX_LENGTH = 2_048;

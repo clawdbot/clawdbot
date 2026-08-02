@@ -56,7 +56,7 @@ export function resolveCodexPluginThreadConfigStartupPolicy(params: {
   const pluginThreadConfigRequired =
     !params.nativeToolSurfaceEnabled || shouldBuildCodexPluginThreadConfig(params.pluginConfig);
   // Restricted runs still need a config so thread/start carries an explicit
-  // apps._default denial patch without app/list discovery.
+  // apps._default denial patch without app inventory discovery.
   const pluginThreadConfigPluginConfig = params.nativeToolSurfaceEnabled
     ? params.pluginConfig
     : disableCodexPluginThreadConfig(params.pluginConfig);
@@ -195,6 +195,7 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
           policy,
           metadataCache,
           appCacheKey: params.appCacheKey,
+          configCwd: params.configCwd,
         })
       : undefined,
     build: () =>

@@ -283,6 +283,7 @@ export function clearAutoFallbackPrimaryProbeSelection(
   delete entry.providerOverride;
   delete entry.modelOverride;
   delete entry.modelOverrideSource;
+  delete entry.modelOverrideRouteResolution;
   delete entry.modelOverrideFallbackOriginProvider;
   delete entry.modelOverrideFallbackOriginModel;
   if (
@@ -294,9 +295,7 @@ export function clearAutoFallbackPrimaryProbeSelection(
     delete entry.authProfileOverrideSource;
     delete entry.authProfileOverrideCompactionCount;
   }
-  delete entry.fallbackNoticeSelectedModel;
-  delete entry.fallbackNoticeActiveModel;
-  delete entry.fallbackNoticeReason;
+  delete entry.fallbackNotice;
   entry.updatedAt = now;
 }
 
@@ -476,14 +475,6 @@ export function resolveSubagentModelConfigSelectionResult(params: {
   return candidates.find((candidate) => resolvePrimaryStringValue(candidate.raw));
 }
 
-export function resolveSubagentModelConfigSelection(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
-}): AgentModelConfig | undefined {
-  return resolveSubagentModelConfigSelectionResult(params)?.raw;
-}
-
 export function resolveSubagentModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
@@ -513,17 +504,6 @@ function resolveSubagentSpawnModelFallbacksOverride(
     cfg.agents?.defaults?.subagents?.model,
     agentConfig?.model,
   ]);
-}
-
-export function resolveFallbackAgentId(params: {
-  agentId?: string | null;
-  sessionKey?: string | null;
-}): string {
-  const explicitAgentId = normalizeOptionalString(params.agentId) ?? "";
-  if (explicitAgentId) {
-    return normalizeAgentId(explicitAgentId);
-  }
-  return resolveAgentIdFromSessionKey(params.sessionKey);
 }
 
 export function resolveRunModelFallbacksOverride(params: {

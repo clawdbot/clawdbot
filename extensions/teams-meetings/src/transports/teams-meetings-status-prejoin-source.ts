@@ -119,8 +119,7 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
   let microphoneState = identityVerified ? toggleState(microphone, "microphone") : undefined;
   const camera = first(selectors.camera) || findTextButton(/camera|video/i);
   let cameraState = identityVerified ? toggleState(camera, "camera") : undefined;
-  let controlManualActionReason;
-  let controlManualActionMessage;
+  let controlManualAction;
   if (canMutateSession && identityVerified && !inCall && camera && cameraState === "on") {
     camera.click();
     await waitForUi();
@@ -132,8 +131,7 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
   }
   const join = first(selectors.join) || findTextButton(/^\\s*(join now|ask to join|join meeting)\\s*$/i);
   if (identityVerified && !inCall && join && cameraState !== "off") {
-    controlManualActionReason = "teams-camera-required";
-    controlManualActionMessage = "Turn the Teams camera off and verify the camera control shows it is off, then retry joining.";
+    controlManualAction = manualActionFor("teams-camera-required", "Turn the Teams camera off and verify the camera control shows it is off, then retry joining.");
   }
   const isBlackHole = (value) =>
     /^blackhole 2ch(?: \\(virtual\\))?$/i.test(String(value || "").replace(/\\s+/g, " ").trim());
@@ -244,8 +242,7 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
         const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
         microphoneState = toggleState(currentMicrophone, "microphone");
       }
-      controlManualActionReason = "teams-audio-choice-required";
-      controlManualActionMessage = "Select BlackHole 2ch as the Teams microphone and verify it is selected before enabling talk-back.";
+      controlManualAction = manualActionFor("teams-audio-choice-required", "Select BlackHole 2ch as the Teams microphone and verify it is selected before enabling talk-back.");
     } else if (canMutateSession && microphoneState === "off") {
       microphone.click();
       await waitForUi();
@@ -256,8 +253,7 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
       }
     }
     if (audioInputRouted && microphoneState !== "on") {
-      controlManualActionReason = "teams-microphone-required";
-      controlManualActionMessage = "Unmute the Teams microphone and verify the microphone control shows it is on, then retry joining.";
+      controlManualAction = manualActionFor("teams-microphone-required", "Unmute the Teams microphone and verify the microphone control shows it is on, then retry joining.");
     }
   } else if (canMutateSession && identityVerified && !inCall && !allowMicrophone && microphoneState === "on") {
       microphone.click();
@@ -292,19 +288,15 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
     }
   }
   if (identityVerified && !inCall && join && !allowMicrophone && microphoneState !== "off") {
-    controlManualActionReason = "teams-microphone-required";
-    controlManualActionMessage = "Mute the Teams microphone and verify the microphone control shows it is off, then retry joining.";
+    controlManualAction = manualActionFor("teams-microphone-required", "Mute the Teams microphone and verify the microphone control shows it is off, then retry joining.");
   }
-  if (identityVerified && !inCall && join && allowMicrophone && !controlManualActionReason) {
+  if (identityVerified && !inCall && join && allowMicrophone && !controlManualAction) {
     if (!microphone) {
-      controlManualActionReason = "teams-microphone-required";
-      controlManualActionMessage = "Open Teams device settings and verify the microphone control before enabling talk-back.";
+      controlManualAction = manualActionFor("teams-microphone-required", "Open Teams device settings and verify the microphone control before enabling talk-back.");
     } else if (audioInputRouted !== true) {
-      controlManualActionReason = "teams-audio-choice-required";
-      controlManualActionMessage = "Select BlackHole 2ch as the Teams microphone and verify it is selected before enabling talk-back.";
+      controlManualAction = manualActionFor("teams-audio-choice-required", "Select BlackHole 2ch as the Teams microphone and verify it is selected before enabling talk-back.");
     } else if (microphoneState !== "on") {
-      controlManualActionReason = "teams-microphone-required";
-      controlManualActionMessage = "Unmute the Teams microphone and verify the microphone control shows it is on, then retry joining.";
+      controlManualAction = manualActionFor("teams-microphone-required", "Unmute the Teams microphone and verify the microphone control shows it is on, then retry joining.");
     }
   }`,
     manualActionSource: `  const pageText = text(document.body);
@@ -332,30 +324,20 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
   // A granted microphone plus the verified BlackHole input is sufficient for talk-back.
   const permissionRequired = devicePermissionPrompt &&
     (!allowMicrophone || microphonePermissionState !== "granted");
-  let manualActionReason;
-  let manualActionMessage;
+  let manualAction;
   if (committedOwnerConflict && !canMutateSession) {
-    manualActionReason = "teams-session-conflict";
-    manualActionMessage = "This Teams tab is owned by another active meeting session.";
+    manualAction = manualActionFor("teams-session-conflict", "This Teams tab is owned by another active meeting session.");
   } else if (!inCall && loginRequired) {
-    manualActionReason = "teams-login-required";
-    manualActionMessage = tenantLoginRequired
-      ? "This Teams tenant requires sign-in or email verification. Complete it in the OpenClaw browser profile, then retry."
-      : "Sign in to Microsoft Teams in the OpenClaw browser profile, then retry the meeting join.";
+    manualAction = manualActionFor("teams-login-required", tenantLoginRequired ? "This Teams tenant requires sign-in or email verification. Complete it in the OpenClaw browser profile, then retry." : "Sign in to Microsoft Teams in the OpenClaw browser profile, then retry the meeting join.");
   } else if (!inCall && lobbyWaiting) {
-    manualActionReason = "teams-admission-required";
-    manualActionMessage = "Admit the OpenClaw guest from the Microsoft Teams lobby, then retry speech.";
+    manualAction = manualActionFor("teams-admission-required", "Admit the OpenClaw guest from the Microsoft Teams lobby, then retry speech.");
   } else if (!inCall && permissionRequired) {
-    manualActionReason = "teams-permission-required";
-    manualActionMessage = allowMicrophone
-      ? "Allow microphone permission for Teams in the OpenClaw browser profile, then retry."
-      : "Dismiss the Teams device-permission prompt or continue without devices, then retry.";
-  } else if (!inCall && controlManualActionReason) {
-    manualActionReason = controlManualActionReason;
-    manualActionMessage = controlManualActionMessage;
+    manualAction = manualActionFor("teams-permission-required", allowMicrophone ? "Allow microphone permission for Teams in the OpenClaw browser profile, then retry." : "Dismiss the Teams device-permission prompt or continue without devices, then retry.");
+  } else if (!inCall && controlManualAction) {
+    manualAction = controlManualAction;
   }
   let clickedJoin = false;
-  if (canMutateSession && identityVerified && autoJoin && !inCall && join && !join.disabled && !manualActionReason) {
+  if (canMutateSession && identityVerified && autoJoin && !inCall && join && !join.disabled && !manualAction) {
     join.click();
     clickedJoin = true;
     notes.push("Clicked the Teams guest join button.");

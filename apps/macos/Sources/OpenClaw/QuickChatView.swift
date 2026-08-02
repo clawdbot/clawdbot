@@ -343,7 +343,8 @@ struct QuickChatView: View {
                 showsAssistantAvatars: false,
                 composerChrome: .clean,
                 isComposerEnabled: false,
-                isAttachmentInputEnabled: false)
+                isAttachmentInputEnabled: false,
+                mediaPlaybackAllowed: { !AppStateStore.shared.talkEnabled })
                 .id(self.replyBinding.route)
                 .frame(height: 300)
             if QuickChatPasteLogic.finalAssistantText(

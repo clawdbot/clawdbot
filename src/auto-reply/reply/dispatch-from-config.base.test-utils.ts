@@ -57,7 +57,7 @@ beforeAll(globalBeforeAll0);
 describe("dispatchReplyFromConfig", () => {
   beforeEach(describe0BeforeEach0);
 
-  it("loads runtime plugins before reading inbound hook state", async () => {
+  it("loads a registry handle before reading inbound hook state", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -70,12 +70,14 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     const pluginLoadOptions = firstMockArg(
-      runtimePluginMocks.ensureRuntimePluginsLoaded,
+      runtimePluginMocks.loadAgentRuntimePluginRegistryHandle,
       "runtime plugin load",
     ) as { config?: unknown; workspaceDir?: unknown };
     expect(pluginLoadOptions.config).toBe(cfg);
     expect(typeof pluginLoadOptions.workspaceDir).toBe("string");
-    expect(runtimePluginMocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(
+      runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mock.invocationCallOrder[0],
+    ).toBeLessThan(
       expectDefined(
         hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
         "hookMocks.runner.hasHooks.mock.invocationCallOrder[0] test invariant",
@@ -1016,7 +1018,9 @@ describe("dispatchReplyFromConfig", () => {
         replyResolver: async () => undefined,
       });
 
-      expect(result.queuedFinal).toBe(false);
+      // Direct empty completions get a core no-visible-reply fallback final.
+      expect(result.queuedFinal).toBe(true);
+      expect(result.noVisibleReplyFallbackDelivered).toBe(true);
       await vi.waitFor(
         () => {
           expect(
@@ -1284,8 +1288,9 @@ describe("dispatchReplyFromConfig", () => {
       });
 
       expect(result).toMatchObject({
-        queuedFinal: false,
+        queuedFinal: true,
         counts: { tool: 0, block: 0, final: 0 },
+        noVisibleReplyFallbackDelivered: true,
       });
       expect(replyResolver).toHaveBeenCalledTimes(1);
       expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);

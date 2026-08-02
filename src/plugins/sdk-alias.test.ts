@@ -9,7 +9,7 @@ import {
   bundledPluginRoot,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   buildPluginLoaderAliasMap,
   createPluginLoaderModuleCacheKey,
@@ -17,7 +17,6 @@ import {
   resolvePluginLoaderModuleConfig,
   resolvePluginLoaderTryNative,
   resolvePluginRuntimeModulePathWithDiagnostics,
-  shouldPreferNativeModuleLoad,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 import {
@@ -524,7 +523,7 @@ describe("plugin sdk alias helpers", () => {
     expect(aliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
   });
 
-  it("adds non-QA private Codex helper subpaths only for trusted Codex plugins", () => {
+  it("adds the non-QA private Codex helper subpath only for trusted Codex plugins", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
@@ -538,11 +537,6 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(
       path.join(fixture.root, "src", "plugin-sdk", "codex-mcp-projection.ts"),
       "export const codexMcpProjection = true;\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(fixture.root, "src", "plugin-sdk", "codex-native-task-runtime.ts"),
-      "export const codexNativeTaskRuntime = true;\n",
       "utf-8",
     );
     fs.writeFileSync(
@@ -613,12 +607,8 @@ describe("plugin sdk alias helpers", () => {
       ),
     );
 
-    expect(codexSubpaths).toEqual(["codex-mcp-projection", "codex-native-task-runtime", "core"]);
-    expect(installedCodexSubpaths).toEqual([
-      "codex-mcp-projection",
-      "codex-native-task-runtime",
-      "core",
-    ]);
+    expect(codexSubpaths).toEqual(["codex-mcp-projection", "core"]);
+    expect(installedCodexSubpaths).toEqual(["codex-mcp-projection", "core"]);
     expect(otherSubpaths).toEqual(["core"]);
     expect(installedOtherSubpaths).toEqual(["core"]);
     expect(shadowCodexSubpaths).toEqual(["core"]);
@@ -798,23 +788,11 @@ describe("plugin sdk alias helpers", () => {
       "plugin-sdk",
       "codex-mcp-projection.ts",
     );
-    const sourceCodexNativeTaskRuntimePath = path.join(
-      fixture.root,
-      "src",
-      "plugin-sdk",
-      "codex-native-task-runtime.ts",
-    );
     const distCodexMcpProjectionPath = path.join(
       fixture.root,
       "dist",
       "plugin-sdk",
       "codex-mcp-projection.js",
-    );
-    const distCodexNativeTaskRuntimePath = path.join(
-      fixture.root,
-      "dist",
-      "plugin-sdk",
-      "codex-native-task-runtime.js",
     );
     const sourceQaRuntimePath = path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts");
     fs.rmSync(
@@ -827,18 +805,8 @@ describe("plugin sdk alias helpers", () => {
       "utf-8",
     );
     fs.writeFileSync(
-      sourceCodexNativeTaskRuntimePath,
-      "export const codexNativeTaskRuntime = true;\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
       distCodexMcpProjectionPath,
       "export const codexMcpProjection = true;\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      distCodexNativeTaskRuntimePath,
-      "export const codexNativeTaskRuntime = true;\n",
       "utf-8",
     );
     fs.writeFileSync(sourceQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
@@ -865,21 +833,10 @@ describe("plugin sdk alias helpers", () => {
       "plugin-sdk",
       "codex-mcp-projection.js",
     );
-    const devCodexNativeTaskRuntimePath = path.join(
-      devFixture.root,
-      "dist",
-      "plugin-sdk",
-      "codex-native-task-runtime.js",
-    );
     mkdirSafeDir(path.join(devFixture.root, "extensions"));
     fs.writeFileSync(
       devCodexMcpProjectionPath,
       "export const devCodexMcpProjection = true;\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      devCodexNativeTaskRuntimePath,
-      "export const devCodexNativeTaskRuntime = true;\n",
       "utf-8",
     );
     const { packageRoot: installedCodexRoot, pluginEntry: installedCodexEntry } =
@@ -955,28 +912,16 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/codex-mcp-projection"] ?? "")).toBe(
       fs.realpathSync(sourceCodexMcpProjectionPath),
     );
-    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/codex-native-task-runtime"] ?? "")).toBe(
-      fs.realpathSync(sourceCodexNativeTaskRuntimePath),
-    );
     expect(
       fs.realpathSync(installedAliases["openclaw/plugin-sdk/codex-mcp-projection"] ?? ""),
     ).toBe(fs.realpathSync(distCodexMcpProjectionPath));
-    expect(
-      fs.realpathSync(installedAliases["openclaw/plugin-sdk/codex-native-task-runtime"] ?? ""),
-    ).toBe(fs.realpathSync(distCodexNativeTaskRuntimePath));
     expect(fs.realpathSync(devRootAliases["openclaw/plugin-sdk/codex-mcp-projection"] ?? "")).toBe(
       fs.realpathSync(devCodexMcpProjectionPath),
     );
-    expect(
-      fs.realpathSync(devRootAliases["openclaw/plugin-sdk/codex-native-task-runtime"] ?? ""),
-    ).toBe(fs.realpathSync(devCodexNativeTaskRuntimePath));
     expect(aliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
     expect(otherAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
-    expect(otherAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
     expect(installedOtherAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
-    expect(installedOtherAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
     expect(shadowCodexAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
-    expect(shadowCodexAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
   });
 
   it("aliases the SSRF internal helper only for bundled local IPC owner plugins", async () => {
@@ -1582,9 +1527,6 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/media-generation-core/catalog"] ?? "")).toBe(
       fs.realpathSync(mediaGenerationCore.distFile),
     );
-    expect(fs.realpathSync(aliases["@openclaw/acp-core/normalize-text"] ?? "")).toBe(
-      fs.realpathSync(acpCoreRootDistFile),
-    );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/record-coerce"] ?? "")).toBe(
       fs.realpathSync(normalizationCoreRootDistFile),
     );
@@ -1845,9 +1787,9 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("uses transpiled module loads for source TypeScript plugin entries", () => {
-    expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(true);
+    expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(true);
     expect(
-      shouldPreferNativeModuleLoad(
+      resolvePluginLoaderTryNative(
         `/repo/${bundledPluginFile("discord", "src/channel.runtime.ts")}`,
       ),
     ).toBe(false);
@@ -1864,9 +1806,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(false);
       expect(
-        shouldPreferNativeModuleLoad(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
+        resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
       ).toBe(false);
     } finally {
       Object.defineProperty(process, "versions", {
@@ -1884,9 +1826,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(true);
+      expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(true);
       expect(
-        shouldPreferNativeModuleLoad(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
+        resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
       ).toBe(true);
     } finally {
       Object.defineProperty(process, "platform", {
@@ -1924,8 +1866,7 @@ describe("plugin sdk alias helpers", () => {
 
   it("prefers native module loading for bundled plugin dist .js modules, keeps .ts on aliased path", () => {
     // Built .js/.mjs/.cjs files under dist/extensions/ should now delegate
-    // to shouldPreferNativeModuleLoad() — which returns true on Node for
-    // compiled artifacts, avoiding the slow jiti transform path.
+    // to native loading on Node for compiled artifacts, avoiding the slow jiti transform path.
     expect(
       resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
         preferBuiltDist: true,
@@ -2295,6 +2236,14 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(aliasA).not.toBe(aliasB);
   });
 
+  it("reuses one merged map for plugin entrypoints with the same effective SDK surface", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const entryA = writePluginEntry(fixture.root, bundledPluginFile("a", "src/index.ts"));
+    const entryB = writePluginEntry(fixture.root, bundledPluginFile("b", "src/index.ts"));
+
+    expect(buildPluginLoaderAliasMap(entryB)).toBe(buildPluginLoaderAliasMap(entryA));
+  });
+
   it("returns different references when pluginSdkResolution differs", () => {
     const fixture = createPluginSdkAliasFixture();
     const entry = writePluginEntry(fixture.root, bundledPluginFile("res", "src/index.ts"));
@@ -2305,14 +2254,24 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(auto).not.toBe(dist);
   });
 
-  it("returns different references when argv1 differs", () => {
+  it("reuses one merged map when resolution modes have the same effective order", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const entry = writePluginEntry(fixture.root, bundledPluginFile("same-order", "src/index.ts"));
+
+    const auto = buildPluginLoaderAliasMap(entry, undefined, undefined, "auto");
+    const source = buildPluginLoaderAliasMap(entry, undefined, undefined, "src");
+
+    expect(source).toBe(auto);
+  });
+
+  it("reuses a merged map when different argv hints resolve the same SDK surface", () => {
     const fixture = createPluginSdkAliasFixture();
     const entry = writePluginEntry(fixture.root, bundledPluginFile("argv", "src/index.ts"));
 
     const a = buildPluginLoaderAliasMap(entry, "/path/to/cli-a.mjs");
     const b = buildPluginLoaderAliasMap(entry, "/path/to/cli-b.mjs");
 
-    expect(a).not.toBe(b);
+    expect(a).toBe(b);
   });
 
   it("returns different references when an explicit dev source root differs", () => {
@@ -2391,18 +2350,121 @@ describe("buildPluginLoaderAliasMap memoization", () => {
 });
 
 describe("buildPluginLoaderJitiOptions", () => {
-  it("adds the versioned fs cache directory to plugin loader jiti options", () => {
+  it("scopes the jiti cache to the durable user cache and OpenClaw install", () => {
     const root = createTrustedOpenClawPackageFixture("2.0.0");
     const tmpDir = path.join(root, "tmp");
+    const cacheRoot = path.join(root, "cache");
 
-    const options = withEnv({ TMPDIR: tmpDir }, () =>
+    const options = withEnv({ TMPDIR: tmpDir, XDG_CACHE_HOME: `  ${cacheRoot}  ` }, () =>
       buildPluginLoaderJitiOptions(
         { "openclaw/plugin-sdk/core": path.join(root, "dist", "plugin-sdk", "core.js") },
         { modulePath: path.join(root, "dist", "plugins", "loader.js") },
       ),
     );
 
-    expect(options.fsCache).toContain(path.join(tmpDir, "jiti", "openclaw", "2.0.0"));
+    expect(options.fsCache).toContain(path.join(cacheRoot, "openclaw", "jiti", "2.0.0"));
+    expect(options.fsCache).not.toContain(tmpDir);
+  });
+
+  it.each(["", "   ", "relative/cache"])(
+    "ignores non-absolute XDG cache roots (%j)",
+    (xdgCacheHome) => {
+      const root = createTrustedOpenClawPackageFixture("2.0.0");
+      const homeDir = path.join(root, "home");
+      const options = withEnv(
+        {
+          XDG_CACHE_HOME: xdgCacheHome,
+          LOCALAPPDATA: undefined,
+          OPENCLAW_HOME: homeDir,
+        },
+        () => buildPluginLoaderJitiOptions({}, { modulePath: path.join(root, "dist", "plugins") }),
+      );
+      const platformCacheRoot =
+        process.platform === "win32"
+          ? path.join(homeDir, "AppData", "Local")
+          : process.platform === "darwin"
+            ? path.join(homeDir, "Library", "Caches")
+            : path.join(homeDir, ".cache");
+
+      expect(options.fsCache).toContain(path.join(platformCacheRoot, "openclaw", "jiti", "2.0.0"));
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "uses an absolute Windows local application-data cache root",
+    () => {
+      const root = createTrustedOpenClawPackageFixture("2.0.0");
+      const localAppData = path.join(root, "local-app-data");
+      const options = withEnv(
+        {
+          XDG_CACHE_HOME: undefined,
+          LOCALAPPDATA: `  ${localAppData}  `,
+          OPENCLAW_HOME: path.join(root, "home"),
+        },
+        () => buildPluginLoaderJitiOptions({}, { modulePath: path.join(root, "dist", "plugins") }),
+      );
+
+      expect(options.fsCache).toContain(path.join(localAppData, "openclaw", "jiti", "2.0.0"));
+    },
+  );
+
+  it.each(["JITI_FS_CACHE", "JITI_CACHE"])("honors the %s filesystem-cache opt-out", (envKey) => {
+    const root = createTrustedOpenClawPackageFixture("2.0.0");
+    const options = withEnv(
+      {
+        JITI_FS_CACHE: envKey === "JITI_FS_CACHE" ? "false" : undefined,
+        JITI_CACHE: envKey === "JITI_CACHE" ? "false" : undefined,
+        XDG_CACHE_HOME: path.join(root, "cache"),
+      },
+      () => buildPluginLoaderJitiOptions({}, { modulePath: path.join(root, "dist", "plugins") }),
+    );
+
+    expect(options.fsCache).toBe(false);
+  });
+
+  it("keeps deferred jiti imports working after the temporary directory is deleted", async () => {
+    const root = createTrustedOpenClawPackageFixture("2.0.0");
+    const transientTmpRoot = path.join(root, "tmp");
+    const durableCacheRoot = path.join(root, "cache");
+    const sourceRoot = path.join(root, "source");
+    const parentModulePath = path.join(sourceRoot, "parent.ts");
+    const childModulePath = path.join(sourceRoot, "child.ts");
+    mkdirSafeDir(sourceRoot);
+    mkdirSafeDir(transientTmpRoot);
+    fs.writeFileSync(
+      parentModulePath,
+      'export const loadChild = () => import("./child.ts");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(childModulePath, 'export const marker = "still-delivered";\n', "utf-8");
+    const createJiti = await getCreateJiti();
+
+    await withEnvAsync(
+      {
+        TMPDIR: transientTmpRoot,
+        XDG_CACHE_HOME: durableCacheRoot,
+        JITI_FS_CACHE: undefined,
+        JITI_CACHE: undefined,
+      },
+      async () => {
+        const options = buildPluginLoaderJitiOptions({}, { modulePath: parentModulePath });
+        const loadSourceModule = createJiti(parentModulePath, {
+          ...options,
+          tryNative: false,
+        });
+        const parent = loadSourceModule(parentModulePath) as {
+          loadChild: () => Promise<{ marker: string }>;
+        };
+
+        fs.rmSync(transientTmpRoot, { recursive: true, force: true });
+
+        await expect(parent.loadChild()).resolves.toMatchObject({ marker: "still-delivered" });
+        expect(String(options.fsCache)).toContain(path.join(durableCacheRoot, "openclaw", "jiti"));
+        expect(fs.readdirSync(String(options.fsCache)).some((file) => file.includes("child"))).toBe(
+          true,
+        );
+      },
+    );
   });
 
   it("pre-normalizes and marks alias maps for source transforms", () => {

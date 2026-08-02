@@ -3,12 +3,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
-  getRuntimeConfigSnapshotMetadata,
   writeConfigFile,
 } from "../config/config.js";
 import { resetConfigOverrides, setConfigOverride } from "../config/runtime-overrides.js";
@@ -16,8 +15,11 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
+import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { getPairedDevice } from "../infra/device-pairing.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { callGateway } from "./call.js";
 import { startGatewayServer } from "./server.js";
 import {
   connectDeviceAuthReq,
@@ -174,7 +176,6 @@ function resetGatewayTestState(): void {
   clearConfigCache();
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest({ preserveListeners: true });
-  clearGatewaySubagentRuntime();
 }
 
 describe("gateway e2e", () => {
@@ -184,6 +185,55 @@ describe("gateway e2e", () => {
 
   beforeAll(async () => {
     ({ createConfigIO } = await import("../config/config.js"));
+  });
+
+  it("pairs the local CLI before a runtime-token loopback gateway becomes ready", async () => {
+    const { envSnapshot, tempHome } = await setupGatewayTempHome({
+      prefix: "openclaw-gw-runtime-token-cli-pairing-",
+    });
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    try {
+      deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+      const configPath = await createGatewayConfigPath(tempHome);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      const initialConfig: OpenClawConfig = {
+        gateway: { mode: "local", bind: "loopback" },
+        logging: { level: "info" },
+      };
+      await createConfigIO({ configPath }).writeConfigFile(initialConfig);
+      const port = await getFreeGatewayPort();
+      server = await startGatewayServer(port, {
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
+
+      await expect(
+        callGateway({
+          config: initialConfig,
+          localPortOverride: port,
+          method: "health",
+          timeoutMs: 5_000,
+        }),
+      ).resolves.toEqual(expect.any(Object));
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      expect(persisted.gateway?.auth?.token).toBeUndefined();
+      const identity = loadOrCreateDeviceIdentity();
+      expect(loadDeviceAuthToken({ deviceId: identity.deviceId, role: "operator" })).toMatchObject({
+        scopes: expect.arrayContaining(["operator.admin"]),
+      });
+      await expect(getPairedDevice(identity.deviceId)).resolves.toMatchObject({
+        approvedVia: "silent",
+        approvedScopes: expect.arrayContaining(["operator.admin"]),
+      });
+    } finally {
+      if (server) {
+        await server.close({ reason: "runtime-token local CLI pairing test complete" });
+      }
+      await removeGatewayTempHome(tempHome);
+      envSnapshot.restore();
+    }
   });
 
   it.each(["generated", "explicit-override", "secret-ref-override", "runtime-overrides"] as const)(
@@ -292,10 +342,11 @@ describe("gateway e2e", () => {
           callerAuthOverride.rateLimit!.maxAttempts = 99;
           callerTailscaleOverride.serviceName = "svc:mutated";
         }
-        await writeConfigFile({
+        const nextLoggingSource = {
           ...initialConfig,
           logging: { level: "debug" },
-        });
+        } satisfies OpenClawConfig;
+        await writeConfigFile(nextLoggingSource);
         await expect
           .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
           .toBe("debug");
@@ -309,8 +360,7 @@ describe("gateway e2e", () => {
           expect(getRuntimeConfig().channels?.whatsapp?.allowFrom).toEqual(["*"]);
 
           const sourceBeforePolicyEdit = (await configIO.readConfigFileSnapshot()).sourceConfig;
-          const revisionBeforePolicyEdit = getRuntimeConfigSnapshotMetadata()?.revision ?? -1;
-          await writeConfigFile({
+          const nextPolicySource = {
             ...sourceBeforePolicyEdit,
             channels: {
               ...sourceBeforePolicyEdit.channels,
@@ -319,13 +369,8 @@ describe("gateway e2e", () => {
                 dmPolicy: "disabled",
               },
             },
-          });
-          await expect
-            .poll(() => getRuntimeConfigSnapshotMetadata()?.revision ?? -1, {
-              timeout: 5_000,
-              interval: 50,
-            })
-            .toBeGreaterThan(revisionBeforePolicyEdit);
+          } satisfies OpenClawConfig;
+          await writeConfigFile(nextPolicySource);
           const persistedPolicyEdit = JSON.parse(
             await fs.readFile(configPath, "utf-8"),
           ) as OpenClawConfig;
@@ -333,21 +378,16 @@ describe("gateway e2e", () => {
           expect(getRuntimeConfig().channels?.whatsapp?.dmPolicy).toBe("open");
 
           const sourceBeforeUnrelatedWrite = (await configIO.readConfigFileSnapshot()).sourceConfig;
-          const revisionBeforeUnrelatedWrite = getRuntimeConfigSnapshotMetadata()?.revision ?? -1;
-          await writeConfigFile({
+          const nextUnrelatedSource = {
             ...sourceBeforeUnrelatedWrite,
             ui: { assistant: { name: "unrelated-managed-write" } },
-          });
-          await expect
-            .poll(() => getRuntimeConfigSnapshotMetadata()?.revision ?? -1, {
-              timeout: 5_000,
-              interval: 50,
-            })
-            .toBeGreaterThan(revisionBeforeUnrelatedWrite);
+          } satisfies OpenClawConfig;
+          await writeConfigFile(nextUnrelatedSource);
           const persistedAfterUnrelatedWrite = JSON.parse(
             await fs.readFile(configPath, "utf-8"),
           ) as OpenClawConfig;
           expect(persistedAfterUnrelatedWrite.channels?.whatsapp?.dmPolicy).toBe("disabled");
+          expect(persistedAfterUnrelatedWrite.ui?.assistant?.name).toBe("unrelated-managed-write");
         }
 
         const reconnected = await connectGatewayClient({
@@ -535,7 +575,7 @@ describe("gateway e2e", () => {
           },
           // The request below runs sessionKey "agent:dev:mock-openai"; the
           // gateway rejects session keys whose agent id is not declared.
-          list: [{ id: "dev", default: true }],
+          entries: { dev: { default: true } },
         },
         models: {
           mode: "replace",
@@ -621,7 +661,7 @@ module.exports = {
       const cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
-          list: [{ id: "main", default: true, tools: { allow: ["agents_list"] } }],
+          entries: { main: { default: true, tools: { allow: ["agents_list"] } } },
         },
         plugins: {
           allow: ["http-probe"],
@@ -782,6 +822,79 @@ module.exports = {
         expect(resToken.ok).toBe(true);
       } finally {
         await server2.close({ reason: "wizard auth verify" });
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it.each([
+    { flow: "setup", exitCode: 0, status: "done" },
+    { flow: "setup", exitCode: 23, status: "error" },
+    { flow: "channels", exitCode: 0, status: "done" },
+    { flow: "channels", exitCode: 23, status: "error" },
+  ] as const)(
+    "keeps the authenticated Gateway alive after a $flow wizard exits $exitCode",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async ({ flow, exitCode, status }) => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: `openclaw-wizard-${flow}-exit-home-`,
+        minimalGateway: true,
+      });
+      const wizardToken = nextGatewayId("wiz-contained-exit");
+      const port = await getFreeGatewayPort();
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token: wizardToken },
+        controlUiEnabled: false,
+        wizardRunner: async (_opts, runtime, prompter) => {
+          await prompter.outro("wizard complete");
+          runtime.exit(exitCode);
+        },
+        channelWizardRunner: async (_opts, runtime, prompter) => {
+          await prompter.outro("channel wizard complete");
+          runtime.exit(exitCode);
+        },
+      });
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: wizardToken,
+        clientDisplayName: "vitest-wizard-contained-exit",
+      });
+      // Intercept an actual host exit so the fail-first Gateway test cannot
+      // terminate its Vitest worker before reporting the regression.
+      const processExit = vi.spyOn(process, "exit").mockImplementation((code) => {
+        throw new Error(`Gateway process exit ${code}`);
+      });
+
+      try {
+        const start = await client.request<{
+          sessionId: string;
+          done: boolean;
+          status: "running" | "done" | "cancelled" | "error";
+          step?: { id: string };
+        }>("wizard.start", flow === "channels" ? { flow } : { mode: "local" });
+        expect(start).toMatchObject({ done: false, status: "running" });
+        expect(start.step?.id).toBeTruthy();
+
+        const result = await client.request<{
+          done: boolean;
+          status: "running" | "done" | "cancelled" | "error";
+          error?: string;
+        }>("wizard.next", {
+          sessionId: start.sessionId,
+          answer: { stepId: start.step?.id, value: null },
+        });
+        expect(result).toMatchObject({ done: true, status });
+        if (exitCode !== 0) {
+          expect(result.error).toContain(String(exitCode));
+        }
+        expect(processExit).not.toHaveBeenCalled();
+        await expect(client.request("health", {})).resolves.toBeDefined();
+      } finally {
+        processExit.mockRestore();
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "wizard runtime isolation E2E complete" });
         await removeGatewayTempHome(tempHome);
         envSnapshot.restore();
       }

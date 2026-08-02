@@ -1,17 +1,15 @@
-import {
-  catalogRawRecord,
-  clampText,
-  createDockPanelLayout,
-  type BoardFace,
-  type BoardProvider,
-  type BoardTab,
-  type BoardViewSnapshot,
-  type ChatPageHost,
-  type ControlUiSessionPullRequest,
-  type GatewayBrowserClient,
-  type SessionCatalogPullRequestSummary,
-  type ApplicationContext,
-} from "./chat-pane-deps.ts";
+import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/index.js";
+import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
+import type { BoardProvider } from "../../lib/board/provider.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardTab } from "../../lib/board/types.ts";
+import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import { clampText } from "../../lib/format.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
@@ -118,11 +116,7 @@ export const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
 // Widest the rail's grid column gets; a side-docked rail takes this from the
 // width available to the chat + detail-panel split.
 export const WORKSPACE_RAIL_MAX_WIDTH = 280;
-// .chat-main min-width (312) + divider + .chat-sidebar min-width (300) + slack;
-// below this the detail panel stacks under the thread.
-export const DETAIL_SIDEBAR_SIDE_MIN_WIDTH = 680;
 export const SESSION_RAIL_DOCK_MIN_WIDTH = 1080;
-
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new thread after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =

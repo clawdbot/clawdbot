@@ -2,7 +2,7 @@
 import {
   recordChannelBotPairLoopAndCheckSuppression,
   resolveChannelInboundRouteEnvelope,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
   type ChannelBotLoopProtectionFacts,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -20,7 +20,11 @@ import {
   createGoogleChatIngressMonitor,
   type GoogleChatIngressLifecycle,
 } from "./monitor-ingress.js";
-import { deliverGoogleChatReply, type GoogleChatTypingMessage } from "./monitor-reply-delivery.js";
+import {
+  createGoogleChatTypingMessage,
+  deliverGoogleChatReply,
+  type GoogleChatTypingMessage,
+} from "./monitor-reply-delivery.js";
 import {
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
@@ -286,7 +290,7 @@ async function processMessageWithPipeline(params: {
       };
     }
   }
-  const media = toInboundMediaFacts(mediaInputs);
+  const media = await toInboundMediaFactsWithMetadata(mediaInputs);
 
   const fromLabel = isGroup
     ? space.displayName || `space:${spaceId}`
@@ -380,7 +384,11 @@ async function processMessageWithPipeline(params: {
         thread: typingMessageThreadName,
       });
       if (result?.messageName) {
-        typingMessage = { name: result.messageName, thread: typingMessageThreadName };
+        typingMessage = createGoogleChatTypingMessage({
+          messageName: result.messageName,
+          requestedThreadName: typingMessageThreadName,
+          deliveredThreadName: result.threadName,
+        });
       }
     } catch (err) {
       runtime.error?.(`Failed sending typing message: ${String(err)}`);

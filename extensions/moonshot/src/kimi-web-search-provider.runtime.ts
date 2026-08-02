@@ -35,11 +35,11 @@ import {
   isNativeMoonshotBaseUrl,
   MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
-  MOONSHOT_DEFAULT_MODEL_ID,
 } from "../provider-catalog.js";
 
 const DEFAULT_KIMI_BASE_URL = MOONSHOT_BASE_URL;
-const DEFAULT_KIMI_SEARCH_MODEL = MOONSHOT_DEFAULT_MODEL_ID;
+// Search owns a separate model default so chat onboarding changes do not silently reroute searches.
+const DEFAULT_KIMI_SEARCH_MODEL = "kimi-k2.6";
 /** Models that require explicit thinking disablement for web search. */
 const KIMI_THINKING_MODELS = new Set(["kimi-k2.6", "kimi-k2.5"]);
 const KIMI_WEB_SEARCH_TOOL = {
@@ -216,6 +216,7 @@ async function runKimiSearch(params: {
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<KimiSearchResult> {
   const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
   const messages: Array<Record<string, unknown>> = [{ role: "user", content: params.query }];
@@ -227,6 +228,7 @@ async function runKimiSearch(params: {
       {
         url: endpoint,
         timeoutSeconds: params.timeoutSeconds,
+        signal: params.signal,
         init: {
           method: "POST",
           headers: {
@@ -341,6 +343,7 @@ async function runKimiSearch(params: {
 export async function executeKimiWebSearchProviderTool(
   ctx: { config?: OpenClawConfig; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
+  opts?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
@@ -392,6 +395,7 @@ export async function executeKimiWebSearchProviderTool(
     baseUrl,
     model,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+    signal: opts?.signal,
   });
   if (!result.grounded) {
     return {

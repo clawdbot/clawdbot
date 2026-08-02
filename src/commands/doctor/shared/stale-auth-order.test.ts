@@ -7,10 +7,6 @@ import { buildAuthHealthSummary } from "../../../agents/auth-health.js";
 import { testing as externalAuthTesting } from "../../../agents/auth-profiles/external-auth.test-support.js";
 import { resolveAuthProfileOrder } from "../../../agents/auth-profiles/order.js";
 import {
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "../../../agents/auth-profiles/paths.js";
-import {
   resolveAuthProfileDatabasePath,
   resolveAuthProfileDatabaseFilePaths,
   writePersistedAuthProfileStateRaw,
@@ -24,6 +20,10 @@ import {
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import {
+  resolveLegacyAuthProfilesPath as resolveAuthStorePath,
+  resolveLegacyFlatAuthPath as resolveLegacyAuthStorePath,
+} from "../../doctor-auth-legacy-paths.js";
 import {
   collectStaleConfiguredAuthOrderWarnings,
   maybeRepairStaleConfiguredAuthOrders,
@@ -135,6 +135,134 @@ describe("repairStaleConfiguredAuthOrders", () => {
     expect(result.changes).toEqual([
       "auth.order.anthropic: removed 1 missing profile reference to restore automatic per-agent auth selection.",
     ]);
+  });
+
+  it("repairs an undeclared order id to the only declared profile for that provider", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stale-auth-order-"));
+    try {
+      const cfg = {
+        memory: {},
+        auth: {
+          profiles: {
+            "openai:chatgpt-manual": { provider: "openai", mode: "oauth" },
+          },
+          order: { openai: ["openai:manual"] },
+        },
+      } satisfies OpenClawConfig;
+
+      const result = maybeRepairStaleConfiguredAuthOrders({
+        cfg,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+
+      expect(result.config.auth?.order?.openai).toEqual(["openai:chatgpt-manual"]);
+      expect(result.changes).toEqual([
+        "auth.order.openai: replaced undeclared openai:manual with openai:chatgpt-manual.",
+      ]);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports an undeclared order id without changing ambiguous provider profiles", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stale-auth-order-"));
+    try {
+      const cfg = {
+        memory: {},
+        auth: {
+          profiles: {
+            "openai:chatgpt-manual": { provider: "openai", mode: "oauth" },
+            "openai:api-manual": { provider: "openai", mode: "api_key" },
+          },
+          order: { openai: ["openai:manual"] },
+        },
+      } satisfies OpenClawConfig;
+
+      const preview = collectStaleConfiguredAuthOrderWarnings({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      const result = maybeRepairStaleConfiguredAuthOrders({
+        cfg,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+
+      expect(result.config).toBe(cfg);
+      expect(result.changes).toEqual([]);
+      expect(preview.join("\n")).toContain(
+        "declared profiles for this provider are ambiguous (openai:chatgpt-manual, openai:api-manual)",
+      );
+      expect(result.warnings?.join("\n")).toContain("Set auth.order.openai explicitly");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an undeclared order id backed by a usable stored credential", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stale-auth-order-"));
+    try {
+      const cfg = {
+        auth: {
+          profiles: {
+            "openai:chatgpt-manual": { provider: "openai", mode: "oauth" },
+          },
+          order: { openai: ["openai:manual"] },
+        },
+      } satisfies OpenClawConfig;
+      writePersistedAuthProfileStoreRaw(
+        {
+          version: 1,
+          profiles: {
+            "openai:manual": { type: "api_key", provider: "openai", key: "stored-key" },
+          },
+        },
+        path.join(stateDir, "agents", "main", "agent"),
+      );
+
+      const result = maybeRepairStaleConfiguredAuthOrders({
+        cfg,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+
+      expect(result).toEqual({ config: cfg, changes: [] });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("drops undeclared-profile warnings after automatic fallback removes the order", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stale-auth-order-"));
+    try {
+      const cfg = {
+        auth: {
+          profiles: {
+            "openai:chatgpt-manual": { provider: "openai", mode: "oauth" },
+            "openai:api-manual": { provider: "openai", mode: "api_key" },
+          },
+          order: { openai: ["openai:missing"] },
+        },
+      } satisfies OpenClawConfig;
+      writePersistedAuthProfileStoreRaw(
+        {
+          version: 1,
+          profiles: {
+            "openai:fallback": { type: "api_key", provider: "openai", key: "stored-key" },
+          },
+        },
+        path.join(stateDir, "agents", "main", "agent"),
+      );
+
+      const result = maybeRepairStaleConfiguredAuthOrders({
+        cfg,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+
+      expect(result.config.auth?.order?.openai).toBeUndefined();
+      expect(result.warnings).toBeUndefined();
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("preserves an explicit empty order", () => {

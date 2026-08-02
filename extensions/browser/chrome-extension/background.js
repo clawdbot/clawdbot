@@ -4,6 +4,7 @@ import {
   capturePageShare,
   waitForCondition,
 } from "./modules/page-share-core.js";
+import { createPageShareRelay } from "./modules/page-share-relay.js";
 // OpenClaw extension service worker.
 //
 // Thin transport between the OpenClaw extension relay (loopback WebSocket) and
@@ -55,10 +56,19 @@ const attachingTabs = new Map();
 const copilotRevocations = new Map();
 /** Debounce handle for tab-list refreshes. */
 let tabsSyncTimer = null;
-let nextPageShareRequestId = 1;
 let pageShareBadgeTimer = null;
-/** @type {Map<number, {resolve: (value: void) => void, reject: (error: Error) => void, timer: ReturnType<typeof setTimeout>}>} */
-const pendingPageShares = new Map();
+const pageShareRelay = createPageShareRelay();
+
+function closeRelaySocket() {
+  const socket = relayWs;
+  if (!socket) {
+    return;
+  }
+  // Chrome completes close asynchronously; fail pending requests before the
+  // handshake so pairing and unpairing never leave a popup stuck on Sending.
+  pageShareRelay.rejectSocket(socket);
+  socket.close();
+}
 
 function setBadge(kind) {
   relayState = kind;
@@ -463,21 +473,13 @@ async function connectRelay() {
       return;
     }
     if (msg?.type === "pageShareResult") {
-      const pending = pendingPageShares.get(msg.requestId);
-      if (pending) {
-        pendingPageShares.delete(msg.requestId);
-        clearTimeout(pending.timer);
-        if (msg.ok) {
-          pending.resolve();
-        } else {
-          pending.reject(new Error(msg.error || "Page share failed."));
-        }
-      }
+      pageShareRelay.settle(ws, msg);
       return;
     }
     void handleRelayCommand(msg);
   });
   ws.addEventListener("close", () => {
+    pageShareRelay.rejectSocket(ws);
     if (relayWs === ws) {
       clearRelayOpeningDeadline();
       relayWs = null;
@@ -489,24 +491,11 @@ async function connectRelay() {
 }
 
 async function sendPageShareRequest(payload) {
-  if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
+  const socket = relayWs;
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
     throw new Error("Relay not connected.");
   }
-  const requestId = nextPageShareRequestId++;
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pendingPageShares.delete(requestId);
-      reject(new Error("Timed out waiting for OpenClaw."));
-    }, 10_000);
-    pendingPageShares.set(requestId, { resolve, reject, timer });
-    try {
-      relayWs.send(JSON.stringify({ type: "pageShare", requestId, payload }));
-    } catch (error) {
-      pendingPageShares.delete(requestId);
-      clearTimeout(timer);
-      reject(error instanceof Error ? error : new Error(String(error)));
-    }
-  });
+  await pageShareRelay.send(socket, payload);
 }
 
 async function ensureRelayReady() {
@@ -659,7 +648,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         });
         reconnectAttempt = 0;
         clearRelayOpeningDeadline();
-        relayWs?.close();
+        closeRelaySocket();
         relayWs = null;
         await chrome.storage.local.set({ gatewayUrl: parsed.gatewayUrl ?? "" });
         await connectRelay();
@@ -670,7 +659,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case "unpair": {
         await chrome.storage.local.remove(["relayUrl", "gatewayUrl", "token"]);
         clearRelayOpeningDeadline();
-        relayWs?.close();
+        closeRelaySocket();
         relayWs = null;
         setBadge("off");
         await copilot.refreshConfig();

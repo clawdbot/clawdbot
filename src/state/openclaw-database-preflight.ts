@@ -1,13 +1,17 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import {
+  describeRunningOpenClawBuild,
+  readSqliteUserVersion,
+} from "../infra/sqlite-user-version.js";
 import type { OpenClawSchemaVersions } from "./openclaw-schema-versions.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
@@ -44,7 +48,8 @@ type AgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases"
 export class OpenClawDatabaseSchemaPreflightError extends Error {
   constructor(readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[]) {
     super(
-      `Gateway refused startup because ${incompatibleDatabases.length} OpenClaw database schema(s) are newer than this build. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
+      `Gateway refused startup because ${incompatibleDatabases.length} OpenClaw database schema(s) are newer than this build. ` +
+        `Refused by ${describeRunningOpenClawBuild()}. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
     );
     this.name = "OpenClawDatabaseSchemaPreflightError";
   }
@@ -84,10 +89,6 @@ function readRegisteredAgentDatabases(database: DatabaseSync): Array<{
   );
 }
 
-function errorReason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** Read schema headers; report unreadable existing files without diagnosing or repairing them. */
 export function preflightOpenClawDatabaseSchemas(options: {
   env: NodeJS.ProcessEnv;
@@ -124,7 +125,7 @@ export function preflightOpenClawDatabaseSchemas(options: {
       result.indeterminate.push({
         kind: "state",
         path: statePath,
-        reason: `agent database registry query failed: ${errorReason(error)}`,
+        reason: `agent database registry query failed: ${formatErrorMessage(error)}`,
       });
       return result;
     }
@@ -157,7 +158,7 @@ export function preflightOpenClawDatabaseSchemas(options: {
         result.indeterminate.push({
           kind: "agent",
           path: agentPath,
-          reason: errorReason(error),
+          reason: formatErrorMessage(error),
         });
       } finally {
         agentDatabase?.close();
@@ -165,7 +166,11 @@ export function preflightOpenClawDatabaseSchemas(options: {
     }
     return result;
   } catch (error) {
-    result.indeterminate.push({ kind: "state", path: statePath, reason: errorReason(error) });
+    result.indeterminate.push({
+      kind: "state",
+      path: statePath,
+      reason: formatErrorMessage(error),
+    });
     return result;
   } finally {
     if (stateDatabase) {

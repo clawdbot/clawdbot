@@ -7,6 +7,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
+  type ControlUiMockGatewayScenario,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 
@@ -42,6 +43,13 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
 
 let sharedBrowser: Browser | null = null;
 let realChatServer: ControlUiE2eServer | null = null;
+
+function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
+  return installMockGateway(page, {
+    agentModel: "openai/gpt-5.5",
+    ...scenario,
+  });
+}
 
 type ControlRect = {
   x: number;
@@ -152,9 +160,6 @@ function activityAlignmentHtml() {
 function chatFooterActionsHtml() {
   return `
     <div class="chat-group-footer-actions">
-      <button class="chat-expand-btn" type="button" aria-label="Open in canvas">
-        <span class="chat-expand-btn__icon" aria-hidden="true">${iconSvg()}</span>
-      </button>
       <button class="chat-copy-btn" type="button" aria-label="Copy as markdown">
         <span class="chat-copy-btn__icon" aria-hidden="true">${iconSvg()}</span>
       </button>
@@ -578,6 +583,53 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("keeps the native gateway picker as compact as sidebar menus", async () => {
+    const page = await openBrowserPage(800, 600);
+    try {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
+          <wa-dropdown class="chat-pane__gateway-menu">
+            <template shadowrootmode="open"><div part="menu">Gateways</div></template>
+            <wa-dropdown-item class="chat-pane__gateway-menu-item">Local Gateway</wa-dropdown-item>
+          </wa-dropdown>
+        </body></html>`,
+      );
+
+      const styles = await page.evaluate(() => {
+        const dropdown = document.querySelector<HTMLElement>(".chat-pane__gateway-menu")!;
+        const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+        const item = dropdown.querySelector<HTMLElement>(".chat-pane__gateway-menu-item")!;
+        const menuStyle = getComputedStyle(menu);
+        const itemStyle = getComputedStyle(item);
+        return {
+          menu: {
+            borderRadius: menuStyle.borderRadius,
+            padding: menuStyle.padding,
+          },
+          item: {
+            borderRadius: itemStyle.borderRadius,
+            fontSize: itemStyle.fontSize,
+            minHeight: itemStyle.minHeight,
+            padding: itemStyle.padding,
+          },
+        };
+      });
+
+      expect(styles).toEqual({
+        menu: { borderRadius: "8px", padding: "6px" },
+        item: {
+          borderRadius: "8px",
+          fontSize: "13px",
+          minHeight: "30px",
+          padding: "0px 8px",
+        },
+      });
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("pins the collapsed session rail to the pane header edge", async () => {
     const page = await openBrowserPage(922, 282);
     try {
@@ -936,8 +988,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(error.message));
       try {
-        await installMockGateway(page);
-        await page.goto(`${realChatServer.baseUrl}chat`, {
+        await installResponsiveChatGateway(page);
+        await page.goto(`${realChatServer.baseUrl}chat/main`, {
           waitUntil: "domcontentloaded",
           timeout: APP_FIRST_RENDER_TIMEOUT_MS,
         });
@@ -984,7 +1036,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }
       const page = await openBrowserPage(1366, 900);
       try {
-        await installMockGateway(page, {
+        await installResponsiveChatGateway(page, {
           assistantName: "Claw",
           historyMessages: [
             {
@@ -996,7 +1048,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             },
           ],
         });
-        await page.goto(`${realChatServer.baseUrl}chat`, {
+        await page.goto(`${realChatServer.baseUrl}chat/main`, {
           waitUntil: "domcontentloaded",
           timeout: APP_FIRST_RENDER_TIMEOUT_MS,
         });
@@ -1081,7 +1133,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const page = await openBrowserPage(1366, 900);
       try {
         await page.route("https://cdn.example/**", (route) => route.abort());
-        await installMockGateway(page, {
+        await installResponsiveChatGateway(page, {
           historyMessages: [
             {
               content: `MEDIA:${imageUrl}`,
@@ -1096,7 +1148,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             },
           ],
         });
-        await page.goto(`${realChatServer.baseUrl}chat`, {
+        await page.goto(`${realChatServer.baseUrl}chat/main`, {
           waitUntil: "domcontentloaded",
           timeout: APP_FIRST_RENDER_TIMEOUT_MS,
         });
@@ -1104,9 +1156,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const image = page.locator("img.chat-message-image");
         const video = page.locator("video");
         // First wait absorbs the cold-app render; both elements land in the same
-        // history render pass, so the video follows immediately after.
+        // history render pass. Video stays behind its placeholder until metadata loads.
         await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-        await video.waitFor({ timeout: 10_000 });
+        await video.waitFor({ state: "attached", timeout: 10_000 });
         expect(await image.getAttribute("src")).toBe(imageUrl);
         expect(await video.getAttribute("src")).toBe(videoUrl);
       } finally {
@@ -1839,40 +1891,35 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("stacks the detail sidebar below the thread in a narrow pane", async () => {
+  it("collapses sidebar columns into one tabbed column below the pane breakpoint", async () => {
     const page = await openBrowserPage(900, 700);
     try {
-      // A 620px pane inside a wide viewport: chat-pane sets the stacked class
-      // when the pane cannot fit chat + detail panel side by side.
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
           <div style="width: 620px; height: 600px; display: flex;">
-            <div class="chat-split-container chat-split-container--open chat-split-container--stacked">
-              <div class="chat-main" style="flex: 0 1 60%">
-                <div class="chat-thread" role="log">
-                  <div class="chat-thread-inner">
-                    <div class="chat-group assistant">
-                      <div class="chat-avatar assistant">A</div>
-                      <div class="chat-group-messages">
-                        <div class="chat-bubble"><div class="chat-text">Stacked layout keeps the thread readable.</div></div>
-                      </div>
-                    </div>
+            <div class="sidebar-region sidebar-region--narrow">
+              <main class="sidebar-region__primary">Primary chat</main>
+              <section class="sidebar-column sidebar-column--collapsed">
+                <div class="sidebar-column__header">
+                  <div class="sidebar-column__tabs">
+                    <button class="sidebar-column__tab" aria-selected="true">Details</button>
+                    <button class="sidebar-column__tab" aria-selected="false">Discussion</button>
                   </div>
                 </div>
-              </div>
-              <section class="chat-sidebar"><div class="sidebar-panel">Detail panel</div></section>
+                <div class="sidebar-column__body">Active detail panel</div>
+              </section>
             </div>
           </div>
         </body></html>`,
       );
 
       await expectNoHorizontalOverflow(page);
-      const main = await getRect(page, ".chat-main");
-      const sidebar = await getRect(page, ".chat-sidebar");
-      expect(sidebar.top).toBeGreaterThanOrEqual(main.bottom - 1);
-      expect(Math.abs(sidebar.width - main.width)).toBeLessThanOrEqual(1);
+      const primary = await getRect(page, ".sidebar-region__primary");
+      const sidebar = await getRect(page, ".sidebar-column--collapsed");
+      expect(sidebar.top).toBeGreaterThanOrEqual(primary.bottom - 1);
+      expect(Math.abs(sidebar.width - primary.width)).toBeLessThanOrEqual(1);
       expect(sidebar.width).toBeGreaterThanOrEqual(618);
-      expect(sidebar.height).toBeGreaterThanOrEqual(160);
+      expect(await page.locator(".sidebar-column__tab").count()).toBe(2);
     } finally {
       await closeBrowserPage(page);
     }
@@ -2283,7 +2330,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         throw new Error("Expected the Control UI server to be ready");
       }
       page = await openBrowserPage(568, 320);
-      await installMockGateway(page, {
+      await installResponsiveChatGateway(page, {
         historyMessages: [
           {
             content: [
@@ -2297,7 +2344,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           },
         ],
       });
-      await page.goto(`${realChatServer.baseUrl}chat`, {
+      await page.goto(`${realChatServer.baseUrl}chat/main`, {
         waitUntil: "domcontentloaded",
         timeout: APP_FIRST_RENDER_TIMEOUT_MS,
       });

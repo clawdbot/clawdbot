@@ -16,13 +16,29 @@ final class CanvasFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
     }
 
     func start() {
+        self.startEventStream()
+        self.setPollingEnabled(true)
+    }
+
+    func startEventStream() {
         self.watcher.start()
-        self.pollingWatcher.start()
+    }
+
+    func setPollingEnabled(_ enabled: Bool) {
+        if enabled {
+            self.pollingWatcher.start()
+        } else {
+            self.pollingWatcher.stop()
+        }
     }
 
     func stop() {
         self.watcher.stop()
         self.pollingWatcher.stop()
+    }
+
+    var isPolling: Bool {
+        self.pollingWatcher.isRunning
     }
 }
 
@@ -68,6 +84,12 @@ private final class PollingDirectoryWatcher: @unchecked Sendable {
             self.timer?.cancel()
             self.timer = nil
             self.lastSnapshot = [:]
+        }
+    }
+
+    var isRunning: Bool {
+        self.queue.sync {
+            self.timer != nil
         }
     }
 

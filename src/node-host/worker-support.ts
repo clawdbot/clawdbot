@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayClientRequestOptions } from "../gateway/client.js";
 import type { NodeHostClient } from "./client.js";
@@ -89,7 +90,7 @@ export class NodeHostWorkerBridgeClient implements NodeHostClient {
     }
 
     const id = `gateway-${this.nextRequestId++}`;
-    const timeoutMs = Math.max(1, opts?.timeoutMs ?? 15_000);
+    const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 15_000);
     const response = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);

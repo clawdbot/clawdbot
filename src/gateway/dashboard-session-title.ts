@@ -10,16 +10,29 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 
+type DashboardSessionTitleModelEntry = Pick<
+  SessionEntry,
+  "authProfileOverride" | "model" | "modelOverride" | "modelProvider" | "providerOverride"
+>;
+
 const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
 const DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS = 1_000;
 const DASHBOARD_SESSION_TITLE_PROMPT =
   "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message. No emoji. Return only the title.";
 
 // One title request per first turn. Concurrent sends cannot race duplicate model
-// calls or metadata writes while the initial agent run advances session state.
-const dashboardTitleRequests = new Set<string>();
+// calls or metadata writes; late callers receive the in-flight promise so they
+// may await the persisted title before proceeding. Stored promises always
+// settle: the label generator aborts internally (TIMEOUT_MS), so a hung model
+// call cannot pin an entry here and block future attempts.
+const sessionTitleRequests = new Map<string, Promise<boolean>>();
 
-function hasExplicitSessionName(entry: SessionEntry | undefined): boolean {
+type SessionTitleAttempt =
+  | { kind: "persisted" }
+  | { kind: "skipped" }
+  | { kind: "in-flight"; settled: Promise<boolean> };
+
+export function hasExplicitSessionName(entry: SessionEntry | undefined): boolean {
   return Boolean(
     entry?.label?.trim() ||
     entry?.displayName?.trim() ||
@@ -46,7 +59,7 @@ export function isDashboardSessionTitleCandidate(params: {
 function resolveDashboardTitleAuthProfile(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  entry: SessionEntry | undefined;
+  entry: DashboardSessionTitleModelEntry | undefined;
   regularProvider: string;
 }): string | undefined {
   const sessionProfile = params.entry?.authProfileOverride?.trim();
@@ -78,6 +91,47 @@ function normalizeDashboardSessionTitle(raw: string): string | null {
   return normalized ? truncateUtf16Safe(normalized, DASHBOARD_SESSION_TITLE_MAX_CHARS) : null;
 }
 
+/** Generates the same short title used by dashboard session rows without persisting it. */
+export async function generateDashboardSessionTitle(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry?: DashboardSessionTitleModelEntry;
+  userMessage: string;
+}): Promise<string | null> {
+  const sourceText = params.userMessage.trim();
+  if (!sourceText || sourceText.startsWith("/")) {
+    return null;
+  }
+  const regularModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  const preferredProfile = resolveDashboardTitleAuthProfile({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    entry: params.entry,
+    regularProvider: regularModel.provider,
+  });
+  const regularModelRef = `${regularModel.provider}/${regularModel.model}${
+    preferredProfile ? `@${preferredProfile}` : ""
+  }`;
+  const utilityModelRef = resolveUtilityModelRefForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    primaryProvider: regularModel.provider,
+    primaryModelRef: regularModelRef,
+  });
+  const generated = await generateConversationLabelWithFallback({
+    userMessage: truncateUtf16Safe(sourceText, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS),
+    prompt: DASHBOARD_SESSION_TITLE_PROMPT,
+    cfg: params.cfg,
+    agentId: params.agentId,
+    ...(utilityModelRef ? { utilityModelRef } : {}),
+    regularModelRef,
+    ...(preferredProfile ? { preferredProfile } : {}),
+    normalizeLabel: normalizeDashboardSessionTitle,
+    maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
+  });
+  return generated ? normalizeDashboardSessionTitle(generated) : null;
+}
+
 export async function maybeGenerateDashboardSessionTitle(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -92,48 +146,46 @@ export async function maybeGenerateDashboardSessionTitle(params: {
     !isDashboardSessionTitleCandidate({
       sessionKey: params.sessionKey,
       userMessage: sourceText,
-    }) ||
+    })
+  ) {
+    return false;
+  }
+  // Dashboard sends never wait on a duplicate request: only the owning call
+  // may claim persistence (and emit sessions.changed), duplicates skip fast.
+  const attempt = await maybeGenerateSessionTitle({ ...params, userMessage: sourceText });
+  return attempt.kind === "persisted";
+}
+
+export async function maybeGenerateSessionTitle(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: SessionEntry | undefined;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  userMessage: string;
+}): Promise<SessionTitleAttempt> {
+  const sourceText = params.userMessage.trim();
+  if (
     hasExplicitSessionName(params.entry) ||
     params.entry?.systemSent === true ||
     params.entry?.sessionId !== params.sessionId
   ) {
-    return false;
+    return { kind: "skipped" };
   }
 
   const requestKey = `${params.storePath}\0${params.sessionKey}\0${params.sessionId}`;
-  if (dashboardTitleRequests.has(requestKey)) {
-    return false;
+  const existing = sessionTitleRequests.get(requestKey);
+  if (existing) {
+    return { kind: "in-flight", settled: existing };
   }
-  dashboardTitleRequests.add(requestKey);
-  try {
-    const regularModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
-    const preferredProfile = resolveDashboardTitleAuthProfile({
+  const request = (async () => {
+    const displayName = await generateDashboardSessionTitle({
       cfg: params.cfg,
       agentId: params.agentId,
       entry: params.entry,
-      regularProvider: regularModel.provider,
+      userMessage: sourceText,
     });
-    const regularModelRef = `${regularModel.provider}/${regularModel.model}${
-      preferredProfile ? `@${preferredProfile}` : ""
-    }`;
-    const utilityModelRef = resolveUtilityModelRefForAgent({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      primaryProvider: regularModel.provider,
-      primaryModelRef: regularModelRef,
-    });
-    const generated = await generateConversationLabelWithFallback({
-      userMessage: truncateUtf16Safe(sourceText, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS),
-      prompt: DASHBOARD_SESSION_TITLE_PROMPT,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      ...(utilityModelRef ? { utilityModelRef } : {}),
-      regularModelRef,
-      ...(preferredProfile ? { preferredProfile } : {}),
-      normalizeLabel: normalizeDashboardSessionTitle,
-      maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
-    });
-    const displayName = generated ? normalizeDashboardSessionTitle(generated) : null;
     if (!displayName) {
       return false;
     }
@@ -155,7 +207,11 @@ export async function maybeGenerateDashboardSessionTitle(params: {
       { requireWriteSuccess: true },
     );
     return persisted;
+  })();
+  sessionTitleRequests.set(requestKey, request);
+  try {
+    return (await request) ? { kind: "persisted" } : { kind: "skipped" };
   } finally {
-    dashboardTitleRequests.delete(requestKey);
+    sessionTitleRequests.delete(requestKey);
   }
 }

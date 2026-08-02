@@ -1,5 +1,11 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  loadSessionEntryReadOnly,
+  type SessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import type { DetachedTaskFindResult } from "../tasks/detached-task-runtime-contract.js";
 import {
@@ -76,7 +82,7 @@ export function createSubagentRegistryLifecycleDelivery(
     if (entry.expectsCompletionMessage !== true || expectedText == null) {
       return false;
     }
-    const mirrorNotBefore = entry.startedAt ?? entry.createdAt;
+    const mirrorNotBefore = entry.execution.startedAt ?? entry.createdAt;
     const mirrorNotAfter = Date.now() + 30_000;
     const expectedIdempotencyKey = buildAnnounceIdempotencyKey(
       buildAnnounceIdFromChildRun({
@@ -223,10 +229,13 @@ export function createSubagentRegistryLifecycleDelivery(
     entry: SubagentRunRecord;
     reason?: string;
   }) => {
-    if (args.entry.expectsCompletionMessage !== true || args.entry.outcome?.status !== "ok") {
+    if (
+      args.entry.expectsCompletionMessage !== true ||
+      args.entry.execution.outcome?.status !== "ok"
+    ) {
       return;
     }
-    const endedAt = args.entry.endedAt ?? Date.now();
+    const endedAt = args.entry.execution.endedAt ?? Date.now();
     const terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(args.reason);
     const target = resolveSubagentTaskTarget(args.entry);
     try {
@@ -264,16 +273,34 @@ export function createSubagentRegistryLifecycleDelivery(
     }
     let resultText: string | null;
     try {
+      const transcriptTarget = entry.execution.transcriptTarget;
+      const agentId =
+        transcriptTarget?.agentId ?? resolveAgentIdFromSessionKey(entry.childSessionKey);
+      const sessionKey = transcriptTarget?.sessionKey ?? entry.childSessionKey;
+      const configuredStorePath = agentId
+        ? (transcriptTarget?.storePath ??
+          resolveStorePath(params.getRuntimeConfig().session?.store, { agentId }))
+        : undefined;
+      const storePath = configuredStorePath
+        ? resolveSessionStorePathForScope({
+            agentId,
+            sessionKey,
+            storePath: configuredStorePath,
+          })
+        : undefined;
+      const sessionId =
+        transcriptTarget?.sessionId ??
+        (agentId && storePath
+          ? loadSessionEntryReadOnly({ agentId, sessionKey, storePath })?.sessionId
+          : undefined);
+      const sessionTarget: SessionTranscriptRuntimeTarget | undefined =
+        agentId && sessionId && storePath
+          ? { agentId, sessionId, sessionKey, storePath }
+          : undefined;
       const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
         waitForReply: entry.expectsCompletionMessage === true,
         outcome,
-        sessionFile: entry.execution?.transcriptTarget?.storePath
-          ? formatSqliteSessionFileMarker({
-              agentId: entry.execution.transcriptTarget.agentId ?? "",
-              sessionId: entry.execution.transcriptTarget.sessionId ?? "",
-              storePath: entry.execution.transcriptTarget.storePath,
-            })
-          : undefined,
+        ...(sessionTarget ? { sessionTarget } : {}),
       });
       resultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
@@ -309,7 +336,7 @@ export function createSubagentRegistryLifecycleDelivery(
       if (entry.expectsCompletionMessage !== true) {
         continue;
       }
-      if (typeof entry.endedAt !== "number") {
+      if (typeof entry.execution.endedAt !== "number") {
         continue;
       }
       if (typeof entry.cleanupCompletedAt === "number") {
@@ -322,7 +349,7 @@ export function createSubagentRegistryLifecycleDelivery(
 
   const refreshFrozenResultFromSession = async (sessionKey: string): Promise<boolean> => {
     const candidates = listPendingCompletionRunsForSession(sessionKey).filter(
-      (entry) => entry.outcome?.status !== "error",
+      (entry) => entry.execution.outcome?.status !== "error",
     );
     if (candidates.length === 0) {
       return false;
@@ -359,7 +386,7 @@ export function createSubagentRegistryLifecycleDelivery(
       changed = true;
     }
     if (changed) {
-      params.persist();
+      params.persist(...candidates.map((entry) => entry.runId));
     }
     return changed;
   };
@@ -406,9 +433,9 @@ export function createSubagentRegistryLifecycleDelivery(
       childRunId: entry.delivery?.payload?.childRunId ?? entry.runId,
       task: entry.delivery?.payload?.task ?? entry.task,
       label: entry.delivery?.payload?.label ?? entry.label,
-      startedAt: entry.delivery?.payload?.startedAt ?? entry.startedAt,
-      endedAt: entry.delivery?.payload?.endedAt ?? entry.endedAt,
-      outcome: entry.delivery?.payload?.outcome ?? entry.outcome,
+      startedAt: entry.delivery?.payload?.startedAt ?? entry.execution.startedAt,
+      endedAt: entry.delivery?.payload?.endedAt ?? entry.execution.endedAt,
+      outcome: entry.delivery?.payload?.outcome ?? entry.execution.outcome,
       expectsCompletionMessage:
         entry.delivery?.payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
       spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
@@ -444,9 +471,9 @@ export function createSubagentRegistryLifecycleDelivery(
     }
     delivery.payload = {
       ...delivery.payload,
-      startedAt: entry.startedAt,
-      endedAt: entry.endedAt,
-      outcome: entry.outcome,
+      startedAt: entry.execution.startedAt,
+      endedAt: entry.execution.endedAt,
+      outcome: entry.execution.outcome,
       frozenResultText: entry.completion?.resultText,
       fallbackFrozenResultText: entry.completion?.fallbackResultText,
     };

@@ -55,7 +55,7 @@ describe("moonshot provider catalog", () => {
         xhigh: "max",
         max: "max",
       },
-      input: ["text", "image", "video"],
+      input: ["text", "image"],
       contextWindow: 1_048_576,
       maxTokens: 1_048_576,
       cost: {
@@ -71,7 +71,7 @@ describe("moonshot provider catalog", () => {
     });
     expect(requireMoonshotModel(provider, "kimi-k2.7-code")).toMatchObject({
       reasoning: true,
-      input: ["text", "image", "video"],
+      input: ["text", "image"],
       contextWindow: 262144,
       maxTokens: 262144,
       cost: {
@@ -83,7 +83,7 @@ describe("moonshot provider catalog", () => {
     });
     expect(requireMoonshotModel(provider, "kimi-k2.7-code-highspeed")).toMatchObject({
       reasoning: true,
-      input: ["text", "image", "video"],
+      input: ["text", "image"],
       contextWindow: 262144,
       maxTokens: 262144,
       cost: {

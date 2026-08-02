@@ -197,6 +197,128 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
+  it.each([
+    ["item/commandExecution/requestApproval", "cmd-policy-allow", { command: "gh run view 1" }],
+    [
+      "item/fileChange/requestApproval",
+      "patch-policy-allow",
+      { reason: "write memory/2026-07-29.md" },
+    ],
+  ] as const)(
+    "auto-accepts %s when the promoted OpenClaw tool policy allows it",
+    async (method, itemId, requestFields) => {
+      const params = createParams();
+
+      const result = await handleCodexAppServerApprovalRequest({
+        method,
+        requestParams: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId,
+          ...requestFields,
+        },
+        paramsForRun: params,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        autoApproveOpenClawToolPolicy: true,
+      });
+
+      expect(result).toEqual({ decision: "accept" });
+      expect(mockCallGatewayTool).not.toHaveBeenCalled();
+      findApprovalEvent(params, {
+        status: "approved",
+        message: "Codex app-server approval accepted by OpenClaw tool policy.",
+      });
+    },
+  );
+
+  it("preserves the initiating requester when re-running policy for a promoted file approval", async () => {
+    const params = createParams();
+    params.senderId = "owner-1";
+    params.senderIsOwner = true;
+    params.memberRoleIds = ["role-a", "role-b"];
+    mockRunBeforeToolCallHook.mockImplementation(async ({ params: hookParams, ctx }) =>
+      ctx?.requester?.senderIsOwner === true
+        ? { blocked: false, params: hookParams }
+        : { blocked: true, reason: "owner required", kind: "veto" },
+    );
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "patch-owner-policy",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApproveOpenClawToolPolicy: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "apply_patch",
+        ctx: expect.objectContaining({
+          requester: {
+            channel: "telegram",
+            accountId: "default",
+            senderId: "owner-1",
+            senderIsOwner: true,
+            roleIds: ["role-a", "role-b"],
+          },
+        }),
+      }),
+    );
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["promoted tool policy", { autoApproveOpenClawToolPolicy: true }],
+    ["full-auto runtime policy", { autoApprove: true }],
+  ] as const)("keeps permission grants on the human path under %s", async (_label, policy) => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:permission-policy-allow", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:permission-policy-allow",
+        decision: "allow-once",
+      });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "permission-policy-allow",
+        permissions: {
+          network: { enabled: true },
+          fileSystem: { write: ["/workspace"] },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      ...policy,
+    });
+
+    expect(result).toEqual({
+      permissions: {
+        network: { enabled: true },
+        fileSystem: { write: ["/workspace"] },
+      },
+      scope: "turn",
+    });
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "codex_permission_approval" }),
+    );
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
   it("routes command approvals through plugin approvals and accepts allowed commands", async () => {
     const params = createParams();
     mockCallGatewayTool
@@ -248,6 +370,15 @@ describe("Codex app-server approval bridge", () => {
         agentId: "main",
         sessionKey: "agent:main:session-1",
         channelId: "chat-1",
+        requester: {
+          channel: "telegram",
+          accountId: "default",
+        },
+        workspaceDir: undefined,
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat-1",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "thread-ts",
       },
     });
     findApprovalEvent(params, { status: "pending", approvalId: "plugin:approval-1" });
@@ -2425,8 +2556,11 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
-  it("fails closed for unsupported native approval methods without requesting plugin approval", async () => {
+  it("routes unknown approval methods to the human path and still fails closed", async () => {
     const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:future-approval", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:future-approval", decision: "deny" });
 
     const result = await handleCodexAppServerApprovalRequest({
       method: "future/requestApproval",
@@ -2444,8 +2578,15 @@ describe("Codex app-server approval bridge", () => {
       decision: "decline",
       reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
     });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-    expect(params.onAgentEvent).not.toHaveBeenCalled();
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+    findApprovalEvent(params, {
+      status: "denied",
+      approvalId: "plugin:future-approval",
+    });
   });
   it("labels permission approvals explicitly with permission detail", async () => {
     const params = createParams();

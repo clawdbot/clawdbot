@@ -5,6 +5,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TalkModeConfigParsingTest {
@@ -41,6 +43,40 @@ class TalkModeConfigParsingTest {
   fun derivesRealtimeLanguageFromConfiguredLocale() {
     assertEquals("de", realtimeTranscriptionLanguage("de-DE"))
     assertEquals(null, realtimeTranscriptionLanguage("fil-PH"))
+  }
+
+  @Test
+  fun gatesAndroidRealtimeRelayFromEffectiveModel() {
+    val browserOnly =
+      json
+        .parseToJsonElement(
+          """{"talk":{"realtime":{"model":"gpt-live-future"}}}""",
+        ).jsonObject
+    val relayCapable =
+      json
+        .parseToJsonElement(
+          """{"talk":{"realtime":{"model":"gpt-realtime-2.1"}}}""",
+        ).jsonObject
+
+    assertFalse(TalkModeGatewayConfigParser.parse(browserOnly).realtimeRelayModelSupported)
+    assertTrue(TalkModeGatewayConfigParser.parse(relayCapable).realtimeRelayModelSupported)
+  }
+
+  @Test
+  fun gatesAndroidRealtimeRelayFromProviderLevelModel() {
+    val providerLevelBrowserOnly =
+      json
+        .parseToJsonElement(
+          """{"talk":{"realtime":{"provider":"openai","providers":{"openai":{"model":"gpt-live-1-codex"}}}}}""",
+        ).jsonObject
+    val topLevelWins =
+      json
+        .parseToJsonElement(
+          """{"talk":{"realtime":{"provider":"openai","model":"gpt-realtime-2.1","providers":{"openai":{"model":"gpt-live-1-codex"}}}}}""",
+        ).jsonObject
+
+    assertFalse(TalkModeGatewayConfigParser.parse(providerLevelBrowserOnly).realtimeRelayModelSupported)
+    assertTrue(TalkModeGatewayConfigParser.parse(topLevelWins).realtimeRelayModelSupported)
   }
 
   @Test

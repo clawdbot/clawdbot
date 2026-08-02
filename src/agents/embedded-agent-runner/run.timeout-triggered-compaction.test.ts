@@ -607,8 +607,11 @@ describe("timeout-triggered compaction", () => {
     await runEmbeddedAgent(overflowBaseRunParams);
 
     const [beforeEvent, beforeContext] = hookCallAt(0, "before");
-    expect(beforeEvent).toEqual({ messageCount: -1, sessionFile: "/tmp/session.json" });
-    expect(beforeContext.sessionKey).toBe("test-key");
+    expect(beforeEvent).toEqual({
+      messageCount: -1,
+      sessionFile: overflowBaseRunParams.sessionKey,
+    });
+    expect(beforeContext.sessionKey).toBe(overflowBaseRunParams.sessionKey);
     const [afterEvent, afterContext] = hookCallAt(0, "after");
     expect(afterEvent).toEqual({
       messageCount: -1,
@@ -618,7 +621,7 @@ describe("timeout-triggered compaction", () => {
       previousSessionId: "test-session",
     });
     expect(afterContext.sessionId).toBe("rotated-timeout-session");
-    expect(afterContext.sessionKey).toBe("test-key");
+    expect(afterContext.sessionKey).toBe(overflowBaseRunParams.sessionKey);
     expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
   });
 

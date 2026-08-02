@@ -220,7 +220,7 @@ export function composeAnnotatedImage(params: {
   canvas.height = params.height;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
-    throw new Error("canvas 2d context unavailable");
+    throw new Error(t("browser.errors.canvasUnavailable"));
   }
   ctx.drawImage(params.image, 0, 0, params.width, params.height);
   paintAnnotations(ctx, params);

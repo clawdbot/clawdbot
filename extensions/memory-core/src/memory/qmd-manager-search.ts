@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { QmdQueryResult } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type {
+  MemoryEntryProvenance,
   MemorySearchResult,
   MemorySearchRuntimeDebug,
   MemorySource,
@@ -17,6 +18,33 @@ import {
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemorySearchDeadlineControlOptions,
 } from "./search-deadline.js";
+
+function resolveQmdSearchProvenance(
+  resultPath: string,
+  source: MemorySource,
+  observedAt: number,
+): MemoryEntryProvenance {
+  const normalizedPath = resultPath.replaceAll("\\", "/").toLowerCase();
+  const isSystemArtifact =
+    normalizedPath === "dreams.md" ||
+    normalizedPath.startsWith("memory/dreaming/") ||
+    normalizedPath.startsWith("memory/.dreams/");
+  const isConsolidatedMemory = normalizedPath === "memory.md";
+  return {
+    // QMD does not carry flush-recorded per-line provenance. Keep daily notes
+    // and extra paths untrusted until that metadata is available on results.
+    originClass:
+      source === "sessions"
+        ? "untrusted"
+        : isSystemArtifact
+          ? "system"
+          : isConsolidatedMemory
+            ? "agent"
+            : "untrusted",
+    sessionKind: "unknown",
+    observedAt,
+  };
+}
 
 export abstract class QmdManagerSearch extends QmdManagerSearchSupport {
   async search(
@@ -82,60 +110,32 @@ export abstract class QmdManagerSearch extends QmdManagerSearchSupport {
       try {
         if (mcporterEnabled) {
           const minScore = opts?.minScore ?? 0;
-          if (explicitSearchTool) {
-            if (collectionNames.length > 1) {
-              return await this.commands.searchAcrossCollections({
-                tool: explicitSearchTool,
-                searchCommand: qmdSearchCommand,
-                explicitToolOverride: true,
-                query: trimmed,
-                limit,
-                minScore,
-                collectionNames,
-                signal: searchSignal,
-                reportCommandPhase,
-              });
-            }
-            return await this.commands.searchViaMcporter({
-              mcporter: this.qmd.mcporter,
-              tool: explicitSearchTool,
-              searchCommand: qmdSearchCommand,
-              explicitToolOverride: true,
-              query: trimmed,
-              limit,
-              minScore,
-              collection: collectionNames[0],
-              timeoutMs: this.qmd.limits.timeoutMs,
-              signal: searchSignal,
-              reportCommandPhase,
-            });
-          }
-          const tool = this.commands.resolveMcpTool(qmdSearchCommand);
-          if (collectionNames.length > 1) {
-            return await this.commands.searchAcrossCollections({
-              tool,
-              searchCommand: qmdSearchCommand,
-              explicitToolOverride: false,
-              query: trimmed,
-              limit,
-              minScore,
-              collectionNames,
-              signal: searchSignal,
-              reportCommandPhase,
-            });
-          }
-          return await this.commands.searchViaMcporter({
-            mcporter: this.qmd.mcporter,
-            tool,
+          const toolSelection = explicitSearchTool
+            ? { tool: explicitSearchTool, explicitToolOverride: true as const }
+            : {
+                tool: this.commands.resolveMcpTool(qmdSearchCommand),
+                explicitToolOverride: false as const,
+              };
+          const searchParams = {
+            ...toolSelection,
             searchCommand: qmdSearchCommand,
-            explicitToolOverride: false,
             query: trimmed,
             limit,
             minScore,
-            collection: collectionNames[0],
-            timeoutMs: this.qmd.limits.timeoutMs,
             signal: searchSignal,
             reportCommandPhase,
+          };
+          if (collectionNames.length > 1) {
+            return await this.commands.searchAcrossCollections({
+              ...searchParams,
+              collectionNames,
+            });
+          }
+          return await this.commands.searchViaMcporter({
+            ...searchParams,
+            mcporter: this.qmd.mcporter,
+            collection: collectionNames[0],
+            timeoutMs: this.qmd.limits.timeoutMs,
           });
         }
         const collectionGroups = await this.resolveCollectionSearchGroups(
@@ -244,14 +244,18 @@ export abstract class QmdManagerSearch extends QmdManagerSearchSupport {
       if (score < minScore) {
         continue;
       }
-      const result = {
+      const result: MemorySearchResult = {
         path: doc.rel,
         startLine: lines.startLine,
         endLine: lines.endLine,
         score,
         snippet,
         source: doc.source,
-      } satisfies MemorySearchResult;
+        provenance: resolveQmdSearchProvenance(doc.rel, doc.source, doc.observedAt),
+      };
+      // QMD snippets are lossy presentation excerpts, not authoritative entries.
+      // Leave project identity neutral until QMD can return real indexed metadata;
+      // inferring from nearby comment text can attribute an adjacent entry.
       const artifactIdentity =
         doc.source === "sessions"
           ? resolveQmdSessionArtifactIdentity({

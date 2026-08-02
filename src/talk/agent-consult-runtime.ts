@@ -35,9 +35,22 @@ export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 export type RealtimeVoiceAgentConsultResult = { text: string };
 
 /**
+ * Sender-auth contract revision for official realtime voice plugins.
+ *
+ * Revision 1 forwards ingress-authenticated `senderId` and `senderIsOwner` unchanged. Ingress
+ * owns authentication; consumers that require this handoff must fail closed on other revisions.
+ */
+export const REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION = 1;
+
+/**
  * Controls whether voice consults run in a fresh session or fork context from the requester.
  */
 type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
+
+type RealtimeVoiceAgentConsultRunRegistration = {
+  abortSignal?: AbortSignal;
+  cleanup?: () => void;
+};
 
 /**
  * Fails closed when a realtime consult would cross a model-selection lock.
@@ -253,6 +266,10 @@ export async function consultRealtimeVoiceAgent(params: {
   questionSourceLabel?: string;
   agentId?: string;
   spawnedBy?: string | null;
+  /** Sender identity established by the caller's ingress authorization boundary. */
+  senderId?: string | null;
+  /** Trusted owner bit established by the caller's ingress authorization boundary. */
+  senderIsOwner?: boolean;
   contextMode?: RealtimeVoiceAgentConsultContextMode;
   provider?: RunEmbeddedAgentParams["provider"];
   model?: RunEmbeddedAgentParams["model"];
@@ -262,7 +279,14 @@ export async function consultRealtimeVoiceAgent(params: {
   toolsAllow?: string[];
   extraSystemPrompt?: string;
   fallbackText?: string;
+  abortSignal?: AbortSignal;
+  onRunStarted?: (params: {
+    runId: string;
+    sessionId: string;
+    timeoutMs: number;
+  }) => RealtimeVoiceAgentConsultRunRegistration | void;
 }): Promise<RealtimeVoiceAgentConsultResult> {
+  params.abortSignal?.throwIfAborted();
   const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
   const agentDir = params.agentRuntime.resolveAgentDir(params.cfg, agentId);
   const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, agentId);
@@ -310,6 +334,12 @@ export async function consultRealtimeVoiceAgent(params: {
       assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
     },
   });
+  const abortFromCaller = () => lifecycleAbortController.abort(params.abortSignal?.reason);
+  if (params.abortSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    params.abortSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
 
   try {
     return await sessionWorkAdmission.run(async () => {
@@ -339,9 +369,17 @@ export async function consultRealtimeVoiceAgent(params: {
       const sessionId = sessionEntry.sessionId;
       assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
 
+      const runId = `${params.runIdPrefix}:${Date.now()}:${randomUUID()}`;
+      const timeoutMs =
+        params.timeoutMs ?? params.agentRuntime.resolveAgentTimeoutMs({ cfg: params.cfg });
+      const runRegistration = params.onRunStarted?.({ runId, sessionId, timeoutMs });
+      const abortSignal = runRegistration?.abortSignal
+        ? AbortSignal.any([lifecycleAbortController.signal, runRegistration.abortSignal])
+        : lifecycleAbortController.signal;
+
       // Voice consults suppress verbose/reasoning output because the bridge needs a short,
       // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
-      const result = await params.agentRuntime.runEmbeddedAgent({
+      const runPromise = params.agentRuntime.runEmbeddedAgent({
         sessionId,
         sessionKey: params.sessionKey,
         sessionTarget: {
@@ -353,6 +391,8 @@ export async function consultRealtimeVoiceAgent(params: {
         sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
         agentId,
         spawnedBy: params.spawnedBy,
+        senderId: params.senderId,
+        senderIsOwner: params.senderIsOwner,
         messageProvider: consultDeliveryContext?.channel ?? params.messageProvider,
         agentAccountId: consultDeliveryContext?.accountId,
         messageTo: consultDeliveryContext?.to,
@@ -380,16 +420,16 @@ export async function consultRealtimeVoiceAgent(params: {
         reasoningLevel: "off",
         toolResultFormat: "plain",
         toolsAllow: params.toolsAllow,
-        timeoutMs:
-          params.timeoutMs ?? params.agentRuntime.resolveAgentTimeoutMs({ cfg: params.cfg }),
-        runId: `${params.runIdPrefix}:${Date.now()}`,
+        timeoutMs,
+        runId,
         lane: params.lane,
         extraSystemPrompt:
           params.extraSystemPrompt ??
           "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
         agentDir,
-        abortSignal: lifecycleAbortController.signal,
+        abortSignal,
       });
+      const result = await runPromise.finally(() => runRegistration?.cleanup?.());
 
       const text = collectRealtimeVoiceAgentConsultVisibleText(result.payloads ?? []);
       if (!text) {
@@ -402,6 +442,7 @@ export async function consultRealtimeVoiceAgent(params: {
       return { text };
     });
   } finally {
+    params.abortSignal?.removeEventListener("abort", abortFromCaller);
     sessionWorkAdmission.release();
   }
 }

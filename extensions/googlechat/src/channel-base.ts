@@ -9,13 +9,14 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type GoogleChatConfigAccessorAccount,
+  inspectGoogleChatAccount,
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatConfigAccessorAccount,
   resolveGoogleChatAccount,
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
-import { googlechatSetupAdapter, googlechatSetupContract } from "./setup-core.js";
+import { googlechatSetupContract } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
 
 export const GOOGLECHAT_CHANNEL_ID = "googlechat" as const;
@@ -71,11 +72,16 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
   resolveDefaultTo: (account) => account.config.defaultTo,
 });
 
+function isGoogleChatAccountConfigured(account: ResolvedGoogleChatAccount): boolean {
+  return account.tokenStatus
+    ? account.tokenStatus !== "missing"
+    : account.credentialSource !== "none";
+}
+
 type GoogleChatPluginBase = Pick<
   ChannelPlugin<ResolvedGoogleChatAccount>,
   | "id"
   | "meta"
-  | "setup"
   | "setupContract"
   | "setupWizard"
   | "capabilities"
@@ -93,7 +99,6 @@ export function createGoogleChatPluginBase(
   return {
     id: GOOGLECHAT_CHANNEL_ID,
     meta: { ...googlechatMeta },
-    setup: googlechatSetupAdapter,
     setupContract: googlechatSetupContract,
     setupWizard: googlechatSetupWizard,
     capabilities: {
@@ -112,11 +117,12 @@ export function createGoogleChatPluginBase(
     ...(params.configSchema ? { configSchema: params.configSchema } : {}),
     config: {
       ...googleChatConfigAdapter,
-      isConfigured: (account) => account.credentialSource !== "none",
+      inspectAccount: adaptScopedAccountAccessor(inspectGoogleChatAccount),
+      isConfigured: isGoogleChatAccountConfigured,
       describeAccount: (account) =>
         describeAccountSnapshot({
           account,
-          configured: account.credentialSource !== "none",
+          configured: isGoogleChatAccountConfigured(account),
           extra: {
             credentialSource: account.credentialSource,
             tokenStatus: account.tokenStatus,

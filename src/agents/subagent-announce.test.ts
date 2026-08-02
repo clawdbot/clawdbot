@@ -260,9 +260,6 @@ describe("subagent announce seam flow", () => {
       if (typed.method === "chat.history") {
         return { messages: [] as Array<unknown> };
       }
-      if (typed.method === "sessions.patch") {
-        return {};
-      }
       if (typed.method === "sessions.delete") {
         sessionsDeleteSpy(typed);
         return {};

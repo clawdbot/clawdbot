@@ -1,5 +1,6 @@
 // Route resolution tests cover resolving channel route targets from input.
 import { describe, expect, test, vi } from "vitest";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as routingBindings from "./bindings.js";
 import {
@@ -114,6 +115,67 @@ describe("resolveAgentRoute", () => {
       lastRoutePolicy: "main",
       matchedBy: "default",
     });
+  });
+
+  test("preserves explicit main bindings when agents.entries has other agents", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { alpha: {} },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "discord", accountId: "default" },
+        },
+      ],
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "direct", id: "user-1" },
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      matchedBy: "binding.account",
+      lastRoutePolicy: "main",
+    });
+  });
+
+  test("resolves exact main bindings through a configured normalized main-like roster entry", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: {
+          MAIN: { model: "anthropic/claude-3-5-sonnet" },
+        },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "discord", accountId: "default" },
+        },
+      ],
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "direct", id: "user-1" },
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      matchedBy: "binding.account",
+      lastRoutePolicy: "main",
+    });
+    expect(resolveAgentConfig(cfg, route.agentId)?.model).toBe("anthropic/claude-3-5-sonnet");
   });
 
   test("uses the configured main session key for shared direct routes", () => {

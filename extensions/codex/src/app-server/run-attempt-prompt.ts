@@ -33,6 +33,10 @@ import {
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
 
+function isRestrictivePromptToolsAllow(toolsAllow: string[] | undefined): boolean {
+  return toolsAllow !== undefined && !toolsAllow.some((name) => name.trim() === "*");
+}
+
 export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const {
     runtime,
@@ -174,14 +178,21 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
   }
   const codexModelInputHistoryMessages: typeof historyState.messages = [];
-  const buildPromptFromCurrentInputs = () =>
-    resolveAgentHarnessBeforePromptBuildResult({
+  const buildPromptFromCurrentInputs = async () => {
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
       developerInstructions: promptState.developerInstructions,
       messages: structuredClone(historyState.messages),
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
     });
+    if (isRestrictivePromptToolsAllow(result.toolsAllow)) {
+      throw new Error(
+        "Codex app-server cannot enforce before_prompt_build toolsAllow; use the embedded or Copilot runtime for turn-scoped tool policy.",
+      );
+    }
+    return result;
+  };
   const resolveShiftedPromptInputRange = (
     prompt: string,
     promptInputRange: { start: number; end: number } | undefined,

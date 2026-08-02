@@ -19,6 +19,9 @@ const childProcessMocks = vi.hoisted(() => ({
   children: [] as ChildProcess[],
   spawn: vi.fn(),
 }));
+const transcriptMocks = vi.hoisted(() => ({
+  messages: [] as Array<Record<string, unknown>>,
+}));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -34,6 +37,37 @@ vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>()),
   resolveAcpSessionAvailability: acpRuntimeMocks.resolveAcpSessionAvailability,
 }));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
+  return {
+    ...actual,
+    withSessionTranscriptWriteLock: async (
+      _params: unknown,
+      run: (context: {
+        appendMessage: (params: {
+          message: Record<string, unknown>;
+          idempotencyLookup?: string;
+        }) => Promise<void>;
+      }) => Promise<void>,
+    ) => {
+      await run({
+        appendMessage: async ({ message, idempotencyLookup }) => {
+          const key = message.idempotencyKey;
+          if (
+            idempotencyLookup === "scan" &&
+            typeof key === "string" &&
+            transcriptMocks.messages.some((candidate) => candidate.idempotencyKey === key)
+          ) {
+            return;
+          }
+          transcriptMocks.messages.push(message);
+        },
+      });
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
@@ -106,17 +140,30 @@ function captureOpenCodeContinuationCatalog() {
         sessionId: "adopted-opencode-session",
         updatedAt: Date.now(),
         pluginOwnerId: "opencode",
+        initializationPending: true as const,
         ...(params.label ? { label: params.label } : {}),
         ...(params.spawnedCwd ? { spawnedCwd: params.spawnedCwd } : {}),
         pluginExtensions: params.initialEntry.pluginExtensions,
       };
       entries.push({ sessionKey, entry });
-      return {
+      const created = {
         key: sessionKey,
         agentId: params.agentId ?? "main",
         sessionId: entry.sessionId,
         entry,
       };
+      try {
+        const finalPatch = await params.afterCreate?.(created);
+        entry.pluginExtensions = finalPatch?.pluginExtensions ?? entry.pluginExtensions;
+        delete (entry as { initializationPending?: true }).initializationPending;
+        return created;
+      } catch (error) {
+        entries.splice(
+          entries.findIndex((candidate) => candidate.entry === entry),
+          1,
+        );
+        throw error;
+      }
     },
   );
   registerOpenCodeSessionCatalog({
@@ -197,7 +244,16 @@ async function installFakeOpenCode(
 const args = process.argv.slice(2);
 if (process.env.CATALOG_UNRELATED_ENV) process.exit(3);
 if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && args.includes("json")) {
-  process.stdout.write(${JSON.stringify(JSON.stringify([session]))});
+  process.stdout.write(args[2].includes("event_sequence")
+    ? ${JSON.stringify(
+      JSON.stringify([
+        {
+          id: "ses_test",
+          seq: 4,
+        },
+      ]),
+    )}
+    : ${JSON.stringify(JSON.stringify([session]))});
 } else if (args[0] === "--pure" && args[1] === "export" && args[2] === "ses_test") {
   process.stdout.write(${JSON.stringify(JSON.stringify(exported))});
 } else {
@@ -257,6 +313,7 @@ afterEach(async () => {
   acpRuntimeMocks.resolveAcpSessionAvailability.mockReset().mockReturnValue({ available: true });
   nodeHostMocks.runNodePtyCommand.mockClear();
   childProcessMocks.spawn.mockClear();
+  transcriptMocks.messages.length = 0;
   await Promise.all(childProcessMocks.children.splice(0).map((child) => stopChild(child)));
   process.env.PATH = originalPath;
   if (originalPathExt === undefined) {
@@ -368,6 +425,37 @@ describe("OpenCode session catalog", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "memoizes the CLI database query across cadence and invalidates by config identity",
+    async () => {
+      await installFakeOpenCode();
+      let now = 1_000;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const configIdentity = {};
+      try {
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        expect(childProcessMocks.spawn).toHaveBeenCalledOnce();
+
+        now += 31_999;
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        expect(childProcessMocks.spawn).toHaveBeenCalledOnce();
+
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity, forceRefresh: true });
+        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(2);
+
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity: {} });
+        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(3);
+
+        now += 32_001;
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(4);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "hides and rejects Continue when ACP cannot resume OpenCode",
     async () => {
       await installFakeOpenCode();
@@ -419,6 +507,14 @@ describe("OpenCode session catalog", () => {
 
       expect(first).toEqual(concurrent);
       expect(second).toEqual(first);
+      expect(first.upstream).toEqual({
+        kind: "opencode-cli",
+        ref: { threadId: "ses_test" },
+        marker: {
+          seq: 4,
+          lastHumanMessageId: "msg_user",
+        },
+      });
       expect(createSessionEntry).toHaveBeenCalledTimes(1);
       expect(createSessionEntry).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -433,6 +529,22 @@ describe("OpenCode session catalog", () => {
           },
         }),
       );
+      expect(
+        transcriptMocks.messages.map((message) =>
+          typeof message.content === "string"
+            ? message.content
+            : (message.content as Array<{ text: string }>)[0]?.text,
+        ),
+      ).toEqual([
+        "hello",
+        "Thinking\n\nthinking",
+        "hi",
+        'Tool call\n\nbash\n{"command":"pwd"}',
+        "Tool result\n\n/workspace",
+      ]);
+      expect(transcriptMocks.messages[0]?.["__openclaw"]).toEqual({
+        mirrorOrigin: "opencode-catalog-import",
+      });
     },
   );
 
@@ -607,19 +719,20 @@ describe("OpenCode session catalog", () => {
       }),
     };
     const invoke = vi.fn().mockResolvedValue(page);
+    const nodes = [
+      {
+        nodeId: "node-1",
+        connected: true,
+        commands: [OPENCODE_SESSIONS_LIST_COMMAND, OPENCODE_TERMINAL_RESUME_COMMAND],
+      },
+    ];
+    const runtimeListNodes = vi.fn().mockResolvedValue({ nodes });
+    const requestListNodes = vi.fn().mockResolvedValue({ nodes });
     registerOpenCodeSessionCatalog({
       pluginConfig: {},
       runtime: {
         nodes: {
-          list: vi.fn().mockResolvedValue({
-            nodes: [
-              {
-                nodeId: "node-1",
-                connected: true,
-                commands: [OPENCODE_SESSIONS_LIST_COMMAND, OPENCODE_TERMINAL_RESUME_COMMAND],
-              },
-            ],
-          }),
+          list: runtimeListNodes,
           invoke,
         },
       },
@@ -630,7 +743,13 @@ describe("OpenCode session catalog", () => {
       registerNodeInvokePolicy: vi.fn(),
     } as unknown as OpenClawPluginApi);
 
-    await expect(provider!.list({ hostIds: ["node:node-1"], search: "remote" })).resolves.toEqual([
+    await expect(
+      provider!.list({
+        hostIds: ["node:node-1"],
+        search: "remote",
+        listNodes: requestListNodes,
+      }),
+    ).resolves.toEqual([
       expect.objectContaining({
         sessions: [
           expect.objectContaining({
@@ -641,6 +760,8 @@ describe("OpenCode session catalog", () => {
         ],
       }),
     ]);
+    expect(requestListNodes).toHaveBeenCalledOnce();
+    expect(runtimeListNodes).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenNthCalledWith(1, {
       nodeId: "node-1",
       command: OPENCODE_SESSIONS_LIST_COMMAND,

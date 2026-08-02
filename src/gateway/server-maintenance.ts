@@ -7,7 +7,6 @@ import {
   resolveWorktreeCleanupLimits,
   WORKTREE_GC_INTERVAL_MS,
 } from "../agents/worktrees/service.js";
-import type { HealthSummary } from "../commands/health.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
@@ -21,6 +20,7 @@ import {
 } from "./chat-abort.js";
 import type { QueuedChatTurnMap } from "./chat-queued-turns.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
+import type { HealthSummary } from "./health/types.js";
 import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
 import type { ChatRunState } from "./server-chat-state.js";
 import type { ChatRunEntry } from "./server-chat.js";

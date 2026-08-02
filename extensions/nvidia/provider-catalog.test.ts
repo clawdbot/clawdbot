@@ -143,18 +143,18 @@ describe("nvidia provider catalog", () => {
       { id: "z-ai/glm-5.2", input: ["text"], reasoning: true },
       {
         id: "moonshotai/kimi-k2.6",
-        input: ["text", "image", "video"],
+        input: ["text", "image"],
         reasoning: true,
       },
       {
         id: "minimaxai/minimax-m3",
-        input: ["text", "image", "video"],
+        input: ["text", "image"],
         reasoning: true,
       },
       { id: "deepseek-ai/deepseek-v4-pro", input: ["text"], reasoning: true },
       {
         id: "qwen/qwen3.5-397b-a17b",
-        input: ["text", "image", "video"],
+        input: ["text", "image"],
         reasoning: true,
       },
     ]);
@@ -183,7 +183,7 @@ describe("nvidia provider catalog", () => {
       { id: "minimaxai/minimax-m2.7", replacedBy: "minimaxai/minimax-m3" },
     ]);
     expect(provider.models.find((model) => model.id === "moonshotai/kimi-k2.5")).toMatchObject({
-      input: ["text", "image", "video"],
+      input: ["text", "image"],
       reasoning: true,
       contextWindow: 262_144,
       maxTokens: 32_768,

@@ -28,11 +28,6 @@ import {
 } from "./webhook-spool-state.js";
 
 const NEXTCLOUD_TALK_INGRESS_POLL_INTERVAL_MS = 500;
-const NEXTCLOUD_TALK_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const NEXTCLOUD_TALK_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const NEXTCLOUD_TALK_INGRESS_COMPLETED_MAX_ENTRIES = 10_000;
-const NEXTCLOUD_TALK_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const NEXTCLOUD_TALK_INGRESS_FAILED_MAX_ENTRIES = 10_000;
 
 const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
   type: z.enum(["Create", "Update", "Delete"]),
@@ -187,11 +182,8 @@ export function createNextcloudTalkWebhookSpool(options: {
     // Preserve Nextcloud Talk's existing one-drain-at-a-time delivery cycle.
     waitForDeliveryIdleBeforeRepump: true,
     retention: {
-      pruneIntervalMs: NEXTCLOUD_TALK_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: NEXTCLOUD_TALK_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: NEXTCLOUD_TALK_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: NEXTCLOUD_TALK_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: NEXTCLOUD_TALK_INGRESS_FAILED_MAX_ENTRIES,
+      completedMaxEntries: 10_000,
+      failedMaxEntries: 10_000,
     },
     drain: {
       resolveNonRetryableFailure,

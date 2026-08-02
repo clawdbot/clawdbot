@@ -11,6 +11,7 @@ import { resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -103,7 +104,9 @@ async function arrangeAgentsDeleteTest(params: {
   const storeAgentId = resolveFixtureStoreAgentId(cfg, deletedAgentId);
   const storePath = resolveStorePath(cfg.session?.store, { agentId: deletedAgentId });
   for (const [sessionKey, entry] of Object.entries(params.sessions)) {
-    await replaceSessionEntry({ agentId: storeAgentId, sessionKey, storePath }, {
+    const entryAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? storeAgentId;
+    const entryStorePath = resolveStorePath(cfg.session?.store, { agentId: entryAgentId });
+    await replaceSessionEntry({ agentId: entryAgentId, sessionKey, storePath: entryStorePath }, {
       ...entry,
       delivery: { kind: "none" },
     } as SessionEntry);
@@ -125,16 +128,25 @@ async function arrangeAgentsDeleteTest(params: {
 }
 
 function expectSessionStore(
-  storePath: string,
+  cfg: OpenClawConfig,
   sessions: Record<string, { sessionId: string; updatedAt: number }>,
   agentId = "ops",
 ) {
+  const agentIds = new Set([
+    agentId,
+    ...Object.keys(sessions).flatMap((sessionKey) => {
+      const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+      return parsedAgentId ? [parsedAgentId] : [];
+    }),
+  ]);
   expect(
     Object.fromEntries(
-      listSessionEntries({ agentId, storePath }).map(({ entry, sessionKey }) => [
-        sessionKey,
-        entry,
-      ]),
+      [...agentIds].flatMap((storeAgentId) =>
+        listSessionEntries({
+          agentId: storeAgentId,
+          storePath: resolveStorePath(cfg.session?.store, { agentId: storeAgentId }),
+        }).map(({ entry, sessionKey }) => [sessionKey, entry]),
+      ),
     ),
   ).toEqual(
     Object.fromEntries(
@@ -195,7 +207,7 @@ describe("agents delete command", () => {
         "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
         "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
       };
-      const storePath = await arrangeAgentsDeleteTest({
+      await arrangeAgentsDeleteTest({
         stateDir,
         cfg,
         deletedAgentId: "main",
@@ -207,7 +219,7 @@ describe("agents delete command", () => {
       expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
       expect(runtime.error).toHaveBeenCalledWith('"main" cannot be deleted.');
       expect(runtime.exit).toHaveBeenCalledWith(1);
-      expectSessionStore(storePath, sessions, "main");
+      expectSessionStore(cfg, sessions, "main");
     });
   });
 
@@ -291,7 +303,7 @@ describe("agents delete command", () => {
           ],
         },
       } satisfies OpenClawConfig;
-      const storePath = await arrangeAgentsDeleteTest({
+      await arrangeAgentsDeleteTest({
         stateDir,
         cfg,
         sessions: {
@@ -318,7 +330,7 @@ describe("agents delete command", () => {
         bindings: undefined,
         tools: undefined,
       });
-      expectSessionStore(storePath, {
+      expectSessionStore(cfg, {
         "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
       });
     });
@@ -390,7 +402,7 @@ describe("agents delete command", () => {
           list: [{ id: "ops", default: true, workspace: path.join(stateDir, "workspace-ops") }],
         },
       };
-      const storePath = await arrangeAgentsDeleteTest({
+      await arrangeAgentsDeleteTest({
         stateDir,
         cfg,
         sessions: {
@@ -410,7 +422,7 @@ describe("agents delete command", () => {
         'Agent "ops" is the default and cannot be deleted. Reassign default first.',
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
-      expectSessionStore(storePath, {
+      expectSessionStore(cfg, {
         "agent:main:main": { sessionId: "sess-default-alias", updatedAt: now + 1 },
         "agent:ops:quietchat:direct:u1": { sessionId: "sess-ops-direct", updatedAt: now + 2 },
         "agent:main:quietchat:direct:u2": {
@@ -422,11 +434,11 @@ describe("agents delete command", () => {
     });
   });
 
-  it("preserves shared-store legacy default keys when deleting another agent", async () => {
+  it("preserves canonical main-agent keys when deleting another agent", async () => {
     await withStateDirEnv("openclaw-agents-delete-shared-store-", async ({ stateDir }) => {
       const now = Date.now();
       const cfg: OpenClawConfig = {
-        session: { store: path.join(stateDir, "sessions.json") },
+        session: { store: path.join(stateDir, "shared-sessions.sqlite") },
         agents: {
           list: [
             { id: "main", default: true, workspace: path.join(stateDir, "workspace-main") },
@@ -434,12 +446,15 @@ describe("agents delete command", () => {
           ],
         },
       };
-      const storePath = await arrangeAgentsDeleteTest({
+      await arrangeAgentsDeleteTest({
         stateDir,
         cfg,
         sessions: {
-          main: { sessionId: "sess-main", updatedAt: now + 1 },
-          "quietchat:direct:u1": { sessionId: "sess-main-direct", updatedAt: now + 2 },
+          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 1 },
+          "agent:main:quietchat:direct:u1": {
+            sessionId: "sess-main-direct",
+            updatedAt: now + 2,
+          },
           "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 3 },
           "agent:ops:quietchat:direct:u2": { sessionId: "sess-ops-direct", updatedAt: now + 4 },
         },
@@ -449,10 +464,13 @@ describe("agents delete command", () => {
 
       expect(runtime.exit).not.toHaveBeenCalled();
       expectSessionStore(
-        storePath,
+        cfg,
         {
-          main: { sessionId: "sess-main", updatedAt: now + 1 },
-          "quietchat:direct:u1": { sessionId: "sess-main-direct", updatedAt: now + 2 },
+          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 1 },
+          "agent:main:quietchat:direct:u1": {
+            sessionId: "sess-main-direct",
+            updatedAt: now + 2,
+          },
         },
         "main",
       );

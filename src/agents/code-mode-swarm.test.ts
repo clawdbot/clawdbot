@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCodeModeApiVirtualFiles } from "./code-mode-namespaces.js";
+import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
-import { stableStringify } from "./stable-stringify.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -201,7 +201,7 @@ describe("Code Mode swarm guest", () => {
   });
 
   it("documents the typed swarm API and orchestration idioms", () => {
-    const files = createCodeModeApiVirtualFiles([]);
+    const { apiFiles: files } = createCodeModeNamespaceRuntime();
 
     expect(files.map((file) => file.path)).toEqual(["agents.d.ts"]);
     expect(files[0]?.content).toContain("Promise.all");

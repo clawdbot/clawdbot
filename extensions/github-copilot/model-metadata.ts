@@ -8,6 +8,10 @@ type CopilotReasoningCompat = {
   supportedReasoningEfforts?: readonly string[] | null;
 };
 
+// Provider-owned general-purpose preference. Setup verifies it against the
+// authenticated live catalog instead of assuming every account can use it.
+export const DEFAULT_COPILOT_MODEL = "github-copilot/claude-sonnet-5";
+
 const COPILOT_CHAT_COMPLETIONS_COMPAT: ModelDefinitionConfig["compat"] = {
   supportsStore: false,
   supportsDeveloperRole: false,

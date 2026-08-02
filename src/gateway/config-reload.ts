@@ -28,6 +28,7 @@ import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
@@ -267,6 +268,7 @@ export function startGatewayConfigReloader(opts: {
   let pendingInProcessConfig: InProcessConfigCandidate | null = null;
   let activeInProcessConfig: InProcessConfigCandidate | null = null;
   let watcherIntentCandidate: InProcessConfigCandidate | null = null;
+  let watcherIntentCameFromPendingWrite = false;
   let startupInternalWriteHash = opts.initialInternalWriteHash ?? null;
   let lastAppliedWriteHash: string | null = null;
   let lastSourceOnlyWriteHash: string | null = null;
@@ -846,6 +848,7 @@ export function startGatewayConfigReloader(opts: {
             !watcherIntentCandidate
           ) {
             watcherIntentCandidate = pendingWrite;
+            watcherIntentCameFromPendingWrite = false;
           }
           throw err;
         } finally {
@@ -857,6 +860,7 @@ export function startGatewayConfigReloader(opts: {
       }
       const transactionEpoch = configWriteEpoch;
       const intentCandidate = watcherIntentCandidate;
+      const intentCandidateCameFromPendingWrite = watcherIntentCameFromPendingWrite;
       const snapshot = await opts.readSnapshot(currentRuntimeEnvSourceConfig);
       if (configWriteEpoch !== transactionEpoch) {
         throw new GatewayConfigReloadSupersededError();
@@ -904,6 +908,7 @@ export function startGatewayConfigReloader(opts: {
             );
             if (watcherIntentCandidate === intentCandidate) {
               watcherIntentCandidate = null;
+              watcherIntentCameFromPendingWrite = false;
             }
             await promoteAcceptedSnapshot(snapshot, "in-process-write");
           });
@@ -913,6 +918,7 @@ export function startGatewayConfigReloader(opts: {
           }
           if (configWriteEpoch === transactionEpoch && !watcherIntentCandidate) {
             watcherIntentCandidate = intentCandidate;
+            watcherIntentCameFromPendingWrite = intentCandidateCameFromPendingWrite;
           }
           throw err;
         }
@@ -921,6 +927,7 @@ export function startGatewayConfigReloader(opts: {
       }
       if (watcherIntentCandidate === intentCandidate) {
         watcherIntentCandidate = null;
+        watcherIntentCameFromPendingWrite = false;
       }
       if (intentCandidate && lastAppliedWriteHash === intentCandidate.persistedHash) {
         lastAppliedWriteHash = null;
@@ -1070,6 +1077,7 @@ export function startGatewayConfigReloader(opts: {
       (!watcherIntentCandidate || newestLiveCandidate.epoch > watcherIntentCandidate.epoch)
     ) {
       watcherIntentCandidate = newestLiveCandidate;
+      watcherIntentCameFromPendingWrite = newestLiveCandidate === pendingCandidate;
     }
     if (pendingInProcessConfig) {
       pendingInProcessConfig = null;
@@ -1087,12 +1095,27 @@ export function startGatewayConfigReloader(opts: {
       startupInternalWriteHash = null;
       opts.onConfigCandidateObserved?.();
       configWriteEpoch += 1;
+      const pendingRestartIntent =
+        pendingInProcessConfig?.afterWrite?.mode === "restart"
+          ? pendingInProcessConfig.afterWrite
+          : watcherIntentCameFromPendingWrite &&
+              watcherIntentCandidate?.afterWrite?.mode === "restart"
+            ? watcherIntentCandidate.afterWrite
+            : undefined;
       watcherIntentCandidate = null;
+      watcherIntentCameFromPendingWrite = false;
+      // Pending writes coalesce to the latest config, but a newer non-restart intent
+      // must not erase a restart already required by an unapplied committed write,
+      // including one moved into watcher ownership by its filesystem echo.
+      const afterWrite =
+        pendingRestartIntent && event.afterWrite?.mode !== "restart"
+          ? pendingRestartIntent
+          : event.afterWrite;
       pendingInProcessConfig = {
         config: event.runtimeConfig,
         compareConfig: event.sourceConfig,
         persistedHash: event.persistedHash,
-        afterWrite: event.afterWrite,
+        afterWrite,
         ...(event.preparedCandidate ? { preparedCandidate: event.preparedCandidate } : {}),
         ...(event.runtimeRefresh ? { runtimeRefresh: event.runtimeRefresh } : {}),
         epoch: configWriteEpoch,
@@ -1249,6 +1272,7 @@ export function startGatewayConfigReloader(opts: {
       // The signal carries a metadata change while config bytes stay identical.
       // Clear both metadata and config-echo caches before scheduling the shared diff path.
       clearLoadInstalledPluginIndexInstallRecordsCache();
+      clearPluginMetadataLifecycleCaches();
       startupInternalWriteHash = null;
       lastAppliedWriteHash = null;
       scheduleExternalRefresh();

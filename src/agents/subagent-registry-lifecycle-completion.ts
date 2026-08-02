@@ -9,10 +9,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import {
-  resolveKilledSubagentTaskEndedAt,
-  shouldUpdateRunOutcome,
-} from "./subagent-registry-completion.js";
+import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import type { createSubagentRegistryLifecycleCleanupBase } from "./subagent-registry-lifecycle-cleanup-base.js";
 import type { createSubagentRegistryLifecycleCleanup } from "./subagent-registry-lifecycle-cleanup.js";
@@ -97,33 +94,27 @@ export function createSubagentRegistryLifecycleCompletion(
         // not be overwritten. Exact normalized evidence may be the same recovery
         // request deferred by restart admission, so drain it.
         const hasTerminalEvidence =
-          typeof entry.endedAt === "number" ||
-          entry.outcome !== undefined ||
+          entry.execution.status === "terminal" ||
           entry.endedReason !== undefined ||
-          entry.execution?.status === "terminal";
+          typeof entry.cleanupCompletedAt === "number";
         const expectedElapsedMs =
-          typeof currentEntry.startedAt === "number" && typeof completeParams.endedAt === "number"
-            ? Math.max(0, completeParams.endedAt - currentEntry.startedAt)
+          typeof currentEntry.execution.startedAt === "number" &&
+          typeof completeParams.endedAt === "number"
+            ? Math.max(0, completeParams.endedAt - currentEntry.execution.startedAt)
             : undefined;
         const outcomeMatchesInterruptedRecovery = (outcome: SubagentRunOutcome | undefined) =>
           completeParams.outcome.status === "error" &&
           outcome?.status === "error" &&
           outcome.error === completeParams.outcome.error &&
-          (outcome.startedAt === undefined || outcome.startedAt === currentEntry.startedAt) &&
+          (outcome.startedAt === undefined ||
+            outcome.startedAt === currentEntry.execution.startedAt) &&
           (outcome.endedAt === undefined || outcome.endedAt === completeParams.endedAt) &&
           (outcome.elapsedMs === undefined || outcome.elapsedMs === expectedElapsedMs);
-        const executionMatchesInterruptedRecovery =
-          entry.execution?.status !== "terminal" ||
-          (entry.execution.endedAt === completeParams.endedAt &&
-            (entry.execution.startedAt === undefined ||
-              entry.execution.startedAt === currentEntry.startedAt) &&
-            outcomeMatchesInterruptedRecovery(entry.execution.outcome));
         const matchesRequestedInterruptedTerminal =
           typeof completeParams.endedAt === "number" &&
-          entry.endedAt === completeParams.endedAt &&
-          outcomeMatchesInterruptedRecovery(entry.outcome) &&
-          entry.endedReason === SUBAGENT_ENDED_REASON_ERROR &&
-          executionMatchesInterruptedRecovery;
+          entry.execution.endedAt === completeParams.endedAt &&
+          outcomeMatchesInterruptedRecovery(entry.execution.outcome) &&
+          entry.endedReason === SUBAGENT_ENDED_REASON_ERROR;
         if (
           !ownsInterruptedRecovery &&
           (entry.killReconciliation !== undefined ||
@@ -139,16 +130,13 @@ export function createSubagentRegistryLifecycleCompletion(
             typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
           const outcome = withSubagentOutcomeTiming(
             { status: "error", error: completeParams.outcome.error },
-            { startedAt: entry.startedAt, endedAt },
+            { startedAt: entry.execution.startedAt, endedAt },
           );
-          entry.endedAt = endedAt;
-          entry.outcome = outcome;
           entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
           entry.pauseReason = undefined;
           entry.execution = {
             ...entry.execution,
             status: "terminal",
-            startedAt: entry.startedAt,
             endedAt,
             outcome,
             interruptedAt: undefined,
@@ -163,7 +151,7 @@ export function createSubagentRegistryLifecycleCompletion(
           entry.terminalOwner = "interrupted-recovery";
           mutated = true;
           try {
-            params.persistOrThrow();
+            params.persistOrThrow(completeParams.runId);
           } catch (error) {
             restoreEntrySnapshot(entrySnapshot);
             throw error;
@@ -179,7 +167,7 @@ export function createSubagentRegistryLifecycleCompletion(
         completeParams.reason === SUBAGENT_ENDED_REASON_KILLED &&
         entry.endedReason !== undefined &&
         entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED &&
-        entry.outcome !== undefined
+        entry.execution.outcome !== undefined
       ) {
         // Any finalized provider outcome is canonical. A delayed abort listener
         // must not replace success, failure, or timeout with a killed marker.
@@ -205,12 +193,14 @@ export function createSubagentRegistryLifecycleCompletion(
       if (shouldDrainExistingTerminal) {
         // Preserve the newer canonical timing while allowing this duplicate
         // caller to rescue a stalled cleanup and delivery tail.
-        requestedEndedAt = entry.endedAt!;
+        requestedEndedAt = entry.execution.endedAt!;
         completionReason = entry.endedReason ?? completeParams.reason;
       }
       let endedAt = requestedEndedAt;
       let completionOutcome =
-        shouldDrainExistingTerminal && entry.outcome ? entry.outcome : completeParams.outcome;
+        shouldDrainExistingTerminal && entry.execution.outcome
+          ? entry.execution.outcome
+          : completeParams.outcome;
       const liveStructuredOutput = entry.collect
         ? (entry.structuredOutput ??
           peekSwarmStructuredOutput(entry.runId) ??
@@ -305,8 +295,8 @@ export function createSubagentRegistryLifecycleCompletion(
         mutated = true;
       }
 
-      if (observedStartedAt !== undefined && entry.startedAt !== observedStartedAt) {
-        entry.startedAt = observedStartedAt;
+      if (observedStartedAt !== undefined && entry.execution.startedAt !== observedStartedAt) {
+        entry.execution = { ...entry.execution, startedAt: observedStartedAt };
         if (typeof entry.sessionStartedAt !== "number") {
           entry.sessionStartedAt = observedStartedAt;
         }
@@ -332,38 +322,24 @@ export function createSubagentRegistryLifecycleCompletion(
           mutated = true;
         }
       }
-      if (entry.endedAt !== endedAt) {
-        entry.endedAt = endedAt;
-        entry.execution = {
-          ...entry.execution,
-          status: "terminal",
-          startedAt: entry.startedAt,
-          endedAt,
-        };
-        mutated = true;
-      }
       const outcome =
-        recoveryRequested && entry.outcome
-          ? entry.outcome
+        recoveryRequested && entry.execution.outcome
+          ? entry.execution.outcome
           : withSubagentOutcomeTiming(completionOutcome, {
-              startedAt: entry.startedAt,
+              startedAt: entry.execution.startedAt,
               endedAt,
             });
-      if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
-        entry.outcome = outcome;
-        mutated = true;
-      }
+      const executionOutcome = recoveryRequested ? (entry.execution.outcome ?? outcome) : outcome;
       if (
-        entry.execution?.status !== "terminal" ||
+        entry.execution.status !== "terminal" ||
         entry.execution.endedAt !== endedAt ||
-        entry.execution.outcome !== outcome
+        entry.execution.outcome !== executionOutcome
       ) {
         entry.execution = {
           ...entry.execution,
           status: "terminal",
-          startedAt: entry.startedAt,
           endedAt,
-          outcome,
+          outcome: executionOutcome,
         };
         mutated = true;
       }
@@ -398,7 +374,7 @@ export function createSubagentRegistryLifecycleCompletion(
           mutated = true;
         }
       } else {
-        const didFreezeResult = await freezeRunResultAtCompletion(entry, outcome);
+        const didFreezeResult = await freezeRunResultAtCompletion(entry, executionOutcome);
         sessionSuperseded = newerGenerationOwnsSession(entry);
         if (sessionSuperseded) {
           const completion = ensureCompletionState(entry);
@@ -443,7 +419,7 @@ export function createSubagentRegistryLifecycleCompletion(
       if (provisionalKillSnapshot) {
         const finalizedTasks = safeFinalizeSubagentTaskRun({
           entry,
-          outcome,
+          outcome: executionOutcome,
           taskResolution: postCaptureTaskResolution,
         });
         const taskWasAbsent =
@@ -479,7 +455,7 @@ export function createSubagentRegistryLifecycleCompletion(
         restoreEntrySnapshot(entry);
         entry = currentEntry;
         try {
-          params.persistOrThrow();
+          params.persistOrThrow(completeParams.runId);
         } catch (error) {
           restoreEntrySnapshot(liveBeforeCommit);
           throw error;
@@ -490,14 +466,14 @@ export function createSubagentRegistryLifecycleCompletion(
       } else {
         try {
           if (mutated) {
-            params.persistOrThrow();
+            params.persistOrThrow(completeParams.runId);
           }
         } catch (error) {
           restoreEntrySnapshot(entrySnapshot);
           throw error;
         }
         if (!suppressTaskFinalization) {
-          safeFinalizeSubagentTaskRun({ entry, outcome });
+          safeFinalizeSubagentTaskRun({ entry, outcome: executionOutcome });
         }
       }
       terminalGeneration = (terminalGenerations.get(entry) ?? 0) + 1;
@@ -517,7 +493,7 @@ export function createSubagentRegistryLifecycleCompletion(
     const retireSupersededSession = async (currentEntry: SubagentRunRecord) => {
       if (completionReason !== SUBAGENT_ENDED_REASON_KILLED) {
         await params.retireSupersededRun(completeParams.runId, currentEntry);
-        params.persist();
+        params.persist(completeParams.runId);
       }
     };
     sessionSuperseded = sessionSuperseded || newerGenerationOwnsSession(entry);
@@ -534,12 +510,13 @@ export function createSubagentRegistryLifecycleCompletion(
     // Record only the current, non-superseded callback with a committed outcome; the
     // run-terminal dedupe key is first-write-wins, so a provisional/stale status here
     // would permanently mislabel the signal-log terminal kind.
-    if (!isProvisionalKill && entry.outcome?.status && entry.outcome.status !== "unknown") {
+    const outcomeStatus = entry.execution.outcome?.status;
+    if (!isProvisionalKill && outcomeStatus && outcomeStatus !== "unknown") {
       recordSubagentTerminalState({
         childSessionKey: entry.childSessionKey,
         runId: entry.runId,
         requesterSessionKey: entry.requesterSessionKey,
-        outcomeStatus: entry.outcome.status,
+        outcomeStatus,
       });
     }
 
@@ -569,7 +546,18 @@ export function createSubagentRegistryLifecycleCompletion(
     }
 
     const suppressedForSteerRestart = params.suppressAnnounceForSteerRestart(entry);
-    if (mutated && !suppressedForSteerRestart && !completeParams.suppressSessionEffects) {
+    // Recovery persists its terminal state before draining this callback, so an
+    // unchanged row still needs its first session-status and progress events.
+    const shouldPublishTerminalStatus =
+      mutated ||
+      (completeParams.recoverInterrupted === true &&
+        !isProvisionalKill &&
+        !progressEndedEntries.has(entry));
+    if (
+      shouldPublishTerminalStatus &&
+      !suppressedForSteerRestart &&
+      !completeParams.suppressSessionEffects
+    ) {
       emitSessionLifecycleEvent({
         sessionKey: entry.childSessionKey,
         reason: "subagent-status",

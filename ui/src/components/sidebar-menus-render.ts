@@ -14,6 +14,7 @@ import {
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
 import {
+  renderSidebarCatalogViewMenu,
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
@@ -72,12 +73,14 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
   const { host } = controller;
   const position = controller.agentMenuPosition;
   const trigger = controller.agentMenuTrigger;
-  const { activeId, agent, agents } = host.activeChipAgent();
+  const { activeId, agent, agents, identity, identities } = host.activeChipAgent();
   return renderSidebarAgentMenu({
     position,
+    basePath: host.basePath,
     activeId,
-    activeName: agent ? normalizeAgentLabel(agent) : activeId,
+    activeName: identity?.name?.trim() || (agent ? normalizeAgentLabel(agent) : activeId),
     agents,
+    identities,
     filter: controller.agentMenuFilter,
     pinnedAgentIds: host.pinnedAgentIds,
     connected: host.connected,
@@ -315,6 +318,33 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
         return;
       }
       controller.closeSessionSortMenu({ restoreFocus });
+    },
+  });
+}
+
+export function renderSidebarCatalogViewMenuForController(controller: SidebarMenusController) {
+  const { host } = controller;
+  const position = controller.catalogViewMenuPosition;
+  return renderSidebarCatalogViewMenu({
+    position,
+    trigger: controller.catalogViewMenuTrigger,
+    grouping: host.catalogProjectGrouping,
+    creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
+    creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
+    onGroupingChange: (grouping) => {
+      host.setCatalogProjectGrouping(grouping);
+      controller.closeCatalogViewMenu({ restoreFocus: true });
+    },
+    onCreatorFilterChange: (creatorId) => {
+      host.sessionCreatorFilterId = creatorId;
+      void host.sessionDataContext?.sessions.setCreatorFilter(creatorId);
+      controller.closeCatalogViewMenu({ restoreFocus: true });
+    },
+    onClose: (restoreFocus) => {
+      if (controller.catalogViewMenuPosition !== position) {
+        return;
+      }
+      controller.closeCatalogViewMenu({ restoreFocus });
     },
   });
 }

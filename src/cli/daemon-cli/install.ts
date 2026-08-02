@@ -25,10 +25,7 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
-import {
-  formatExternalSupervisorActionRequired,
-  isGatewayExternallySupervised,
-} from "../../infra/gateway-supervision.js";
+import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -126,9 +123,12 @@ export function mergeInstallInvocationEnv(params: {
     ) {
       continue;
     }
-    // Existing service env may contain host-specific secrets or loader overrides; keep only
-    // portable, non-dangerous values and let the current shell override them.
-    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+    // An installed CA file is additive, operator-owned Node startup trust; retain it on reinstall.
+    // Never replay service-owned TLS-disable, proxy, or loader overrides from the old environment.
+    if (
+      isDangerousHostEnvVarName(key) ||
+      (isDangerousHostEnvOverrideVarName(key) && upper !== "NODE_EXTRA_CA_CERTS")
+    ) {
       continue;
     }
     const value = rawValue.trim();
@@ -149,10 +149,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
-  if (isGatewayExternallySupervised()) {
-    fail(
-      `Gateway install blocked: ${formatExternalSupervisorActionRequired("install or rewrite the gateway service")}`,
-    );
+  try {
+    assertGatewayServiceMutationAllowed("install or rewrite the gateway service");
+  } catch (error) {
+    fail(`Gateway install blocked: ${String(error)}`);
     return;
   }
 

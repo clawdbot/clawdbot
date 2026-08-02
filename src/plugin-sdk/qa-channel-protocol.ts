@@ -89,6 +89,8 @@ export type QaBusAttachment = {
   id: string;
   kind: "image" | "video" | "audio" | "file";
   mimeType: string;
+  /** Selects how QA Channel projects an inline fixture after saving it locally. */
+  mediaFactCarrier?: "path" | "media-store-url";
   fileName?: string;
   inline?: boolean;
   url?: string;

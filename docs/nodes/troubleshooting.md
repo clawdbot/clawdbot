@@ -112,7 +112,7 @@ If still stuck:
 - Re-grant OS permissions.
 - Recreate/adjust the exec approval policy.
 
-For computer control, also verify that a vision-capable agent exposes the `computer` tool, `screen.snapshot` succeeds with Screen Recording permission, and `/phone status` shows the temporary or persistent gateway authorization you intended. A `gateway.nodes.commands.deny` entry always overrides `gateway.nodes.commands.allow`.
+For computer control, also verify that the node-local Computer Control toggle is enabled, its pairing update is approved, a vision-capable agent exposes the `computer` tool, and `screen.snapshot` succeeds with Screen Recording permission. A `gateway.nodes.commands.deny` entry always overrides a platform default or `gateway.nodes.commands.allow`.
 
 ## Related
 

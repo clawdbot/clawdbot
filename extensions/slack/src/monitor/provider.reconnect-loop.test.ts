@@ -8,7 +8,9 @@ const slackTestState = getSlackTestState();
 describe("slack socket reconnect loop", () => {
   beforeEach(() => {
     resetSlackTestState();
-    vi.useFakeTimers();
+    // Reconnect backoff uses timeouts. Keep ingress polling and SQLite WAL intervals
+    // real so runAllTimersAsync cannot turn periodic maintenance into an infinite loop.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   });
 
   afterEach(() => {
@@ -107,7 +109,7 @@ describe("slack socket reconnect loop", () => {
     );
   });
 
-  it("keeps degraded identity health after a recoverable reconnect", async () => {
+  it("re-resolves degraded identity after a recoverable reconnect", async () => {
     getSlackClient().auth.test.mockResolvedValueOnce({
       app_id: "A1",
       user_id: "UUSER",
@@ -150,9 +152,10 @@ describe("slack socket reconnect loop", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
-      healthState: "degraded",
-      lastError: expect.stringContaining("without bot_id"),
+      lifecycle: "ready",
+      lastError: null,
     });
+    expect(getSlackClient().auth.test).toHaveBeenCalledTimes(2);
     controller.abort();
     await expect(run).resolves.toBeUndefined();
   });

@@ -1,11 +1,7 @@
 import { statSync } from "node:fs";
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import {
-  createAccountListHelpers,
-  normalizeAccountId,
-  resolveMergedAccountConfig,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/account-resolution";
+import { normalizeAccountId, type OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 // Imessage plugin module implements accounts behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
@@ -21,7 +17,11 @@ export type ResolvedIMessageAccount = {
   configured: boolean;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("imessage", {
+const {
+  listAccountIds,
+  resolveDefaultAccountId,
+  resolveAccountConfig: resolveMergedIMessageAccountConfig,
+} = createAccountListHelpers<IMessageAccountConfig>("imessage", {
   implicitDefaultAccount: {
     channelKeys: ["cliPath", "dbPath"],
   },
@@ -77,13 +77,7 @@ function mergeIMessageStreamingConfig(
 
 function mergeIMessageAccountConfig(cfg: OpenClawConfig, accountId: string): IMessageAccountConfig {
   const accountConfig = resolveIMessageAccountConfig(cfg, accountId);
-  const merged = resolveMergedAccountConfig<IMessageAccountConfig>({
-    channelConfig: cfg.channels?.imessage as IMessageAccountConfig | undefined,
-    accounts: cfg.channels?.imessage?.accounts as
-      | Record<string, Partial<IMessageAccountConfig>>
-      | undefined,
-    accountId,
-  });
+  const merged = resolveMergedIMessageAccountConfig(cfg, accountId);
   const streaming = mergeIMessageStreamingConfig(
     (cfg.channels?.imessage as Record<string, unknown> | undefined)?.streaming,
     (accountConfig as Record<string, unknown> | undefined)?.streaming,

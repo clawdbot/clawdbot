@@ -1,7 +1,7 @@
 // Agent session helper tests cover explicit session resolution through config and session stores.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSessionKeyForRequest } from "./session.js";
+import { resolveSessionKeyForRequest } from "./session.runtime.js";
 
 const mocks = vi.hoisted(() => ({
   listSessionEntries: vi.fn(),
@@ -127,7 +127,26 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
-  it("migrates legacy main-store main-key sessions for plain --to default-agent requests", () => {
+  it("canonicalizes an explicit main alias for the selected agent", () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: {},
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        agents: { list: [{ id: "mybot", default: true }] },
+        session: { mainKey: "work" },
+      } satisfies OpenClawConfig,
+      sessionKey: "main",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:work");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("does not adopt another agent's main session for a default-agent request", () => {
     setupMainAndMybotStorePaths();
     const mainStore = {
       "agent:main:main": { sessionId: "legacy-session-id", updatedAt: 1 },
@@ -146,15 +165,12 @@ describe("resolveSessionKeyForRequest", () => {
     });
 
     expect(result.sessionKey).toBe("agent:mybot:main");
-    expect(result.sessionStore).toEqual({
-      ...mybotStore,
-      "agent:mybot:main": mainStore["agent:main:main"],
-    });
+    expect(result.sessionStore).toEqual(mybotStore);
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
-    expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBe("legacy-session-id");
+    expect(result.sessionStore["agent:mybot:main"]).toBeUndefined();
   });
 
-  it("migrates legacy main-key sessions for plain --to default-agent requests with a literal shared store", () => {
+  it("does not adopt another agent's main session from a literal shared store", () => {
     const sharedStore = {
       "agent:main:main": { sessionId: "legacy-session-id", updatedAt: 1 },
     };
@@ -171,12 +187,9 @@ describe("resolveSessionKeyForRequest", () => {
     });
 
     expect(result.sessionKey).toBe("agent:mybot:main");
-    expect(result.sessionStore).toEqual({
-      ...sharedStore,
-      "agent:mybot:main": sharedStore["agent:main:main"],
-    });
+    expect(result.sessionStore).toEqual(sharedStore);
     expect(result.storePath).toBe(SHARED_STORE_PATH);
-    expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBe("legacy-session-id");
+    expect(result.sessionStore["agent:mybot:main"]).toBeUndefined();
     expect(mocks.listSessionEntries).toHaveBeenCalledTimes(1);
     expect(mocks.listSessionEntries).toHaveBeenCalledWith({
       agentId: "mybot",

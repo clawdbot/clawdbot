@@ -4,6 +4,7 @@ import { Container, TextDisplay } from "../internal/discord.js";
 import {
   deliverDiscordInteractionReply,
   hasRenderableReplyPayload,
+  settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
 
 function createInteraction() {
@@ -66,4 +67,31 @@ describe("deliverDiscordInteractionReply", () => {
     });
     expect(interaction.followUp).not.toHaveBeenCalled();
   });
+});
+
+describe("settleDiscordInteractionWithoutVisibleReply", () => {
+  it("deletes a deferred slash-command loading response", async () => {
+    const interaction = {
+      responseState: "deferred",
+      deleteReply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await settleDiscordInteractionWithoutVisibleReply(interaction as never);
+
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["unacknowledged", "deferred-update", "replied"])(
+    "does not delete an interaction in the %s state",
+    async (responseState) => {
+      const interaction = {
+        responseState,
+        deleteReply: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await settleDiscordInteractionWithoutVisibleReply(interaction as never);
+
+      expect(interaction.deleteReply).not.toHaveBeenCalled();
+    },
+  );
 });

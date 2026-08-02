@@ -147,7 +147,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `providerCatalogEntry`               | No       | `string`                     | Lightweight provider-catalog module path, relative to the plugin root, for manifest-scoped provider catalog metadata that can be loaded without activating the full plugin runtime.                                                                                                            |
 | `modelSupport`                       | No       | `object`                     | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                                                                                                    |
 | `modelCatalog`                       | No       | `object`                     | Declarative model catalog metadata for providers owned by this plugin. This is the control-plane contract for future read-only listing, onboarding, model pickers, aliases, and suppression without loading plugin runtime.                                                                    |
-| `modelPricing`                       | No       | `object`                     | Provider-owned external pricing lookup policy. Use it to opt local/self-hosted providers out of remote pricing catalogs or map provider refs to OpenRouter/LiteLLM catalog ids without hardcoding provider ids in core.                                                                        |
+| `modelPricing`                       | No       | `object`                     | Provider-owned hosted-pricing publication policy. Use it to opt local/self-hosted providers out of published pricing or map provider refs to OpenRouter/LiteLLM catalog ids without hardcoding provider ids in core.                                                                           |
 | `modelIdNormalization`               | No       | `object`                     | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                                                                                      |
 | `providerEndpoints`                  | No       | `object[]`                   | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                                                                                       |
 | `providerRequest`                    | No       | `object`                     | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                                                                                         |
@@ -385,30 +385,31 @@ If a tool has no `toolMetadata`, OpenClaw preserves the existing behavior and lo
 
 Each `providerAuthChoices` entry describes one onboarding or auth choice. OpenClaw reads this before provider runtime loads. Provider setup lists use these manifest choices, descriptor-derived setup choices, and install-catalog metadata without loading provider runtime.
 
-| Field                 | Required | Type                                                                  | What it means                                                                                             |
-| --------------------- | -------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `provider`            | Yes      | `string`                                                              | Provider id this choice belongs to.                                                                       |
-| `method`              | Yes      | `string`                                                              | Auth method id to dispatch to.                                                                            |
-| `choiceId`            | Yes      | `string`                                                              | Stable auth-choice id used by onboarding and CLI flows.                                                   |
-| `choiceLabel`         | No       | `string`                                                              | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                         |
-| `choiceHint`          | No       | `string`                                                              | Short helper text for the picker.                                                                         |
-| `icon`                | No       | HTTPS URL                                                             | Artwork shown beside this choice in supported onboarding clients.                                         |
-| `website`             | No       | HTTPS URL                                                             | Product, sign-in, or installation page shown by supported onboarding clients.                             |
-| `assistantPriority`   | No       | `number`                                                              | Lower values sort earlier in assistant-driven interactive pickers.                                        |
-| `assistantVisibility` | No       | `"visible"` \| `"manual-only"`                                        | Hide the choice from assistant pickers while still allowing manual CLI selection.                         |
-| `deprecatedChoiceIds` | No       | `string[]`                                                            | Legacy choice ids that should redirect users to this replacement choice.                                  |
-| `groupId`             | No       | `string`                                                              | Optional group id for grouping related choices.                                                           |
-| `groupLabel`          | No       | `string`                                                              | User-facing label for that group.                                                                         |
-| `groupHint`           | No       | `string`                                                              | Short helper text for the group.                                                                          |
-| `onboardingFeatured`  | No       | `boolean`                                                             | Surface this group in the featured tier of the interactive onboarding picker, before the "More..." entry. |
-| `optionKey`           | No       | `string`                                                              | Internal option key for simple one-flag auth flows.                                                       |
-| `cliFlag`             | No       | `string`                                                              | CLI flag name, such as `--openrouter-api-key`.                                                            |
-| `cliOption`           | No       | `string`                                                              | Full CLI option shape, such as `--openrouter-api-key <key>`.                                              |
-| `cliDescription`      | No       | `string`                                                              | Description used in CLI help.                                                                             |
-| `appGuidedSecret`     | No       | `boolean`                                                             | One pasted secret plus provider defaults is sufficient for app-guided setup.                              |
-| `appGuidedDiscovery`  | No       | `boolean`                                                             | The matching runtime auth method owns read-only local discovery through `appGuidedSetup`.                 |
-| `appGuidedAuth`       | No       | `"oauth"` \| `"device-code"`                                          | Provider-owned interactive login that native setup clients can render generically.                        |
-| `onboardingScopes`    | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`.  |
+| Field                  | Required | Type                                                                  | What it means                                                                                             |
+| ---------------------- | -------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `provider`             | Yes      | `string`                                                              | Provider id this choice belongs to.                                                                       |
+| `method`               | Yes      | `string`                                                              | Auth method id to dispatch to.                                                                            |
+| `choiceId`             | Yes      | `string`                                                              | Stable auth-choice id used by onboarding and CLI flows.                                                   |
+| `choiceLabel`          | No       | `string`                                                              | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                         |
+| `choiceHint`           | No       | `string`                                                              | Short helper text for the picker.                                                                         |
+| `icon`                 | No       | HTTPS URL                                                             | Artwork shown beside this choice in supported onboarding clients.                                         |
+| `website`              | No       | HTTPS URL                                                             | Product, sign-in, or installation page shown by supported onboarding clients.                             |
+| `assistantPriority`    | No       | `number`                                                              | Lower values sort earlier in assistant-driven interactive pickers.                                        |
+| `assistantVisibility`  | No       | `"visible"` \| `"manual-only"`                                        | Hide the choice from assistant pickers while still allowing manual CLI selection.                         |
+| `deprecatedChoiceIds`  | No       | `string[]`                                                            | Legacy choice ids that should redirect users to this replacement choice.                                  |
+| `groupId`              | No       | `string`                                                              | Optional group id for grouping related choices.                                                           |
+| `groupLabel`           | No       | `string`                                                              | User-facing label for that group.                                                                         |
+| `groupHint`            | No       | `string`                                                              | Short helper text for the group.                                                                          |
+| `onboardingFeatured`   | No       | `boolean`                                                             | Surface this group in the featured tier of the interactive onboarding picker, before the "More..." entry. |
+| `optionKey`            | No       | `string`                                                              | Internal option key for simple one-flag auth flows.                                                       |
+| `cliFlag`              | No       | `string`                                                              | CLI flag name, such as `--openrouter-api-key`.                                                            |
+| `cliOption`            | No       | `string`                                                              | Full CLI option shape, such as `--openrouter-api-key <key>`.                                              |
+| `cliDescription`       | No       | `string`                                                              | Description used in CLI help.                                                                             |
+| `appGuidedSecret`      | No       | `boolean`                                                             | One pasted secret plus provider defaults is sufficient for app-guided setup.                              |
+| `appGuidedActionLabel` | No       | `string`                                                              | Short command label shown when starting provider-owned app-guided setup.                                  |
+| `appGuidedDiscovery`   | No       | `boolean`                                                             | The matching runtime auth method owns read-only local discovery through `appGuidedSetup`.                 |
+| `appGuidedAuth`        | No       | `"oauth"` \| `"device-code"`                                          | Provider-owned interactive login that native setup clients can render generically.                        |
+| `onboardingScopes`     | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`.  |
 
 When `appGuidedDiscovery` is true, the matching provider auth method must expose
 `appGuidedSetup.detect` and `appGuidedSetup.prepare`. Detection must be
@@ -489,7 +490,9 @@ Planner diagnostics can distinguish explicit activation hints from manifest owne
 Use `qaRunners` when a plugin contributes one or more transport runners beneath
 the shared `openclaw qa` root. Keep this metadata cheap and static; the plugin
 runtime still owns actual CLI registration through a lightweight
-`runtime-api.ts` surface that exports matching `qaRunnerCliRegistrations`. An
+`qa-runner-api.ts` surface that exports matching `qaRunnerCliRegistrations`. For
+plugins using the shipped `runtime-api.ts` contract, that legacy surface remains
+accepted through 2026-10-01 while authors migrate. An
 optional `adapterFactory` exposes the transport to shared QA scenarios without
 changing the registered command's runner.
 
@@ -618,6 +621,13 @@ Each field hint can include:
 | `sensitive`    | `boolean`        | Marks the field as secret or sensitive.                                                                           |
 | `placeholder`  | `string`         | Placeholder text for form inputs.                                                                                 |
 | `presentation` | `"phone-number"` | Display-only localized phone formatting for parseable international (`+...`) values; raw values remain unchanged. |
+
+Channel config sections inherit `help` for the leaves every channel shares
+(`enabled`, `allowFrom`, `dmPolicy`, `groupPolicy`, `streaming`, and similar) at
+the channel root and under `accounts.<id>`. A channel that declares its own
+`help` for one of those keys always wins, so override it whenever the shared
+wording is wrong for your provider. Provider-specific keys such as credentials,
+hosts, and webhooks still need their own hints.
 
 ## contracts reference
 
@@ -974,27 +984,28 @@ Provider fields:
 
 Model fields:
 
-| Field              | Type                                                           | What it means                                                               |
-| ------------------ | -------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `id`               | `string`                                                       | Provider-local model id, without the `provider/` prefix.                    |
-| `name`             | `string`                                                       | Optional display name.                                                      |
-| `api`              | `ModelApi`                                                     | Optional per-model API override.                                            |
-| `baseUrl`          | `string`                                                       | Optional per-model base URL override.                                       |
-| `headers`          | `Record<string, string>`                                       | Optional per-model static headers.                                          |
-| `input`            | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.            |
-| `reasoning`        | `boolean`                                                      | Whether the model exposes reasoning behavior.                               |
-| `contextWindow`    | `number`                                                       | Native provider context window.                                             |
-| `contextTokens`    | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`. |
-| `maxTokens`        | `number`                                                       | Maximum output tokens when known.                                           |
-| `thinkingLevelMap` | `Record<string, string \| null>`                               | Optional per-thinking-level model-id or param overrides.                    |
-| `cost`             | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`. |
-| `compat`           | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.  |
-| `mediaInput`       | `object`                                                       | Optional per-modality input config, currently image-only.                   |
-| `status`           | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.          |
-| `statusReason`     | `string`                                                       | Optional reason shown with non-available status.                            |
-| `replaces`         | `string[]`                                                     | Older provider-local model ids this model supersedes.                       |
-| `replacedBy`       | `string`                                                       | Replacement provider-local model id for deprecated rows.                    |
-| `tags`             | `string[]`                                                     | Stable tags used by pickers and filters.                                    |
+| Field              | Type                                                           | What it means                                                                        |
+| ------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `id`               | `string`                                                       | Provider-local model id, without the `provider/` prefix.                             |
+| `name`             | `string`                                                       | Optional display name.                                                               |
+| `api`              | `ModelApi`                                                     | Optional per-model API override.                                                     |
+| `baseUrl`          | `string`                                                       | Optional per-model base URL override.                                                |
+| `headers`          | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
+| `input`            | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
+| `reasoning`        | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
+| `contextWindow`    | `number`                                                       | Native provider context window.                                                      |
+| `contextTokens`    | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`.          |
+| `maxTokens`        | `number`                                                       | Maximum output tokens when known.                                                    |
+| `thinkingLevelMap` | `Record<string, string \| null>`                               | Optional per-thinking-level model-id or param overrides.                             |
+| `cost`             | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`.          |
+| `compat`           | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.           |
+| `upstreamModel`    | `string`                                                       | Optional `provider/model` ref of the same upstream model in another bundled catalog. |
+| `mediaInput`       | `object`                                                       | Optional per-modality input config, currently image-only.                            |
+| `status`           | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.                   |
+| `statusReason`     | `string`                                                       | Optional reason shown with non-available status.                                     |
+| `replaces`         | `string[]`                                                     | Older provider-local model ids this model supersedes.                                |
+| `replacedBy`       | `string`                                                       | Replacement provider-local model id for deprecated rows.                             |
+| `tags`             | `string[]`                                                     | Stable tags used by pickers and filters.                                             |
 
 Suppression fields:
 
@@ -1005,6 +1016,8 @@ Suppression fields:
 | `reason`                   | `string`   | Optional message shown when the suppressed row is requested directly.                                     |
 | `when.baseUrlHosts`        | `string[]` | Optional list of effective provider base URL hosts required before the suppression applies.               |
 | `when.providerConfigApiIn` | `string[]` | Optional list of exact provider-config `api` values required before the suppression applies.              |
+
+`upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode#models-shipped-by-more-than-one-provider).
 
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
 
@@ -1133,7 +1146,7 @@ OpenClaw derives `trustedDirs` for manifest presets from the plugin root and, fo
 
 ## modelPricing reference
 
-Use `modelPricing` when a provider needs control-plane pricing behavior before runtime loads. The Gateway pricing cache reads this metadata without importing provider runtime code.
+Use `modelPricing` when the hosted catalog publisher needs provider-specific pricing-key behavior. The publisher reads this metadata without importing provider runtime code.
 
 ```json
 {
@@ -1156,11 +1169,11 @@ Use `modelPricing` when a provider needs control-plane pricing behavior before r
 
 Provider fields:
 
-| Field        | Type              | What it means                                                                                      |
-| ------------ | ----------------- | -------------------------------------------------------------------------------------------------- |
-| `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never fetch OpenRouter or LiteLLM pricing. |
-| `openRouter` | `false \| object` | OpenRouter pricing lookup mapping. `false` disables OpenRouter lookup for this provider.           |
-| `liteLLM`    | `false \| object` | LiteLLM pricing lookup mapping. `false` disables LiteLLM lookup for this provider.                 |
+| Field        | Type              | What it means                                                                                 |
+| ------------ | ----------------- | --------------------------------------------------------------------------------------------- |
+| `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing. |
+| `openRouter` | `false \| object` | OpenRouter publication-key mapping. `false` disables OpenRouter matching for this provider.   |
+| `liteLLM`    | `false \| object` | LiteLLM publication-key mapping. `false` disables LiteLLM matching for this provider.         |
 
 Source fields:
 
@@ -1211,7 +1224,7 @@ Important examples:
 | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `openclaw.extensions`                                                                      | Declares native plugin entrypoints. Must stay inside the plugin package directory.                                                                                                        |
 | `openclaw.runtimeExtensions`                                                               | Declares built JavaScript runtime entrypoints for installed packages. Must stay inside the plugin package directory.                                                                      |
-| `openclaw.setupEntry`                                                                      | Lightweight setup-only entrypoint used during onboarding, deferred channel startup, and read-only channel status/SecretRef discovery. Must stay inside the plugin package directory.      |
+| `openclaw.setupEntry`                                                                      | Lightweight setup-only entrypoint used during onboarding, channel setup, and read-only channel status/SecretRef discovery. Must stay inside the plugin package directory.                 |
 | `openclaw.runtimeSetupEntry`                                                               | Declares the built JavaScript setup entrypoint for installed packages. Requires `setupEntry`, must exist, and must stay inside the plugin package directory.                              |
 | `openclaw.channel`                                                                         | Cheap channel catalog metadata like labels, docs paths, aliases, and selection copy.                                                                                                      |
 | `openclaw.channel.approvalFlags`                                                           | Closed approval behavior flags available before runtime load. `native` means the channel owns native approval UI and same-turn resolution.                                                |
@@ -1226,9 +1239,10 @@ Important examples:
 | `openclaw.install.expectedIntegrity`                                                       | Expected npm dist integrity string such as `sha512-...`; install and update flows verify the fetched artifact against it.                                                                 |
 | `openclaw.install.allowInvalidConfigRecovery`                                              | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.                                                                                                            |
 | `openclaw.install.requiredPlatformPackages`                                                | npm package aliases that must materialize when their lockfile platform constraints match the current host.                                                                                |
-| `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`                          | Lets setup-runtime channel surfaces load before listen, then defers the full configured channel plugin until post-listen activation.                                                      |
 
 Manifest metadata decides which provider/channel/setup choices appear in onboarding before runtime loads. `package.json#openclaw.install` tells onboarding how to fetch or enable that plugin when the user picks one of those choices. Do not move install hints into `openclaw.plugin.json`.
+
+Configured startup plugins register HTTP routes from their full runtime after the Gateway starts listening. Until startup sidecars are ready, an otherwise-unclaimed HTTP request returns `503` with `Retry-After: 1`; core routes remain available throughout startup.
 
 For `openclaw.channel.cliAddOptions`, use Commander's long-option syntax, such as `--initial-sync-limit <n>`. Set `valueType: "int"` to parse a non-negative integer or `valueType: "list"` to split comma-, semicolon-, or newline-delimited input into strings before the plugin setup adapter receives it. Omit `valueType` to pass the parsed Commander value through unchanged.
 

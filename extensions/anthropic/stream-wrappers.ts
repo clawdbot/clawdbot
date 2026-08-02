@@ -73,7 +73,12 @@ function mergeAnthropicBetaHeader(
   return merged;
 }
 
-function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
+/**
+ * Claude subscription credentials are OAuth access tokens rather than API keys.
+ * Anthropic authenticates them through `Authorization: Bearer`, so every caller
+ * that builds request auth must branch on this instead of assuming `x-api-key`.
+ */
+export function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
 }
 

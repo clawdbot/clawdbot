@@ -89,6 +89,20 @@ describe("persisted implicit-main roster migration", () => {
         main: { default: true },
         ops: {},
       });
+      expect(snapshot.includeProvenance).toEqual([
+        {
+          path: ["agents", "entries"],
+          kind: "single",
+          hasSiblingOverrides: false,
+          targetPath: path.join(configDir, "entries.json"),
+        },
+        {
+          path: [],
+          kind: "single",
+          hasSiblingOverrides: true,
+          targetPath: path.join(configDir, "base.json"),
+        },
+      ]);
       expect(configIncludeOwnsAgentRoster(snapshot)).toBe(true);
     });
   });
@@ -112,8 +126,35 @@ describe("persisted implicit-main roster migration", () => {
 
       const snapshot = await readConfigFileSnapshot();
 
-      expect(snapshot.includeProvenance?.agentRoster).toBe(false);
+      expect(snapshot.agentRosterIncludeOwned).toBe(false);
       expect(configIncludeOwnsAgentRoster(snapshot)).toBe(false);
+    });
+  });
+
+  it("does not publish partial provenance when a later include fails", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({
+          agents: { $include: ["./delegating.json", "./missing.json"] },
+        }),
+      );
+      await fs.writeFile(
+        path.join(configDir, "delegating.json"),
+        JSON.stringify({ $include: "./entries.json" }),
+      );
+      await fs.writeFile(
+        path.join(configDir, "entries.json"),
+        JSON.stringify({ entries: { main: { default: true } } }),
+      );
+      resetConfigRuntimeState();
+
+      const snapshot = await readConfigFileSnapshot();
+
+      expect(snapshot.valid).toBe(false);
+      expect(snapshot.includeProvenance).toBeUndefined();
     });
   });
 
@@ -134,7 +175,7 @@ describe("persisted implicit-main roster migration", () => {
 
       const snapshot = await readConfigFileSnapshot();
 
-      expect(snapshot.includeProvenance?.agentRoster).toBe(true);
+      expect(snapshot.agentRosterIncludeOwned).toBe(true);
       expect(configIncludeOwnsAgentRoster(snapshot)).toBe(true);
     });
   });
@@ -161,7 +202,7 @@ describe("persisted implicit-main roster migration", () => {
 
       const snapshot = await readConfigFileSnapshot();
 
-      expect(snapshot.includeProvenance?.agentRoster).toBe(false);
+      expect(snapshot.agentRosterIncludeOwned).toBe(false);
       expect(configIncludeOwnsAgentRoster(snapshot)).toBe(false);
     });
   });
@@ -184,7 +225,7 @@ describe("persisted implicit-main roster migration", () => {
       const snapshot = await readConfigFileSnapshot();
 
       expect(snapshot.sourceConfigBeforeMigrations?.agents?.list?.[0]?.id).toBe("10");
-      expect(snapshot.includeProvenance?.agentRoster).toBe(true);
+      expect(snapshot.agentRosterIncludeOwned).toBe(true);
       expect(configIncludeOwnsAgentRoster(snapshot)).toBe(true);
     });
   });

@@ -538,14 +538,9 @@ function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
   if (item.kind !== "group") {
     return false;
   }
-  const role = item.role.toLowerCase();
   // sessions_send projections start a new autonomous turn, same contract as
   // annotateToolTurnOutcome; they are inputs, not work produced by this turn.
-  return (
-    role === "user" ||
-    groupStartsProjectedTurnBoundary(item) ||
-    (role === "assistant" && assistantGroupIsForwardedBoundary(item))
-  );
+  return messageGroupStartsTurnBoundary(item);
 }
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
@@ -573,6 +568,23 @@ function assistantGroupHasVisibleReplyContent(group: MessageGroup): boolean {
       return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
     });
   });
+}
+
+export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolean {
+  return (
+    group.role.toLowerCase() === "assistant" &&
+    !assistantGroupIsForwardedBoundary(group) &&
+    assistantGroupHasVisibleReplyContent(group)
+  );
+}
+
+function messageGroupStartsTurnBoundary(group: MessageGroup): boolean {
+  const role = group.role.toLowerCase();
+  return (
+    role === "user" ||
+    groupStartsProjectedTurnBoundary(group) ||
+    (role === "assistant" && assistantGroupIsForwardedBoundary(group))
+  );
 }
 
 // History carries no final-vs-commentary marker (commentary exists only as

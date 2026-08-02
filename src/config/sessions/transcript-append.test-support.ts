@@ -4,17 +4,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "../../agents/runtime/index.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionWriteLockOptions,
-} from "../../agents/session-write-lock.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockOptions,
+} from "../../plugin-sdk/session-write-lock-runtime.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { serializeJsonlEntry, serializeJsonlLine, writeJsonlLines } from "./transcript-jsonl.js";
+import { serializeJsonlLines } from "./transcript-jsonl.js";
 import {
   streamSessionTranscriptLines,
   streamSessionTranscriptLinesReverse,
@@ -23,6 +23,30 @@ import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
+
+function serializeJsonlLine(entry: unknown): string {
+  const serialized = JSON.stringify(entry);
+  if (serialized === undefined) {
+    throw new TypeError(`entry of type ${typeof entry} is not JSON-serializable`);
+  }
+  return serialized;
+}
+
+function serializeJsonlEntry(entry: unknown): string {
+  return `${serializeJsonlLine(entry)}\n`;
+}
+
+async function writeJsonlLines(
+  filePath: string,
+  lines: readonly string[],
+  options?: { encoding?: BufferEncoding; flag?: string; mode?: number },
+): Promise<void> {
+  await fs.writeFile(filePath, serializeJsonlLines(lines), {
+    encoding: options?.encoding ?? "utf-8",
+    ...(options?.flag ? { flag: options.flag } : {}),
+    ...(options?.mode !== undefined ? { mode: options.mode } : {}),
+  });
+}
 
 const transcriptAppendQueue = new KeyedAsyncQueue();
 
@@ -496,7 +520,7 @@ async function withSessionTranscriptWriteLock<T>(
   const lock = await acquireSessionWriteLock({
     sessionFile: params.transcriptPath,
     ...resolveSessionWriteLockOptions(params.config),
-    allowReentrant: true,
+    reentrantOwner: `session:${path.resolve(params.transcriptPath)}:append:${randomUUID()}`,
   });
   try {
     return await run();

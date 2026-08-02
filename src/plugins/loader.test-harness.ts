@@ -25,7 +25,6 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import { testing as runtimeRegistryLoaderTesting } from "./runtime/runtime-registry-loader.js";
 
 export const getEmbeddingProvider = (id: string) => getRegisteredEmbeddingProvider(id)?.adapter;
 
@@ -663,7 +662,6 @@ export function createSetupEntryChannelPluginFixture(params: {
   fullBlurb: string;
   setupBlurb: string;
   configured: boolean;
-  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   useBundledFullEntryContract?: boolean;
   bundledFullEntryId?: string;
   useBundledSetupEntryContract?: boolean;
@@ -694,13 +692,6 @@ export function createSetupEntryChannelPluginFixture(params: {
         openclaw: {
           extensions: ["./index.cjs"],
           setupEntry: "./setup-entry.cjs",
-          ...(params.startupDeferConfiguredChannelFullLoadUntilAfterListen
-            ? {
-                startup: {
-                  deferConfiguredChannelFullLoadUntilAfterListen: true,
-                },
-              }
-            : {}),
         },
       },
       null,
@@ -993,7 +984,6 @@ export function collectStartupTraceMetrics(
 export const globalAfterEach0 = () => {
   resetDiagnosticEventsForTest();
   clearRuntimeConfigSnapshot();
-  runtimeRegistryLoaderTesting.resetPluginRegistryLoadedForTests();
   resetPluginLoaderTestStateForTest();
 };
 

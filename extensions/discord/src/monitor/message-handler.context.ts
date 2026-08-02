@@ -4,7 +4,7 @@ import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
   toHistoryMediaEntries,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
@@ -129,14 +129,15 @@ export async function buildDiscordMessageProcessContext(params: {
   const senderUsername = sender.isPluralKit
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
-  const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
-    channelConfig,
-    guildInfo,
-    sender: { id: sender.id, name: sender.name, tag: sender.tag },
-    allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
-    isGuild: isGuildMessage,
-    channelTopic: channelInfo?.topic,
-  });
+  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext } =
+    buildDiscordInboundAccessContext({
+      channelConfig,
+      guildInfo,
+      sender: { id: sender.id, name: sender.name, tag: sender.tag },
+      allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
+      isGuild: isGuildMessage,
+      channelTopic: channelInfo?.topic,
+    });
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: cfg.session?.dmScope,
@@ -416,7 +417,7 @@ export async function buildDiscordMessageProcessContext(params: {
       authorized: commandAuthorized,
       body: preflightAudioTranscript ?? baseText,
     },
-    media: toInboundMediaFacts(mediaList, {
+    media: await toInboundMediaFactsWithMetadata(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     }),
     supplemental: {
@@ -442,7 +443,7 @@ export async function buildDiscordMessageProcessContext(params: {
                 );
                 return isContextAborted(abortSignal)
                   ? []
-                  : toInboundMediaFacts(referencedReplyMediaList);
+                  : await toInboundMediaFactsWithMetadata(referencedReplyMediaList);
               },
             }
           : undefined,
@@ -458,7 +459,7 @@ export async function buildDiscordMessageProcessContext(params: {
       GroupSubject: isDirectMessage ? undefined : groupChannel,
       GroupChannel: groupChannel,
       ...(isGuildMessage ? { GroupRequireMention: ctx.groupRequireMention } : {}),
-      UntrustedStructuredContext: untrustedContext,
+      ChannelStructuredContext: channelStructuredContext,
       OwnerAllowFrom: ownerAllowFrom,
     },
   });

@@ -8,7 +8,6 @@ import { clearAgentHarnesses } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { ModelAuthMode } from "../model-auth.js";
 import type { AgentRuntimePlan, BuildAgentRuntimePlanParams } from "../runtime-plan/types.js";
-import type { CompactionTranscriptRotation } from "./compaction-successor-transcript.js";
 
 type MockResolvedModel = {
   model: {
@@ -47,7 +46,6 @@ export const hookRunner = {
   runAfterCompaction: vi.fn(async () => undefined),
 };
 
-export const ensureRuntimePluginsLoaded: Mock<(params?: unknown) => void> = vi.fn();
 export const acquireSessionWriteLockMock = vi.fn(async (_params?: unknown) => ({
   release: vi.fn(async () => {}),
 }));
@@ -70,7 +68,7 @@ export const resolveModelMock: Mock<
   modelRegistry: {},
 }));
 export const resolveModelAsyncMock = vi.fn(
-  async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
+  async (provider: string, modelId: string, agentDir?: string, cfg?: unknown, _options?: unknown) =>
     resolveModelMock(provider, modelId, agentDir, cfg),
 );
 export const sessionCompactImpl = vi.fn(async () => ({
@@ -295,7 +293,12 @@ async function runCompactWithSafetyTimeoutMock(
 }
 export const compactWithSafetyTimeoutMock = vi.fn(runCompactWithSafetyTimeoutMock);
 export const rotateTranscriptAfterCompactionMock: Mock<
-  (_params?: unknown) => Promise<CompactionTranscriptRotation>
+  (_params?: unknown) => Promise<{
+    rotated: boolean;
+    sessionId?: string;
+    sessionFile?: string;
+    leafId?: string;
+  }>
 > = vi.fn(async () => ({
   rotated: false,
 }));
@@ -420,6 +423,22 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   },
 };
 
+export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
+  async (input: Record<string, unknown>) => ({
+    snapshot: {
+      agentId: input.agentId,
+      agentDir: input.agentDir,
+      config: input.config,
+      workspaceDir: input.workspaceDir,
+      metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    },
+    release: vi.fn(),
+  }),
+);
+
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
   sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
@@ -532,7 +551,7 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runAfterCompaction.mockReset();
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
-  ensureRuntimePluginsLoaded.mockReset();
+  acquireAgentRunPreparedModelRuntimeMock.mockClear();
   acquireSessionWriteLockMock.mockClear();
 
   resolveContextEngineMock.mockReset();
@@ -565,8 +584,13 @@ export function resetCompactHooksHarnessMocks(): void {
   }));
   resolveModelAsyncMock.mockReset();
   resolveModelAsyncMock.mockImplementation(
-    async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
-      resolveModelMock(provider, modelId, agentDir, cfg),
+    async (
+      provider: string,
+      modelId: string,
+      agentDir?: string,
+      cfg?: unknown,
+      _options?: unknown,
+    ) => resolveModelMock(provider, modelId, agentDir, cfg),
   );
   resolveAgentHarnessPolicyMock.mockReset();
   resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
@@ -616,18 +640,14 @@ export async function loadCompactHooksHarness(): Promise<{
     runGlobalGatewayStopSafely: vi.fn(async () => undefined),
   }));
 
-  vi.doMock("../runtime-plugins.js", () => ({
-    ensureRuntimePluginsLoaded,
-  }));
-
   vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
     captureCurrentPluginMetadataSnapshotState: vi.fn(() => ({
       snapshot: undefined,
       configFingerprint: undefined,
       compatiblePolicyHashes: undefined,
       compatibleConfigFingerprints: undefined,
+      configIdentities: new WeakSet(),
     })),
-    clearCurrentPluginMetadataSnapshot: vi.fn(),
     getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
     resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
     restoreCurrentPluginMetadataSnapshotState: vi.fn(),
@@ -737,20 +757,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../prepared-model-runtime.js", () => ({
     activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
-    acquireAgentRunPreparedModelRuntime: vi.fn(async (input: Record<string, unknown>) => ({
-      snapshot: {
-        agentId: input.agentId,
-        agentDir: input.agentDir,
-        config: input.config,
-        workspaceDir: input.workspaceDir,
-        metadataSnapshot: {
-          ...emptyPluginMetadataSnapshot,
-          workspaceDir: input.workspaceDir as string | undefined,
-        },
-        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
-      },
-      release: vi.fn(),
-    })),
+    acquireAgentRunPreparedModelRuntime: acquireAgentRunPreparedModelRuntimeMock,
     prepareModelRuntimeSnapshot: vi.fn(async () => ({
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
     })),
@@ -781,20 +788,22 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveSandboxContext: resolveSandboxContextMock,
   }));
 
-  vi.doMock("../session-file-repair.js", () => ({
-    repairSessionFileIfNeeded: vi.fn(async () => {}),
-  }));
-
-  vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: acquireSessionWriteLockMock,
-    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
-    resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
-    resolveSessionWriteLockOptions: vi.fn(() => ({
-      timeoutMs: 60_000,
-      staleMs: 1_800_000,
-      maxHoldMs: 300_000,
-    })),
-  }));
+  vi.doMock("../session-write-lock.js", async () => {
+    const { resolveSessionWriteLockTargetKey } = await vi.importActual<
+      typeof import("../session-write-lock.js")
+    >("../session-write-lock.js");
+    return {
+      acquireSessionWriteLock: acquireSessionWriteLockMock,
+      resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
+      resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
+      resolveSessionWriteLockOptions: vi.fn(() => ({
+        timeoutMs: 60_000,
+        staleMs: 1_800_000,
+        maxHoldMs: 300_000,
+      })),
+      resolveSessionWriteLockTargetKey,
+    };
+  });
 
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
@@ -936,16 +945,6 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("./compaction-successor-transcript.js", async () => {
-    const actual = await vi.importActual<typeof import("./compaction-successor-transcript.js")>(
-      "./compaction-successor-transcript.js",
-    );
-    return {
-      ...actual,
-      rotateTranscriptAfterCompaction: rotateTranscriptAfterCompactionMock,
-    };
-  });
-
   vi.doMock("./wait-for-idle-before-flush.js", () => ({
     flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
   }));
@@ -1009,6 +1008,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../date-time.js", () => ({
+    formatDateStamp: vi.fn(() => "2026-01-01"),
     formatUserTime: vi.fn(() => ""),
     resolveUserTimeFormat: vi.fn(() => ""),
     resolveUserTimezone: vi.fn(() => ""),
@@ -1066,11 +1066,6 @@ export async function loadCompactHooksHarness(): Promise<{
     buildModelAliasLines: vi.fn(() => []),
     resolveModel: resolveModelMock,
     resolveModelAsync: resolveModelAsyncMock,
-  }));
-
-  vi.doMock("./session-manager-cache.js", () => ({
-    prewarmSessionFile: vi.fn(async () => {}),
-    trackSessionManagerAccess: vi.fn(),
   }));
 
   vi.doMock("./system-prompt.js", () => ({

@@ -402,7 +402,6 @@ describe("worker npm installation artifact", () => {
   it("uses an exact registry-proven gateway package", async () => {
     await withTempDir({ prefix: "openclaw-worker-npm-release-" }, async (packageRoot) => {
       await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
-      await fs.writeFile(path.join(packageRoot, "npm-shrinkwrap.json"), "{}\n", "utf8");
       const packageIntegrity = `sha512-${Buffer.alloc(64).toString("base64")}`;
       const verifyRelease = vi.fn(async () => packageIntegrity);
 
@@ -451,7 +450,6 @@ describe("worker npm installation artifact", () => {
   it("rejects a source checkout even when its version is published", async () => {
     await withTempDir({ prefix: "openclaw-worker-npm-source-" }, async (packageRoot) => {
       await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
-      await fs.writeFile(path.join(packageRoot, "npm-shrinkwrap.json"), "{}\n", "utf8");
       await fs.mkdir(path.join(packageRoot, ".git"));
       const verifyRelease = vi.fn(async () => `sha512-${Buffer.alloc(64).toString("base64")}`);
 

@@ -92,17 +92,16 @@ export const HeartbeatSchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    if (!val.every) {
-      return;
-    }
-    try {
-      parseDurationMs(val.every, { defaultUnit: "m" });
-    } catch {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["every"],
-        message: "invalid duration (use ms, s, m, h)",
-      });
+    if (val.every) {
+      try {
+        parseDurationMs(val.every, { defaultUnit: "m" });
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["every"],
+          message: "invalid duration (use ms, s, m, h)",
+        });
+      }
     }
 
     const active = val.activeHours;
@@ -427,6 +426,10 @@ const ToolsWebFetchSchema = z
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    // Values are registered sensitive so exposed config redacts them. Names are
+    // validated at request time rather than here, because a fail-closed config
+    // error over one header typo would disable the whole surface.
+    headers: z.record(z.string(), z.string().register(sensitive)).optional(),
     readability: z.boolean().optional(),
     useTrustedEnvProxy: z.boolean().optional(),
     ssrfPolicy: z
@@ -529,6 +532,8 @@ const ToolExecBaseShape = {
     .strict()
     .optional(),
   backgroundMs: z.number().int().positive().optional(),
+  // The documented global setting and per-agent override share one strict contract.
+  approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
   timeoutSeconds: z.number().int().positive().optional(),
   cleanupMs: z.number().int().positive().optional(),
   notifyOnExit: z.boolean().optional(),
@@ -549,15 +554,6 @@ function addExecPolicyModeConflictIssue(
     message: "tools.exec.mode cannot be combined with tools.exec.security or tools.exec.ask",
   });
 }
-
-const AgentToolExecSchema = z
-  .object({
-    ...ToolExecBaseShape,
-    approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
-  })
-  .strict()
-  .superRefine(addExecPolicyModeConflictIssue)
-  .optional();
 
 const ToolExecSchema = z
   .object(ToolExecBaseShape)
@@ -597,9 +593,10 @@ const ToolSearchSchema = z
 const CodeModeSchema = z
   .union([
     z.boolean(),
+    z.literal("auto"),
     z
       .object({
-        enabled: z.boolean().optional(),
+        enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
         runtime: z.literal("quickjs-wasi").optional(),
         mode: z.literal("only").optional(),
         languages: z.array(z.enum(["javascript", "typescript"])).optional(),
@@ -734,7 +731,7 @@ const AgentToolsSchema = z
       })
       .strict()
       .optional(),
-    exec: AgentToolExecSchema,
+    exec: ToolExecSchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
     message: MessageToolConfigSchema,
@@ -1023,12 +1020,7 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
-    experimental: z
-      .object({
-        planTool: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    updatePlan: z.boolean().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

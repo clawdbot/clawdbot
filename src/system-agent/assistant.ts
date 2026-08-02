@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SessionManager } from "../agents/sessions/index.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
   SYSTEM_AGENT_GREETING_SYSTEM_PROMPT,
@@ -152,7 +153,8 @@ async function runConfiguredSystemAgentText(params: {
       // OpenClaw is the planner surface, but the configured roster owner supplies runtime policy.
       agentId: route.agentId,
       trigger: "manual" as const,
-      sessionFile: path.join(tempDir, "session.jsonl"),
+      sessionFile: `in-memory:${runId}`,
+      sessionManager: SessionManager.inMemory(tempDir),
       workspaceDir: tempDir,
       cwd: tempDir,
       agentDir: route.agentDir,

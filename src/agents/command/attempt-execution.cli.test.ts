@@ -5,16 +5,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../config/sessions/legacy-sqlite-marker.js";
+import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   listSessionEntries,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../../config/sessions/sqlite-marker.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -26,6 +26,7 @@ import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
+import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
   persistAcpTurnTranscript,
   persistCliTurnTranscript,
@@ -34,6 +35,240 @@ import {
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 type RunAgentAttemptParams = Parameters<typeof runAgentAttemptImpl>[0];
+const SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY = "agent:main:subagent:child";
+const SUBAGENT_ANNOUNCE_REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
+
+function createSubagentAnnounceHandoffOptions(params: {
+  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
+  targetSessionKey: string;
+  targetSessionId: string;
+  provider: string;
+  model: string;
+  disableMessageTool?: boolean;
+  requireExplicitMessageTarget?: boolean;
+  modelRun?: boolean;
+  promptMode?: "none";
+  runtimeToolsAllow?: string[];
+  trustedInternalHandoff?: boolean;
+}): Partial<RunAgentAttemptParams["opts"]> {
+  return {
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    ...(params.disableMessageTool ? { disableMessageTool: true } : {}),
+    ...(params.requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
+    ...(params.modelRun ? { modelRun: true } : {}),
+    ...(params.promptMode ? { promptMode: params.promptMode } : {}),
+    toolsAllow: params.runtimeToolsAllow ?? [...SUBAGENT_ANNOUNCE_REQUESTER_TOOLS],
+    ...(params.trustedInternalHandoff === false
+      ? {}
+      : {
+          trustedInternalHandoff: {
+            kind: "subagent-completion" as const,
+            sourceSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
+            sourceSessionId: "subagent-announce-child",
+            targetSessionKey: params.targetSessionKey,
+            targetSessionId: params.targetSessionId,
+            provider: params.provider,
+            model: params.model,
+          },
+        }),
+    inputProvenance: {
+      kind: "inter_session",
+      sourceSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
+      sourceChannel: "internal",
+      sourceTool: "subagent_announce",
+    },
+    internalEvents: [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
+        childSessionId: "subagent-announce-child",
+        announceType: "subagent task",
+        taskLabel: "review",
+        status: "ok",
+        statusLabel: "completed",
+        result: "child output",
+        replyInstruction: "Relay this completion.",
+      },
+    ],
+  };
+}
+
+type SubagentAnnounceDeliveryCase = {
+  name: string;
+  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
+  disableMessageTool: boolean;
+  requireExplicitMessageTarget?: boolean;
+  modelRun?: boolean;
+  promptMode?: "none";
+  inheritedToolAllow?: readonly string[];
+  inheritedToolDeny?: readonly string[];
+  runtimeToolsAllow?: string[];
+  operatorTools?: OpenClawConfig["tools"];
+  sandboxMode?: "off" | "non-main" | "all";
+  trustedInternalHandoff?: boolean;
+  expectedDisableTools: boolean;
+  expectedToolsAllow?: readonly string[];
+};
+
+const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
+  {
+    name: "automatic source replies",
+    sourceReplyDeliveryMode: "automatic" as const,
+    disableMessageTool: false,
+    expectedDisableTools: true,
+  },
+  {
+    name: "message-tool-only source replies",
+    sourceReplyDeliveryMode: "message_tool_only" as const,
+    disableMessageTool: false,
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "message-tool-only source replies requiring an explicit target",
+    sourceReplyDeliveryMode: "message_tool_only" as const,
+    disableMessageTool: false,
+    requireExplicitMessageTarget: true,
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "an explicitly disabled message tool",
+    sourceReplyDeliveryMode: "message_tool_only" as const,
+    disableMessageTool: true,
+    expectedDisableTools: true,
+  },
+  {
+    name: "a coding profile with a source-bound message grant",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    inheritedToolAllow: ["read", "exec", "sessions_spawn"],
+    operatorTools: { profile: "coding" },
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "an operator allowlist with a source-bound message grant",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    operatorTools: { allow: ["read", "exec"] },
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "an inherited explicit message deny",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    inheritedToolAllow: ["*"],
+    inheritedToolDeny: ["message"],
+    expectedDisableTools: true,
+  },
+  {
+    name: "a current operator message deny",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    operatorTools: { deny: ["message"] },
+    expectedDisableTools: true,
+  },
+  {
+    name: "an active sandbox message deny",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
+    sandboxMode: "all",
+    expectedDisableTools: true,
+  },
+  {
+    name: "a non-main sandbox message deny",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
+    sandboxMode: "non-main",
+    expectedDisableTools: true,
+  },
+  {
+    name: "an inactive sandbox message deny",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
+    sandboxMode: "off",
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "a runtime allowlist excluding message",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    runtimeToolsAllow: ["read", "exec"],
+    expectedDisableTools: true,
+  },
+  {
+    name: "an empty runtime allowlist",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    runtimeToolsAllow: [],
+    expectedDisableTools: true,
+  },
+  {
+    name: "an intersected runtime allowlist excluding message",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    runtimeToolsAllow: attachToolAllowlistIntersection(["*", "message"], [["*"], ["read"]]),
+    expectedDisableTools: true,
+  },
+  {
+    name: "an authorized messaging tool group",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    inheritedToolAllow: ["group:messaging"],
+    runtimeToolsAllow: ["group:messaging"],
+    operatorTools: { profile: "coding" },
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "an untrusted completion handoff",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    trustedInternalHandoff: false,
+    expectedDisableTools: true,
+  },
+];
+
+const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
+  ...SUBAGENT_ANNOUNCE_DELIVERY_CASES.map((testCase) => {
+    if (testCase.name === "automatic source replies") {
+      return {
+        ...testCase,
+        expectedDisableTools: false,
+        expectedToolsAllow: SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
+      };
+    }
+    if (!testCase.expectedDisableTools) {
+      return {
+        ...testCase,
+        expectedToolsAllow: testCase.runtimeToolsAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
+      };
+    }
+    return testCase;
+  }),
+  {
+    name: "a raw model run despite message-tool-only delivery",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    modelRun: true,
+    expectedDisableTools: true,
+  },
+  {
+    name: "prompt mode none despite message-tool-only delivery",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    promptMode: "none",
+    expectedDisableTools: true,
+  },
+];
+
 const runAgentAttempt = (
   params: Omit<RunAgentAttemptParams, "lifecycleGeneration"> &
     Partial<Pick<RunAgentAttemptParams, "lifecycleGeneration">>,
@@ -67,6 +302,9 @@ const providerAuthAliasMocks = vi.hoisted(() => ({
       return ["codex-cli", "openai"].includes(normalized) ? "openai" : normalized;
     },
   ),
+}));
+const sessionWriteLockMocks = vi.hoisted(() => ({
+  acquireSessionWriteLock: vi.fn(),
 }));
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
@@ -124,6 +362,17 @@ vi.mock("../embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
+vi.mock("../session-write-lock.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-write-lock.js")>(
+    "../session-write-lock.js",
+  );
+  sessionWriteLockMocks.acquireSessionWriteLock.mockImplementation(actual.acquireSessionWriteLock);
+  return {
+    ...actual,
+    acquireSessionWriteLock: sessionWriteLockMocks.acquireSessionWriteLock,
+  };
+});
+
 function makeCliResult(text: string): EmbeddedAgentRunResult {
   return {
     payloads: [{ text }],
@@ -162,8 +411,12 @@ async function persistCliTranscriptEntry(
   return result.sessionEntry;
 }
 
-async function readSessionMessages(sessionFile: string) {
-  return (await readTranscriptEntries(sessionFile))
+type TranscriptReadTarget =
+  | string
+  | { agentId: string; sessionId: string; sessionKey: string; storePath: string };
+
+async function readSessionMessages(target: TranscriptReadTarget) {
+  return (await readTranscriptEntries(target))
     .filter((entry) => entry.type === "message")
     .map(
       (entry) =>
@@ -171,19 +424,23 @@ async function readSessionMessages(sessionFile: string) {
     );
 }
 
-async function readSessionFileEntries(sessionFile: string) {
+async function readSessionFileEntries(target: TranscriptReadTarget) {
   return await readTranscriptEntries<{
     type?: string;
     id?: string;
     parentId?: string | null;
     cwd?: string;
     message?: { role?: string };
-  }>(sessionFile);
+  }>(target);
 }
 
 async function readTranscriptEntries<T extends { type?: string; message?: unknown }>(
-  sessionFile: string,
+  target: TranscriptReadTarget,
 ): Promise<T[]> {
+  if (typeof target !== "string") {
+    return (await loadTranscriptEvents(target)) as T[];
+  }
+  const sessionFile = target;
   const marker = parseSqliteSessionFileMarker(sessionFile);
   if (marker) {
     return (await loadTranscriptEvents({
@@ -249,7 +506,13 @@ describe("CLI attempt execution", () => {
 
   async function runOpenClawEmbeddedAttemptForTest(overrides?: {
     opts?: Partial<RunAgentAttemptParams["opts"]>;
+    config?: OpenClawConfig;
+    subagentAnnounceEnvelope?: Pick<
+      SubagentAnnounceDeliveryCase,
+      "inheritedToolAllow" | "inheritedToolDeny"
+    >;
     runId?: string;
+    sessionKey?: string;
     body?: string;
     transcriptBody?: string;
     providerOverride?: string;
@@ -258,16 +521,34 @@ describe("CLI attempt execution", () => {
     fallbackRuntimeState?: RunAgentAttemptParams["fallbackRuntimeState"];
     userTurnTranscriptRecorder?: RunAgentAttemptParams["userTurnTranscriptRecorder"];
     sessionEntry?: Partial<SessionEntry>;
+    additionalSessionEntries?: Record<string, Partial<SessionEntry>>;
     configuredAuthProfileId?: string;
+    timeoutMs?: number;
+    runTimeoutOverrideMs?: number;
   }) {
     const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
-    const sessionKey = `agent:main:direct:${runId}`;
+    const sessionKey = overrides?.sessionKey ?? `agent:main:direct:${runId}`;
     const sessionEntry: SessionEntry = {
       sessionId: `session-${runId}`,
       updatedAt: Date.now(),
       ...overrides?.sessionEntry,
     };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const sessionStore = overrides?.subagentAnnounceEnvelope
+      ? createSubagentAnnounceSessionStore(
+          sessionKey,
+          sessionEntry,
+          overrides.subagentAnnounceEnvelope,
+        )
+      : { [sessionKey]: sessionEntry };
+    for (const [additionalSessionKey, additionalEntry] of Object.entries(
+      overrides?.additionalSessionEntries ?? {},
+    )) {
+      sessionStore[additionalSessionKey] = {
+        sessionId: `${additionalSessionKey}-session`,
+        updatedAt: Date.now(),
+        ...additionalEntry,
+      } as SessionEntry;
+    }
     await writeSessionStoreSeed(sessionStore);
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
@@ -279,7 +560,7 @@ describe("CLI attempt execution", () => {
       originalProvider: "openai",
       modelOverride: overrides?.modelOverride ?? "gpt-5.4",
       configuredAuthProfileId: overrides?.configuredAuthProfileId,
-      cfg: {} as OpenClawConfig,
+      cfg: overrides?.config ?? ({ session: { store: storePath } } as OpenClawConfig),
       sessionEntry,
       sessionId: sessionEntry.sessionId,
       sessionKey,
@@ -291,7 +572,8 @@ describe("CLI attempt execution", () => {
       isFallbackRetry: overrides?.isFallbackRetry ?? false,
       fallbackRuntimeState: overrides?.fallbackRuntimeState,
       resolvedThinkLevel: "medium",
-      timeoutMs: 1_000,
+      timeoutMs: overrides?.timeoutMs ?? 1_000,
+      runTimeoutOverrideMs: overrides?.runTimeoutOverrideMs,
       runId,
       opts: {
         message: "stream gate",
@@ -325,6 +607,7 @@ describe("CLI attempt execution", () => {
     hasClaudeLiveSessionForOwnerMock.mockReturnValue(false);
     providerAuthAliasMocks.resolveProviderAuthAliasMap.mockClear();
     providerAuthAliasMocks.resolveProviderIdForAuth.mockClear();
+    sessionWriteLockMocks.acquireSessionWriteLock.mockClear();
   });
 
   async function writeSessionStoreSeed(sessionStore: Record<string, SessionEntry>): Promise<void> {
@@ -332,6 +615,29 @@ describe("CLI attempt execution", () => {
       await replaceSessionEntry({ sessionKey, storePath }, entry);
     }
     closeOpenClawAgentDatabasesForTest();
+  }
+
+  function createSubagentAnnounceSessionStore(
+    requesterSessionKey: string,
+    requesterSessionEntry: SessionEntry,
+    envelope: Pick<SubagentAnnounceDeliveryCase, "inheritedToolAllow" | "inheritedToolDeny">,
+  ): Record<string, SessionEntry> {
+    return {
+      [requesterSessionKey]: requesterSessionEntry,
+      [SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY]: {
+        sessionId: "subagent-announce-child",
+        updatedAt: Date.now(),
+        spawnedBy: requesterSessionKey,
+        spawnDepth: 1,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: [...(envelope.inheritedToolAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS)],
+        ...(envelope.inheritedToolDeny
+          ? { inheritedToolDeny: [...envelope.inheritedToolDeny] }
+          : {}),
+      },
+    };
   }
 
   function readSessionStore(): Record<string, SessionEntry> {
@@ -346,6 +652,25 @@ describe("CLI attempt execution", () => {
     homeEnvSnapshot = undefined;
     closeOpenClawAgentDatabasesForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("forwards explicit local-agent timeouts while preserving the default when omitted", async () => {
+    const explicitTimeoutMs = 21_600_000;
+    const explicit = await runOpenClawEmbeddedAttemptForTest({
+      runId: "explicit-local-timeout",
+      timeoutMs: explicitTimeoutMs,
+      runTimeoutOverrideMs: explicitTimeoutMs,
+    });
+    expect(explicit.timeoutMs).toBe(explicitTimeoutMs);
+    expect(explicit.runTimeoutOverrideMs).toBe(explicitTimeoutMs);
+
+    const configuredDefaultMs = 600_000;
+    const inherited = await runOpenClawEmbeddedAttemptForTest({
+      runId: "inherited-local-timeout",
+      timeoutMs: configuredDefaultMs,
+    });
+    expect(inherited.timeoutMs).toBe(configuredDefaultMs);
+    expect(inherited.runTimeoutOverrideMs).toBeUndefined();
   });
 
   async function runClaudeCliAttempt(params: {
@@ -545,6 +870,37 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
+  it("clears a fork-marked Claude CLI session after terminal failover", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-expired";
+    const cliSessionId = "expired-fork-source";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-cli-fork-expired", cliSessionId);
+    sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("fork source expired", {
+        reason: "session_expired",
+        provider: "claude-cli",
+        model: "opus",
+      }),
+    );
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "fork from an expired source",
+        runId: "run-cli-fork-expired",
+      }),
+    ).rejects.toMatchObject({ name: "FailoverError", reason: "session_expired" });
+
+    expect(firstRunCliAgentArg().forkCliSessionOnResume).toBe(true);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+  });
+
   it("preserves a reused Claude CLI session after detached media starts", async () => {
     const sessionKey = "agent:main:cron:job:run:run-id";
     const cliSessionId = "media-continuation-session";
@@ -580,18 +936,24 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(cliSessionId);
   });
 
-  it("clears reused Claude CLI session IDs before a fresh retry after timeout failover", async () => {
+  it("atomically forks and rebinds a reused Claude CLI session after timeout failover", async () => {
     const sessionKey = "agent:main:direct:cli-timeout";
     const cliSessionId = "timeout-poisoned-session";
+    const forkedCliSessionId = "timeout-recovery-fork";
     await writeClaudeCliAssistantTranscript(cliSessionId);
     const sessionEntry = makeClaudeCliSessionEntry("session-cli-timeout", cliSessionId);
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeSessionStoreSeed(sessionStore);
     runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
-      const retry = requireRecord(args, "run CLI agent argument").onBeforeFreshCliSessionRetry;
-      expect(retry).toBeTypeOf("function");
+      const runArgs = requireRecord(args, "run CLI agent argument");
+      const prepareFork = runArgs.onBeforeForkedCliSessionRetry;
+      const claimFork = runArgs.claimCliSessionFork;
+      const persistFork = runArgs.persistCliSessionForkSuccessor;
+      expect(prepareFork).toBeTypeOf("function");
+      expect(claimFork).toBeTypeOf("function");
+      expect(persistFork).toBeTypeOf("function");
       await (
-        retry as (params: {
+        prepareFork as (params: {
           provider: string;
           reason: "timeout";
           sessionId: string;
@@ -601,9 +963,17 @@ describe("CLI attempt execution", () => {
         reason: "timeout",
         sessionId: cliSessionId,
       });
-      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.forkNextResume).toBe(
+        true,
+      );
+      await (claimFork as () => Promise<boolean>)();
+      expect(
+        sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.forkNextResume,
+      ).toBeUndefined();
+      await (persistFork as (sessionId: string) => Promise<void>)(forkedCliSessionId);
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+        forkedCliSessionId,
+      );
       return makeCliResult("hello after timeout");
     });
 
@@ -617,9 +987,203 @@ describe("CLI attempt execution", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      forkedCliSessionId,
+    );
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(forkedCliSessionId);
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(forkedCliSessionId);
+
+    const persisted = readSessionStore();
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      forkedCliSessionId,
+    );
+  });
+
+  it("clears a persisted fork successor before transcript fallback", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-timeout";
+    const cliSessionId = "timeout-parent-session";
+    const forkedCliSessionId = "timeout-stalled-fork";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-cli-fork-timeout", cliSessionId);
+    sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const runArgs = requireRecord(args, "run CLI agent argument");
+      const claimFork = runArgs.claimCliSessionFork;
+      const persistFork = runArgs.persistCliSessionForkSuccessor;
+      const clearFork = runArgs.onBeforeFreshCliSessionRetry;
+      expect(runArgs.forkCliSessionOnResume).toBe(true);
+      expect(runArgs.onBeforeForkedCliSessionRetry).toBeUndefined();
+      expect(clearFork).toBeTypeOf("function");
+      await (claimFork as () => Promise<boolean>)();
+      await (persistFork as (sessionId: string) => Promise<void>)(forkedCliSessionId);
+      await (
+        clearFork as (params: {
+          provider: string;
+          reason: "timeout";
+          sessionId: string;
+        }) => Promise<boolean>
+      )({
+        provider: "claude-cli",
+        reason: "timeout",
+        sessionId: forkedCliSessionId,
+      });
+      return makeCliResult("hello after fork timeout");
+    });
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "retry after fork timeout",
+      runId: "run-cli-fork-timeout",
+    });
+
     expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    const persisted = readSessionStore();
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+  });
+
+  it("clears a persisted fork successor when recovery fails after rebinding", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-finalization-failure";
+    const cliSessionId = "finalization-parent-session";
+    const forkedCliSessionId = "partial-fork-successor";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry(
+      "session-cli-fork-finalization-failure",
+      cliSessionId,
+    );
+    sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    const finalizationError = Object.assign(new Error("fork finalization failed"), {
+      name: "AbortError",
+    });
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const runArgs = requireRecord(args, "run CLI agent argument");
+      await (runArgs.claimCliSessionFork as () => Promise<boolean>)();
+      await (runArgs.persistCliSessionForkSuccessor as (sessionId: string) => Promise<void>)(
+        forkedCliSessionId,
+      );
+      throw finalizationError;
+    });
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "resume and fail after fork",
+        runId: "run-cli-fork-finalization-failure",
+      }),
+    ).rejects.toBe(finalizationError);
+
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+  });
+
+  it("preserves a restored fork marker when recovery dies before producing a successor", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-before-successor-failure";
+    const cliSessionId = "recovery-source-session";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry(
+      "session-cli-fork-before-successor-failure",
+      cliSessionId,
+    );
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    const recoveryError = Object.assign(new Error("fork process died before init"), {
+      name: "AbortError",
+    });
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const runArgs = requireRecord(args, "run CLI agent argument");
+      await (
+        runArgs.onBeforeForkedCliSessionRetry as (params: {
+          provider: string;
+          reason: "timeout";
+          sessionId: string;
+        }) => Promise<boolean>
+      )({ provider: "claude-cli", reason: "timeout", sessionId: cliSessionId });
+      await (runArgs.claimCliSessionFork as () => Promise<boolean>)();
+      await (runArgs.restoreCliSessionFork as () => Promise<void>)();
+      throw recoveryError;
+    });
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "resume and fail before fork init",
+        runId: "run-cli-fork-before-successor-failure",
+      }),
+    ).rejects.toBe(recoveryError);
+
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toMatchObject({
+      sessionId: cliSessionId,
+      forkNextResume: true,
+    });
+    expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]).toMatchObject({
+      sessionId: cliSessionId,
+      forkNextResume: true,
+    });
+  });
+
+  it("does not clear a concurrent rebind after failed fork recovery", async () => {
+    const sessionKey = "agent:main:direct:cli-fork-concurrent-rebind";
+    const cliSessionId = "concurrent-parent-session";
+    const forkedCliSessionId = "failed-fork-successor";
+    const concurrentCliSessionId = "newer-concurrent-session";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry(
+      "session-cli-fork-concurrent-rebind",
+      cliSessionId,
+    );
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    const recoveryError = Object.assign(new Error("fork recovery aborted"), {
+      name: "AbortError",
+    });
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const runArgs = requireRecord(args, "run CLI agent argument");
+      await (
+        runArgs.onBeforeForkedCliSessionRetry as (params: {
+          provider: string;
+          reason: "timeout";
+          sessionId: string;
+        }) => Promise<boolean>
+      )({ provider: "claude-cli", reason: "timeout", sessionId: cliSessionId });
+      await (runArgs.claimCliSessionFork as () => Promise<boolean>)();
+      await (runArgs.persistCliSessionForkSuccessor as (sessionId: string) => Promise<void>)(
+        forkedCliSessionId,
+      );
+
+      const concurrentEntry = makeClaudeCliSessionEntry(
+        sessionEntry.sessionId,
+        concurrentCliSessionId,
+      );
+      await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
+      sessionStore[sessionKey] = concurrentEntry;
+      throw recoveryError;
+    });
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "resume while another turn rebinds",
+        runId: "run-cli-fork-concurrent-rebind",
+      }),
+    ).rejects.toBe(recoveryError);
+
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      concurrentCliSessionId,
+    );
+    expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      concurrentCliSessionId,
+    );
   });
 
   it("does not install a stale-session clearing hook for storeless CLI attempts", async () => {
@@ -1475,16 +2039,14 @@ describe("CLI attempt execution", () => {
       nowSpy.mockRestore();
     }
 
-    const updatedSessionFile = updatedEntry?.sessionFile;
-    if (!updatedSessionFile) {
-      throw new Error("expected CLI transcript persistence to create a session file");
-    }
-    expect(parseSqliteSessionFileMarker(updatedSessionFile)).toMatchObject({
+    expect(updatedEntry).not.toHaveProperty("sessionFile");
+    const target = {
       agentId: "main",
       sessionId: sessionEntry.sessionId,
+      sessionKey,
       storePath,
-    });
-    const entries = await readSessionFileEntries(updatedSessionFile);
+    };
+    const entries = await readSessionFileEntries(target);
     expectRecordFields(requireRecord(entries[0], "session entry"), {
       type: "session",
       id: sessionEntry.sessionId,
@@ -1498,7 +2060,7 @@ describe("CLI attempt execution", () => {
       type: "message",
       parentId: entries[1]?.id,
     });
-    const messages = await readSessionMessages(updatedSessionFile);
+    const messages = await readSessionMessages(target);
     expect(messages).toHaveLength(2);
     expectRecordFields(requireRecord(messages[0], "user message"), {
       role: "user",
@@ -1513,7 +2075,7 @@ describe("CLI attempt execution", () => {
     });
 
     const persisted = readSessionStore();
-    expect(persisted[sessionKey]?.sessionFile).toBe(updatedSessionFile);
+    expect(persisted[sessionKey]).not.toHaveProperty("sessionFile");
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(sessionEntry.updatedAt);
     expect(persisted[sessionKey]?.updatedAt).toBeLessThanOrEqual(nowCalls.at(-1) ?? 0);
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
@@ -1569,6 +2131,85 @@ describe("CLI attempt execution", () => {
         content: [{ type: "text", text: "hello from cli" }],
       }),
     );
+  });
+
+  it("does not gap-fill an assistant already owned by the runtime", async () => {
+    const sessionKey = "agent:main:direct:runtime-owned-assistant";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-runtime-owned-assistant",
+      updatedAt: Date.now(),
+    };
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "runtime answer" }],
+          timestamp: Date.now(),
+        },
+        cwd: tmpDir,
+      },
+    );
+
+    await persistCliTurnTranscript({
+      body: "ignored prompt",
+      result: makeCliResult("runtime answer"),
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+      skipAssistantTurn: true,
+    });
+
+    const messages = await readSessionMessages(
+      formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: sessionEntry.sessionId,
+        storePath,
+      }),
+    );
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "runtime answer" }],
+    });
+  });
+
+  it("holds the session-key lease for the embedded assistant gap-fill", async () => {
+    const sessionKey = "agent:main:direct:gap-fill-lease";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-gap-fill-lease",
+      updatedAt: Date.now(),
+    };
+    await writeSessionStoreSeed({ [sessionKey]: sessionEntry });
+    const release = vi.fn();
+    sessionWriteLockMocks.acquireSessionWriteLock.mockResolvedValueOnce({ release });
+
+    await persistCliTurnTranscript({
+      body: "ignored prompt",
+      result: makeCliResult("runtime answer"),
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+
+    expect(sessionWriteLockMocks.acquireSessionWriteLock).toHaveBeenCalledOnce();
+    expect(sessionWriteLockMocks.acquireSessionWriteLock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: expect.any(String),
+        targetKind: "session-key",
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("persists a media-only ACP user turn when the reply is empty", async () => {
@@ -1686,7 +2327,13 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    let messages = await readSessionMessages(updatedFirst?.sessionFile ?? "");
+    const target = {
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    };
+    let messages = await readSessionMessages(target);
     expect(messages).toHaveLength(1);
     expectRecordFields(requireRecord(messages[0], "assistant message"), {
       role: "assistant",
@@ -1707,7 +2354,7 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    messages = await readSessionMessages(updatedFirst?.sessionFile ?? "");
+    messages = await readSessionMessages(target);
     expect(messages).toHaveLength(1);
   });
 
@@ -1741,11 +2388,6 @@ describe("CLI attempt execution", () => {
       config: {},
       embeddedAssistantGapFill: true,
     });
-    const sessionFile = updatedFirst?.sessionFile;
-    if (typeof sessionFile !== "string") {
-      throw new Error("Expected CLI transcript session file.");
-    }
-
     await appendTranscriptEvent(
       { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
       {
@@ -1773,7 +2415,12 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    const messages = await readSessionMessages(sessionFile);
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
     expect(messages).toHaveLength(1);
     expectRecordFields(requireRecord(messages[0], "assistant message"), {
       role: "assistant",
@@ -1811,12 +2458,7 @@ describe("CLI attempt execution", () => {
       config: {},
       embeddedAssistantGapFill: true,
     });
-    const sessionFile = updatedFirst?.sessionFile;
-    if (typeof sessionFile !== "string") {
-      throw new Error("Expected CLI transcript session file.");
-    }
-    const persistedFirst = readSessionStore();
-    expect(persistedFirst[sessionKey]?.sessionFile).toBe(sessionFile);
+    expect(updatedFirst).not.toHaveProperty("sessionFile");
 
     await appendTranscriptMessage(
       { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
@@ -1844,9 +2486,14 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    const messages = await readSessionMessages(sessionFile);
-    expect(messages).toHaveLength(3);
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
     expect(messages.map((message) => message.role)).toEqual(["assistant", "user", "assistant"]);
+    expect(messages).toHaveLength(3);
     expectRecordFields(requireRecord(messages[2], "deduped assistant message"), {
       content: [{ type: "text", text: "same answer" }],
     });
@@ -1861,7 +2508,7 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeSessionStoreSeed(sessionStore);
 
-    const updatedEntry = await persistCliTranscriptEntry({
+    await persistCliTranscriptEntry({
       body: [
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
         "secret runtime context",
@@ -1881,7 +2528,12 @@ describe("CLI attempt execution", () => {
       config: {},
     });
 
-    const messages = await readSessionMessages(updatedEntry?.sessionFile ?? "");
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
     expectRecordFields(requireRecord(messages[0], "transcript user message"), {
       role: "user",
       content: "visible ask",
@@ -2199,21 +2851,176 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("disables CLI tools for a subagent completion announce handoff", async () => {
-    const sessionKey = "agent:main:direct:claude-announce";
+  it.each(SUBAGENT_ANNOUNCE_DELIVERY_CASES)(
+    "bounds CLI subagent completion handoff tools for $name",
+    async ({
+      sourceReplyDeliveryMode,
+      disableMessageTool,
+      requireExplicitMessageTarget,
+      inheritedToolAllow,
+      inheritedToolDeny,
+      runtimeToolsAllow,
+      operatorTools,
+      sandboxMode,
+      trustedInternalHandoff,
+      expectedDisableTools,
+      expectedToolsAllow,
+    }) => {
+      const sessionKey = "agent:main:direct:claude-announce";
+      const sessionEntry: SessionEntry = {
+        sessionId: "openclaw-session-cli-announce",
+        updatedAt: Date.now(),
+      };
+      const sessionStore = createSubagentAnnounceSessionStore(sessionKey, sessionEntry, {
+        inheritedToolAllow,
+        inheritedToolDeny,
+      });
+      await writeSessionStoreSeed(sessionStore);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("completion announce"));
+
+      await runAgentAttempt({
+        providerOverride: "claude-cli",
+        originalProvider: "claude-cli",
+        modelOverride: "opus",
+        cfg: {
+          session: { store: storePath },
+          ...(operatorTools ? { tools: operatorTools } : {}),
+          ...(sandboxMode ? { agents: { defaults: { sandbox: { mode: sandboxMode } } } } : {}),
+        },
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        workspaceDir: tmpDir,
+        body: "A background task finished. Process the completion update now.",
+        isFallbackRetry: false,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId: "run-cli-announce",
+        opts: createSubagentAnnounceHandoffOptions({
+          sourceReplyDeliveryMode,
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionEntry.sessionId,
+          provider: "claude-cli",
+          model: "opus",
+          disableMessageTool,
+          requireExplicitMessageTarget,
+          runtimeToolsAllow,
+          trustedInternalHandoff,
+        }) as Parameters<typeof runAgentAttempt>[0]["opts"],
+        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+        spawnedBy: undefined,
+        messageChannel: "telegram",
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir: tmpDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "claude-cli",
+        sessionStore,
+        storePath,
+        sessionHasHistory: false,
+      });
+
+      expectMockArgFields(runCliAgentMock, {
+        provider: "claude-cli",
+        sourceReplyDeliveryMode,
+        requireExplicitMessageTarget: requireExplicitMessageTarget === true,
+        toolsAllow: expectedToolsAllow,
+        disableTools: expectedDisableTools,
+        allowEmptyAssistantReplyAsSilent: true,
+      });
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES)(
+    "bounds embedded subagent completion handoff tools for $name",
+    async ({
+      sourceReplyDeliveryMode,
+      disableMessageTool,
+      requireExplicitMessageTarget,
+      modelRun,
+      promptMode,
+      inheritedToolAllow,
+      inheritedToolDeny,
+      runtimeToolsAllow,
+      operatorTools,
+      sandboxMode,
+      trustedInternalHandoff,
+      expectedDisableTools,
+      expectedToolsAllow,
+    }) => {
+      const runId = `embedded-announce-${sourceReplyDeliveryMode}-${disableMessageTool}`;
+      const sessionKey = `agent:main:direct:${runId}`;
+      const sessionId = `session-${runId}`;
+      const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+        runId,
+        body: "A background task finished. Process the completion update now.",
+        config: {
+          session: { store: storePath },
+          ...(operatorTools ? { tools: operatorTools } : {}),
+          ...(sandboxMode ? { agents: { defaults: { sandbox: { mode: sandboxMode } } } } : {}),
+        },
+        subagentAnnounceEnvelope: { inheritedToolAllow, inheritedToolDeny },
+        opts: createSubagentAnnounceHandoffOptions({
+          sourceReplyDeliveryMode,
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionId,
+          provider: "openai",
+          model: "gpt-5.4",
+          disableMessageTool,
+          requireExplicitMessageTarget,
+          modelRun,
+          promptMode,
+          runtimeToolsAllow,
+          trustedInternalHandoff,
+        }),
+      });
+
+      expectRecordFields(embeddedArg, {
+        provider: "openai",
+        sourceReplyDeliveryMode,
+        requireExplicitMessageTarget,
+        toolsAllow: expectedToolsAllow,
+        disableTools: expectedDisableTools,
+        disableMessageTool: disableMessageTool || undefined,
+        modelRun: modelRun || undefined,
+        promptMode,
+        allowEmptyAssistantReplyAsSilent: true,
+      });
+      expect(runCliAgentMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps trusted CLI completion handoffs tool-free when inherited policy is restricted", async () => {
+    const sessionKey = "agent:main:direct:claude-trusted-announce";
+    const childSessionKey = "agent:openclaw:subagent:child";
     const sessionEntry: SessionEntry = {
-      sessionId: "openclaw-session-cli-announce",
+      sessionId: "openclaw-session-cli-trusted-announce",
       updatedAt: Date.now(),
     };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: sessionEntry,
+      [childSessionKey]: {
+        sessionId: "child-session-id",
+        updatedAt: Date.now(),
+        spawnedBy: sessionKey,
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolDeny: ["exec"],
+      },
+    };
     await writeSessionStoreSeed(sessionStore);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("tool-free announce"));
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("trusted announce"));
 
     await runAgentAttempt({
       providerOverride: "claude-cli",
       originalProvider: "claude-cli",
       modelOverride: "opus",
-      cfg: {} as OpenClawConfig,
+      cfg: { session: { store: storePath } } as OpenClawConfig,
       sessionEntry,
       sessionId: sessionEntry.sessionId,
       sessionKey,
@@ -2224,11 +3031,20 @@ describe("CLI attempt execution", () => {
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
-      runId: "run-cli-announce",
+      runId: "run-cli-trusted-announce",
       opts: {
+        trustedInternalHandoff: {
+          kind: "subagent-completion",
+          sourceSessionKey: childSessionKey,
+          sourceSessionId: "child-session-id",
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionEntry.sessionId,
+          provider: "claude-cli",
+          model: "opus",
+        },
         inputProvenance: {
           kind: "inter_session",
-          sourceSessionKey: "agent:openclaw:subagent:child",
+          sourceSessionKey: childSessionKey,
           sourceChannel: "internal",
           sourceTool: "subagent_announce",
         },
@@ -2236,7 +3052,8 @@ describe("CLI attempt execution", () => {
           {
             type: "task_completion",
             source: "subagent",
-            childSessionKey: "agent:openclaw:subagent:child",
+            childSessionKey,
+            childSessionId: "child-session-id",
             announceType: "subagent task",
             taskLabel: "review",
             status: "ok",
@@ -2556,6 +3373,225 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.suppressLiveStreamOutput).toBe(true);
+  });
+
+  it("preserves embedded OpenAI-compatible tools for the exact trusted completion", async () => {
+    const runId = "trusted-glm-completion";
+    const childSessionKey = "agent:main:subagent:glm-child";
+    const sessionKey = `agent:main:direct:${runId}`;
+    const sessionId = `session-${runId}`;
+    const trustedInternalHandoff = {
+      kind: "subagent-completion" as const,
+      sourceSessionKey: childSessionKey,
+      sourceSessionId: "glm-child-session",
+      targetSessionKey: sessionKey,
+      targetSessionId: sessionId,
+      provider: "openai",
+      model: "glm-4.5",
+    };
+
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId,
+      modelOverride: "glm-4.5",
+      additionalSessionEntries: {
+        [childSessionKey]: {
+          sessionId: "glm-child-session",
+          spawnedBy: sessionKey,
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+          inheritedToolPolicyVersion: 1,
+        },
+      },
+      opts: {
+        trustedInternalHandoff,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: childSessionKey,
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey,
+            childSessionId: "glm-child-session",
+            announceType: "subagent task",
+            taskLabel: "review",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child output",
+            replyInstruction: "Review and continue.",
+          },
+        ],
+      },
+    });
+
+    expect(embeddedArg.disableTools).toBe(false);
+    expect(embeddedArg.trustedInternalHandoff).toEqual(trustedInternalHandoff);
+  });
+
+  it("preserves embedded tools for a verified nested subagent completion", async () => {
+    const runId = "trusted-nested-glm-completion";
+    const requesterSessionKey = "agent:main:subagent:parent-child";
+    const childSessionKey = "agent:main:subagent:leaf";
+    const requesterSessionId = "parent-child-session";
+    const childSessionId = "leaf-session";
+    const trustedInternalHandoff = {
+      kind: "subagent-completion" as const,
+      sourceSessionKey: childSessionKey,
+      sourceSessionId: childSessionId,
+      targetSessionKey: requesterSessionKey,
+      targetSessionId: requesterSessionId,
+      provider: "openai",
+      model: "glm-4.5",
+    };
+
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId,
+      sessionKey: requesterSessionKey,
+      modelOverride: "glm-4.5",
+      sessionEntry: {
+        sessionId: requesterSessionId,
+        spawnedBy: "agent:main:direct:root",
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolDeny: ["exec"],
+      },
+      additionalSessionEntries: {
+        [childSessionKey]: {
+          sessionId: childSessionId,
+          spawnedBy: requesterSessionKey,
+          spawnDepth: 2,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+          inheritedToolPolicyVersion: 1,
+          inheritedToolDeny: ["exec", "read"],
+        },
+      },
+      opts: {
+        trustedInternalHandoff,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: childSessionKey,
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey,
+            childSessionId,
+            announceType: "subagent task",
+            taskLabel: "review",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child output",
+            replyInstruction: "Review and continue.",
+          },
+        ],
+      },
+    });
+
+    expect(embeddedArg.disableTools).toBe(false);
+    expect(embeddedArg.trustedInternalHandoff).toEqual(trustedInternalHandoff);
+  });
+
+  it("keeps duplicate completion events tool-free despite an otherwise exact capability", async () => {
+    const runId = "duplicate-glm-completion";
+    const childSessionKey = "agent:main:subagent:duplicate-child";
+    const sessionKey = `agent:main:direct:${runId}`;
+    const sessionId = `session-${runId}`;
+    const completionEvent = {
+      type: "task_completion" as const,
+      source: "subagent" as const,
+      childSessionKey,
+      childSessionId: "duplicate-child-session",
+      announceType: "subagent task",
+      taskLabel: "review",
+      status: "ok" as const,
+      statusLabel: "completed",
+      result: "child output",
+      replyInstruction: "Review and continue.",
+    };
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId,
+      modelOverride: "glm-4.5",
+      additionalSessionEntries: {
+        [childSessionKey]: {
+          sessionId: completionEvent.childSessionId,
+          spawnedBy: sessionKey,
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+          inheritedToolPolicyVersion: 1,
+        },
+      },
+      opts: {
+        trustedInternalHandoff: {
+          kind: "subagent-completion",
+          sourceSessionKey: childSessionKey,
+          sourceSessionId: completionEvent.childSessionId,
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionId,
+          provider: "openai",
+          model: "glm-4.5",
+        },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: childSessionKey,
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [completionEvent, completionEvent],
+      },
+    });
+
+    expect(embeddedArg.disableTools).toBe(true);
+    expect(embeddedArg.trustedInternalHandoff).toBeUndefined();
+  });
+
+  it("keeps an exact completion capability tool-free when persisted lineage is missing", async () => {
+    const runId = "missing-lineage-completion";
+    const childSessionKey = "agent:main:subagent:missing";
+    const sessionKey = `agent:main:direct:${runId}`;
+    const sessionId = `session-${runId}`;
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId,
+      modelOverride: "glm-4.5",
+      opts: {
+        trustedInternalHandoff: {
+          kind: "subagent-completion",
+          sourceSessionKey: childSessionKey,
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionId,
+          provider: "openai",
+          model: "glm-4.5",
+        },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: childSessionKey,
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey,
+            announceType: "subagent task",
+            taskLabel: "review",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child output",
+            replyInstruction: "Review and continue.",
+          },
+        ],
+      },
+    });
+
+    expect(embeddedArg.disableTools).toBe(true);
+    expect(embeddedArg.trustedInternalHandoff).toBeUndefined();
   });
 
   it("forwards canonical transcript text without replacing embedded image content", async () => {
