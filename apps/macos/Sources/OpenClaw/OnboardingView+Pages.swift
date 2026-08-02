@@ -619,20 +619,23 @@ extension OnboardingView {
         let attemptID = UUID()
         self.remoteProbeAttemptID = attemptID
         let originalMode = state.connectionMode
-        let shouldRestoreMode = originalMode != .remote
-        if shouldRestoreMode {
+        if originalMode != .remote {
             // Reuse the shared remote endpoint stack for probing without committing the user's mode choice.
-            configuredGatewayProbe.beginTemporaryConnectionCheck()
+            if self.remoteProbeTemporaryRestoreMode == nil {
+                self.remoteProbeTemporaryRestoreMode = originalMode
+                configuredGatewayProbe.beginTemporaryConnectionCheck()
+            }
             state.connectionMode = .remote
         }
         remoteProbeState = .checking(input)
         remoteAuthIssue = nil
         defer {
-            if shouldRestoreMode {
-                self.suppressRemoteProbeReset = true
-                self.state.connectionMode = originalMode
-                self.suppressRemoteProbeReset = false
-                self.configuredGatewayProbe.endTemporaryConnectionCheck()
+            if Self.ownsRemoteGatewayProbeAttempt(
+                attemptID: attemptID,
+                currentAttemptID: self.remoteProbeAttemptID)
+            {
+                self.remoteProbeAttemptID = nil
+                self.finishTemporaryRemoteProbeIfNeeded()
             }
         }
         let result = await RemoteGatewayProbe.run()
@@ -645,7 +648,6 @@ extension OnboardingView {
         else {
             return
         }
-        self.remoteProbeAttemptID = nil
         switch result {
         case let .ready(success):
             remoteProbeState = .ok(input, success)
@@ -665,8 +667,25 @@ extension OnboardingView {
 
     func resetRemoteProbeFeedback() {
         remoteProbeAttemptID = nil
+        self.finishTemporaryRemoteProbeIfNeeded()
         remoteProbeState = .idle
         remoteAuthIssue = nil
+    }
+
+    private func finishTemporaryRemoteProbeIfNeeded() {
+        guard let restoreMode = self.remoteProbeTemporaryRestoreMode else { return }
+        self.remoteProbeTemporaryRestoreMode = nil
+        self.suppressRemoteProbeReset = true
+        self.state.connectionMode = restoreMode
+        self.suppressRemoteProbeReset = false
+        self.configuredGatewayProbe.endTemporaryConnectionCheck()
+    }
+
+    static func ownsRemoteGatewayProbeAttempt(
+        attemptID: UUID,
+        currentAttemptID: UUID?) -> Bool
+    {
+        currentAttemptID == attemptID
     }
 
     static func shouldAcceptRemoteGatewayProbeResult(
@@ -676,7 +695,7 @@ extension OnboardingView {
         expectedInput: RemoteGatewayProbeInput,
         currentInput: RemoteGatewayProbeInput) -> Bool
     {
-        currentAttemptID == attemptID &&
+        self.ownsRemoteGatewayProbeAttempt(attemptID: attemptID, currentAttemptID: currentAttemptID) &&
             probeState == .checking(expectedInput) &&
             currentInput == expectedInput
     }

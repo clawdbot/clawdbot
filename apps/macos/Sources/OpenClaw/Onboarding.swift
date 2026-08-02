@@ -631,6 +631,7 @@ struct OnboardingView: View {
     @State var preferredGatewayID: String?
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
     @State var remoteProbeAttemptID: UUID?
+    @State var remoteProbeTemporaryRestoreMode: AppState.ConnectionMode?
     @State var remoteAuthIssue: RemoteGatewayAuthIssue?
     @State var suppressRemoteProbeReset = false
     @State var gatewayDiscovery: GatewayDiscoveryModel

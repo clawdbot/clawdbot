@@ -211,6 +211,12 @@ struct OnboardingRemoteAuthPromptTests {
         let replacementAttempt = UUID()
         let checking = RemoteOnboardingProbeState.checking(self.directInput)
 
+        #expect(OnboardingView.ownsRemoteGatewayProbeAttempt(
+            attemptID: firstAttempt,
+            currentAttemptID: replacementAttempt) == false)
+        #expect(OnboardingView.ownsRemoteGatewayProbeAttempt(
+            attemptID: replacementAttempt,
+            currentAttemptID: replacementAttempt))
         #expect(OnboardingView.shouldAcceptRemoteGatewayProbeResult(
             attemptID: firstAttempt,
             currentAttemptID: replacementAttempt,
