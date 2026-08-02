@@ -856,16 +856,19 @@ describe("web outbound", () => {
       { verbose: false, cfg: WHATSAPP_TEST_CFG },
     );
 
+    const redactedTarget = redactIdentifier("+1555");
+    const redactedJid = redactIdentifier("1555@s.whatsapp.net");
+    let content = "";
     await vi.waitFor(
       () => {
-        expect(fsSync.existsSync(logPath)).toBe(true);
+        content = fsSync.existsSync(logPath) ? fsSync.readFileSync(logPath, "utf-8") : "";
+        expect(content).toContain(redactedTarget);
+        expect(content).toContain(redactedJid);
+        expect(content).toContain("sent poll");
       },
       { timeout: 2_000, interval: 5 },
     );
 
-    const content = fsSync.readFileSync(logPath, "utf-8");
-    expect(content).toContain(redactIdentifier("+1555"));
-    expect(content).toContain(redactIdentifier("1555@s.whatsapp.net"));
     expect(content).not.toContain(`"to":"+1555"`);
     expect(content).not.toContain(`"jid":"1555@s.whatsapp.net"`);
     expect(content).not.toContain("Lunch?");
