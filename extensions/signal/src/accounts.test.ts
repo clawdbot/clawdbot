@@ -238,7 +238,7 @@ describe("resolveSignalAccount", () => {
     expect(() => resolveSignalAccount({ cfg, accountId: "work" })).toThrow(message);
   });
 
-  it("keeps colliding inferred managed native ports aligned with fallback binds", () => {
+  it("keeps colliding canonical connection endpoints independent of daemon binds", () => {
     const cfg = {
       channels: {
         signal: {
@@ -258,8 +258,8 @@ describe("resolveSignalAccount", () => {
 
     expect(resolveSignalAccount({ cfg, accountId: "work" }).transport).toMatchObject({
       kind: "managed-native",
-      baseUrl: "http://127.0.0.1:8080",
-      httpPort: 8080,
+      baseUrl: "http://127.0.0.1:8181",
+      httpPort: 8081,
     });
   });
 
