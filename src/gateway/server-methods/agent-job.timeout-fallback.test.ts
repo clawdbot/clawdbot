@@ -160,7 +160,7 @@ describe("waitForAgentJob timeout fallback", () => {
 
   it("keeps retryable lifecycle failures pending for the full retry grace", async () => {
     const runId = `run-timeout-fallback-retryable-${runSequence++}`;
-    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
 
     emitAgentEvent({
       runId,
@@ -178,14 +178,14 @@ describe("waitForAgentJob timeout fallback", () => {
       },
     });
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     await expect(waitPromise).resolves.toMatchObject({
       status: "timeout",
       error: "Retryable provider failure",
       pendingError: true,
     });
 
-    await vi.advanceTimersByTimeAsync(14_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
       status: "error",
       endedAt: 1_100,
@@ -391,6 +391,34 @@ describe("waitForAgentJob timeout fallback", () => {
       },
     },
     {
+      label: "provider timeout error before a later provider end",
+      first: {
+        phase: "error",
+        endedAt: 1_100,
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "Provider timed out",
+      },
+      second: {
+        phase: "end",
+        endedAt: 1_200,
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      expected: {
+        status: "timeout",
+        endedAt: 1_100,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "Provider timed out",
+      },
+    },
+    {
       label: "restart error after an earlier provider end",
       first: {
         phase: "error",
@@ -464,7 +492,7 @@ describe("waitForAgentJob timeout fallback", () => {
     },
   ])("preserves canonical terminal precedence for $label", async ({ first, second, expected }) => {
     const runId = `run-timeout-fallback-cross-phase-${runSequence++}`;
-    const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
 
     emitAgentEvent({
       runId,
@@ -478,7 +506,7 @@ describe("waitForAgentJob timeout fallback", () => {
     });
     const freshWaitPromise = waitForAgentJob({
       runId,
-      timeoutMs: 20_000,
+      timeoutMs: 5_000,
       ignoreCachedSnapshot: true,
     });
     emitAgentEvent({
@@ -487,9 +515,12 @@ describe("waitForAgentJob timeout fallback", () => {
       data: { startedAt: 1_000, ...second },
     });
 
-    await vi.advanceTimersByTimeAsync(15_000);
-    await expect(waitPromise).resolves.toMatchObject({ startedAt: 1_000, ...expected });
-    await expect(freshWaitPromise).resolves.toMatchObject({ startedAt: 1_000, ...expected });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const terminalOutcome = { startedAt: 1_000, pendingError: undefined, ...expected };
+    await expect(waitPromise).resolves.toMatchObject(terminalOutcome);
+    await expect(freshWaitPromise).resolves.toMatchObject(terminalOutcome);
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(10_000);
     await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject(expected);
   });
 

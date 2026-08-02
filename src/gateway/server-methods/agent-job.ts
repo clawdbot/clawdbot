@@ -549,7 +549,11 @@ export async function waitForAgentJob(params: {
       if (!params.source) {
         const pendingError = pendingAgentRunErrors.get(params.runId)?.snapshot;
         if (pendingError && pendingError.version > afterVersion) {
-          finish(createPendingErrorTimeoutSnapshot(pendingError));
+          finish(
+            isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
+              ? publicSnapshot(pendingError)
+              : createPendingErrorTimeoutSnapshot(pendingError),
+          );
           return;
         }
         const pendingTimeout = pendingAgentRunTimeouts.get(params.runId)?.snapshot;
