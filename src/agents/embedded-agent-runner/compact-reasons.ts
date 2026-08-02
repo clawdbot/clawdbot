@@ -80,13 +80,38 @@ export function isBenignCompactionSkipReason(reason?: string): boolean {
   return classification === "below_threshold" || classification === "already_compacted";
 }
 
-/** Return whether a failed compaction result came from a retryable provider outage. */
-export function isTransientCompactionFailureReason(reason?: string): boolean {
-  const classification = classifyCompactionReason(reason);
+/** Return whether structured failure metadata identifies a retryable provider outage. */
+export function isTransientCompactionFailureResult(result: {
+  ok: boolean;
+  compacted: boolean;
+  failure?: {
+    reason?: string;
+    status?: number;
+    code?: string;
+  };
+}): boolean {
+  if (result.ok || result.compacted || !result.failure) {
+    return false;
+  }
+  const status = result.failure.status;
+  if (status === 408 || status === 429 || (status !== undefined && status >= 500 && status < 600)) {
+    return true;
+  }
+  if (
+    result.failure.reason === "timeout" ||
+    result.failure.reason === "rate_limit" ||
+    result.failure.reason === "server_error" ||
+    result.failure.reason === "overloaded"
+  ) {
+    return true;
+  }
   return (
-    classification === "timeout" ||
-    classification === "provider_error_429" ||
-    classification === "provider_error_5xx"
+    result.failure.code === "ETIMEDOUT" ||
+    result.failure.code === "ESOCKETTIMEDOUT" ||
+    result.failure.code === "UND_ERR_CONNECT_TIMEOUT" ||
+    result.failure.code === "UND_ERR_HEADERS_TIMEOUT" ||
+    result.failure.code === "UND_ERR_BODY_TIMEOUT" ||
+    result.failure.code === "rate_limit_exceeded"
   );
 }
 

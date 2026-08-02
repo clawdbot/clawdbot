@@ -13,7 +13,7 @@ import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import {
   isBenignCompactionSkipResult,
-  isTransientCompactionFailureReason,
+  isTransientCompactionFailureResult,
 } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
@@ -202,11 +202,16 @@ function shouldSkipRequiredPreflightCompactionResult(result: {
   ok: boolean;
   compacted: boolean;
   reason?: string;
+  failure?: {
+    reason?: string;
+    status?: number;
+    code?: string;
+  };
 }): boolean {
   if (result.compacted) {
     return false;
   }
-  return isBenignCompactionSkipResult(result) || isTransientCompactionFailureReason(result.reason);
+  return isBenignCompactionSkipResult(result) || isTransientCompactionFailureResult(result);
 }
 
 function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {

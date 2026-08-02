@@ -5,7 +5,7 @@ import {
   formatUnknownCompactionReasonDetail,
   isBenignCompactionSkipResult,
   isBenignCompactionSkipReason,
-  isTransientCompactionFailureReason,
+  isTransientCompactionFailureResult,
   resolveCompactionFailureReason,
 } from "./compact-reasons.js";
 
@@ -102,20 +102,28 @@ describe("isBenignCompactionSkipReason", () => {
   );
 });
 
-describe("isTransientCompactionFailureReason", () => {
-  it.each(["Compaction timed out", "Provider returned 429", "Provider returned 503"])(
-    "treats retryable preflight compaction failure %s as transient",
-    (reason) => {
-      expect(isTransientCompactionFailureReason(reason)).toBe(true);
-    },
-  );
+describe("isTransientCompactionFailureResult", () => {
+  it.each([
+    [{ reason: "provider timeout", status: 408, code: "ETIMEDOUT" }],
+    [{ reason: "rate_limit", status: 429, code: "rate_limit_exceeded" }],
+    [{ reason: "server_error", status: 503, code: "upstream_unavailable" }],
+  ])("treats structured provider failure %j as transient", (failure) => {
+    expect(isTransientCompactionFailureResult({ ok: false, compacted: false, failure })).toBe(true);
+  });
 
-  it.each(["Provider returned 400", "Provider returned 401", "Provider returned 403", undefined])(
-    "does not treat non-retryable preflight compaction failure %s as transient",
-    (reason) => {
-      expect(isTransientCompactionFailureReason(reason)).toBe(false);
+  it.each([
+    {
+      ok: false,
+      compacted: false,
+      reason: "Provider returned 503 but the context engine failed internally",
+      failure: { reason: "auth", status: 401, code: "context_engine_failure" },
     },
-  );
+    { ok: false, compacted: false, reason: "Provider returned 503" },
+    { ok: false, compacted: false, failure: { reason: "format", status: 400 } },
+    { ok: true, compacted: false, failure: { reason: "server_error", status: 503 } },
+  ])("keeps non-transient or non-failure result %j blocking", (result) => {
+    expect(isTransientCompactionFailureResult(result)).toBe(false);
+  });
 });
 
 describe("formatUnknownCompactionReasonDetail", () => {

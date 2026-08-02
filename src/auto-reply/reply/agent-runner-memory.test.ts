@@ -1632,15 +1632,24 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it.each([
-    ["failed timeout", false, "Compaction timed out"],
-    ["failed 429", false, "Provider returned 429 rate limit"],
-    ["failed 503", false, "Provider returned 503 from model"],
-    ["successful timeout no-op", true, "Compaction timed out"],
-    ["successful 429 no-op", true, "Provider returned 429 rate limit"],
-    ["successful 503 no-op", true, "Provider returned 503 from model"],
+    [
+      "failed timeout",
+      "Compaction timed out",
+      { reason: "timeout", status: 408, code: "ETIMEDOUT" },
+    ],
+    [
+      "failed 429",
+      "Provider returned 429 rate limit",
+      { reason: "rate_limit", status: 429, code: "rate_limit_exceeded" },
+    ],
+    [
+      "failed 503",
+      "Provider returned 503 from model",
+      { reason: "server_error", status: 503, code: "upstream_unavailable" },
+    ],
   ])(
     "continues when required preflight compaction reports a transient %s result",
-    async (_caseName, ok, reason) => {
+    async (_caseName, reason, failure) => {
       const sessionFile = path.join(rootDir, "session.jsonl");
       await fs.writeFile(
         sessionFile,
@@ -1656,9 +1665,10 @@ describe("runMemoryFlushIfNeeded", () => {
         relativePath: "memory/2023-11-14.md",
       }));
       compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
-        ok,
+        ok: false,
         compacted: false,
         reason,
+        failure,
       });
       const sessionEntry: SessionEntry = {
         sessionId: "session",
@@ -1696,12 +1706,13 @@ describe("runMemoryFlushIfNeeded", () => {
   );
 
   it.each([
-    ["failed 400", false, "Provider returned 400"],
-    ["failed 401", false, "Provider returned 401"],
+    ["failed 400", false, "Provider returned 400", { reason: "format", status: 400 }],
+    ["failed 401", false, "Provider returned 401", { reason: "auth", status: 401 }],
     ["successful 403 no-op", true, "Provider returned 403"],
+    ["text-only transient", false, "Provider returned 503 from model"],
   ])(
     "still fails required preflight compaction for non-retryable %s result",
-    async (_caseName, ok, reason) => {
+    async (_caseName, ok, reason, failure) => {
       const sessionFile = path.join(rootDir, "session.jsonl");
       await fs.writeFile(
         sessionFile,
@@ -1720,6 +1731,7 @@ describe("runMemoryFlushIfNeeded", () => {
         ok,
         compacted: false,
         reason,
+        ...(failure ? { failure } : {}),
       });
       const sessionEntry: SessionEntry = {
         sessionId: "session",
