@@ -18,6 +18,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { logWarn } from "../logger.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
@@ -177,13 +178,7 @@ function pruneExpiredResponseSessions(now: number) {
 }
 
 function evictOverflowResponseSessions() {
-  while (responseSessionMap.size > MAX_RESPONSE_SESSION_ENTRIES) {
-    const oldestKey = responseSessionMap.keys().next().value;
-    if (!oldestKey) {
-      return;
-    }
-    responseSessionMap.delete(oldestKey);
-  }
+  pruneMapToMaxSize(responseSessionMap, MAX_RESPONSE_SESSION_ENTRIES);
 }
 
 function storeResponseSession(

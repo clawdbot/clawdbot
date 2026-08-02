@@ -12,6 +12,7 @@ import {
 import { isAllowedToolCallName } from "../agents/tool-call-shared.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import type { TrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type {
@@ -81,13 +82,7 @@ function rememberRunProvenance(
 ): void {
   runProvenance.delete(runId);
   runProvenance.set(runId, provenance);
-  while (runProvenance.size > MAX_TRACKED_RUN_PROVENANCE) {
-    const oldestRunId = runProvenance.keys().next().value;
-    if (oldestRunId === undefined) {
-      break;
-    }
-    runProvenance.delete(oldestRunId);
-  }
+  pruneMapToMaxSize(runProvenance, MAX_TRACKED_RUN_PROVENANCE);
 }
 
 function resolveProvenance(

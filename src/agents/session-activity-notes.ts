@@ -3,6 +3,7 @@ import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
@@ -167,13 +168,7 @@ function rememberItemStatus(
   }
   state.itemStatuses.delete(itemId);
   state.itemStatuses.set(itemId, status);
-  while (state.itemStatuses.size > limit) {
-    const oldest = state.itemStatuses.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    state.itemStatuses.delete(oldest);
-  }
+  pruneMapToMaxSize(state.itemStatuses, limit);
   return true;
 }
 
