@@ -2,7 +2,6 @@
 // registered Commander commands. Keep those user-facing descriptions aligned.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadBundledPluginPublicSurface } from "../../test-utils/bundled-plugin-public-surface.js";
 import { cliCommandCatalog } from "../command-catalog.js";
 import { isReservedNonPluginCommandRoot } from "../command-registration-policy.js";
 import { collectShellCompletionCommandTree } from "../completion-command-tree.js";
@@ -15,6 +14,11 @@ import { getSubCliEntries } from "./subcli-descriptors.js";
 const RESERVED_CATALOG_ROOTS = {
   tool: "reserved so plugin registration cannot claim this unregistered root",
   tools: "reserved so plugin registration cannot claim this unregistered root",
+} as const;
+
+const PLUGIN_CATALOG_PATHS = {
+  "memory search": "registered and covered by the memory-core plugin",
+  "memory status": "registered and covered by the memory-core plugin",
 } as const;
 
 const JSON_NOT_APPLICABLE = {
@@ -304,10 +308,6 @@ describe("root command descriptions", () => {
 
   it("keeps startup policy catalog paths registered or explicitly reserved", async () => {
     const program = await registerAllBuiltInCommands();
-    const { registerMemoryCli } = await loadBundledPluginPublicSurface<{
-      registerMemoryCli: (program: Command) => void;
-    }>({ pluginId: "memory-core", artifactBasename: "cli" });
-    registerMemoryCli(program);
 
     // Private QA is a lazy source-checkout command. Its root placeholder proves
     // registration without importing the private build omitted from normal dist.
@@ -318,14 +318,17 @@ describe("root command descriptions", () => {
     const registeredPaths = collectRegisteredCommandPaths(program, lazyProgram);
     const catalogPaths = new Set(cliCommandCatalog.map((entry) => entry.commandPath.join(" ")));
     const reservedPaths = new Set(Object.keys(RESERVED_CATALOG_ROOTS));
+    const pluginPaths = new Set(Object.keys(PLUGIN_CATALOG_PATHS));
 
     expect(
-      Object.entries(RESERVED_CATALOG_ROOTS).filter(([, reason]) => reason.trim().length === 0),
-      "every reserved catalog root must document why it has no command",
+      Object.entries({ ...RESERVED_CATALOG_ROOTS, ...PLUGIN_CATALOG_PATHS }).filter(
+        ([, reason]) => reason.trim().length === 0,
+      ),
+      "every catalog exception must document why core has no command",
     ).toEqual([]);
 
     const missing = [...catalogPaths].filter(
-      (path) => !registeredPaths.has(path) && !reservedPaths.has(path),
+      (path) => !registeredPaths.has(path) && !reservedPaths.has(path) && !pluginPaths.has(path),
     );
     expect(missing, "catalog entries with no registered command or reserved-root decision").toEqual(
       [],
@@ -338,6 +341,11 @@ describe("root command descriptions", () => {
       staleReservedRoots,
       "reserved catalog roots must remain cataloged and blocked from plugin registration",
     ).toEqual([]);
+
+    const stalePluginPaths = [...pluginPaths].filter(
+      (path) => !catalogPaths.has(path) || registeredPaths.has(path),
+    );
+    expect(stalePluginPaths, "plugin catalog paths must remain plugin-owned").toEqual([]);
 
     const reservedRootsThatNowRegister = [...reservedPaths].filter((path) =>
       registeredPaths.has(path),
