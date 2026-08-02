@@ -253,7 +253,10 @@ describe("Gateway queued session rotation", () => {
         name: "queued-session-rotation",
         gatewayToken: "secret-token",
         config,
-        env: { OPENCLAW_SKIP_PROVIDERS: undefined },
+        env: {
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        },
       });
       instances.push(instance);
       await instance.startGateway();
