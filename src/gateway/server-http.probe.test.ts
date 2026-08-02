@@ -197,7 +197,18 @@ describe("startup plugin HTTP routing", () => {
               accept: "application/xhtml+xml;q=0, text/*",
             },
             { name: "explicit XHTML", accept: "application/xhtml+xml" },
-            { name: "quoted parameter delimiters", accept: 'text/html;note="x; q=0; y"' },
+            {
+              name: "nonmatching zero-quality parameter with wildcard",
+              accept: "text/html;profile=alternate;q=0, */*;q=1",
+            },
+            {
+              name: "mismatched charset rejection with matching HTML",
+              accept: "text/html;charset=utf-16;q=0, text/html;q=1",
+            },
+            {
+              name: "quoted parameter delimiters with wildcard",
+              accept: 'text/html;note="x; q=0; y", */*',
+            },
           ];
           const nonHtmlCases = [
             { name: "JSON", accept: "application/json" },
@@ -205,6 +216,18 @@ describe("startup plugin HTTP routing", () => {
             { name: "zero-quality HTML", accept: "text/html;q=0" },
             { name: "rejected HTML with wildcard", accept: "text/html;q=0, */*" },
             { name: "rejected HTML with text wildcard", accept: "text/html;q=0, text/*" },
+            {
+              name: "nonmatching positive parameter with rejected wildcard",
+              accept: "text/html;profile=alternate;q=1, */*;q=0",
+            },
+            {
+              name: "matching charset rejection with less-specific HTML",
+              accept: "text/html;charset=utf-8;q=0, text/html;q=1",
+            },
+            {
+              name: "exact HTML rejection with parameterized text wildcard",
+              accept: "text/html;q=0, text/*;charset=utf-8;q=1",
+            },
             { name: "zero-quality wildcard", accept: "*/*;q=0" },
             { name: "mixed-case zero quality", accept: "text/html;Q=0" },
             { name: "zero-quality text wildcard", accept: "text/*;q=0" },
