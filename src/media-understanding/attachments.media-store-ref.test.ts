@@ -5,11 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import { toInboundMediaFacts } from "../channels/inbound-event/media.js";
 import type { ChannelInboundMediaInput } from "../channels/inbound-event/media.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { applyMediaUnderstanding } from "./apply.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 import { formatDecisionSummary } from "./runner.entries.js";
@@ -42,6 +44,27 @@ function createOpenAiAudioCfg(): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
+function createUrlDisabledFileCfg(): OpenClawConfig {
+  return {
+    tools: {
+      media: {
+        audio: { enabled: false },
+        image: { enabled: false },
+        video: { enabled: false },
+      },
+    },
+    gateway: {
+      http: {
+        endpoints: {
+          responses: {
+            files: { allowUrl: false },
+          },
+        },
+      },
+    },
+  };
+}
+
 async function withStoredInboundAudio<T>(
   run: (saved: { id: string; path: string }, stateDir: string) => Promise<T>,
 ): Promise<T> {
@@ -57,6 +80,20 @@ async function withStoredInboundAudio<T>(
       "inbound",
     );
     return await run(saved, stateDir);
+  });
+}
+
+async function withStoredInboundDocument<T>(
+  run: (saved: { id: string; path: string }) => Promise<T>,
+): Promise<T> {
+  const stateDir = await fs.realpath(tempDirs.make("openclaw-media-store-ref-", os.tmpdir()));
+  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, PATH: "" }, async () => {
+    const saved = await saveMediaBuffer(
+      Buffer.from("stored document text", "utf8"),
+      "text/plain",
+      "inbound",
+    );
+    return await run(saved);
   });
 }
 
@@ -100,6 +137,62 @@ async function runInboundVoiceNoteCase(params: {
 }
 
 describe("inbound media-store references in the attachment url field", () => {
+  it("extracts a stored document when remote URLs are disabled", async () => {
+    await withStoredInboundDocument(async (saved) => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      const ctx: MsgContext = {
+        Body: "<media:document>",
+        media: toInboundMediaFacts([
+          {
+            url: `media://inbound/${saved.id}`,
+            contentType: "text/plain",
+            kind: "document",
+          },
+        ]),
+      };
+
+      try {
+        const result = await applyMediaUnderstanding({
+          ctx,
+          cfg: createUrlDisabledFileCfg(),
+        });
+
+        expect(result.appliedFile).toBe(true);
+        expect(ctx.Body).toContain("stored document text");
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+  });
+
+  it("keeps HTTP documents blocked when remote URLs are disabled", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const ctx: MsgContext = {
+      Body: "<media:document>",
+      media: toInboundMediaFacts([
+        {
+          url: "https://example.test/report.txt",
+          contentType: "text/plain",
+          kind: "document",
+        },
+      ]),
+    };
+
+    try {
+      const result = await applyMediaUnderstanding({
+        ctx,
+        cfg: createUrlDisabledFileCfg(),
+      });
+
+      expect(result.appliedFile).toBe(false);
+      expect(ctx.Body).toBe("<media:document>");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("transcribes a voice note referenced only by media://inbound", async () => {
     const { result, transcribeAudio } = await runInboundVoiceNoteCase({
       buildMedia: (saved) => ({
