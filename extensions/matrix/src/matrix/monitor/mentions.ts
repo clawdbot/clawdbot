@@ -6,7 +6,7 @@ import { getMatrixRuntime } from "../../runtime.js";
 import type { RoomMessageEventContent } from "./types.js";
 
 const MATRIX_HTML_ENTITY_RE = /&(?:#x?[0-9a-f]+|amp|apos|gt|lt|nbsp|quot);/gi;
-const MATRIX_MENTION_TOKEN_CHARS = String.raw`A-Za-z0-9_=+/\-\p{Default_Ignorable_Code_Point}`;
+const MATRIX_MENTION_TOKEN_CHARS = String.raw`\p{L}\p{N}\p{M}\p{Pc}\p{S}\p{Extended_Pictographic}\p{Default_Ignorable_Code_Point}/\-`;
 
 function decodeVisibleHtmlEntities(value: string): string {
   return value.replace(MATRIX_HTML_ENTITY_RE, (entity) => {

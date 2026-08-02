@@ -980,7 +980,10 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(getMemberDisplayName).not.toHaveBeenCalledWith("!room:example.org", "@bot:example.org");
   });
 
-  it("rejects forged plain-text native mentions from another Matrix homeserver", async () => {
+  it.each([
+    { label: "another homeserver", body: "hello @bot:evil.example" },
+    { label: "a longer Unicode localpart", body: "hello @boté" },
+  ])("rejects forged plain-text native mentions targeting $label", async ({ body }) => {
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       mentionRegexes: [],
@@ -991,7 +994,7 @@ describe("matrix monitor handler pairing account scope", () => {
       "!room:example.org",
       createMatrixTextMessageEvent({
         eventId: "$foreign-native-mention",
-        body: "hello @bot:evil.example",
+        body,
         mentions: { user_ids: ["@bot:example.org"] },
       }),
     );
