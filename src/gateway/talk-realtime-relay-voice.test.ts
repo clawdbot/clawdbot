@@ -24,9 +24,9 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 
 function createRelaySession(): {
   session: RelaySession;
-  failVoiceTranscriptPersistence: ReturnType<typeof vi.fn>;
+  failSession: ReturnType<typeof vi.fn>;
 } {
-  const failVoiceTranscriptPersistence = vi.fn(() => {
+  const failSession = vi.fn(() => {
     void closeRelayVoiceSession(session);
   });
   const session = {
@@ -41,10 +41,10 @@ function createRelaySession(): {
     voiceSessionCreated: false,
     voiceTranscriptSeq: 0,
     voiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),
-    failVoiceTranscriptPersistence,
+    failSession,
     pendingVoiceTranscripts: [],
   } as unknown as RelaySession;
-  return { session, failVoiceTranscriptPersistence };
+  return { session, failSession };
 }
 
 describe("realtime relay voice transcript persistence", () => {
@@ -63,7 +63,7 @@ describe("realtime relay voice transcript persistence", () => {
         }
       },
     );
-    const { session, failVoiceTranscriptPersistence } = createRelaySession();
+    const { session, failSession } = createRelaySession();
     let accepted = enqueueRelayVoiceTranscript(session, "user", `  ${"x".repeat(9_000)}  `) ? 1 : 0;
 
     for (let index = 0; index < 10_000; index += 1) {
@@ -84,7 +84,7 @@ describe("realtime relay voice transcript persistence", () => {
 
     expect(accepted).toBe(41);
     expect(voiceSessionMocks.appendRelayVoiceTranscript).toHaveBeenCalledOnce();
-    expect(failVoiceTranscriptPersistence).toHaveBeenCalledOnce();
+    expect(failSession).toHaveBeenCalledOnce();
     const close = session.voiceSessionClose;
     expect(close).toBeDefined();
     expect(closeRelayVoiceSession(session)).toBe(close);

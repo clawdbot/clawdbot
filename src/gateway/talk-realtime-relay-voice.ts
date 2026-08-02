@@ -122,7 +122,7 @@ export function enqueueRelayVoiceTranscript(
   );
   if (!admission.accepted) {
     if (admission.reason === "overflow") {
-      session.failVoiceTranscriptPersistence(VOICE_TRANSCRIPT_QUEUE_POLICY.overflowMessage);
+      session.failSession(VOICE_TRANSCRIPT_QUEUE_POLICY.overflowMessage);
     }
     return false;
   }

@@ -623,6 +623,9 @@ describe("scoped vitest configs", () => {
     );
     expect(requireTestConfig(defaultCliProcessConfig).include).toEqual(cliProcessTestFiles);
     expect(requireTestConfig(defaultCliProcessConfig).fileParallelism).toBe(false);
+    expect(requireTestConfig(defaultCliProcessConfig).env).toMatchObject({
+      ESBUILD_WORKER_THREADS: "0",
+    });
   });
 
   it("keeps native SQLite runtime config tests in forked workers", () => {

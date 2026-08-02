@@ -198,7 +198,15 @@ describe("Codex app-server main thread cleanup", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("retains a subscribed persistent Codex thread after a completed turn", async () => {
+  it.each([
+    { label: "without a context engine", contextEngine: undefined },
+    {
+      label: "with the default legacy context engine",
+      contextEngine: {
+        info: { id: "legacy", name: "Legacy", version: "1.0.0" },
+      } as EmbeddedRunAttemptParams["contextEngine"],
+    },
+  ])("retains a subscribed persistent Codex thread $label", async ({ contextEngine }) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const requests: Array<{ method: string; params: unknown }> = [];
@@ -227,10 +235,10 @@ describe("Codex app-server main thread cleanup", () => {
       } as never;
     });
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
-      bindingStore: testCodexAppServerBindingStore,
-      clientFactory,
-    });
+    const run = runCodexAppServerAttempt(
+      { ...createParams(sessionFile, workspaceDir), contextEngine },
+      { bindingStore: testCodexAppServerBindingStore, clientFactory },
+    );
     await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/start"), {
       interval: 1,
       timeout: 5_000,

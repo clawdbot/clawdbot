@@ -75,7 +75,7 @@ describe("llama.cpp provider plugin", () => {
     expect(registerProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "llama-cpp",
-        label: "Local model (llama.cpp)",
+        label: "llama.cpp",
         createStreamFn: expect.any(Function),
         normalizeToolSchemas: expect.any(Function),
         inspectToolSchemas: expect.any(Function),

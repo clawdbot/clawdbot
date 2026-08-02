@@ -1095,7 +1095,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
                 },
                 accountId: ctx.accountId ?? undefined,
+                ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
                 mediaLocalRoots: ctx.mediaLocalRoots,
+                ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
                 ...(replyInThread
                   ? { threadId: replyToMessageId }
                   : { replyToId: replyToMessageId }),
@@ -1122,7 +1124,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 text: text ?? "",
                 mediaUrl,
                 accountId: ctx.accountId ?? undefined,
+                ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
                 mediaLocalRoots: ctx.mediaLocalRoots,
+                ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
                 ...(replyInThread
                   ? { threadId: replyToMessageId }
                   : { replyToId: replyToMessageId }),

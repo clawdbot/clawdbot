@@ -524,22 +524,24 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   }
 
   private fail(error: Error): void {
-    if (this.closed) {
-      return;
-    }
-    this.config.onError?.(error);
-    this.teardown("error");
+    this.teardown("error", () => this.config.onError?.(error));
   }
 
-  private teardown(reason: "completed" | "error"): void {
+  private teardown(reason: "completed" | "error", beforeClose?: () => void): void {
     if (this.closed) {
       return;
     }
+    // Claim terminal ownership and release resources before callbacks so reentrant close
+    // cannot replace the outcome, while finally preserves error-before-close ordering.
     this.closed = true;
     this.releaseResources();
-    if (!this.closeNotified) {
-      this.closeNotified = true;
-      this.config.onClose?.(reason);
+    try {
+      beforeClose?.();
+    } finally {
+      if (!this.closeNotified) {
+        this.closeNotified = true;
+        this.config.onClose?.(reason);
+      }
     }
   }
 

@@ -49,7 +49,6 @@ function writeInstallIndex(params: { stateDir: string; pluginDir: string }): voi
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           compat: [],

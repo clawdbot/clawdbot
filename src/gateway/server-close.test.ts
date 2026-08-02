@@ -6,6 +6,12 @@ import { once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
@@ -162,6 +168,7 @@ function createGatewayCloseTestDeps(
 
 describe("createGatewayCloseHandler", () => {
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     vi.useRealTimers();
     mocks.logInfo.mockClear();
     mocks.logWarn.mockClear();
@@ -183,6 +190,7 @@ describe("createGatewayCloseHandler", () => {
   });
 
   afterEach(() => {
+    resetPluginRuntimeStateForTest();
     vi.useRealTimers();
     if (originalRestartTraceEnv === undefined) {
       delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
@@ -192,6 +200,7 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("still runs later teardown when cron.stopAndDrain() rejects (no listener strand)", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
     const stopAndDrain = vi.fn().mockRejectedValue(new Error("stream watcher stop failed"));
     const httpClose = vi.fn((cb: (err?: Error | null) => void) => cb(null));
     const deps = createGatewayCloseTestDeps({
@@ -209,6 +218,7 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
     expect(httpClose).toHaveBeenCalled();
     expect(result.warnings.length).toBeGreaterThan(0);
+    expect(getActivePluginRegistry()).toBeNull();
   });
 
   it("completes a clean shutdown with a ShutdownResult", async () => {
@@ -230,6 +240,15 @@ describe("createGatewayCloseHandler", () => {
       clearIntervalSpy.mockRestore();
       clearInterval(delegateArtifactCleanup);
     }
+  });
+
+  it("clears the process-root plugin registry after teardown", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+
+    await close({ reason: "test" });
+
+    expect(getActivePluginRegistry()).toBeNull();
   });
 
   it("joins an in-flight config reload before mutable runtime teardown", async () => {

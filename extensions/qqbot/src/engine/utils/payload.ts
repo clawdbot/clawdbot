@@ -7,6 +7,7 @@
  * Zero external dependencies.
  */
 
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ChatScope } from "../types.js";
 
 /** Structured reminder payload emitted by the model. */
@@ -39,10 +40,6 @@ interface ParseResult {
 
 const PAYLOAD_PREFIX = "QQBOT_PAYLOAD:";
 const CRON_PREFIX = "QQBOT_CRON:";
-
-function formatErr(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 function normalizeBase64ForCompare(value: string): string {
   return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
@@ -96,7 +93,7 @@ export function parseQQBotPayload(text: string): ParseResult {
 
     return { isPayload: true, payload };
   } catch (e) {
-    return { isPayload: true, error: `Failed to parse JSON: ${formatErr(e)}` };
+    return { isPayload: true, error: `Failed to parse JSON: ${formatErrorMessage(e)}` };
   }
 }
 
@@ -142,7 +139,10 @@ export function decodeCronPayload(message: string): {
 
     return { isCronPayload: true, payload };
   } catch (e) {
-    return { isCronPayload: true, error: `Failed to decode cron payload: ${formatErr(e)}` };
+    return {
+      isCronPayload: true,
+      error: `Failed to decode cron payload: ${formatErrorMessage(e)}`,
+    };
   }
 }
 

@@ -532,6 +532,68 @@ describe("agent-events sequencing", () => {
     });
   });
 
+  test.each(["end", "error"] as const)(
+    "stamps the owning start onto an older overlapping run's %s event",
+    (phase) => {
+      registerAgentRunContext("older-run", { sessionKey: "shared-session" });
+      registerAgentRunContext("newer-run", { sessionKey: "shared-session" });
+      const seen: AgentEventPayload[] = [];
+      const stop = onAgentEvent((event) => seen.push(event));
+
+      emitAgentEvent({
+        runId: "older-run",
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
+      emitAgentEvent({
+        runId: "newer-run",
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 2_000 },
+      });
+      emitAgentEvent({
+        runId: "older-run",
+        stream: "lifecycle",
+        data: { phase, endedAt: 3_000 },
+      });
+      emitAgentEvent({
+        runId: "newer-run",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 4_000 },
+      });
+      stop();
+
+      expect(seen.map((event) => [event.runId, event.data.phase, event.data.startedAt])).toEqual([
+        ["older-run", "start", 1_000],
+        ["newer-run", "start", 2_000],
+        ["older-run", phase, 1_000],
+        ["newer-run", "end", 2_000],
+      ]);
+    },
+  );
+
+  test("does not invent or replace producer-owned lifecycle start timestamps", () => {
+    registerAgentRunContext("unstarted-run", { sessionKey: "shared-session" });
+    registerAgentRunContext("started-run", { sessionKey: "shared-session" });
+    const seen: AgentEventPayload[] = [];
+    const stop = onAgentEvent((event) => seen.push(event));
+
+    emitAgentEvent({ runId: "unstarted-run", stream: "lifecycle", data: { phase: "end" } });
+    emitAgentEvent({
+      runId: "started-run",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId: "started-run",
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_500 },
+    });
+    stop();
+
+    expect(seen[0]?.data).toEqual({ phase: "end" });
+    expect(seen[2]?.data.startedAt).toBe(1_500);
+  });
+
   test("rejects old runs after restart and stamps the new generation", () => {
     const oldGeneration = getAgentEventLifecycleGeneration();
     registerAgentRunContext("old-run", { sessionKey: "main" });

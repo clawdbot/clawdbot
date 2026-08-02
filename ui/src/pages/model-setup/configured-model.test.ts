@@ -53,7 +53,7 @@ describe("renderConfiguredModel", () => {
     },
     {
       brandId: "llama-cpp",
-      detail: "gemma-4-e4b-it-q4_k_m (downloaded)",
+      detail: "Ready locally",
       kind: "provider-auto:llama-cpp",
       label: "llama.cpp",
       modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
@@ -86,7 +86,8 @@ describe("renderConfiguredModel", () => {
     };
     const { container, onVerify } = mount(result);
 
-    expect(text(container)).toContain(`Selected model ${fixture.label} ${fixture.detail}`);
+    expect(text(container)).toContain(`Selected model ${fixture.label}`);
+    expect(text(container)).toContain(fixture.detail);
     expect(text(container)).toContain(`${fixture.label} isn’t responding.`);
     expect(text(container)).not.toContain("Change connection");
     const button = container.querySelector<HTMLButtonElement>("button");

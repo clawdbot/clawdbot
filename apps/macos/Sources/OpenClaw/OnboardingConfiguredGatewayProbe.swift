@@ -16,6 +16,7 @@ final class OnboardingConfiguredGatewayProbe {
     enum Outcome: Equatable {
         case configured(modelRef: String, route: BoundRoute)
         case missing(route: BoundRoute)
+        case authIssue(RemoteGatewayAuthIssue)
         case unavailable
         case superseded
 
@@ -23,7 +24,7 @@ final class OnboardingConfiguredGatewayProbe {
             switch self {
             case let .configured(_, route), let .missing(route):
                 route
-            case .unavailable, .superseded:
+            case .authIssue, .unavailable, .superseded:
                 nil
             }
         }
@@ -111,8 +112,17 @@ final class OnboardingConfiguredGatewayProbe {
         self.activeProbeCount += 1
         defer { self.finishProbe() }
         guard connectionMode != .unconfigured else { return .unavailable }
-        guard let route = await gateway.captureRoute() else {
-            return self.isCurrent(attempt) ? .unavailable : .superseded
+        let route: GatewayConnection.Route
+        do {
+            route = try await self.gateway.captureRequiredRoute()
+        } catch {
+            guard self.isCurrent(attempt) else { return .superseded }
+            if connectionMode == .remote,
+               let authIssue = RemoteGatewayAuthIssue(error: error)
+            {
+                return .authIssue(authIssue)
+            }
+            return .unavailable
         }
         guard self.isCurrent(attempt) else { return .superseded }
         let boundRoute = BoundRoute(route: route, identity: routeIdentity)
@@ -134,6 +144,11 @@ final class OnboardingConfiguredGatewayProbe {
             guard await self.gateway.isCurrentRoute(route),
                   self.isCurrent(attempt)
             else { return .superseded }
+            if connectionMode == .remote,
+               let authIssue = RemoteGatewayAuthIssue(error: error)
+            {
+                return .authIssue(authIssue)
+            }
             return .unavailable
         }
     }

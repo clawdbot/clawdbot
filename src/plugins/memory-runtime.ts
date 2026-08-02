@@ -3,11 +3,10 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { resolvePluginRegistryLoadCacheKey } from "./loader.js";
+import { loadPluginRegistryHandle, resolvePluginRegistryLoadCacheKey } from "./loader.js";
 import { getMemoryRuntime, resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
-import { loadRuntimePluginRegistryHandle } from "./runtime/standalone-runtime-registry-loader.js";
 
 type MemoryRuntime = NonNullable<
   PluginRegistry["memoryCapabilities"][number]["capability"]["runtime"]
@@ -95,10 +94,7 @@ function ensureMemoryRuntime(params?: {
     const runtime = resolveMemoryRuntimeFromRegistry(standaloneMemoryRegistrySlot.registry);
     return runtime ? { runtime, registry: standaloneMemoryRegistrySlot.registry } : undefined;
   }
-  const registry = loadRuntimePluginRegistryHandle({
-    requiredPluginIds: onlyPluginIds,
-    loadOptions,
-  });
+  const registry = loadPluginRegistryHandle(loadOptions);
   if (!registry) {
     return undefined;
   }

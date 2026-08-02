@@ -32,6 +32,13 @@ import {
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
 
+// OpenTelemetry instrument names start with an ASCII letter and allow only these characters.
+// The 128-character prefix cap leaves ample room within the dependency's 255-character name cap.
+const MetricNamePrefixSchema = z
+  .string()
+  .max(128)
+  .regex(/^(?:[A-Za-z][A-Za-z0-9_./-]*)?$/);
+
 export const OpenClawSchemaShape = {
   $schema: z.string().optional(),
   meta: z
@@ -83,6 +90,7 @@ export const OpenClawSchemaShape = {
           protocol: z.union([z.literal("http/protobuf"), z.literal("grpc")]).optional(),
           headers: z.record(z.string(), z.string()).optional(),
           serviceName: z.string().optional(),
+          metricNamePrefix: MetricNamePrefixSchema.optional(),
           traces: z.boolean().optional(),
           metrics: z.boolean().optional(),
           logs: z.boolean().optional(),

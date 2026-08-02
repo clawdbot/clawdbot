@@ -275,24 +275,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     expect(attemptInput.memoryFlushWritePath).toBe("memory/2026-03-10.md");
   });
 
-  it("reports total usage from the last turn instead of accumulated total", async () => {
-    // Billing metadata uses accumulated input/output but the reported total
-    // remains the final provider call total, matching last-turn usage contracts.
-    // Simulate a multi-turn run result.
-    // Turn 1: Input 100, Output 50. Total 150.
-    // Turn 2: Input 150, Output 50. Total 200.
-
-    // The accumulated usage (attemptUsage) will be the sum:
-    // Input: 100 + 150 = 250 (Note: runEmbeddedAttempt actually returns accumulated usage)
-    // Output: 50 + 50 = 100
-    // Total: 150 + 200 = 350
-
-    // The last assistant usage (lastAssistant.usage) will be Turn 2:
-    // Input: 150, Output 50, Total 200.
-
-    // We expect result.meta.agentMeta.usage.total to be 200 (last turn total).
-    // The bug causes it to be 350 (accumulated total).
-
+  it("reports cumulative usage separately from the last call", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Response 1", "Response 2"],
@@ -313,15 +296,16 @@ describe("runEmbeddedAgent usage reporting", () => {
       runId: "run-1",
     });
 
-    // Check usage in meta
-    const usage = result.meta.agentMeta?.usage;
-    expect(usage?.input).toBe(250);
-    expect(usage?.output).toBe(100);
-    expect(usage?.total).toBe(200);
-
-    // Check if total matches the last turn's total (200)
-    // If the bug exists, it will likely be 350
-    expect(usage?.total).toBe(200);
+    expect(result.meta.agentMeta?.usage).toMatchObject({
+      input: 250,
+      output: 100,
+      total: 350,
+    });
+    expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
+      input: 150,
+      output: 50,
+      total: 200,
+    });
   });
 
   it("uses current-attempt usage when the persisted assistant snapshot is zeroed", async () => {
@@ -357,7 +341,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     expect(result.meta.agentMeta?.usage).toMatchObject({
       input: 250,
       output: 100,
-      total: 200,
+      total: 350,
     });
     expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
       input: 150,

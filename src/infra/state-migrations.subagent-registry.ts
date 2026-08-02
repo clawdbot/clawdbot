@@ -3,10 +3,10 @@ import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
+  LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshot,
-  resolveLegacyMigrationRelativePath,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import {
@@ -34,75 +34,32 @@ export function detectLegacySubagentRegistry(params: {
   };
 }
 
-function relativeLegacyPath(stateDir: string, filePath: string): string {
-  return resolveLegacyMigrationRelativePath(stateDir, filePath, "subagent registry");
-}
-
-async function readLegacySourceSnapshot(
-  stateRoot: Root,
-  stateDir: string,
-  sourcePath: string,
-): Promise<LegacySourceSnapshot> {
-  return readLegacyMigrationSourceSnapshot({
-    stateRoot,
-    stateDir,
-    sourcePath,
-    maxBytes: LEGACY_SUBAGENT_REGISTRY_MAX_BYTES,
-    label: "subagent registry",
-  });
-}
-
-async function recoverInterruptedClaim(
-  stateRoot: Root,
-  stateDir: string,
-  sourcePath: string,
-  env: NodeJS.ProcessEnv,
-): Promise<void> {
-  const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-  const claimRelativePath = relativeLegacyPath(stateDir, claimPath);
-  const sourceRelativePath = relativeLegacyPath(stateDir, sourcePath);
-  if (!(await stateRoot.exists(claimRelativePath))) {
+async function recoverInterruptedClaim(params: {
+  source: LegacyMigrationSourceClaim;
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  if (!(await params.source.exists(true))) {
     return;
   }
-  const claimed = await readLegacySourceSnapshot(stateRoot, stateDir, claimPath);
-  if (!(await stateRoot.exists(sourceRelativePath))) {
-    await stateRoot.move(claimRelativePath, sourceRelativePath);
+  const claimed = await params.source.read(true);
+  if (!(await params.source.exists())) {
+    const restoreError = await params.source.restore();
+    if (restoreError) {
+      throw new Error(restoreError);
+    }
     return;
   }
-  await readLegacySourceSnapshot(stateRoot, stateDir, sourcePath);
+  await params.source.read();
   // The interrupted claim and recreated source are two separate retirements.
   // Record the older bytes before deletion; the recreated source is processed next.
   const result = recordLegacySubagentRegistryDiscard({
-    env,
-    sourcePath,
+    env: params.env,
+    sourcePath: params.source.sourcePath,
     sourceSha256: claimed.sha256,
     sourceSize: claimed.size,
   });
-  await stateRoot.remove(claimRelativePath);
-  markLegacySubagentRegistrySourceRemoved(result.sourceKey, env);
-}
-
-async function restoreClaim(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-}): Promise<string | null> {
-  const claimPath = `${params.sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-  try {
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath)))) {
-      return null;
-    }
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, params.sourcePath))) {
-      return `source path already exists: ${params.sourcePath}`;
-    }
-    await params.stateRoot.move(
-      relativeLegacyPath(params.stateDir, claimPath),
-      relativeLegacyPath(params.stateDir, params.sourcePath),
-    );
-    return null;
-  } catch (error) {
-    return String(error);
-  }
+  await params.source.remove({ skipSourceCheck: true });
+  markLegacySubagentRegistrySourceRemoved(result.sourceKey, params.env);
 }
 
 async function migrateWithExclusiveStateOwnership(params: {
@@ -118,44 +75,50 @@ async function migrateWithExclusiveStateOwnership(params: {
   const warnings: string[] = [];
   const notices: string[] = [];
   const sourcePath = params.detected.sourcePath;
+  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
+    stateRoot: params.stateRoot,
+    stateDir: params.stateDir,
+    sourcePath,
+    label: "subagent registry",
+    claimSuffix: DOCTOR_CLAIM_SUFFIX,
+    readSnapshot: (snapshotPath) =>
+      readLegacyMigrationSourceSnapshot({
+        stateRoot: params.stateRoot,
+        stateDir: params.stateDir,
+        sourcePath: snapshotPath,
+        maxBytes: LEGACY_SUBAGENT_REGISTRY_MAX_BYTES,
+        label: "subagent registry",
+      }),
+  });
   if (!params.detected.hasLegacy) {
     return { changes, warnings };
   }
 
   let snapshot: LegacySourceSnapshot;
   try {
-    await recoverInterruptedClaim(params.stateRoot, params.stateDir, sourcePath, params.env);
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath)))) {
+    await recoverInterruptedClaim({ source, env: params.env });
+    if (!(await source.exists())) {
       return { changes, warnings };
     }
-    snapshot = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, sourcePath);
+    snapshot = await source.read();
   } catch (error) {
     warnings.push(`Failed reading legacy subagent registry: ${String(error)}`);
     return { changes, warnings };
   }
 
-  const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
   try {
     params.beforeVerify?.();
-    const current = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, sourcePath);
+    const current = await source.read();
     if (!sourceSnapshotsMatch(current, snapshot)) {
       throw new Error("legacy subagent registry changed after Doctor loaded it");
     }
-    params.beforeClaim?.();
-    await params.stateRoot.move(
-      relativeLegacyPath(params.stateDir, sourcePath),
-      relativeLegacyPath(params.stateDir, claimPath),
-    );
-    const claimed = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, claimPath);
-    if (!sourceSnapshotsMatch(claimed, snapshot)) {
-      throw new Error("legacy subagent registry changed before Doctor could claim it");
-    }
-  } catch (error) {
-    const restoreError = await restoreClaim({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      sourcePath,
+    await source.claim({
+      snapshot,
+      mismatchMessage: "legacy subagent registry changed before Doctor could claim it",
+      beforeClaim: params.beforeClaim,
     });
+  } catch (error) {
+    const restoreError = await source.restore();
     warnings.push(
       `Failed migrating legacy subagent registry: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
     );
@@ -171,11 +134,7 @@ async function migrateWithExclusiveStateOwnership(params: {
       sourceSize: snapshot.size,
     });
   } catch (error) {
-    const restoreError = await restoreClaim({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      sourcePath,
-    });
+    const restoreError = await source.restore();
     warnings.push(
       `Failed migrating legacy subagent registry: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
     );
@@ -183,20 +142,12 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   try {
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath))) {
-      throw new Error(`legacy subagent registry reappeared during retirement: ${sourcePath}`);
-    }
-    if (params.removeSource) {
-      await params.removeSource(claimPath);
-    } else {
-      await params.stateRoot.remove(relativeLegacyPath(params.stateDir, claimPath));
-    }
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath))) {
-      throw new Error(`legacy subagent registry reappeared during cleanup: ${sourcePath}`);
-    }
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath))) {
-      throw new Error(`legacy subagent registry Doctor claim remains after cleanup: ${claimPath}`);
-    }
+    await source.remove({
+      removeSource: params.removeSource,
+      sourceReappearedMessage: `legacy subagent registry reappeared during retirement: ${sourcePath}`,
+      sourceRemainingMessage: `legacy subagent registry reappeared during cleanup: ${sourcePath}`,
+      claimRemainingMessage: `legacy subagent registry Doctor claim remains after cleanup: ${source.claimPath}`,
+    });
   } catch (error) {
     warnings.push(`Legacy subagent registry retirement cleanup failed: ${String(error)}`);
     return { changes, warnings };

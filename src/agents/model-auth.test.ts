@@ -36,7 +36,6 @@ vi.mock("../plugins/plugin-registry.js", () => ({
             startup: {
               sidecar: false,
               memory: false,
-              deferConfiguredChannelFullLoadUntilAfterListen: false,
               agentHarnesses: [],
             },
             compat: [],
