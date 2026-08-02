@@ -168,26 +168,33 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
   );
 
   log("initializing");
-  await client.initialize({
-    protocolVersion: PROTOCOL_VERSION,
-    clientCapabilities: {
-      fs: { readTextFile: true, writeTextFile: true },
-      terminal: true,
-    },
-    clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
-  });
+  try {
+    await client.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
+      clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
+    });
 
-  log("creating session");
-  const session = await client.newSession({
-    cwd,
-    mcpServers: [],
-  });
+    log("creating session");
+    const session = await client.newSession({
+      cwd,
+      mcpServers: [],
+    });
 
-  return {
-    client,
-    agent,
-    sessionId: session.sessionId,
-  };
+    return {
+      client,
+      agent,
+      sessionId: session.sessionId,
+    };
+  } catch (error) {
+    // Handshake failed: kill the spawned server so a hung or non-ACP
+    // process is not leaked when this function throws.
+    agent.kill();
+    throw error;
+  }
 }
 
 /** Starts the terminal prompt loop for a local ACP client session. */
