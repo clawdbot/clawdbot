@@ -74,20 +74,42 @@ function sanitizeAssistantErrorDisplayMessage(
     string,
     unknown
   >;
-  next.content = Array.isArray(content)
-    ? content
-        .map(
-          (block) =>
-            sanitizeChatHistoryContentBlock(block, { maxChars: Number.MAX_SAFE_INTEGER }).block,
-        )
-        .filter((block) => {
-          if (!block || typeof block !== "object" || Array.isArray(block)) {
-            return true;
-          }
-          const type = (block as { type?: unknown }).type;
-          return type !== "thinking" && type !== "reasoning" && type !== "redacted_thinking";
-        })
-    : content;
+  if (Array.isArray(content)) {
+    let firstTextBlock = true;
+    next.content = content.flatMap((block) => {
+      const sanitized = sanitizeChatHistoryContentBlock(block, {
+        maxChars: Number.MAX_SAFE_INTEGER,
+      }).block;
+      if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) {
+        return [sanitized];
+      }
+      const entry = sanitized as { type?: unknown; text?: unknown };
+      if (
+        entry.type === "thinking" ||
+        entry.type === "reasoning" ||
+        entry.type === "redacted_thinking"
+      ) {
+        return [];
+      }
+      if (!firstTextBlock || !isAssistantTextContentType(entry.type)) {
+        return [sanitized];
+      }
+      firstTextBlock = false;
+      if (typeof entry.text !== "string" || !entry.text.startsWith(STREAM_ERROR_FALLBACK_TEXT)) {
+        return [sanitized];
+      }
+      const replyText = entry.text.slice(STREAM_ERROR_FALLBACK_TEXT.length);
+      return replyText ? [{ ...entry, text: replyText }] : [];
+    });
+  } else {
+    next.content =
+      typeof content === "string" && content.startsWith(STREAM_ERROR_FALLBACK_TEXT)
+        ? content.slice(STREAM_ERROR_FALLBACK_TEXT.length)
+        : content;
+  }
+  if (typeof next.text === "string" && next.text.startsWith(STREAM_ERROR_FALLBACK_TEXT)) {
+    next.text = next.text.slice(STREAM_ERROR_FALLBACK_TEXT.length);
+  }
   delete next.diagnostics;
   delete next.errorBody;
   delete next.errorCode;
@@ -109,7 +131,11 @@ function isPureStreamErrorFallbackAssistantMessage(message: Record<string, unkno
 }
 
 function hasVisibleAssistantDisplayContent(message: Record<string, unknown>): boolean {
-  if (message.role !== "assistant" || isPureStreamErrorFallbackAssistantMessage(message)) {
+  if (
+    message.role !== "assistant" ||
+    message.display === false ||
+    isPureStreamErrorFallbackAssistantMessage(message)
+  ) {
     return false;
   }
   const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER).message as Record<

@@ -479,6 +479,42 @@ describe("SessionHistorySseState", () => {
     });
   });
 
+  test("keeps an inline failed turn before a new forwarded inter-session turn", () => {
+    const state = newState([
+      {
+        role: "assistant",
+        content: textContent(STREAM_ERROR_FALLBACK_TEXT),
+        stopReason: "error",
+        __openclaw: { seq: 1 },
+      },
+    ]);
+
+    const forwarded = state.appendInlineMessage({
+      message: {
+        role: "user",
+        content: textContent("forwarded update"),
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+      },
+      messageSeq: 2,
+    });
+
+    expect(forwarded?.message).toMatchObject({
+      role: "assistant",
+      content: textContent("forwarded update"),
+    });
+    expect(appendAssistantText(state, "actual fallback response", 3)?.message).toMatchObject({
+      role: "assistant",
+      content: textContent("actual fallback response"),
+    });
+    expect(state.snapshot().messages[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
   test("requests refresh when initial SSE history ends with a repaired stream error", () => {
     const state = newState([
       userTextMessage("hello", 1),
