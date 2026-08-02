@@ -19,6 +19,19 @@ export type AgentRuntimeMessageActionContext = {
   toolContext?: ChannelThreadingToolContext;
 };
 
+export type MessageActionTurnCapabilityRejectionReason =
+  | "token_missing"
+  | "token_unknown"
+  | "expired"
+  | "agent_mismatch"
+  | "run_mismatch"
+  | "session_key_mismatch"
+  | "session_id_mismatch";
+
+export type MessageActionTurnCapabilityResolution =
+  | { ok: true; context: AgentRuntimeMessageActionContext }
+  | { ok: false; reason: MessageActionTurnCapabilityRejectionReason };
+
 type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   agentId: string;
   runId: string;
@@ -122,6 +135,51 @@ export function mintMessageActionTurnCapability(params: {
   return token;
 }
 
+export function resolveMessageActionTurnCapabilityDiagnostic(params: {
+  token?: string;
+  agentId: string;
+  runId?: string;
+  sessionKey: string;
+  sessionId?: string;
+  nowMs?: number;
+}): MessageActionTurnCapabilityResolution {
+  const token = params.token?.trim();
+  if (!token) {
+    return { ok: false, reason: "token_missing" };
+  }
+  const capability = capabilitiesByToken.get(token);
+  if (!capability) {
+    return { ok: false, reason: "token_unknown" };
+  }
+  const nowMs = params.nowMs ?? Date.now();
+  if (nowMs >= capability.expiresAtMs) {
+    capabilitiesByToken.delete(token);
+    return { ok: false, reason: "expired" };
+  }
+  if (capability.agentId !== normalizeAgentId(params.agentId)) {
+    return { ok: false, reason: "agent_mismatch" };
+  }
+  if (capability.runId !== params.runId?.trim()) {
+    return { ok: false, reason: "run_mismatch" };
+  }
+  if (capability.sessionKey !== params.sessionKey.trim()) {
+    return { ok: false, reason: "session_key_mismatch" };
+  }
+  if (capability.sessionId && capability.sessionId !== normalizeOptionalString(params.sessionId)) {
+    return { ok: false, reason: "session_id_mismatch" };
+  }
+  return {
+    ok: true,
+    context: {
+      expiresAtMs: capability.expiresAtMs,
+      sessionId: capability.sessionId,
+      requesterAccountId: capability.requesterAccountId,
+      requesterSenderId: capability.requesterSenderId,
+      toolContext: copyToolContext(capability.toolContext),
+    },
+  };
+}
+
 export function resolveMessageActionTurnCapability(params: {
   token?: string;
   agentId: string;
@@ -130,34 +188,8 @@ export function resolveMessageActionTurnCapability(params: {
   sessionId?: string;
   nowMs?: number;
 }): AgentRuntimeMessageActionContext | undefined {
-  const token = params.token?.trim();
-  if (!token) {
-    return undefined;
-  }
-  const capability = capabilitiesByToken.get(token);
-  if (!capability) {
-    return undefined;
-  }
-  const nowMs = params.nowMs ?? Date.now();
-  if (nowMs >= capability.expiresAtMs) {
-    capabilitiesByToken.delete(token);
-    return undefined;
-  }
-  if (
-    capability.agentId !== normalizeAgentId(params.agentId) ||
-    capability.runId !== params.runId?.trim() ||
-    capability.sessionKey !== params.sessionKey.trim() ||
-    (capability.sessionId && capability.sessionId !== normalizeOptionalString(params.sessionId))
-  ) {
-    return undefined;
-  }
-  return {
-    expiresAtMs: capability.expiresAtMs,
-    sessionId: capability.sessionId,
-    requesterAccountId: capability.requesterAccountId,
-    requesterSenderId: capability.requesterSenderId,
-    toolContext: copyToolContext(capability.toolContext),
-  };
+  const resolution = resolveMessageActionTurnCapabilityDiagnostic(params);
+  return resolution.ok ? resolution.context : undefined;
 }
 
 export function revokeMessageActionTurnCapability(token: string | undefined): boolean {

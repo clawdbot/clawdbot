@@ -3609,6 +3609,31 @@ describe("message tool sandbox passthrough", () => {
     });
   });
 
+  it("keeps an unknown turn capability fail-closed", async () => {
+    mockSendResult({ to: "discord:123" });
+
+    const call = await executeSend({
+      toolOptions: {
+        agentId: "main",
+        agentSessionKey: "agent:main:runtime-policy",
+        runId: "run-1",
+        sessionId: "session-1",
+        messageActionTurnCapability: "unknown-capability",
+        requesterSenderId: "forged-sender",
+      },
+      action: {
+        target: "discord:123",
+        message: "hi",
+      },
+    });
+
+    expect(call?.messageActionAuthorization).toEqual({
+      requesterAccountId: undefined,
+      requesterSenderId: undefined,
+      toolContext: undefined,
+    });
+  });
+
   it("forwards capability-bound current-turn identity to local actions", async () => {
     mockSendResult({ to: "discord:123" });
     const token = mintMessageActionTurnCapability({

@@ -3,6 +3,7 @@ import {
   isTrustedMessageActionTurnIngress,
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapability,
+  resolveMessageActionTurnCapabilityDiagnostic,
   revokeMessageActionTurnCapability,
 } from "./message-action-turn-capability.js";
 
@@ -140,5 +141,61 @@ describe("message action turn capability", () => {
         sessionKey: "session-2",
       }),
     ).toBeUndefined();
+  });
+
+  it("diagnoses every fail-closed capability rejection without exposing bound values", () => {
+    const token = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-1",
+      sessionKey: "agent:main:matrix:direct:room-1",
+      sessionId: "session-1",
+      nowMs: 1000,
+      ttlMs: 5000,
+    });
+    const base = {
+      token,
+      agentId: "main",
+      runId: "run-1",
+      sessionKey: "agent:main:matrix:direct:room-1",
+      sessionId: "session-1",
+      nowMs: 2000,
+    };
+
+    expect(resolveMessageActionTurnCapabilityDiagnostic({ ...base, token: undefined })).toEqual({
+      ok: false,
+      reason: "token_missing",
+    });
+    expect(resolveMessageActionTurnCapabilityDiagnostic({ ...base, token: "unknown" })).toEqual({
+      ok: false,
+      reason: "token_unknown",
+    });
+    for (const [overrides, reason] of [
+      [{ agentId: "other" }, "agent_mismatch"],
+      [{ runId: "run-2" }, "run_mismatch"],
+      [{ sessionKey: "agent:main:matrix:direct:room-2" }, "session_key_mismatch"],
+      [{ sessionId: "session-2" }, "session_id_mismatch"],
+    ] as const) {
+      expect(resolveMessageActionTurnCapabilityDiagnostic({ ...base, ...overrides })).toEqual({
+        ok: false,
+        reason,
+      });
+    }
+
+    const expired = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-expired",
+      sessionKey: "agent:main:matrix:direct:expired",
+      nowMs: 1000,
+      ttlMs: 1000,
+    });
+    expect(
+      resolveMessageActionTurnCapabilityDiagnostic({
+        token: expired,
+        agentId: "main",
+        runId: "run-expired",
+        sessionKey: "agent:main:matrix:direct:expired",
+        nowMs: 2000,
+      }),
+    ).toEqual({ ok: false, reason: "expired" });
   });
 });

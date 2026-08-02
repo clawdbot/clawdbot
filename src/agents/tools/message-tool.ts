@@ -46,7 +46,7 @@ import {
   getBootEchoContextForSession,
   stripBootEchoFromOutboundText,
 } from "../../gateway/boot-echo-guard.js";
-import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
+import { resolveMessageActionTurnCapabilityDiagnostic } from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
 import {
@@ -64,6 +64,7 @@ import {
   shouldApplyCrossContextMarker,
 } from "../../infra/outbound/outbound-policy.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
@@ -101,6 +102,7 @@ import {
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
+const log = createSubsystemLogger("agents/tools/message");
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return action === "broadcast" || shouldApplyCrossContextMarker(action);
 }
@@ -1473,9 +1475,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
-      const trustedTurnContext =
+      const turnCapabilityResolution =
         resolvedAgentId && options?.agentSessionKey
-          ? resolveMessageActionTurnCapability({
+          ? resolveMessageActionTurnCapabilityDiagnostic({
               token: options.messageActionTurnCapability,
               agentId: resolvedAgentId,
               runId: options.runId,
@@ -1483,6 +1485,20 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               sessionId: options.sessionId,
             })
           : undefined;
+      const trustedTurnContext = turnCapabilityResolution?.ok
+        ? turnCapabilityResolution.context
+        : undefined;
+      if (
+        turnCapabilityResolution &&
+        !turnCapabilityResolution.ok &&
+        (options?.messageActionTurnCapability || options?.requesterSenderId)
+      ) {
+        // Capability tokens and bound identities are secret or sensitive. Emit
+        // only the categorical rejection needed to diagnose missing authority.
+        log.warn("message tool trusted turn context unavailable", {
+          reason: turnCapabilityResolution.reason,
+        });
+      }
       if (
         suppressedVisiblePayloadReason &&
         action === "send" &&
