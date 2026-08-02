@@ -196,30 +196,35 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       params: { channelId: "other" },
       accountId: "default",
       requesterAccountId: "default",
+      expectedReason: "requested_target_mismatch",
     },
     {
       name: "missing target",
       params: {},
       accountId: "default",
       requesterAccountId: "default",
+      expectedReason: "requested_target_mismatch",
     },
     {
       name: "wrong account",
       params: { channelId: "current" },
       accountId: "other",
       requesterAccountId: "default",
+      expectedReason: "account_context_mismatch",
     },
     {
       name: "missing requester account",
       params: { channelId: "current" },
       accountId: "default",
       requesterAccountId: undefined,
+      expectedReason: "account_context_mismatch",
     },
     {
       name: "invalid account",
       params: { channelId: "current" },
       accountId: "!!!",
       requesterAccountId: "default",
+      expectedReason: "account_context_mismatch",
     },
     {
       name: "missing current provider",
@@ -227,6 +232,7 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       accountId: "default",
       requesterAccountId: "default",
       currentChannelProvider: undefined,
+      expectedReason: "provider_context_mismatch",
     },
     {
       name: "different current provider",
@@ -234,6 +240,7 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       accountId: "default",
       requesterAccountId: "default",
       currentChannelProvider: "slack",
+      expectedReason: "provider_context_mismatch",
     },
   ])("rejects a non-bundled delegated read with $name before plugin code", async (testCase) => {
     setReadPlugin();
@@ -254,6 +261,22 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
         },
       }),
     ).rejects.toThrow("requires the exact current conversation and account");
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "discord",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: testCase.params,
+        accountId: testCase.accountId,
+        requesterAccountId: testCase.requesterAccountId,
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider:
+            "currentChannelProvider" in testCase ? testCase.currentChannelProvider : "discord",
+          currentChannelId: "current",
+        },
+      }),
+    ).rejects.toThrow(`reason=${testCase.expectedReason}`);
     expect(supportsAction).not.toHaveBeenCalled();
     expect(requiresTrustedRequesterSender).not.toHaveBeenCalled();
     expect(handleAction).not.toHaveBeenCalled();
@@ -1078,12 +1101,14 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       accountId: "default",
       requesterAccountId: "default",
       currentChannelProvider: undefined,
+      expectedReason: "provider_context_mismatch",
     },
     {
       name: "wrong current provider",
       accountId: "default",
       requesterAccountId: "default",
       currentChannelProvider: "discord",
+      expectedReason: "provider_context_mismatch",
     },
     {
       name: "wrong account",
@@ -1091,6 +1116,7 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       requesterAccountId: "default",
       currentChannelProvider: "telegram",
       currentChannelId: "123",
+      expectedReason: "account_context_mismatch",
     },
     {
       name: "missing current target",
@@ -1098,6 +1124,7 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       requesterAccountId: "default",
       currentChannelProvider: "telegram",
       currentChannelId: undefined,
+      expectedReason: "current_target_missing",
     },
   ])("rejects bundled targetless sticker-cache reads with $name", async (testCase) => {
     setReadPlugin({ channel: "telegram", origin: "bundled" });
@@ -1116,7 +1143,7 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
           currentChannelId: "currentChannelId" in testCase ? testCase.currentChannelId : "123",
         },
       }),
-    ).rejects.toThrow("requires the exact current conversation and account");
+    ).rejects.toThrow(`reason=${testCase.expectedReason}`);
     expect(handleAction).not.toHaveBeenCalled();
   });
 

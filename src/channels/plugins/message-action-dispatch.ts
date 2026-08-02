@@ -220,6 +220,25 @@ function hasCurrentConversationTarget(ctx: ChannelMessageActionContext): boolean
   );
 }
 
+function exactCurrentConversationFailureReason(
+  ctx: ChannelMessageActionContext,
+):
+  | "account_context_mismatch"
+  | "current_target_missing"
+  | "provider_context_mismatch"
+  | "requested_target_mismatch" {
+  if (!hasMatchingCurrentProviderContext(ctx)) {
+    return "provider_context_mismatch";
+  }
+  if (!hasMatchingCurrentAccountContext(ctx)) {
+    return "account_context_mismatch";
+  }
+  if (!hasCurrentConversationTarget(ctx)) {
+    return "current_target_missing";
+  }
+  return "requested_target_mismatch";
+}
+
 function hasTargetInput(value: unknown): boolean {
   if (typeof value === "string") {
     return Boolean(value.trim());
@@ -385,7 +404,7 @@ function assertConversationReadAllowed(params: {
     return;
   }
   throw new Error(
-    `Delegated ${params.ctx.channel}:${params.ctx.action} requires the exact current conversation and account for this plugin.`,
+    `Delegated ${params.ctx.channel}:${params.ctx.action} requires the exact current conversation and account for this plugin (reason=${exactCurrentConversationFailureReason(params.ctx)}).`,
   );
 }
 
