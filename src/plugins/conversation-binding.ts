@@ -140,12 +140,14 @@ function takePendingPluginBindingRequest(
 
 function addPendingPluginBindingRequest(request: PendingPluginBindingRequest): void {
   const expiresAtMs = Date.now() + PENDING_PLUGIN_BINDING_REQUEST_TTL_MS;
-  let entry: PendingPluginBindingRequestEntry;
-  const timeoutId = setTimeout(() => {
-    takePendingPluginBindingRequest(request.id, entry);
-  }, PENDING_PLUGIN_BINDING_REQUEST_TTL_MS);
-  timeoutId.unref?.();
-  entry = { request, expiresAtMs, timeoutId };
+  const entry: PendingPluginBindingRequestEntry = {
+    request,
+    expiresAtMs,
+    timeoutId: setTimeout(() => {
+      takePendingPluginBindingRequest(request.id, entry);
+    }, PENDING_PLUGIN_BINDING_REQUEST_TTL_MS),
+  };
+  entry.timeoutId.unref?.();
   pendingRequests.set(request.id, entry);
 
   // Oldest-first eviction keeps abandoned approval payloads bounded and fail-closed.

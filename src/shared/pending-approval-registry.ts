@@ -55,7 +55,9 @@ export function createPendingApprovalRegistry<TValue>() {
     timeoutMs: number,
     onExpire: PendingApprovalTerminal<TValue>,
   ) => {
-    if (!isCurrent(entry)) return;
+    if (!isCurrent(entry)) {
+      return;
+    }
     entry.timeoutId = setTimeout(() => {
       const expired = settle(entry.id, onExpire);
       if (expired.status === "taken") {
@@ -65,7 +67,9 @@ export function createPendingApprovalRegistry<TValue>() {
     entry.timeoutId.unref?.();
   };
   const clear = () => {
-    for (const entry of pending.values()) clearTimeout(entry.timeoutId);
+    for (const entry of pending.values()) {
+      clearTimeout(entry.timeoutId);
+    }
     pending.clear();
   };
   const has = (id: string) => pending.has(id);
