@@ -115,6 +115,23 @@ describe("core canvas document host", () => {
     expect(headCss.statusCode).toBe(200);
     expect(headCss.headers["content-length"]).toBe(String(getCss.body.byteLength));
     expect(headCss.body.byteLength).toBe(0);
+
+    // Invalid UTF-8 in a copied HTML file expands to U+FFFD when served, so the
+    // header must be measured from the decoded representation, not raw bytes.
+    const brokenBytes = Buffer.from([
+      0x3c, 0x68, 0x31, 0x3e, 0xff, 0xfe, 0x3c, 0x2f, 0x68, 0x31, 0x3e,
+    ]);
+    await writeFile(
+      path.join(resolveCanvasDocumentsDir(stateDir), "widget-1", "broken.html"),
+      brokenBytes,
+    );
+    const brokenUrl = document.entryUrl.replace(/index\.html$/, "broken.html");
+    const getBroken = await capture(brokenUrl);
+    const headBroken = await capture(brokenUrl, "HEAD");
+    expect(getBroken.statusCode).toBe(200);
+    expect(getBroken.body.byteLength).toBeGreaterThan(brokenBytes.byteLength);
+    expect(headBroken.headers["content-length"]).toBe(String(getBroken.body.byteLength));
+    expect(headBroken.body.byteLength).toBe(0);
   });
 
   it("rejects unsupported methods and traversal paths", async () => {
