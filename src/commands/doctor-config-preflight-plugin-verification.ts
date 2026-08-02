@@ -193,8 +193,7 @@ export async function refreshStartupPluginQuarantine(params: {
   return result;
 }
 
-/** Map payload verification failures into startup quarantine and blocking diagnostics. */
-export function mapStartupPluginQuarantineRefresh(params: {
+function mapStartupPluginQuarantineRefresh(params: {
   cfg: OpenClawConfig;
   failures: readonly PluginPayloadSmokeFailure[];
 }): StartupPluginConvergenceResult {
