@@ -5,8 +5,8 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildLiveNvidiaProvider,
   buildNvidiaProvider,
+  buildSelectableFeaturedNvidiaProvider,
   buildSelectableNvidiaProvider,
-  buildSelectableLiveNvidiaProvider,
 } from "./provider-catalog.js";
 
 const NVIDIA_FEATURED_MODELS_URL =
@@ -275,9 +275,9 @@ describe("nvidia provider catalog", () => {
       ],
     });
 
-    const provider = await buildSelectableLiveNvidiaProvider();
+    const provider = await buildSelectableFeaturedNvidiaProvider();
 
-    expect(provider.models.map((model) => model.id)).toEqual([
+    expect(provider?.models.map((model) => model.id)).toEqual([
       "z-ai/glm-5.2",
       "nvidia/nemotron-3-super-120b-a12b",
     ]);
@@ -302,10 +302,10 @@ describe("nvidia provider catalog", () => {
     });
 
     const live = await buildLiveNvidiaProvider();
-    const selectableLive = await buildSelectableLiveNvidiaProvider();
+    const selectableLive = await buildSelectableFeaturedNvidiaProvider();
 
     expect(live.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
-    expect(selectableLive.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
+    expect(selectableLive?.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
   });
 
   it("maps current featured feed metadata for MiniMax, DeepSeek, and Qwen", async () => {
@@ -347,12 +347,20 @@ describe("nvidia provider catalog", () => {
     ]);
   });
 
-  it("returns no selectable live rows when the featured catalog is unavailable", async () => {
+  it("returns no featured provider when the featured catalog is unavailable", async () => {
     mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
 
-    const provider = await buildSelectableLiveNvidiaProvider();
+    const provider = await buildSelectableFeaturedNvidiaProvider();
 
-    expect(provider.models.map((model) => model.id)).toEqual([]);
+    expect(provider).toBeNull();
+  });
+
+  it("preserves a genuinely empty successful featured catalog", async () => {
+    mockFeaturedCatalogResponse({ "featured-models": [] });
+
+    const provider = await buildSelectableFeaturedNvidiaProvider();
+
+    expect(provider?.models).toEqual([]);
   });
 
   it("ignores malformed featured catalog rows and keeps valid entries", async () => {
@@ -462,6 +470,27 @@ describe("nvidia provider catalog", () => {
       EXPECTED_FEATURED_MODELS.map((model) => model.id),
     );
     expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.2"]);
+    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache genuinely empty featured catalog responses", async () => {
+    mockFeaturedCatalogResponse({ "featured-models": [] });
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "z-ai/glm-5.2",
+          "model-name": "GLM 5.2",
+          context: 202752,
+          "max-output": 8192,
+        },
+      ],
+    });
+
+    const first = await buildSelectableFeaturedNvidiaProvider();
+    const second = await buildSelectableFeaturedNvidiaProvider();
+
+    expect(first?.models).toEqual([]);
+    expect(second?.models.map((model) => model.id)).toEqual(["z-ai/glm-5.2"]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
 

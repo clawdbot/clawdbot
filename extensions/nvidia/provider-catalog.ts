@@ -101,14 +101,11 @@ export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
   };
 }
 
-export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProviderConfig> {
+export async function buildSelectableFeaturedNvidiaProvider(): Promise<ModelProviderConfig | null> {
   const provider = buildSelectableNvidiaProvider();
   const featuredModels = await loadNvidiaFeaturedModels();
-  if (!featuredModels || featuredModels.length === 0) {
-    return {
-      ...provider,
-      models: [],
-    };
+  if (!featuredModels) {
+    return null;
   }
   return {
     ...provider,
@@ -130,13 +127,17 @@ async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nul
       // the guarded fixed-host fetch on the fast path.
       lookupFn: lookupNvidiaFeaturedModelHostname,
       auditContext: "nvidia-featured-model-catalog",
-      shouldCacheRows: (modelRows) => parseNvidiaFeaturedModels(modelRows) !== null,
+      shouldCacheRows: (modelRows) =>
+        modelRows.length > 0 && parseNvidiaFeaturedModels(modelRows) !== null,
       readRows: (payload) => {
-        if (!payload || typeof payload !== "object") {
-          return [];
+        if (!isRecord(payload)) {
+          throw new Error("Invalid NVIDIA featured model catalog response");
         }
-        const featuredRows = (payload as { "featured-models"?: unknown })["featured-models"];
-        return Array.isArray(featuredRows) ? featuredRows : [];
+        const featuredRows = payload["featured-models"];
+        if (!Array.isArray(featuredRows)) {
+          throw new Error("Missing NVIDIA featured model catalog rows");
+        }
+        return featuredRows;
       },
     });
     return parseNvidiaFeaturedModels(rows);
@@ -146,6 +147,9 @@ async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nul
 }
 
 function parseNvidiaFeaturedModels(rows: readonly unknown[]): ModelDefinitionConfig[] | null {
+  if (rows.length === 0) {
+    return [];
+  }
   const models = rows
     .slice(0, FEATURED_MODEL_MAX_ROWS)
     .map(parseNvidiaFeaturedModel)

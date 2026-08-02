@@ -1,11 +1,12 @@
 // Nvidia plugin entrypoint registers its OpenClaw integration.
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyNvidiaConfig, NVIDIA_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildLiveNvidiaProvider,
+  buildSelectableFeaturedNvidiaProvider,
   buildSelectableNvidiaProvider,
-  buildSelectableLiveNvidiaProvider,
 } from "./provider-catalog.js";
 
 const PROVIDER_ID = "nvidia";
@@ -36,6 +37,17 @@ async function buildNvidiaCatalogModels(ctx: {
   }));
 }
 
+async function buildNvidiaRuntimeCatalog(ctx: ProviderCatalogContext) {
+  const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+  if (!apiKey) {
+    return null;
+  }
+  const provider = await buildSelectableFeaturedNvidiaProvider();
+  // A null catalog lets runtime discovery use bundled rows without projecting
+  // those static models into the separate live-catalog surface.
+  return provider ? { provider: { ...provider, apiKey } } : null;
+}
+
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "NVIDIA Provider",
@@ -50,8 +62,8 @@ export default defineSingleProviderPluginEntry({
       applyConfig: applyNvidiaConfig,
     },
     catalog: {
-      buildProvider: buildSelectableLiveNvidiaProvider,
-      buildStaticProvider: buildSelectableNvidiaProvider,
+      run: buildNvidiaRuntimeCatalog,
+      staticRun: async () => ({ provider: buildSelectableNvidiaProvider() }),
     },
     augmentModelCatalog: buildNvidiaCatalogModels,
     wizard: {

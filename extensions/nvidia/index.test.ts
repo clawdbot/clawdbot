@@ -321,4 +321,53 @@ describe("nvidia provider hooks", () => {
       catalogProvider?.liveCatalog?.(buildCatalogContext("nvapi-test")),
     ).resolves.toEqual([]);
   });
+
+  it.each([
+    ["unavailable", { error: "unavailable" }, 503],
+    ["malformed", { error: "missing featured rows" }, 200],
+  ])(
+    "falls back to bundled runtime models when the featured catalog is %s",
+    async (_, body, status) => {
+      mockFeaturedCatalogResponse(body, status);
+      const provider = await registerNvidiaProvider();
+      const context = buildCatalogContext("nvapi-test");
+
+      await expect(provider.catalog?.run(context)).resolves.toBeNull();
+      await expect(provider.staticCatalog?.run(context)).resolves.toMatchObject({
+        provider: {
+          models: expect.arrayContaining([
+            expect.objectContaining({ id: "nvidia/nemotron-3-ultra-550b-a55b" }),
+            expect.objectContaining({ id: "moonshotai/kimi-k2.6" }),
+          ]),
+        },
+      });
+    },
+  );
+
+  it("preserves a genuinely empty successful featured catalog", async () => {
+    mockFeaturedCatalogResponse({ "featured-models": [] });
+    const provider = await registerNvidiaProvider();
+
+    await expect(provider.catalog?.run(buildCatalogContext("nvapi-test"))).resolves.toMatchObject({
+      provider: { apiKey: "nvapi-test", models: [] },
+    });
+  });
+
+  it("keeps a healthy deprecated-only featured catalog genuinely empty", async () => {
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "moonshotai/kimi-k2.5",
+          "model-name": "Kimi K2.5",
+          context: 262144,
+          "max-output": 32768,
+        },
+      ],
+    });
+    const provider = await registerNvidiaProvider();
+
+    await expect(provider.catalog?.run(buildCatalogContext("nvapi-test"))).resolves.toMatchObject({
+      provider: { apiKey: "nvapi-test", models: [] },
+    });
+  });
 });
