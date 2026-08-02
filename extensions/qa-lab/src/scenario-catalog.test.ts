@@ -238,6 +238,19 @@ describe("qa scenario catalog", () => {
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
     expect(otelStdout.gatewayRuntime?.preserveDebugArtifacts).toBe(true);
     expect(blockedSlack.gatewayRuntime?.allowUnhealthyStartup).toBe(true);
+    expect(blockedSlack.gatewayConfigPatch).toMatchObject({
+      channels: {
+        slack: {
+          accounts: {
+            $selectedAccount: { botToken: "xoxb-intentionally-invalid-lifecycle" },
+          },
+        },
+      },
+    });
+    const blockedSlackFlow = JSON.stringify(blockedSlack.execution.flow);
+    expect(blockedSlackFlow).toContain("transport.accountId");
+    expect(blockedSlackFlow).not.toContain("account.accountId === 'default'");
+    expect(flowContainsCall(blockedSlack.execution.flow, "waitForTransportReady")).toBe(false);
   });
 
   it.each([
