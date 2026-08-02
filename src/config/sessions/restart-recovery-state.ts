@@ -246,6 +246,9 @@ type RestartRecoveryNormalizedField =
   | "restartRecoveryDeliveryRequestMessageId"
   | "restartRecoveryDeliveryRunId"
   | "restartRecoveryDeliverySourceRunId"
+  | "restartRecoveryInterruptionReason"
+  | "restartRecoveryTimeoutAttemptCount"
+  | "restartRecoveryTimeoutExhausted"
   | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoveryTerminalDeliveryEvidence"
   | "restartRecoveryTerminalRunIds";
@@ -262,7 +265,13 @@ export function normalizeRestartRecoveryEntryFields(
   entry: SessionEntry,
   assign: (
     key: RestartRecoveryNormalizedField,
-    value: string | string[] | true | RestartRecoveryTerminalDeliveryEvidence[] | undefined,
+    value:
+      | number
+      | string
+      | string[]
+      | true
+      | RestartRecoveryTerminalDeliveryEvidence[]
+      | undefined,
   ) => void,
 ): void {
   const deliveryMediaUrls = normalizePresentStringArray(entry.restartRecoveryDeliveryMediaUrls);
@@ -292,6 +301,25 @@ export function normalizeRestartRecoveryEntryFields(
   assign(
     "restartRecoveryDeliverySourceRunId",
     normalizeRunId(entry.restartRecoveryDeliverySourceRunId),
+  );
+  assign(
+    "restartRecoveryInterruptionReason",
+    entry.restartRecoveryInterruptionReason === "gateway_restart" ||
+      entry.restartRecoveryInterruptionReason === "gateway_timeout"
+      ? entry.restartRecoveryInterruptionReason
+      : undefined,
+  );
+  assign(
+    "restartRecoveryTimeoutAttemptCount",
+    typeof entry.restartRecoveryTimeoutAttemptCount === "number" &&
+      Number.isSafeInteger(entry.restartRecoveryTimeoutAttemptCount) &&
+      entry.restartRecoveryTimeoutAttemptCount > 0
+      ? entry.restartRecoveryTimeoutAttemptCount
+      : undefined,
+  );
+  assign(
+    "restartRecoveryTimeoutExhausted",
+    entry.restartRecoveryTimeoutExhausted === true ? true : undefined,
   );
   assign(
     "restartRecoverySourceReplyDeliveryMode",
@@ -395,6 +423,9 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRequestMessageId: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryInterruptionReason: undefined,
+    restartRecoveryTimeoutAttemptCount: undefined,
+    restartRecoveryTimeoutExhausted: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
     restartRecoveryForceSafeTools: undefined,
     ...(terminalDeliveryEvidence

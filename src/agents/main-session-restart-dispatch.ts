@@ -17,10 +17,17 @@ import {
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
-const RESTART_RECOVERY_RESUME_MESSAGE =
+const GATEWAY_RESTART_RECOVERY_RESUME_MESSAGE =
   "[System] Your previous turn was interrupted by a gateway restart while " +
   "OpenClaw was waiting on tool/model work. Continue from the existing " +
   "transcript and finish the interrupted response.";
+const GATEWAY_TIMEOUT_RECOVERY_RESUME_MESSAGE =
+  "[System] Your previous turn exceeded the gateway run deadline while OpenClaw was " +
+  "waiting on tool/model work. Continue from the existing transcript, reuse existing " +
+  "job ids and checkpoints, and do not restart completed work. Finish if results are " +
+  "ready; otherwise post a concise progress or blocker update before this turn's deadline.";
+
+export type MainSessionInterruptionReason = "gateway_restart" | "gateway_timeout";
 
 type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
 
@@ -28,15 +35,22 @@ function normalizeFiniteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
+function buildResumeMessage(
+  interruptionReason: MainSessionInterruptionReason,
+  pendingFinalDeliveryText?: string | null,
+): string {
+  const resumeMessage =
+    interruptionReason === "gateway_timeout"
+      ? GATEWAY_TIMEOUT_RECOVERY_RESUME_MESSAGE
+      : GATEWAY_RESTART_RECOVERY_RESUME_MESSAGE;
   const sanitizedPendingText =
     typeof pendingFinalDeliveryText === "string"
       ? sanitizePendingFinalDeliveryText(pendingFinalDeliveryText)
       : "";
   if (sanitizedPendingText) {
-    return `${RESTART_RECOVERY_RESUME_MESSAGE}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`;
+    return `${resumeMessage}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`;
   }
-  return RESTART_RECOVERY_RESUME_MESSAGE;
+  return resumeMessage;
 }
 
 export function resolveRestartRecoveryDeliveryContext(params: {
@@ -187,6 +201,7 @@ export async function resumeMainSession(params: {
   storePath: string;
   sessionKey: string;
   pendingFinalDeliveryText?: string | null;
+  interruptionReason?: MainSessionInterruptionReason;
   forceRestartSafeTools?: boolean;
   sessionWorkAdmissionHandoffId?: string;
 }): Promise<boolean> {
@@ -239,7 +254,10 @@ export async function resumeMainSession(params: {
       throw new Error("restart recovery session ownership changed before dispatch");
     }
     const agentParams: Record<string, unknown> = {
-      message: buildResumeMessage(sanitizedPendingText),
+      message: buildResumeMessage(
+        params.interruptionReason ?? "gateway_restart",
+        sanitizedPendingText,
+      ),
       sessionKey: dispatchSessionKey,
       expectedExistingSessionId: params.entry.sessionId,
       ...(params.sessionWorkAdmissionHandoffId

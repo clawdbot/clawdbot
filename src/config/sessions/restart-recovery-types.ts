@@ -49,6 +49,12 @@ export type SessionRestartRecoveryState = {
   restartRecoveryDeliveryRequestMessageId?: string;
   restartRecoveryDeliveryRunId?: string;
   restartRecoveryDeliverySourceRunId?: string;
+  /** Why the active recovery claim entered transcript continuation. */
+  restartRecoveryInterruptionReason?: "gateway_restart" | "gateway_timeout";
+  /** Number of timeout continuations dispatched for the active claim. */
+  restartRecoveryTimeoutAttemptCount?: number;
+  /** Stops repeated full-deadline continuation after the durable attempt budget is exhausted. */
+  restartRecoveryTimeoutExhausted?: true;
   restartRecoverySourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
   restartRecoveryTerminalRunIds?: string[];

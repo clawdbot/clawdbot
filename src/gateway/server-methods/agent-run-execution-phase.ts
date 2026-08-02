@@ -9,6 +9,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+} from "../../routing/session-key.js";
+import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
@@ -266,6 +271,9 @@ export function startAgentRunExecution(params: {
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
 
+      let handOffTimedOutMainSession = false;
+      let settledSessionId = params.resolvedSessionId;
+
       dispatchAgentRunFromGateway({
         ingressOpts: {
           message,
@@ -356,6 +364,7 @@ export function startAgentRunExecution(params: {
             activeSessionAgentId: params.activeSessionAgentId,
           }),
           onSessionIdChanged: (sessionId) => {
+            settledSessionId = sessionId;
             if (prepared.activeRunAbort.entry) {
               prepared.activeRunAbort.entry.sessionId = sessionId;
             }
@@ -376,13 +385,58 @@ export function startAgentRunExecution(params: {
         dedupeKeys: params.agentDedupeKeys,
         abortController: prepared.activeRunAbort.controller,
         cleanupAbortController: cleanupAdmittedRun,
-        onSettled: params.restoredCronContinuation
-          ? async ({ terminalOutcome, onRecovered }) =>
-              await params.releaseCronContinuationClaimWithRecovery(
+        onSettled: async ({ terminalOutcome, onRecovered }) => {
+          const continuationSettled = params.restoredCronContinuation
+            ? await params.releaseCronContinuationClaimWithRecovery(
                 { terminalOutcome },
                 onRecovered,
               )
-          : undefined,
+            : true;
+          handOffTimedOutMainSession = Boolean(
+            continuationSettled &&
+            !params.restoredCronContinuation &&
+            (terminalOutcome.reason === "hard_timeout" || terminalOutcome.reason === "timed_out") &&
+            params.resolvedSessionKey &&
+            !isCronSessionKey(params.resolvedSessionKey) &&
+            !isSubagentSessionKey(params.resolvedSessionKey) &&
+            !isAcpSessionKey(params.resolvedSessionKey) &&
+            !params.spawnedBy &&
+            !(
+              typeof params.sessionEntry?.spawnDepth === "number" &&
+              params.sessionEntry.spawnDepth > 0
+            ) &&
+            params.sessionEntry?.subagentRole == null &&
+            settledSessionId,
+          );
+          return continuationSettled;
+        },
+        onCleanup: () => {
+          const canonicalSessionKey = params.resolvedSessionKey;
+          const expectedSessionId = settledSessionId;
+          if (!handOffTimedOutMainSession || !canonicalSessionKey || !expectedSessionId) {
+            return;
+          }
+          // Keep restart-recovery/transcript machinery behind the settled-run lifecycle boundary.
+          void import("../../agents/main-session-timeout-recovery.js")
+            .then(({ scheduleTimedOutMainSessionRecovery }) =>
+              scheduleTimedOutMainSessionRecovery({
+                canonicalSessionKey,
+                cfg: params.cfgForAgent ?? params.cfg,
+                expectedRunId: params.runId,
+                expectedSessionId,
+                sessionKeys: [
+                  canonicalSessionKey,
+                  ...(params.requestedSessionKey ? [params.requestedSessionKey] : []),
+                ],
+                storePath: prepared.lifecycleStorePath,
+              }),
+            )
+            .catch((error: unknown) => {
+              params.context.logGateway.warn(
+                `failed to schedule timed-out main-session recovery ${params.runId}: ${formatForLog(error)}`,
+              );
+            });
+        },
         respond: params.respond,
         context: params.context,
         taskTrackingMode: prepared.dispatchTaskTrackingMode,

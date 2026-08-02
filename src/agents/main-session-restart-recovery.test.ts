@@ -859,7 +859,45 @@ describe("main-session-restart-recovery", () => {
       channel: "slack",
       to: "channel:C0BLY1APGH5",
       threadId: "1785613439.266819",
+      message: expect.stringContaining("exceeded the gateway run deadline"),
     });
+  });
+
+  it("reuses one durably minted timeout continuation id across startup retries", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:slack:channel:c0bly1apgh5": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "timeout",
+        abortedLastRun: false,
+        restartRecoveryDeliveryContext: {
+          channel: "slack",
+          to: "channel:C0BLY1APGH5",
+          threadId: "1785613439.266819",
+        },
+        restartRecoveryDeliveryRunId: "timed-out-run",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "research these companies" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ceto" }] },
+      { role: "toolResult", content: '{"job_id":"dr_rUN3w1Jh","status":"running"}' },
+    ]);
+    vi.mocked(callGateway).mockRejectedValueOnce(new Error("ambiguous gateway rejection"));
+
+    await expect(
+      scheduleRestartAbortedMainSessionRecovery({ delayMs: 0, maxRetries: 2, stateDir: tmpDir }),
+    ).resolves.toBe(true);
+
+    const runIds = vi
+      .mocked(callGateway)
+      .mock.calls.filter(([request]) => request.method === "agent")
+      .map(([request]) => (request.params as { idempotencyKey?: unknown }).idempotencyKey);
+    expect(runIds).toHaveLength(2);
+    expect(runIds[0]).toEqual(expect.any(String));
+    expect(runIds[0]).not.toBe("timed-out-run");
+    expect(runIds[1]).toBe(runIds[0]);
   });
 
   it("leaves an ordinary terminal timeout without a delivery claim untouched", async () => {

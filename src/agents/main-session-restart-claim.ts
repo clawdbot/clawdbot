@@ -2,10 +2,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../config/sessions.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 
+export const MAX_GATEWAY_TIMEOUT_RECOVERY_ATTEMPTS = 3;
+
 export type ExpectedRestartRecoveryClaim = {
   canonicalSessionKey?: string;
   recoveryRunId: string;
-  recoverySourceRunId: string;
+  recoverySourceRunId?: string;
   sessionId: string;
   sessionKey: string;
 };

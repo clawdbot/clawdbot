@@ -2,6 +2,7 @@
  * Post-restart recovery for main sessions interrupted while holding a transcript lock.
  */
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -53,11 +54,13 @@ import {
 import {
   buildUnresumableSessionNoticeIdempotencyKey,
   loadExpectedRestartRecoveryClaim,
+  MAX_GATEWAY_TIMEOUT_RECOVERY_ATTEMPTS,
   type ExpectedRestartRecoveryClaim,
 } from "./main-session-restart-claim.js";
 import {
   resolveRestartRecoveryDeliveryContext,
   resumeMainSession,
+  type MainSessionInterruptionReason,
 } from "./main-session-restart-dispatch.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
@@ -66,9 +69,20 @@ const log = createSubsystemLogger("main-session-restart-recovery");
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 const MAX_RECOVERY_RETRIES = 3;
 const RETRY_BACKOFF_MULTIPLIER = 2;
-const UNRESUMABLE_SESSION_NOTICE =
+const UNRESUMABLE_RESTART_NOTICE =
   "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
   "Please send that last request again and I'll pick it up cleanly.";
+const UNRESUMABLE_TIMEOUT_NOTICE =
+  "I exceeded the gateway run deadline and couldn't safely resume the previous turn. " +
+  "Please send that last request again and I'll pick it up cleanly.";
+
+function resolveUnresumableSessionNotice(
+  interruptionReason: MainSessionInterruptionReason | undefined,
+): string {
+  return interruptionReason === "gateway_timeout"
+    ? UNRESUMABLE_TIMEOUT_NOTICE
+    : UNRESUMABLE_RESTART_NOTICE;
+}
 
 function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
@@ -382,6 +396,22 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
           }
           entry.status = "running";
           entry.abortedLastRun = true;
+          if (isGatewayTimeoutWithDurableClaim) {
+            entry.restartRecoveryInterruptionReason = "gateway_timeout";
+            const timeoutAttemptCount = entry.restartRecoveryTimeoutAttemptCount ?? 0;
+            if (timeoutAttemptCount >= MAX_GATEWAY_TIMEOUT_RECOVERY_ATTEMPTS) {
+              entry.restartRecoveryTimeoutExhausted = true;
+            } else {
+              entry.restartRecoveryTimeoutAttemptCount = timeoutAttemptCount + 1;
+              // Persist the continuation RPC id as part of timeout adoption so
+              // startup retries cannot mint duplicate accepted continuations.
+              entry.restartRecoveryDeliveryRunId = randomUUID();
+            }
+          } else {
+            // The current interruption is a restart, even when the orphaned run
+            // happened to be a continuation of an earlier gateway timeout.
+            entry.restartRecoveryInterruptionReason = "gateway_restart";
+          }
           entry.startedAt = undefined;
           entry.endedAt = undefined;
           entry.runtimeMs = undefined;
@@ -755,12 +785,13 @@ async function markSessionFailed(params: {
 async function sendUnresumableSessionNotice(params: {
   deliveryContext: DeliveryContext;
   entry: SessionEntry;
+  interruptionReason?: MainSessionInterruptionReason;
   reason: string;
   sessionKey: string;
 }): Promise<void> {
   const messageParams: Record<string, unknown> = {
     to: params.deliveryContext.to,
-    message: UNRESUMABLE_SESSION_NOTICE,
+    message: resolveUnresumableSessionNotice(params.interruptionReason),
     bestEffort: true,
   };
   if (params.deliveryContext.threadId != null) {
@@ -799,6 +830,7 @@ async function sendUnresumableSessionNotice(params: {
 
 async function writeUnresumableSessionNotice(params: {
   entry: SessionEntry;
+  interruptionReason?: MainSessionInterruptionReason;
   sessionKey: string;
   storePath: string;
 }): Promise<boolean> {
@@ -817,7 +849,7 @@ async function writeUnresumableSessionNotice(params: {
       updatedAt: params.entry.updatedAt,
     },
     storePath: params.storePath,
-    text: UNRESUMABLE_SESSION_NOTICE,
+    text: resolveUnresumableSessionNotice(params.interruptionReason),
     idempotencyKey: buildUnresumableSessionNoticeIdempotencyKey(params.entry),
   }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
   if (!result.ok) {
@@ -901,6 +933,24 @@ function resolveRecoveryDispatchSessionKey(params: {
   }
 }
 
+/** Checks every non-liveness gate before a durable main-session row is adopted for recovery. */
+export function canPrepareMainSessionRecovery(params: {
+  cfg?: OpenClawConfig;
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}): boolean {
+  return (
+    !shouldSkipMainRecovery(params.entry, params.sessionKey) &&
+    !resolveSessionWorkStartError(params.sessionKey, params.entry) &&
+    resolveRecoveryDispatchSessionKey({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    }) !== undefined
+  );
+}
+
 type RecoveryAttemptResult = {
   recovered: number;
   failed: number;
@@ -916,6 +966,7 @@ async function recoverStore(params: {
   storePath: string;
   resumedSessionKeys: Set<string>;
   expectedClaim?: ExpectedRestartRecoveryClaim;
+  interruptionReason?: MainSessionInterruptionReason;
   sessionWorkAdmissionHandoffId?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
@@ -960,11 +1011,15 @@ async function recoverStore(params: {
     if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
       continue;
     }
-    if (shouldSkipMainRecovery(entry, sessionKey)) {
-      result.skipped++;
-      continue;
-    }
-    if (resolveSessionWorkStartError(sessionKey, entry)) {
+    const interruptionReason = params.interruptionReason ?? entry.restartRecoveryInterruptionReason;
+    if (
+      !canPrepareMainSessionRecovery({
+        cfg: params.cfg,
+        entry,
+        sessionKey,
+        storePath: params.storePath,
+      })
+    ) {
       result.skipped++;
       continue;
     }
@@ -997,6 +1052,7 @@ async function recoverStore(params: {
     }
 
     if (
+      !entry.restartRecoveryTimeoutExhausted &&
       entry.pendingFinalDelivery === true &&
       entry.pendingFinalDeliveryText &&
       entry.restartRecoveryForceSafeTools === true
@@ -1008,6 +1064,7 @@ async function recoverStore(params: {
         storePath: params.storePath,
         sessionKey,
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+        interruptionReason,
         forceRestartSafeTools: true,
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
       });
@@ -1038,7 +1095,11 @@ async function recoverStore(params: {
         },
       );
     } catch (err) {
-      if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+      if (
+        !entry.restartRecoveryTimeoutExhausted &&
+        entry.pendingFinalDelivery === true &&
+        entry.pendingFinalDeliveryText
+      ) {
         log.warn(
           `transcript unavailable for ${sessionKey}; resuming its durable pending final delivery`,
         );
@@ -1049,6 +1110,7 @@ async function recoverStore(params: {
           storePath: params.storePath,
           sessionKey,
           pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+          interruptionReason,
           sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
         });
         if (resumed) {
@@ -1066,7 +1128,11 @@ async function recoverStore(params: {
       continue;
     }
 
-    if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+    if (
+      !entry.restartRecoveryTimeoutExhausted &&
+      entry.pendingFinalDelivery === true &&
+      entry.pendingFinalDeliveryText
+    ) {
       const resumed = await resumeMainSession({
         canonicalSessionKey: dispatchSessionKey,
         cfg: params.cfg,
@@ -1074,6 +1140,7 @@ async function recoverStore(params: {
         storePath: params.storePath,
         sessionKey,
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+        interruptionReason,
         forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
       });
@@ -1087,10 +1154,12 @@ async function recoverStore(params: {
       continue;
     }
 
-    const transcriptResumePolicy = resolveMainSessionResumePolicy(
-      messages,
-      entry.restartRecoveryForceSafeTools === true,
-    );
+    const transcriptResumePolicy = entry.restartRecoveryTimeoutExhausted
+      ? {
+          blockReason: `gateway timeout recovery exhausted after ${MAX_GATEWAY_TIMEOUT_RECOVERY_ATTEMPTS} continuation attempts`,
+          forceRestartSafeTools: false,
+        }
+      : resolveMainSessionResumePolicy(messages, entry.restartRecoveryForceSafeTools === true);
     const resumePolicy = {
       ...transcriptResumePolicy,
       forceRestartSafeTools:
@@ -1110,6 +1179,7 @@ async function recoverStore(params: {
         !deliveryContext &&
         !(await writeUnresumableSessionNotice({
           entry,
+          interruptionReason,
           sessionKey,
           storePath: params.storePath,
         }))
@@ -1134,6 +1204,7 @@ async function recoverStore(params: {
           await sendUnresumableSessionNotice({
             deliveryContext,
             entry,
+            interruptionReason,
             reason: resumePolicy.blockReason,
             sessionKey,
           });
@@ -1152,6 +1223,7 @@ async function recoverStore(params: {
       storePath: params.storePath,
       sessionKey,
       pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+      interruptionReason,
       forceRestartSafeTools: resumePolicy.forceRestartSafeTools,
       sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
     });
@@ -1239,15 +1311,20 @@ export async function recoverRestartAbortedMainSessions(
 }
 
 /** Retries one exact durable Control UI row from its owning per-agent SQLite store. */
-export async function retryRestartAbortedMainSessionRecovery(params: {
+type RetryRestartAbortedMainSessionRecoveryParams = {
   canonicalSessionKey?: string;
   cfg?: OpenClawConfig;
   expectedRecoveryRunId: string;
-  expectedRecoverySourceRunId: string;
+  expectedRecoverySourceRunId?: string;
   expectedSessionId: string;
+  interruptionReason?: MainSessionInterruptionReason;
   sessionKey: string;
   storePath: string;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
+};
+
+export async function retryRestartAbortedMainSessionRecovery(
+  params: RetryRestartAbortedMainSessionRecoveryParams,
+): Promise<{ recovered: number; failed: number; skipped: number }> {
   const expectedClaim: ExpectedRestartRecoveryClaim = {
     canonicalSessionKey: params.canonicalSessionKey,
     recoveryRunId: params.expectedRecoveryRunId,
@@ -1283,6 +1360,7 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
           storePath: params.storePath,
           resumedSessionKeys: new Set<string>(),
           expectedClaim,
+          interruptionReason: params.interruptionReason,
           sessionWorkAdmissionHandoffId: handoffId,
         }),
     );

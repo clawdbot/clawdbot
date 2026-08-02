@@ -94,6 +94,8 @@ export function dispatchAgentRunFromGateway(params: {
     terminalOutcome: AgentRunTerminalOutcome;
     onRecovered?: () => void;
   }) => Promise<boolean> | boolean;
+  /** Runs after this dispatch releases its run context and session admission. */
+  onCleanup?: () => void;
 }) {
   const shouldTrackTask = params.taskTrackingMode === "cli";
   let taskTracked = false;
@@ -257,5 +259,12 @@ export function dispatchAgentRunFromGateway(params: {
     .finally(() => {
       clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
       params.cleanupAbortController();
+      try {
+        params.onCleanup?.();
+      } catch (error) {
+        params.context.logGateway.warn(
+          `failed to hand off settled agent run ${params.runId}: ${formatForLog(error)}`,
+        );
+      }
     });
 }
