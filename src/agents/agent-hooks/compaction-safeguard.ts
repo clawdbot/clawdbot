@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { isAbortError } from "../../infra/abort-signal.js";
@@ -14,10 +15,8 @@ import {
 } from "../../plugins/compaction-provider.js";
 import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
-import {
-  buildHistoryPrunePlanWithWorker,
-  computeAdaptiveChunkRatioWithWorker,
-} from "../compaction-planning-worker.js";
+import { computeAdaptiveChunkRatioWithWorker } from "../compaction-planning-worker.js";
+import { buildHistoryPrunePlan } from "../compaction-planning.js";
 import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
@@ -44,10 +43,7 @@ import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
 } from "../workspace-bootstrap-read.js";
-import {
-  composeSplitTurnInstructions,
-  resolveCompactionInstructions,
-} from "./compaction-instructions.js";
+import { resolveCompactionInstructions } from "./compaction-instructions.js";
 import {
   appendSummarySection,
   auditSummaryQuality,
@@ -87,19 +83,6 @@ const compactionSafeguardDeps = {
   summarizeInStages,
 };
 
-function buildPreviousSummaryMessage(previousSummary: string): AgentMessage {
-  return {
-    role: "user",
-    content: [
-      {
-        type: "text",
-        text: `<previous-compaction-summary>\n${PREVIOUS_SUMMARY_REDISTILL_PREFIX}\n\n${previousSummary.trim()}\n</previous-compaction-summary>`,
-      },
-    ],
-    timestamp: 0,
-  } as AgentMessage;
-}
-
 function prependPreviousSummaryForRedistill(params: {
   messages: AgentMessage[];
   previousSummary?: string;
@@ -108,27 +91,27 @@ function prependPreviousSummaryForRedistill(params: {
   if (!previousSummary) {
     return params.messages;
   }
-  return [buildPreviousSummaryMessage(previousSummary), ...params.messages];
+  return [
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `<previous-compaction-summary>\n${PREVIOUS_SUMMARY_REDISTILL_PREFIX}\n\n${previousSummary}\n</previous-compaction-summary>`,
+        },
+      ],
+      timestamp: 0,
+    } as AgentMessage,
+    ...params.messages,
+  ];
 }
-
-type SessionBranchEntry = {
-  type?: unknown;
-  message?: unknown;
-  customType?: unknown;
-  content?: unknown;
-  display?: unknown;
-  details?: unknown;
-  timestamp?: unknown;
-  summary?: unknown;
-  fromId?: unknown;
-};
 
 function coerceTimestamp(value: unknown): number {
   const timestamp = typeof value === "string" ? Date.parse(value) : value;
   return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-function sessionBranchEntryToMessage(entry: SessionBranchEntry): unknown {
+function sessionBranchEntryToMessage(entry: Record<string, unknown>): unknown {
   if (entry.type === "message" && entry.message && typeof entry.message === "object") {
     return entry.message;
   }
@@ -154,17 +137,13 @@ function sessionBranchEntryToMessage(entry: SessionBranchEntry): unknown {
 }
 
 function collectSessionBranchMessages(sessionManager: unknown): AgentMessage[] {
-  const getBranch = (sessionManager as { getBranch?: unknown })?.getBranch;
-  if (typeof getBranch !== "function") {
-    return [];
-  }
   try {
-    const entries: unknown = getBranch.call(sessionManager);
+    const entries: unknown = (sessionManager as { getBranch?: () => unknown })?.getBranch?.();
     return Array.isArray(entries)
       ? entries.flatMap((entry) => {
           const message =
             entry && typeof entry === "object"
-              ? sessionBranchEntryToMessage(entry as SessionBranchEntry)
+              ? sessionBranchEntryToMessage(entry as Record<string, unknown>)
               : undefined;
           return message ? [message as AgentMessage] : [];
         })
@@ -174,41 +153,26 @@ function collectSessionBranchMessages(sessionManager: unknown): AgentMessage[] {
   }
 }
 
-function isReplayUnsafeInterSessionInput(message: AgentMessage): boolean {
-  if ((message as { role?: unknown }).role !== "user") {
-    return false;
-  }
-  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
-  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
-}
-
 function isSessionsSendToolName(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
   return (
-    value
-      .trim()
-      .toLowerCase()
+    normalizeOptionalString(value)
+      ?.toLowerCase()
       .replace(/^(?:functions?|tools?)[./_-]/, "") === "sessions_send"
   );
 }
 
 function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
-  const sendCallIds = new Set<string>();
+  const sendCallIds = new Set(
+    messages.flatMap((message) =>
+      message.role === "assistant"
+        ? extractToolCallsFromAssistant(message)
+            .filter((call) => isSessionsSendToolName(call.name))
+            .map((call) => call.id.trim())
+            .filter(Boolean)
+        : [],
+    ),
+  );
   const resultTextByCallId = new Map<string, string>();
-
-  for (const message of messages) {
-    if (message.role !== "assistant") {
-      continue;
-    }
-    for (const call of extractToolCallsFromAssistant(message)) {
-      const callId = call.id.trim();
-      if (callId && isSessionsSendToolName(call.name)) {
-        sendCallIds.add(callId);
-      }
-    }
-  }
 
   for (const message of messages) {
     if (message.role !== "toolResult") {
@@ -249,14 +213,10 @@ function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
         const resultText = callId ? resultTextByCallId.get(callId) : undefined;
         const resolved = Boolean(callId && resultTextByCallId.has(callId));
         const requestText = JSON.stringify({ callId: callId || undefined, args: record.arguments });
+        const resultSuffix = resolved ? `\nResult: ${resultText || "[empty]"}` : "";
         return {
           type: "text",
-          text:
-            resolved && resultText
-              ? `sessions_send result received; delivery call omitted from replay.\nRequest: ${requestText}\nResult: ${resultText}`
-              : resolved
-                ? `sessions_send result received; delivery call omitted from replay.\nRequest: ${requestText}\nResult: [empty]`
-                : `sessions_send result missing; delivery call omitted from replay.\nRequest: ${requestText}`,
+          text: `sessions_send result ${resolved ? "received" : "missing"}; delivery call omitted from replay.\nRequest: ${requestText}${resultSuffix}`,
         };
       });
       return replaced ? [{ ...message, content } as AgentMessage] : [message];
@@ -296,6 +256,10 @@ function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): Agen
         return typeof type === "string" && TOOL_CALL_BLOCK_TYPES.has(type);
       }));
   const activeInput = sanitizedMessages[turnStart - 1];
+  const activeInputProvenance =
+    activeInput?.role === "user"
+      ? normalizeInputProvenance((activeInput as { provenance?: unknown }).provenance)
+      : undefined;
 
   // A completed sessions_send target run is already delivered to its caller.
   // Require terminal text so compaction after tool output can still recover unfinished work.
@@ -303,8 +267,8 @@ function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): Agen
     endsWithTerminalAssistantText &&
     turnStart < sanitizedMessages.length &&
     turnStart > 0 &&
-    activeInput !== undefined &&
-    isReplayUnsafeInterSessionInput(activeInput)
+    activeInputProvenance?.kind === "inter_session" &&
+    activeInputProvenance.sourceTool === "sessions_send"
   ) {
     return sanitizedMessages.slice(0, turnStart - 1);
   }
@@ -348,16 +312,13 @@ function assembleSuffix(parts: {
   fileOpsSummary?: string;
   workspaceContext?: string;
 }): string {
-  let suffix = Object.values(parts).reduce(
+  const suffix = Object.values(parts).reduce(
     (summary, section) => appendSummarySection(summary, section ?? ""),
     "",
   );
   // Ensure leading separator so suffix does not merge with body (e.g. when body
   // ends without newline: "...## Exact identifiers## Tool Failures").
-  if (suffix && !/^\s/.test(suffix)) {
-    suffix = `\n\n${suffix}`;
-  }
-  return suffix;
+  return suffix && !/^\s/.test(suffix) ? `\n\n${suffix}` : suffix;
 }
 
 type ToolFailure = {
@@ -447,34 +408,25 @@ function buildCompactionSummaryHeaders(params: {
   };
 }
 
-function clampNonNegativeInt(value: unknown, fallback: number): number {
+function clampNonNegativeInt(
+  value: unknown,
+  fallback: number,
+  max = Number.POSITIVE_INFINITY,
+): number {
   const normalized = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return Math.max(0, Math.floor(normalized));
+  return Math.min(max, Math.max(0, Math.floor(normalized)));
 }
 
 function resolveRecentTurnsPreserve(value: unknown): number {
-  return Math.min(
-    MAX_RECENT_TURNS_PRESERVE,
-    clampNonNegativeInt(value, DEFAULT_RECENT_TURNS_PRESERVE),
-  );
+  return clampNonNegativeInt(value, DEFAULT_RECENT_TURNS_PRESERVE, MAX_RECENT_TURNS_PRESERVE);
 }
 
 function resolveQualityGuardMaxRetries(value: unknown): number {
-  return Math.min(
+  return clampNonNegativeInt(
+    value,
+    DEFAULT_QUALITY_GUARD_MAX_RETRIES,
     MAX_QUALITY_GUARD_MAX_RETRIES,
-    clampNonNegativeInt(value, DEFAULT_QUALITY_GUARD_MAX_RETRIES),
   );
-}
-
-function normalizeFailureText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-function truncateFailureText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, Math.max(0, maxChars - 3))}...`;
 }
 
 function formatToolFailureMeta(details: unknown): string | undefined {
@@ -482,16 +434,16 @@ function formatToolFailureMeta(details: unknown): string | undefined {
     return undefined;
   }
   const record = details as Record<string, unknown>;
-  const status = typeof record.status === "string" ? record.status : undefined;
-  const exitCode =
-    typeof record.exitCode === "number" && Number.isFinite(record.exitCode)
-      ? record.exitCode
-      : undefined;
-  const parts = [
-    status ? `status=${status}` : "",
-    exitCode !== undefined ? `exitCode=${exitCode}` : "",
-  ];
-  return parts.filter(Boolean).join(" ") || undefined;
+  return (
+    [
+      typeof record.status === "string" && record.status ? `status=${record.status}` : "",
+      typeof record.exitCode === "number" && Number.isFinite(record.exitCode)
+        ? `exitCode=${record.exitCode}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ") || undefined
+  );
 }
 
 function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
@@ -530,13 +482,14 @@ function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
       typeof toolResult.toolName === "string" && toolResult.toolName.trim()
         ? toolResult.toolName
         : "tool";
-    const rawText = collectTextContentBlocks(toolResult.content).join("\n");
     const meta = formatToolFailureMeta(toolResult.details);
-    const normalized = normalizeFailureText(rawText);
-    const summary = truncateFailureText(
-      normalized || (meta ? "failed" : "failed (no output)"),
-      MAX_TOOL_FAILURE_CHARS,
-    );
+    const failureText =
+      collectTextContentBlocks(toolResult.content).join("\n").replace(/\s+/g, " ").trim() ||
+      (meta ? "failed" : "failed (no output)");
+    const summary =
+      failureText.length > MAX_TOOL_FAILURE_CHARS
+        ? `${truncateUtf16Safe(failureText, MAX_TOOL_FAILURE_CHARS - 3)}...`
+        : failureText;
     failures.push({ toolCallId, toolName, summary, meta });
   }
 
@@ -671,10 +624,7 @@ function extractMessageText(message: AgentMessage): string {
 }
 
 function formatNonTextPlaceholder(content: unknown): string | null {
-  if (content === null || content === undefined) {
-    return null;
-  }
-  if (typeof content === "string") {
+  if (content == null || typeof content === "string") {
     return null;
   }
   if (!Array.isArray(content)) {
@@ -692,22 +642,21 @@ function formatNonTextPlaceholder(content: unknown): string | null {
     }
     typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
   }
-  if (typeCounts.size === 0) {
-    return null;
-  }
-  const parts = [...typeCounts.entries()].map(([type, count]) =>
-    count > 1 ? `${type} x${count}` : type,
-  );
-  return `[non-text content: ${parts.join(", ")}]`;
+  return typeCounts.size > 0
+    ? `[non-text content: ${Array.from(typeCounts, ([type, count]) =>
+        count > 1 ? `${type} x${count}` : type,
+      ).join(", ")}]`
+    : null;
 }
 
 function splitPreservedRecentTurns(params: {
   messages: AgentMessage[];
   recentTurnsPreserve: number;
 }): { summarizableMessages: AgentMessage[]; preservedMessages: AgentMessage[] } {
-  const preserveTurns = Math.min(
+  const preserveTurns = clampNonNegativeInt(
+    params.recentTurnsPreserve,
+    0,
     MAX_RECENT_TURNS_PRESERVE,
-    clampNonNegativeInt(params.recentTurnsPreserve, 0),
   );
   if (preserveTurns <= 0) {
     return { summarizableMessages: params.messages, preservedMessages: [] };
@@ -722,18 +671,13 @@ function splitPreservedRecentTurns(params: {
   const userIndexes = conversationIndexes.filter(
     (index) => params.messages[index]?.role === "user",
   );
-  const preservedIndexSet = new Set<number>();
-  if (userIndexes.length >= preserveTurns) {
-    const boundaryStartIndex = userIndexes[userIndexes.length - preserveTurns] ?? -1;
-    for (const index of conversationIndexes) {
-      if (index >= boundaryStartIndex) {
-        preservedIndexSet.add(index);
-      }
-    }
-  } else {
-    for (const userIndex of userIndexes) {
-      preservedIndexSet.add(userIndex);
-    }
+  const boundaryStartIndex = userIndexes.at(-preserveTurns);
+  const preservedIndexSet = new Set(
+    boundaryStartIndex === undefined
+      ? userIndexes
+      : conversationIndexes.filter((index) => index >= boundaryStartIndex),
+  );
+  if (boundaryStartIndex === undefined) {
     for (const index of conversationIndexes.toReversed()) {
       preservedIndexSet.add(index);
       if (preservedIndexSet.size >= preserveTurns * 2) {
@@ -791,12 +735,12 @@ function formatContextMessages(messages: AgentMessage[]): string[] {
       } else {
         return null;
       }
-      const text = extractMessageText(message);
-      const nonTextPlaceholder = formatNonTextPlaceholder(
-        (message as { content?: unknown }).content,
-      );
-      const rendered =
-        text && nonTextPlaceholder ? `${text}\n${nonTextPlaceholder}` : text || nonTextPlaceholder;
+      const rendered = [
+        extractMessageText(message),
+        formatNonTextPlaceholder((message as { content?: unknown }).content),
+      ]
+        .filter(Boolean)
+        .join("\n");
       if (!rendered) {
         return null;
       }
@@ -1107,14 +1051,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let droppedSummary: string | undefined;
 
       if (tokensBefore !== undefined) {
-        const prunePlan = await buildHistoryPrunePlanWithWorker({
+        const prunePlan = buildHistoryPrunePlan({
           messagesToSummarize,
           turnPrefixMessages,
           tokensBefore,
           contextWindowTokens,
           maxHistoryShare,
           parts: 2,
-          signal,
         });
         const { newContentTokens, maxHistoryTokens, pruned } = prunePlan;
 
@@ -1171,18 +1114,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSectionLocal = formatPreservedTurnsSection(preservedRecentMessages);
-      const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
-      const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
-        .slice(-10)
-        .map((message) => extractMessageText(message))
-        .filter(Boolean)
-        .join("\n");
-      const identifiers = extractOpaqueIdentifiers(identifierSeedText);
+      const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
+      const latestUserAsk = extractLatestUserAsk(allMessages);
+      const identifiers = extractOpaqueIdentifiers(
+        allMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
+      );
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
       // that generateSummary adds on top of the serialized conversation chunk.
-      const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
       const adaptiveRatio = await computeAdaptiveChunkRatioWithWorker({
         messages: allMessages,
         contextWindow: contextWindowTokens,
@@ -1196,7 +1136,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // incorporates context from pruned messages instead of losing it entirely.
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
 
-      let summary = "";
       let lastHistorySummary = "";
       let lastSplitTurnSection = "";
       let currentInstructions = structuredInstructions;
@@ -1218,7 +1157,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: currentInstructions,
                   previousSummary: effectivePreviousSummary,
                 })
-              : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
+              : buildStructuredFallbackSummary(effectivePreviousSummary);
 
           summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
@@ -1226,10 +1165,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ...llmSummaryParams,
               messages: turnPrefixMessages,
               maxChunkTokens,
-              customInstructions: composeSplitTurnInstructions(
-                TURN_PREFIX_INSTRUCTIONS,
-                currentInstructions,
-              ),
+              customInstructions: `${TURN_PREFIX_INSTRUCTIONS}\n\nAdditional requirements:\n\n${currentInstructions}`,
               previousSummary: undefined,
             });
             splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
@@ -1247,7 +1183,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               `Compaction safeguard: quality retry failed on attempt ${attempt + 1}; ` +
                 `keeping last successful summary: ${formatErrorMessage(attemptError)}`,
             );
-            summary = lastSuccessfulSummary;
             break;
           }
           throw attemptError;
@@ -1260,7 +1195,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           messagesToSummarize.length > 0 ||
           (preparation.isSplitTurn && turnPrefixMessages.length > 0);
         if (!qualityGuardEnabled || !canRegenerate) {
-          summary = summaryWithPreservedTurns;
           break;
         }
         const quality = auditSummaryQuality({
@@ -1269,7 +1203,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           latestAsk: latestUserAsk,
           identifierPolicy,
         });
-        summary = summaryWithPreservedTurns;
         if (quality.ok || attempt >= totalAttempts - 1) {
           break;
         }
@@ -1288,7 +1221,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       }
 
       // Cap history before suffixes so diagnostics and workspace rules survive.
-      return await finalizeSummary(lastHistorySummary || summary, {
+      return await finalizeSummary(lastHistorySummary || lastSuccessfulSummary || "", {
         splitTurnSection: lastSplitTurnSection,
         preservedTurnsSection: preservedTurnsSectionLocal,
       });

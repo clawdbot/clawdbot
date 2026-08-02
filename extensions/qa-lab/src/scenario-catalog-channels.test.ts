@@ -26,11 +26,16 @@ describe("qa scenario catalog channel contracts", () => {
     const config = readQaScenarioExecutionConfig("native-command-session-target") as
       | {
           requiredProviderMode?: string;
+          sessionKey?: string;
         }
       | undefined;
 
     expect(scenario.execution.channel).toBe("telegram");
     expect(config?.requiredProviderMode).toBe("mock-openai");
+    expect(config?.sessionKey).toBe("agent:main:telegram:direct:qa-native-operator");
+    expect(JSON.stringify(requireFlowScenario(scenario).execution.flow)).toContain(
+      "session.key === config.sessionKey && session.hasActiveRun === true",
+    );
   });
 
   it("keeps channel-owned scenarios independent from the driver implementation", () => {
@@ -123,7 +128,20 @@ describe("qa scenario catalog channel contracts", () => {
     expect(scenario.coverage?.primary).toEqual(["channels.streaming-final-reply"]);
     expect(scenario.coverage?.secondary).toEqual([`${agentRuntime}.streaming-replies-delivery`]);
     expect(scenario.gatewayConfigPatch).toMatchObject({
-      channels: { telegram: { streaming: { mode: "partial" } } },
+      channels: {
+        telegram: {
+          groups: { "*": { requireMention: false } },
+          streaming: { mode: "partial" },
+        },
+      },
+    });
+  });
+
+  it("disables Telegram mention gating for deterministic group delivery proofs", () => {
+    const scenario = readQaScenarioById("telegram-assistant-transcript-role-boundary");
+
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      channels: { telegram: { groups: { "*": { requireMention: false } } } },
     });
   });
 

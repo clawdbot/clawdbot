@@ -7,6 +7,7 @@ import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { getContextEngineRegistration } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -1778,7 +1779,7 @@ describe("loadOpenClawPlugins", () => {
     expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
   });
 
-  it("restores cleared runtime registrations when an activating reload throws before activation", async () => {
+  it("keeps the active registry and prior contributions intact when replacement registration throws", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "reload-rollback",
@@ -1886,6 +1887,95 @@ describe("loadOpenClawPlugins", () => {
       }),
     ).toThrow("plugin load failed: reload-rollback-failure: Error: register failed");
     await expectRegistrationsIntact();
+  });
+
+  it("removes gateway method handlers and descriptors when registration throws", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "failing-gateway-method",
+      filename: "failing-gateway-method.cjs",
+      body: `module.exports = {
+        id: "failing-gateway-method",
+        register(api) {
+          api.registerGatewayMethod("failing-gateway-method.ping", ({ respond }) => {
+            respond(true, { ok: true });
+          });
+          throw new Error("gateway method register failed");
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["failing-gateway-method"],
+        },
+      },
+      onlyPluginIds: ["failing-gateway-method"],
+    });
+
+    expect(registry.plugins[0]?.status).toBe("error");
+    expect(registry.gatewayHandlers["failing-gateway-method.ping"]).toBeUndefined();
+    expect(registry.gatewayMethodDescriptors).toStrictEqual([]);
+  });
+
+  it("keeps a working context engine when same-owner re-registration throws", async () => {
+    useNoBundledPlugins();
+    const goodPlugin = writePlugin({
+      id: "context-engine-reload",
+      filename: "context-engine-good.cjs",
+      body: `module.exports = {
+        id: "context-engine-reload",
+        register(api) {
+          api.registerContextEngine("reload-engine", () => ({ marker: "good" }));
+        },
+      };`,
+    });
+    const baseOptions = {
+      cache: false,
+      workspaceDir: goodPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [goodPlugin.file] },
+          allow: ["context-engine-reload"],
+        },
+      },
+      onlyPluginIds: ["context-engine-reload"],
+    };
+    const activeRegistry = loadOpenClawPlugins(baseOptions);
+    const activeRegistration = getContextEngineRegistration("reload-engine");
+
+    const failingPlugin = writePlugin({
+      id: "context-engine-reload",
+      filename: "context-engine-failing.cjs",
+      body: `module.exports = {
+        id: "context-engine-reload",
+        register(api) {
+          api.registerContextEngine("reload-engine", () => ({ marker: "bad" }));
+          throw new Error("context engine reload failed");
+        },
+      };`,
+    });
+    expect(() =>
+      loadOpenClawPlugins({
+        ...baseOptions,
+        workspaceDir: failingPlugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [failingPlugin.file] },
+            allow: ["context-engine-reload"],
+          },
+        },
+        throwOnLoadError: true,
+      }),
+    ).toThrow("context engine reload failed");
+
+    expect(getActivePluginRegistry()).toBe(activeRegistry);
+    expect(getContextEngineRegistration("reload-engine")).toBe(activeRegistration);
+    expect(await activeRegistration?.factory({})).toMatchObject({ marker: "good" });
   });
 
   it("rejects malformed plugin agent harness registrations", () => {

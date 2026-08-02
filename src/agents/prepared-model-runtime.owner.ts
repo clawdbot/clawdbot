@@ -9,6 +9,7 @@ import {
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
+import { requiresAgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
 import {
   startSerializedSnapshotBuild,
   startSerializedSnapshotBuildBatch,
@@ -120,6 +121,9 @@ export function rebindInputToCommittedConfiguredOwner(
     env: owner.input.env,
     workspaceDir: preserveWorkspaceDir ? input.workspaceDir : owner.input.workspaceDir,
     preserveWorkspaceDirOnRefresh: preserveWorkspaceDir,
+    allowGatewaySubagentBinding:
+      input.allowGatewaySubagentBinding ?? owner.input.allowGatewaySubagentBinding,
+    runtimePluginSelections: input.runtimePluginSelections,
   });
 }
 
@@ -148,6 +152,7 @@ export function normalizePreparedModelRuntimeInput(
   const {
     inheritedAuthDir: _inheritedAuthDir,
     readOnly,
+    runtimePluginSelections: _runtimePluginSelections,
     skipCredentials,
     workspaceDir: _workspaceDir,
     ...rest
@@ -157,6 +162,14 @@ export function normalizePreparedModelRuntimeInput(
   );
   const workspaceDir = normalizeOptionalDir(input.workspaceDir);
   const env = input.env ? Object.freeze({ ...input.env }) : undefined;
+  const runtimePluginSelections = input.runtimePluginSelections
+    ? Object.freeze(
+        [...input.runtimePluginSelections]
+          .filter((selection) => requiresAgentHarnessPluginSelection(selection, input.config))
+          .map((selection) => Object.freeze({ ...selection }))
+          .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+      )
+    : undefined;
   return {
     ...rest,
     agentDir: path.resolve(input.agentDir),
@@ -165,6 +178,8 @@ export function normalizePreparedModelRuntimeInput(
     ...(skipCredentials === true ? { skipCredentials: true } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(env ? { env } : {}),
+    ...(input.allowGatewaySubagentBinding === true ? { allowGatewaySubagentBinding: true } : {}),
+    ...(runtimePluginSelections?.length ? { runtimePluginSelections } : {}),
   };
 }
 
@@ -185,6 +200,8 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
     skipCredentials: input.skipCredentials === true,
     workspaceDir: input.workspaceDir,
     env: environmentFingerprint(input.env),
+    allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
+    runtimePluginSelections: input.runtimePluginSelections,
     config: input.readOnly ? hashRuntimeConfigValue(input.config) : undefined,
   });
 }
@@ -211,6 +228,9 @@ export function resolvePublishedOwner(
       owner.input.inheritedAuthDir === input.inheritedAuthDir &&
       owner.input.readOnly === input.readOnly &&
       owner.input.skipCredentials === input.skipCredentials &&
+      owner.input.allowGatewaySubagentBinding === input.allowGatewaySubagentBinding &&
+      JSON.stringify(owner.input.runtimePluginSelections) ===
+        JSON.stringify(input.runtimePluginSelections) &&
       (input.env === undefined ||
         owner.environmentFingerprint === environmentFingerprint(input.env)) &&
       (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
@@ -230,7 +250,9 @@ export function hasSameLifecycleInput(
     left.skipCredentials === right.skipCredentials &&
     left.workspaceDir === right.workspaceDir &&
     environmentFingerprint(left.env) === environmentFingerprint(right.env) &&
-    left.preserveWorkspaceDirOnRefresh === right.preserveWorkspaceDirOnRefresh
+    left.preserveWorkspaceDirOnRefresh === right.preserveWorkspaceDirOnRefresh &&
+    left.allowGatewaySubagentBinding === right.allowGatewaySubagentBinding &&
+    JSON.stringify(left.runtimePluginSelections) === JSON.stringify(right.runtimePluginSelections)
   );
 }
 
@@ -254,6 +276,7 @@ export function createPreparedModelRuntimeReplacement(): PreparedModelRuntimeRep
 export function listConfiguredOwnerInputs(
   config: OpenClawConfig,
   defaultWorkspaceDir?: string,
+  allowGatewaySubagentBinding?: boolean,
 ): PreparedModelRuntimeInput[] {
   const inheritedAuthDir = resolveDefaultAgentDir(config);
   const defaultAgentId = resolveDefaultAgentId(config);
@@ -268,6 +291,9 @@ export function listConfiguredOwnerInputs(
         ? defaultWorkspaceDir
         : resolveAgentWorkspaceDir(config, agentId),
     };
+    if (allowGatewaySubagentBinding === true) {
+      input.allowGatewaySubagentBinding = true;
+    }
     if (preserveWorkspaceDirOnRefresh) {
       input.preserveWorkspaceDirOnRefresh = true;
     }

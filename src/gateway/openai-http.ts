@@ -13,13 +13,7 @@ import { isClientToolNameConflictError } from "../agents/agent-tool-definition-a
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
-import {
-  hasNonzeroUsage,
-  normalizeUsage,
-  toOpenAiChatCompletionsUsage,
-  type NormalizedUsage,
-  type OpenAiChatCompletionsUsage,
-} from "../agents/usage.js";
+import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
@@ -67,6 +61,7 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
+import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
@@ -766,41 +761,11 @@ function resolveAgentResponseCommentary(result: unknown): string {
     .join("\n\n");
 }
 
-type AgentUsageMeta = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
-
 type PendingToolCall = {
   id?: unknown;
   name?: unknown;
   arguments?: unknown;
 };
-
-function resolveAgentRunUsage(result: unknown): NormalizedUsage | undefined {
-  const agentMeta = (
-    result as {
-      meta?: {
-        agentMeta?: {
-          usage?: AgentUsageMeta;
-          lastCallUsage?: AgentUsageMeta;
-        };
-      };
-    } | null
-  )?.meta?.agentMeta;
-  const primary = normalizeUsage(agentMeta?.usage);
-  if (hasNonzeroUsage(primary)) {
-    return primary;
-  }
-  const fallback = normalizeUsage(agentMeta?.lastCallUsage);
-  if (hasNonzeroUsage(fallback)) {
-    return fallback;
-  }
-  return primary ?? fallback;
-}
 
 function resolveStopReasonAndPendingToolCalls(meta: unknown): {
   stopReason: string | undefined;
@@ -1340,18 +1305,27 @@ export async function handleOpenAiHttpRequest(
     }
   });
 
+  // Agent cleanup and deferred SSE delivery have independent lifetimes;
+  // shutdown must wait until both have settled, whichever finishes last.
+  const releaseAgentRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseResponseRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseStreamRootWork = () => {
+    res.off("finish", releaseStreamRootWork);
+    res.off("close", releaseStreamRootWork);
+    releaseResponseRootWork?.();
+  };
+  res.once("finish", releaseStreamRootWork);
+  res.once("close", releaseStreamRootWork);
+
   stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
+    releaseStreamRootWork();
   });
 
   wroteRole = true;
   writeAssistantRoleChunk(res, { runId, model });
 
-  // The streamed run outlives this handler, whose root-work admission is
-  // released on return. Without retaining it, subordinate session/lane
-  // admissions inherit a released lease and fail as GatewayDrainingError.
-  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
@@ -1482,7 +1456,7 @@ export async function handleOpenAiHttpRequest(
       });
       requestFinalize();
     } finally {
-      releaseRootWork?.();
+      releaseAgentRootWork?.();
       if (!closed) {
         emitAgentEvent({
           runId,

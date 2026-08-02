@@ -67,23 +67,21 @@ describe("built-in machine-output resolvers", () => {
     ).toBe(true);
   });
 
-  it("reserves raw cron scratch and config get output", () => {
+  it("reserves raw cron scratch output", () => {
     expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job"])).toBe(true);
-    expect(isConfigMachineOutput(["node", "openclaw", "config", "get", "gateway.port"])).toBe(true);
+  });
+
+  it.each(["get", "file", "schema"])("reserves config %s machine output", (subcommand) => {
+    expect(isConfigMachineOutput(["node", "openclaw", "config", subcommand])).toBe(true);
     expect(
-      isConfigMachineOutput([
-        "node",
-        "openclaw",
-        "config",
-        "--section",
-        "agents",
-        "get",
-        "gateway.port",
-      ]),
+      isConfigMachineOutput(["node", "openclaw", "config", "--section", "agents", subcommand]),
     ).toBe(true);
   });
 
   it("treats config set --json as parse-only except for JSON dry-run reports", () => {
+    expect(isConfigMachineOutput(["node", "openclaw", "config", "set", "gateway.port"])).toBe(
+      false,
+    );
     expect(
       isConfigSetJsonParseOnly([
         "node",

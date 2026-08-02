@@ -5,7 +5,7 @@ import path from "node:path";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
 import { pluginLoaderCacheInstances } from "./loader-cache-instances.js";
-import { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPlugins } from "./loader.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 export { loadOpenClawPlugins };
@@ -161,7 +161,7 @@ export function resetPluginLoaderTestStateForTest() {
 export function clearPluginLoaderCache(): void {
   pluginLoaderCacheInstances.scoped.clear();
   pluginLoaderCacheInstances.fullWorkspace.clear();
-  clearActivatedPluginRuntimeState();
+  resetPluginRuntimeStateForTest();
 }
 
 export function cleanupPluginLoaderFixturesForTest() {

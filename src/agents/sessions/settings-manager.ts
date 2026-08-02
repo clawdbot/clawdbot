@@ -8,10 +8,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { mergeDeep } from "../../infra/deep-merge.js";
+import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
 import type { Transport } from "../../llm/types.js";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.js";
-import { acquireLockSyncWithRetry } from "./storage-lock.js";
 
 interface CompactionSettings {
   enabled?: boolean; // default: true
@@ -156,7 +156,7 @@ export class FileSettingsStorage implements SettingsStorage {
       // Only create directory and lock if file exists or we need to write
       const fileExists = existsSync(path);
       if (fileExists) {
-        release = acquireLockSyncWithRetry(path);
+        release = acquireFileLockSyncWithRetry(path);
       }
       const current = fileExists ? readFileSync(path, "utf-8") : undefined;
       const next = fn(current);
@@ -166,7 +166,7 @@ export class FileSettingsStorage implements SettingsStorage {
           mkdirSync(dir, { recursive: true });
         }
         if (!release) {
-          release = acquireLockSyncWithRetry(path);
+          release = acquireFileLockSyncWithRetry(path);
         }
         writeFileSync(path, next, "utf-8");
       }

@@ -573,6 +573,7 @@ async function startLocalModeTui(
         OPENCLAW_HOME: homeDir,
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "500",
         OPENCLAW_AGENT_DIR: undefined,
         OPENCLAW_SKIP_PROVIDERS: undefined,
         XDG_CONFIG_HOME: xdgConfigHome,
@@ -934,6 +935,7 @@ describe("TUI PTY real backends", () => {
         const responseOffset = fixture.run.visibleOutput().lastIndexOf("LOCAL_PTY_RESPONSE");
         await waitForOutputAfter(fixture.run, "| idle", responseOffset);
         await createFreshSession(fixture.run, "new session: agent:main:tui-");
+        const secondResponseStart = fixture.run.visibleOutput().length;
         await fixture.run.write("send after local new\r");
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
@@ -944,6 +946,9 @@ describe("TUI PTY real backends", () => {
         expect(JSON.stringify(fixture.mockModel.requests()[1]?.body)).toContain(
           "send after local new",
         );
+        await waitForOutputAfter(fixture.run, "LOCAL_PTY_RESPONSE", secondResponseStart);
+        const secondResponseOffset = fixture.run.visibleOutput().lastIndexOf("LOCAL_PTY_RESPONSE");
+        await waitForOutputAfter(fixture.run, "| idle", secondResponseOffset);
 
         await fixture.run.write("/exit\r", { delay: false });
         const exit = await fixture.run.waitForExit();

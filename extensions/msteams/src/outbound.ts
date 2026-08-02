@@ -218,11 +218,11 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         mediaReadFile,
       });
     },
-    sendPoll: async ({ cfg, to, poll }) => {
+    sendPoll: async ({ cfg, to, poll, threadId }) => {
       const maxSelections = poll.maxSelections ?? 1;
       const result = await sendPollMSTeams({
         cfg,
-        to,
+        to: resolveMSTeamsThreadTarget(to, threadId),
         question: poll.question,
         options: poll.options,
         maxSelections,

@@ -1,13 +1,12 @@
-// Verifies runtime plugin loading scope, disablement, and gateway-bindable mode.
+// Verifies prepared-runtime handles and process-root runtime installation remain distinct.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
-  ensureStandaloneRuntimePluginRegistryLoaded: vi.fn(),
-  getActivePluginRuntimeSubagentMode: vi.fn<() => "default" | "explicit" | "gateway-bindable">(
-    () => "default",
-  ),
-  getActivePluginRegistryWorkspaceDir: vi.fn<() => string | undefined>(() => undefined),
+  getActivePluginRuntimeSubagentMode: vi.fn<() => "default" | "explicit" | "gateway-bindable">(),
+  installRuntimePluginRegistryAtProcessRoot: vi.fn(),
+  loadRuntimePluginRegistryHandle: vi.fn(),
+  resolveAgentRuntimePluginLoadPlan: vi.fn(),
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
@@ -15,208 +14,125 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../plugins/runtime/standalone-runtime-registry-loader.js", () => ({
-  ensureStandaloneRuntimePluginRegistryLoaded: hoisted.ensureStandaloneRuntimePluginRegistryLoaded,
+  installRuntimePluginRegistryAtProcessRoot: hoisted.installRuntimePluginRegistryAtProcessRoot,
+  loadRuntimePluginRegistryHandle: hoisted.loadRuntimePluginRegistryHandle,
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
   getActivePluginRuntimeSubagentMode: hoisted.getActivePluginRuntimeSubagentMode,
-  getActivePluginRegistryWorkspaceDir: hoisted.getActivePluginRegistryWorkspaceDir,
 }));
 
-describe("ensureRuntimePluginsLoaded", () => {
-  let ensureRuntimePluginsLoaded: typeof import("./runtime-plugins.js").ensureRuntimePluginsLoaded;
+vi.mock("./harness/runtime-plugin-load-plan.js", () => ({
+  resolveAgentRuntimePluginLoadPlan: hoisted.resolveAgentRuntimePluginLoadPlan,
+}));
 
-  beforeEach(async () => {
-    // Reset modules so each case sees fresh mocked runtime-plugin dependencies.
-    hoisted.getCurrentPluginMetadataSnapshot.mockReset();
-    hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
-    hoisted.ensureStandaloneRuntimePluginRegistryLoaded.mockReset();
-    hoisted.ensureStandaloneRuntimePluginRegistryLoaded.mockReturnValue(undefined);
-    hoisted.getActivePluginRuntimeSubagentMode.mockReset();
-    hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("default");
-    hoisted.getActivePluginRegistryWorkspaceDir.mockReset();
-    hoisted.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
-    vi.resetModules();
-    ({ ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js"));
+import {
+  installAgentRuntimePluginRegistryAtProcessRoot,
+  loadAgentRuntimePluginRegistryHandle,
+} from "./runtime-plugins.js";
+
+describe("agent runtime plugin registries", () => {
+  beforeEach(() => {
+    hoisted.getCurrentPluginMetadataSnapshot.mockReset().mockReturnValue(undefined);
+    hoisted.getActivePluginRuntimeSubagentMode.mockReset().mockReturnValue("default");
+    hoisted.installRuntimePluginRegistryAtProcessRoot.mockReset().mockReturnValue({ root: true });
+    hoisted.loadRuntimePluginRegistryHandle.mockReset().mockReturnValue({ handle: true });
+    hoisted.resolveAgentRuntimePluginLoadPlan.mockReset().mockImplementation(({ config }) => ({
+      config,
+      pluginIds: ["codex", "memory-core"],
+    }));
   });
 
-  it("does not reactivate plugins when a process already has an active registry", () => {
-    hoisted.ensureStandaloneRuntimePluginRegistryLoaded.mockReturnValue({});
+  it("returns a non-activating handle for a prepared runtime", () => {
+    const config = {} as never;
+    const selections = [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }];
 
-    ensureRuntimePluginsLoaded({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
-
-    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledTimes(1);
-  });
-
-  it("resolves runtime plugins through the shared runtime helper", () => {
-    ensureRuntimePluginsLoaded({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
-
-    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
-      requiredPluginIds: undefined,
-      loadOptions: {
-        config: {} as never,
+    expect(
+      loadAgentRuntimePluginRegistryHandle({
+        config,
         workspaceDir: "/tmp/workspace",
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
+        allowGatewaySubagentBinding: true,
+        selections,
+      }),
+    ).toEqual({ handle: true });
+    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
+      config,
+      workspaceDir: "/tmp/workspace",
+      selections,
+    });
+    expect(hoisted.loadRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+      requiredPluginIds: ["codex", "memory-core"],
+      loadOptions: {
+        config,
+        activationSourceConfig: config,
+        workspaceDir: "/tmp/workspace",
+        runtimeOptions: { allowGatewaySubagentBinding: true },
       },
     });
+    expect(hoisted.installRuntimePluginRegistryAtProcessRoot).not.toHaveBeenCalled();
   });
 
-  it("does not load runtime plugins when plugins are globally disabled", () => {
-    ensureRuntimePluginsLoaded({
-      config: {
-        plugins: {
-          enabled: false,
-        },
-      } as never,
+  it("installs only through the explicit process-root entry point", () => {
+    const config = {} as never;
+    hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("gateway-bindable");
+
+    expect(
+      installAgentRuntimePluginRegistryAtProcessRoot({ config, workspaceDir: "/tmp/workspace" }),
+    ).toEqual({ root: true });
+    expect(hoisted.installRuntimePluginRegistryAtProcessRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        loadOptions: expect.objectContaining({
+          runtimeOptions: { allowGatewaySubagentBinding: true },
+        }),
+      }),
+    );
+    expect(hoisted.loadRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+  });
+
+  it("installs an explicit empty registry when plugins are globally disabled", () => {
+    const params = {
+      config: { plugins: { enabled: false } } as never,
       workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
+    };
+    expect(loadAgentRuntimePluginRegistryHandle(params)).toEqual({ handle: true });
+    expect(installAgentRuntimePluginRegistryAtProcessRoot(params)).toEqual({ root: true });
+    expect(hoisted.resolveAgentRuntimePluginLoadPlan).not.toHaveBeenCalled();
+    expect(hoisted.loadRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+      requiredPluginIds: [],
+      loadOptions: {
+        activationSourceConfig: params.config,
+        config: params.config,
+        onlyPluginIds: [],
+        runtimeOptions: undefined,
+        workspaceDir: "/tmp/workspace",
+      },
     });
-
-    expect(hoisted.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
-    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(hoisted.installRuntimePluginRegistryAtProcessRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requiredPluginIds: [],
+        loadOptions: expect.objectContaining({ onlyPluginIds: [] }),
+      }),
+    );
   });
 
-  it("scopes runtime plugin loading to the current gateway startup plan", () => {
-    // Startup metadata narrows runtime loading to plugins already planned for gateway startup.
+  it("preserves the gateway startup scope and ordering", () => {
     const config = {} as never;
     hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue({
-      startup: {
-        pluginIds: ["telegram", "memory-core"],
-      },
+      startup: { pluginIds: ["telegram", "memory-core"] },
     });
 
-    ensureRuntimePluginsLoaded({
+    loadAgentRuntimePluginRegistryHandle({ config, workspaceDir: "/tmp/workspace" });
+
+    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
       config,
       workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
+      basePluginIds: ["telegram", "memory-core"],
+      selections: [],
     });
-
-    expect(hoisted.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config,
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
-      requiredPluginIds: ["telegram", "memory-core"],
-      loadOptions: {
-        config,
-        workspaceDir: "/tmp/workspace",
-        onlyPluginIds: ["telegram", "memory-core"],
-        forceFullRuntimeForChannelPlugins: true,
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      },
-    });
-  });
-
-  it("delegates startup-scope registry reuse to loader cache compatibility", () => {
-    hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue({
-      startup: {
-        pluginIds: ["telegram"],
-      },
-    });
-    hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("gateway-bindable");
-
-    ensureRuntimePluginsLoaded({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
-
-    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
-      requiredPluginIds: ["telegram"],
-      loadOptions: {
-        config: {} as never,
-        onlyPluginIds: ["telegram"],
-        workspaceDir: "/tmp/workspace",
-        forceFullRuntimeForChannelPlugins: true,
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      },
-    });
-  });
-
-  it("lets the loader decide when startup ids match but config changes", () => {
-    const config = {
-      plugins: {
-        config: {
-          telegram: {
-            replyMode: "changed",
-          },
-        },
-      },
-    } as never;
-    hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue({
-      startup: {
-        pluginIds: ["telegram"],
-      },
-    });
-    hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("gateway-bindable");
-
-    ensureRuntimePluginsLoaded({
-      config,
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
-
-    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
-      requiredPluginIds: ["telegram"],
-      loadOptions: {
-        config,
-        onlyPluginIds: ["telegram"],
-        workspaceDir: "/tmp/workspace",
-        forceFullRuntimeForChannelPlugins: true,
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      },
-    });
-  });
-
-  it("does not enable gateway subagent binding for normal runtime loads", () => {
-    ensureRuntimePluginsLoaded({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
-      requiredPluginIds: undefined,
-      loadOptions: {
-        config: {} as never,
-        workspaceDir: "/tmp/workspace",
-        runtimeOptions: undefined,
-      },
-    });
-  });
-
-  it("inherits gateway-bindable mode from an active gateway registry", () => {
-    hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("gateway-bindable");
-
-    ensureRuntimePluginsLoaded({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
-      requiredPluginIds: undefined,
-      loadOptions: {
-        config: {} as never,
-        workspaceDir: "/tmp/workspace",
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      },
-    });
+    expect(hoisted.loadRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        loadOptions: expect.objectContaining({ forceFullRuntimeForChannelPlugins: true }),
+      }),
+    );
   });
 });

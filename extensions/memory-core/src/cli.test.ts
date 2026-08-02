@@ -199,7 +199,12 @@ describe("memory cli", () => {
   }
 
   function mockManager(manager: Record<string, unknown>) {
-    getMemorySearchManager.mockResolvedValueOnce({ manager });
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        ...(manager.search && !manager.status ? { status: () => makeMemoryStatus() } : {}),
+        ...manager,
+      },
+    });
   }
 
   function setupMemoryStatusWithInactiveSecretDiagnostics(close: ReturnType<typeof vi.fn>) {
@@ -1721,6 +1726,48 @@ describe("memory cli", () => {
     expect(Array.isArray(payload?.results)).toBe(true);
     expect(payload?.results).toHaveLength(1);
     expect(close).toHaveBeenCalled();
+  });
+
+  it("qualifies json search results when the index remains stale", async () => {
+    const close = vi.fn(async () => {});
+    const reason = "index was built for model old-embed, expected new-embed";
+    mockManager({
+      search: vi.fn(async () => []),
+      status: () =>
+        makeMemoryStatus({
+          dirty: true,
+          custom: { indexIdentity: { status: "mismatched", reason } },
+        }),
+      close,
+    });
+
+    const writeJson = spyRuntimeJson(defaultRuntime);
+    await runMemoryCli(["search", "hidden codeword", "--agent", "main", "--json"]);
+
+    expect(firstWrittenJsonArg(writeJson)).toEqual({
+      results: [],
+      stale: true,
+      warning: `Memory index is stale: ${reason}. Search results may be incomplete.`,
+      action: "Run: openclaw memory status --index --agent main",
+    });
+  });
+
+  it("warns before reporting no matches from a dirty index", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      search: vi.fn(async () => []),
+      status: () => makeMemoryStatus({ dirty: true }),
+      close,
+    });
+
+    const error = spyRuntimeErrors(defaultRuntime);
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["search", "hidden codeword"]);
+
+    expect(error).toHaveBeenCalledWith(
+      "Memory index is dirty. Search results may be incomplete. Run: openclaw memory status --index --agent main",
+    );
+    expect(log).toHaveBeenCalledWith("No matches.");
   });
 
   it("prints no candidates when promote has no short-term recall data", async () => {

@@ -494,6 +494,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   options: PreparedModelRuntimeRefreshOptions,
   publicationEpoch: number,
 ): Promise<void> {
+  const { defaultWorkspaceDir: workspace, allowGatewaySubagentBinding: bindings } = options;
   const catalogMode = options.catalogMode ?? "live";
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
@@ -507,7 +508,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const entries: Array<{ owner?: PreparedModelRuntimeOwner; input: PreparedModelRuntimeInput }> =
     [];
   const knownKeys = new Set<string>();
-  for (const rawInput of listConfiguredOwnerInputs(config, options.defaultWorkspaceDir)) {
+  for (const rawInput of listConfiguredOwnerInputs(config, workspace, bindings)) {
     let input = normalizePreparedModelRuntimeInput(rawInput);
     const preservedOwner = [...owners.values()].find(
       (owner) =>

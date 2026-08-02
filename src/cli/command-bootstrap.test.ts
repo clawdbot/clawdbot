@@ -118,10 +118,10 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
-  it("does nothing extra when plugin loading is disabled", async () => {
+  it("does not evaluate config or plugin runtimes for a gateway-backed agent turn", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,
-      commandPath: ["config", "validate"],
+      commandPath: ["agent"],
       skipConfigGuard: true,
       loadPlugins: false,
     });

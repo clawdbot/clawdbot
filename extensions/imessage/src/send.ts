@@ -40,13 +40,16 @@ import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
-import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { resolveAuthorizedIMessageReplyReference } from "./message-resource.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import {
   forgetPersistedIMessageEchoKey,
   rememberPersistedIMessageEcho,
 } from "./monitor/persisted-echo-cache.js";
+import {
+  protectIMessageFencedRoleMarkers,
+  sanitizeIMessageFinalOutboundText,
+} from "./monitor/sanitize-outbound.js";
 import {
   formatIMessageChatTarget,
   type IMessageService,
@@ -765,11 +768,12 @@ export async function sendMessageIMessage(
     replyToId: opts.replyToId,
     conversationReadOrigin: opts.conversationReadOrigin,
   });
-  // Sends use a dedicated longer default (not the 10s probe timeout) so macOS 26
-  // bridge stalls aren't aborted mid-send. Explicit opts/probeTimeoutMs still win
-  // for callers that tuned them. See DEFAULT_IMESSAGE_SEND_TIMEOUT_MS.
+  // Sends use a dedicated longer floor (not the 10s probe timeout) so macOS 26
+  // bridge stalls aren't aborted mid-send. A configured probe timeout may extend
+  // sends, but only an explicit per-call timeout may shorten them.
   const timeoutMs =
-    opts.timeoutMs ?? account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_SEND_TIMEOUT_MS;
+    opts.timeoutMs ??
+    Math.max(account.config.probeTimeoutMs ?? 0, DEFAULT_IMESSAGE_SEND_TIMEOUT_MS);
   const pendingEchoTtlMs = resolvePendingPersistedEchoTtlMs(timeoutMs);
   const region = opts.region?.trim() || account.config.region?.trim() || "US";
   const maxBytes =
@@ -780,6 +784,8 @@ export async function sendMessageIMessage(
         : 16 * 1024 * 1024;
   let message =
     text && opts.approvalKind ? appendIMessageApprovalReactionHintForOutboundMessage(text) : text;
+  const protectedRoles = protectIMessageFencedRoleMarkers(message);
+  message = protectedRoles.text;
   let filePath: string | undefined;
   let mediaContentType: string | undefined;
 
@@ -802,18 +808,23 @@ export async function sendMessageIMessage(
       channel: "imessage",
       accountId: account.accountId,
     });
+    protectedRoles.verifyProtectedRoles(message);
     message = convertMarkdownTables(message, tableMode);
+    protectedRoles.verifyProtectedRoles(message);
   }
+  protectedRoles.verifyProtectedRoles(message);
   message = stripInlineDirectiveTagsForDelivery(message).text;
+  protectedRoles.verifyProtectedRoles(message);
   if (!message.trim() && !filePath) {
     throw new Error("iMessage send requires text or media");
   }
   // Extract markdown bold/italic/underline/strikethrough into typed-run
   // ranges that the imsg bridge applies via attributedBody. The sender needs
   // macOS 15+; pre-Sequoia recipients see the same marker-stripped plain text.
-  const formatted = message.trim()
-    ? extractMarkdownFormatRuns(message)
-    : { text: message, ranges: [] };
+  const formatted = sanitizeIMessageFinalOutboundText(message, {
+    formatMarkdown: true,
+    protection: protectedRoles,
+  });
   message = formatted.text;
   if (!message.trim() && !filePath) {
     throw new Error("iMessage send requires text or media");

@@ -52,6 +52,7 @@ export function createNpmPackageLockInstallStrategyArgs(options?: {
 export function generateNpmPackageLock(
   packageDir: string,
   options?: {
+    env?: NodeJS.ProcessEnv;
     installStrategy?: "hoisted" | "nested" | "shallow" | "linked" | "" | null;
   },
 ): string;

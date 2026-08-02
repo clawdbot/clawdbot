@@ -548,22 +548,85 @@ describe("sessions page lifecycle", () => {
     expect(page.selectedKeys).toEqual(new Set());
   });
 
-  it("routes a confirmed row-menu deletion through the scoped bulk owner", async () => {
+  it("archive-gates a confirmed archived row-menu deletion", async () => {
     const key = "agent:main:work";
     const sessions = createSessions({
       deleteMany: vi.fn(async () => ({ deleted: [key], errors: [], preservedWorktrees: [] })),
     });
     const { gateway } = createGateway({} as GatewayBrowserClient);
     const page = await createPage(createContext(gateway, sessions));
-    const row = { key, label: "Work" } as GatewaySessionRow;
+    const row = { key, label: "Work", archived: true } as GatewaySessionRow;
     page.result = { count: 1, sessions: [row] } as SessionsListResult;
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
 
     await page.deleteSessionFromMenu(row);
 
     expect(confirm).toHaveBeenCalledOnce();
-    expect(sessions.deleteMany).toHaveBeenCalledWith([{ key, agentId: undefined }]);
+    expect(sessions.deleteMany).toHaveBeenCalledWith([
+      { key, agentId: undefined, archivedOnly: true },
+    ]);
     expect(page.result?.sessions).toEqual([]);
+  });
+
+  it.each([
+    ["active", false],
+    ["unknown", undefined],
+  ] as const)("keeps %s row-menu deletion admin-only", async (_state, archived) => {
+    const key = `agent:main:${_state}`;
+    const sessions = createSessions({
+      deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(gateway, sessions));
+    const row = {
+      key,
+      label: _state,
+      ...(archived === undefined ? {} : { archived }),
+    } as GatewaySessionRow;
+    page.result = { count: 1, sessions: [row] } as SessionsListResult;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await page.deleteSessionFromMenu(row);
+
+    expect(sessions.deleteMany).toHaveBeenCalledWith([{ key, agentId: undefined }]);
+  });
+
+  it("derives archive gates per selected row and keeps unknown rows admin-only", async () => {
+    const activeKey = "agent:main:active";
+    const archivedKey = "agent:main:archived";
+    const unknownKey = "agent:main:unknown";
+    const sessions = createSessions({
+      deleteMany: vi.fn(async () => ({
+        deleted: [archivedKey],
+        errors: ["active denied", "unknown denied"],
+        preservedWorktrees: [],
+      })),
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(gateway, sessions));
+    page.result = {
+      count: 2,
+      sessions: [
+        { key: activeKey, archived: false },
+        { key: archivedKey, archived: true },
+      ],
+    } as SessionsListResult;
+    page.selectedKeys = new Set([activeKey, archivedKey, unknownKey]);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await page.deleteSelected();
+
+    expect(sessions.deleteMany).toHaveBeenCalledWith([
+      { key: activeKey, agentId: undefined },
+      { key: archivedKey, agentId: undefined, archivedOnly: true },
+      { key: unknownKey, agentId: undefined },
+    ]);
+    expect(page.result).toMatchObject({
+      count: 1,
+      sessions: [{ key: activeKey, archived: false }],
+    });
+    expect(page.selectedKeys).toEqual(new Set([activeKey, unknownKey]));
+    expect(page.error).toBe("active denied; unknown denied");
   });
 
   it("stops an active cloud worker and refreshes the session roster", async () => {

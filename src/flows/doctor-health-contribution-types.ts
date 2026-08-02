@@ -36,6 +36,8 @@ export type DoctorHealthFlowContext = {
   postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;
   configPath: string;
+  /** Whether the selected state directory already existed before doctor startup work. */
+  stateDirExistedAtStart?: boolean;
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;

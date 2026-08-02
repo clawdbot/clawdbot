@@ -1,10 +1,11 @@
-// Standalone runtime registry loader builds plugin runtime registries outside gateway startup.
+// Runtime registry loader entry points distinguish process-root installation from scoped handles.
 import {
   type ActiveRuntimePluginRegistrySurface,
   getLoadedRuntimePluginRegistry,
 } from "../active-runtime-registry.js";
 import {
-  loadOpenClawPlugins,
+  loadAndActivateRootPluginRegistry,
+  loadPluginRegistryHandle,
   resolvePluginRegistryLoadCacheKey,
   type PluginLoadOptions,
 } from "../loader.js";
@@ -27,7 +28,7 @@ function resolveRuntimeSubagentMode(
   return "default";
 }
 
-function installStandaloneRuntimePluginRegistry(
+function installProcessRootRuntimePluginRegistry(
   registry: PluginRegistry,
   params: {
     loadOptions: PluginLoadOptions;
@@ -49,13 +50,19 @@ function installStandaloneRuntimePluginRegistry(
   }
 }
 
-export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
+type RuntimePluginRegistryLoadParams = {
   loadOptions: PluginLoadOptions;
   forceLoad?: boolean;
-  installRegistry?: boolean;
   requiredPluginIds?: readonly string[];
   surface?: ActiveRuntimePluginRegistrySurface;
-}): PluginRegistry | undefined {
+};
+
+function findLoadedRuntimePluginRegistry(
+  params: RuntimePluginRegistryLoadParams,
+): PluginRegistry | undefined {
+  if (params.loadOptions.onlyPluginIds?.length === 0) {
+    return undefined;
+  }
   const requiredPluginIds = params.requiredPluginIds ?? params.loadOptions.onlyPluginIds;
   const surface = params.surface ?? "active";
   if (!params.forceLoad) {
@@ -71,36 +78,36 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
     }
   }
 
-  const effectiveLoadOptions = params.forceLoad
-    ? { ...params.loadOptions, cache: false }
-    : params.loadOptions;
-  const registry = loadOpenClawPlugins(effectiveLoadOptions);
-  if (params.loadOptions.activate !== false) {
-    switch (surface) {
-      case "active":
-        break;
-      case "channel":
-        pinActivePluginChannelRegistry(registry);
-        break;
-      case "http-route":
-        pinActivePluginHttpRouteRegistry(registry);
-        break;
-    }
+  return undefined;
+}
+
+/** Builds or reuses a registry value without changing any process-wide active surface. */
+export function loadRuntimePluginRegistryHandle(
+  params: RuntimePluginRegistryLoadParams,
+): PluginRegistry | undefined {
+  const loadOptions = { ...params.loadOptions, activate: false };
+  return (
+    findLoadedRuntimePluginRegistry({ ...params, loadOptions }) ??
+    loadPluginRegistryHandle(params.forceLoad ? { ...loadOptions, cache: false } : loadOptions)
+  );
+}
+
+/** Installs a registry from a process composition root. Never call from request/run scope. */
+export function installRuntimePluginRegistryAtProcessRoot(
+  params: RuntimePluginRegistryLoadParams,
+): PluginRegistry | undefined {
+  const loadOptions = { ...params.loadOptions, activate: true };
+  const registry =
+    findLoadedRuntimePluginRegistry({ ...params, loadOptions }) ??
+    loadAndActivateRootPluginRegistry(
+      params.forceLoad ? { ...loadOptions, cache: false } : loadOptions,
+    );
+  const surface = params.surface ?? "active";
+  if (surface === "active") {
     return registry;
   }
-
-  if (params.installRegistry === false) {
-    return registry;
-  }
-
-  // Tool discovery returns a request-local snapshot. Installing it would replace live provider,
-  // channel, or HTTP-route registries with a registry that intentionally omits those surfaces.
-  if (params.loadOptions.toolDiscovery === true) {
-    return registry;
-  }
-
-  installStandaloneRuntimePluginRegistry(registry, {
-    loadOptions: params.loadOptions,
+  installProcessRootRuntimePluginRegistry(registry, {
+    loadOptions,
     surface,
   });
   return registry;

@@ -110,7 +110,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          install-deps: "false"
 
       - name: Build Linux companion bundles
         working-directory: apps/linux/src-tauri
@@ -185,7 +184,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          install-deps: "false"
 
       - name: Build macOS test bundles
         working-directory: apps/linux/src-tauri
@@ -253,7 +251,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          install-deps: "false"
 
       - name: Build Windows test bundle
         working-directory: apps/linux/src-tauri

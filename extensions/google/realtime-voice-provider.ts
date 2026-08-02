@@ -52,6 +52,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
+import { createGoogleRealtimeAudioQueue } from "./realtime-audio-queue.js";
 import { resolveGoogleGemini3ThinkingLevel } from "./thinking.js";
 
 const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
@@ -61,7 +62,6 @@ const GOOGLE_REALTIME_INPUT_SAMPLE_RATE = 16_000;
 const GOOGLE_REALTIME_BROWSER_API_VERSION = "v1alpha";
 const GOOGLE_REALTIME_BROWSER_WEBSOCKET_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
-const MAX_PENDING_AUDIO_CHUNKS = 320;
 const DEFAULT_AUDIO_STREAM_END_SILENCE_MS = 500;
 const GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS = 30 * 60 * 1000;
 const GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS = 60 * 1000;
@@ -468,9 +468,11 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private session: Session | null = null;
   private connected = false;
+  private setupCompleteReceived = false;
   private sessionConfigured = false;
   private intentionallyClosed = false;
-  private pendingAudio: Buffer[] = [];
+  // Native reconnect keeps the already accepted FIFO prefix stable.
+  private readonly pendingAudio = createGoogleRealtimeAudioQueue("reject-newest");
   private sessionReadyFired = false;
   private consecutiveSilenceMs = 0;
   private audioStreamEnded = false;
@@ -481,6 +483,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private hasConnectedSession = false;
+  private continuityResetEmitted = false;
   private terminalError: Error | undefined;
   private closeNotified = false;
   private connectionOwner: GoogleLiveConnectionAttempt | undefined;
@@ -529,15 +532,9 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private async connectOwned(attempt: GoogleLiveConnectionAttempt): Promise<void> {
-    const canResumeSession =
-      this.config.sessionResumption !== false && Boolean(this.resumptionHandle);
-    if (this.hasConnectedSession && !canResumeSession) {
-      // An unfinished recognition hypothesis cannot cross into a fresh server session.
-      // Dropping it avoids treating a transport break as a completed user utterance.
-      this.resetPendingTranscripts();
-    }
     this.intentionallyClosed = false;
     this.closeNotified = false;
+    this.setupCompleteReceived = false;
     this.sessionConfigured = false;
     this.sessionReadyFired = false;
     this.consecutiveSilenceMs = 0;
@@ -570,6 +567,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
               return;
             }
             this.connected = true;
+            this.maybeActivateSession();
           },
           onmessage: (message) => {
             if (this.connectionOwner !== attempt) {
@@ -596,6 +594,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
             this.connectionOwner = undefined;
             this.cancelConnectAttempt(attempt);
             this.connected = false;
+            this.setupCompleteReceived = false;
             this.sessionConfigured = false;
             this.pendingFunctionNames.clear();
             this.session = null;
@@ -627,21 +626,27 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
       this.session = session;
       this.hasConnectedSession = true;
+      this.maybeActivateSession();
     } catch (error) {
       if (this.connectionOwner === attempt) {
         this.connectionOwner = undefined;
         this.connected = false;
+        this.setupCompleteReceived = false;
         this.sessionConfigured = false;
+        const session = this.session;
+        this.session = null;
+        session?.close();
       }
       throw error;
     }
   }
 
   sendAudio(audio: Buffer): void {
+    if (this.terminalError || this.intentionallyClosed || this.closeNotified) {
+      return;
+    }
     if (!this.session || !this.connected || !this.sessionConfigured) {
-      if (this.pendingAudio.length < MAX_PENDING_AUDIO_CHUNKS) {
-        this.pendingAudio.push(audio);
-      }
+      this.pendingAudio.enqueue(audio);
       return;
     }
     const silent = this.isSilence(audio);
@@ -769,12 +774,13 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     );
     this.intentionallyClosed = true;
     this.connected = false;
+    this.setupCompleteReceived = false;
     this.sessionConfigured = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    this.pendingAudio = [];
+    this.clearPendingAudio();
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
     this.pendingFunctionNames.clear();
@@ -842,7 +848,9 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       sessionResumptionUpdate?: { newHandle?: string; resumable?: boolean };
     };
     const update = raw.sessionResumptionUpdate;
-    if (update?.resumable && update.newHandle) {
+    if (update?.resumable === false) {
+      this.resumptionHandle = undefined;
+    } else if (update?.resumable && update.newHandle) {
       this.resumptionHandle = update.newHandle;
     }
     if (raw.goAway?.timeLeft) {
@@ -851,9 +859,27 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleSetupComplete(): void {
+    if (!this.setupCompleteReceived) {
+      // setupComplete proves Google selected a new server session. A later
+      // continuity loss therefore owns a new reset generation.
+      if (this.continuityResetEmitted) {
+        this.config.onEvent?.({ direction: "server", type: "session.created" });
+      }
+      this.continuityResetEmitted = false;
+    }
+    this.setupCompleteReceived = true;
+    this.maybeActivateSession();
+  }
+
+  private maybeActivateSession(): void {
+    // The SDK delivers setupComplete before Live.connect() returns its Session.
+    // Readiness requires both facts or queued audio can be drained without a transport.
+    if (this.sessionConfigured || !this.connected || !this.setupCompleteReceived || !this.session) {
+      return;
+    }
     this.sessionConfigured = true;
     this.reconnectAttempts = 0;
-    for (const chunk of this.pendingAudio.splice(0)) {
+    for (const chunk of this.pendingAudio.drain()) {
       this.sendAudio(chunk);
     }
     if (!this.sessionReadyFired) {
@@ -963,6 +989,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.terminalError = error;
     this.intentionallyClosed = true;
     this.connected = false;
+    this.setupCompleteReceived = false;
     this.sessionConfigured = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -990,8 +1017,13 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.closeNotified) {
       return;
     }
+    this.clearPendingAudio();
     this.closeNotified = true;
     this.config.onClose?.(reason);
+  }
+
+  private clearPendingAudio(): void {
+    this.pendingAudio.clear();
   }
 
   private cancelConnectAttempt(attempt: GoogleLiveConnectionAttempt | undefined): void {
@@ -1024,6 +1056,18 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private scheduleReconnect(closeDetails: string): boolean {
     if (this.reconnectAttempts >= GOOGLE_REALTIME_RECONNECT_MAX_ATTEMPTS) {
       return false;
+    }
+    const canResumeSession =
+      this.config.sessionResumption !== false && Boolean(this.resumptionHandle);
+    if (this.hasConnectedSession && !canResumeSession && !this.continuityResetEmitted) {
+      // A non-resumable close ends the provider generation immediately. Reset
+      // consumers before backoff so stale work cannot finish into the replacement.
+      this.continuityResetEmitted = true;
+      this.resetPendingTranscripts();
+      this.config.onEvent?.({
+        direction: "client",
+        type: "session.continuity.reset",
+      });
     }
     const attempt = ++this.reconnectAttempts;
     const delayMs = Math.min(

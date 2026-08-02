@@ -24,6 +24,7 @@ const applyPluginAutoEnableMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
+  loadPluginRegistryHandle: (params: unknown) => loadOpenClawPluginsMock(params),
   resolveCompatibleRuntimePluginRegistry: (params: unknown) =>
     resolveRuntimePluginRegistryMock(params),
   resolvePluginRegistryLoadCacheKey: (params: unknown) => JSON.stringify(params),
@@ -3196,7 +3197,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("loads a standalone registry when cached runtime registries lack matching tool entries", () => {
+  it("keeps a cold-loaded standalone registry scoped through tool callbacks", async () => {
     const config = {
       plugins: {
         enabled: true,
@@ -3214,7 +3215,17 @@ describe("resolvePluginTools optional tools", () => {
         enabledByDefault: false,
       }),
     });
-    const memorySearchFactory = vi.fn(() => [makeTool("memory_search"), makeTool("memory_get")]);
+    const memorySearchFactory = vi.fn(() => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(loadedRegistry);
+      return ["memory_search", "memory_get"].map((name) => {
+        const tool = makeTool(name);
+        tool.execute = async () => {
+          expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(loadedRegistry);
+          return { content: [{ type: "text", text: "ok" }] };
+        };
+        return tool;
+      });
+    });
     const loadedRegistry = {
       plugins: [{ id: "memory-core", status: "loaded" }],
       tools: [
@@ -3257,6 +3268,10 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
     expect(memorySearchFactory).toHaveBeenCalledTimes(1);
+    await expect(tools[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
     const loaderParams = mockCallParams(loadOpenClawPluginsMock) as {
       activate?: unknown;
       onlyPluginIds?: unknown;
