@@ -42,6 +42,7 @@ beforeEach(() => {
 describe("createCliDispatchTranscriptRecorder", () => {
   it("appends the user turn to the run's session identity", async () => {
     const recorder = createCliDispatchTranscriptRecorder(recorderParams());
+    expect(recorder.userMessageIdempotencyKey).toBe("run-transcript-test:user");
     await recorder.finalize();
 
     const records = appendedRecords();
@@ -55,6 +56,7 @@ describe("createCliDispatchTranscriptRecorder", () => {
     expect(records[0]?.message).toMatchObject({
       role: "user",
       content: [{ type: "text", text: "recall prompt" }],
+      idempotencyKey: "run-transcript-test:user",
       __openclaw: { senderIsOwner: true },
     });
   });

@@ -33,6 +33,7 @@ vi.mock("../agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntimeForSessionKey,
 }));
 const transcriptRecorder = vi.hoisted(() => ({
+  userMessageIdempotencyKey: "run-cli-dispatch-test:user",
   noteToolEvent: vi.fn(),
   noteAssistantText: vi.fn(),
   flushAssistantSnapshot: vi.fn(),
@@ -353,6 +354,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       disableCliLiveSession: true,
       cleanupCliLiveSessionOnRunEnd: true,
       requireExplicitMessageTarget: true,
+      excludeMessageIdempotencyKey: "run-cli-dispatch-test:user",
       cliToolAvailability: {
         native: [],
         openClaw: ["memory_search", "memory_get", "notes_retrieve_context"],
