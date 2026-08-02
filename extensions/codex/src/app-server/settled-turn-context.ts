@@ -72,7 +72,7 @@ function adoptPersistedHostPrompt(params: {
     !persistedPrompt ||
     readMirrorIdentity(persistedPrompt.message) !== undefined ||
     readCodexMirrorSourceFingerprint(persistedPrompt.message) !== undefined ||
-    persistedMetadata?.__openclaw?.mirrorOrigin === "codex-app-server"
+    persistedMetadata?.["__openclaw"]?.mirrorOrigin === "codex-app-server"
   ) {
     return params;
   }
