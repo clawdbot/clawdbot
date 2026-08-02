@@ -58,6 +58,7 @@ let buildProviderUnknownModelHintWithPlugin: typeof import("./provider-runtime.j
 let applyProviderNativeStreamingUsageCompatWithPlugin: typeof import("./provider-runtime.js").applyProviderNativeStreamingUsageCompatWithPlugin;
 let applyProviderConfigDefaultsWithPlugin: typeof import("./provider-runtime.js").applyProviderConfigDefaultsWithPlugin;
 let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime.js").formatProviderAuthProfileApiKeyWithPlugin;
+let loginProviderOAuthWithPlugin: typeof import("./provider-runtime.js").loginProviderOAuthWithPlugin;
 let classifyProviderFailoverReasonWithPlugin: typeof import("./provider-runtime.js").classifyProviderFailoverReasonWithPlugin;
 let matchesProviderContextOverflowWithPlugin: typeof import("./provider-runtime.js").matchesProviderContextOverflowWithPlugin;
 let normalizeProviderConfigWithPlugin: typeof import("./provider-runtime.js").normalizeProviderConfigWithPlugin;
@@ -91,6 +92,7 @@ let normalizeProviderResolvedModelWithPlugin: typeof import("./provider-runtime.
 let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareProviderDynamicModel;
 let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
 let refreshProviderOAuthCredentialWithPlugin: typeof import("./provider-runtime.js").refreshProviderOAuthCredentialWithPlugin;
+let resolveProviderOAuthCredentialWithPlugin: typeof import("./provider-runtime.js").resolveProviderOAuthCredentialWithPlugin;
 let resolveProviderRuntimePlugin: typeof import("./provider-runtime.js").resolveProviderRuntimePlugin;
 let providerRuntimeTesting: typeof import("./provider-runtime.js").testing;
 let runProviderDynamicModel: typeof import("./provider-runtime.js").runProviderDynamicModel;
@@ -291,6 +293,10 @@ describe("provider-runtime", () => {
         resolveOwningPluginIdsForProviderMock(params as never),
       resolveOwningPluginIdsForProviderRef: (params: unknown) =>
         resolveOwningPluginIdsForProviderMock(params as never),
+      resolveProviderRefOwnership: (params: unknown) => {
+        const pluginIds = resolveOwningPluginIdsForProviderMock(params as never);
+        return pluginIds?.length ? { status: "owned", pluginIds } : { status: "unowned" };
+      },
     }));
     vi.doMock("./providers.runtime.js", () => ({
       resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
@@ -315,6 +321,7 @@ describe("provider-runtime", () => {
       applyProviderResolvedTransportWithPlugin,
       classifyProviderFailoverReasonWithPlugin,
       formatProviderAuthProfileApiKeyWithPlugin,
+      loginProviderOAuthWithPlugin,
       matchesProviderContextOverflowWithPlugin,
       normalizeProviderConfigWithPlugin,
       normalizeProviderModelIdWithPlugin,
@@ -346,6 +353,7 @@ describe("provider-runtime", () => {
       prepareProviderDynamicModel,
       prepareProviderRuntimeAuth,
       refreshProviderOAuthCredentialWithPlugin,
+      resolveProviderOAuthCredentialWithPlugin,
       resolveProviderRuntimePlugin,
       testing: providerRuntimeTesting,
       runProviderDynamicModel,
@@ -393,6 +401,83 @@ describe("provider-runtime", () => {
       provider: "Open Router",
       expectedPluginId: "openrouter",
     });
+  });
+
+  it("dispatches session OAuth operations to the owning provider", async () => {
+    const loginOAuth = vi.fn(async () => ({
+      access: "login-access",
+      refresh: "login-refresh",
+      expires: 123,
+    }));
+    const refreshOAuth = vi.fn(async (credential) => ({
+      ...credential,
+      access: "refreshed-access",
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "plugin-oauth",
+        label: "Plugin OAuth",
+        auth: [],
+        loginOAuth,
+        refreshOAuth,
+        formatApiKey: (credential) =>
+          credential.type === "oauth" ? `formatted:${credential.access}` : "",
+      },
+    ]);
+
+    await expect(
+      loginProviderOAuthWithPlugin({
+        provider: "plugin-oauth",
+        context: { onAuth: vi.fn(), onPrompt: vi.fn(async () => "") },
+      }),
+    ).resolves.toMatchObject({
+      status: "available",
+      credentials: { access: "login-access", refresh: "login-refresh" },
+    });
+    await expect(
+      resolveProviderOAuthCredentialWithPlugin({
+        provider: "plugin-oauth",
+        credential: {
+          type: "oauth",
+          provider: "plugin-oauth",
+          access: "old-access",
+          refresh: "refresh",
+          expires: 1,
+        },
+        refresh: true,
+      }),
+    ).resolves.toMatchObject({
+      status: "available",
+      apiKey: "formatted:refreshed-access",
+      credential: { access: "refreshed-access" },
+    });
+    expect(loginOAuth).toHaveBeenCalledOnce();
+    expect(refreshOAuth).toHaveBeenCalledOnce();
+  });
+
+  it("distinguishes an owned but unavailable OAuth provider", async () => {
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(["plugin-oauth"]);
+    resolvePluginProvidersMock.mockReturnValue([]);
+
+    await expect(
+      loginProviderOAuthWithPlugin({
+        provider: "plugin-oauth",
+        context: { onAuth: vi.fn(), onPrompt: vi.fn(async () => "") },
+      }),
+    ).resolves.toEqual({ status: "configured-unavailable" });
+    await expect(
+      resolveProviderOAuthCredentialWithPlugin({
+        provider: "plugin-oauth",
+        credential: {
+          type: "oauth",
+          provider: "plugin-oauth",
+          access: "old-access",
+          refresh: "refresh",
+          expires: 1,
+        },
+        refresh: true,
+      }),
+    ).resolves.toEqual({ status: "configured-unavailable" });
   });
 
   it("auto-discovers only usage providers declared by their owning plugin", () => {
