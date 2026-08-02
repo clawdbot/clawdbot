@@ -1,5 +1,4 @@
-// Final-tag enforcement tests cover suppression of leaked reasoning and safe
-// extraction of <final> content across streamed code/fence boundaries.
+// Final-tag enforcement and streamed tag parsing.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
