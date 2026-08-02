@@ -55,6 +55,13 @@ const PendingWorkStateSchema = z.object({
   // consume read-guard skips any flow carrying it so a crash in that window
   // never re-delivers (restart-gap dup cure). Two-axis legible: PRESENT=terminal.
   succeeded: z.object({ point: z.literal("optimal"), durability: z.literal("durable") }).optional(),
+  // F1: durable obligation to surface a terminal outcome to the agent. Written
+  // in the SAME expected-revision CAS that terminalizes the row, so a crash
+  // between "the wake permanently failed" and "the agent was told" cannot lose
+  // the notice — recovery re-reads this flag from the store. Cleared only after
+  // the notice is handed to the durable session-delivery queue, which owns
+  // delivery from that point (see work-terminal-notice.ts).
+  terminalNoticePending: z.literal("retry-exhausted").optional(),
 });
 
 export type PendingWorkState = z.infer<typeof PendingWorkStateSchema>;
@@ -97,6 +104,9 @@ export type PendingContinuationWork = {
   // locus-3: durable delivered-mark (see schema). PRESENT once a wake was
   // confirmed delivered; the consume read-guard refuses to re-drive it.
   succeeded?: { point: "optimal"; durability: "durable" };
+  // F1: durable pending-notice obligation (see schema). PRESENT means the row
+  // terminalized but the agent has not yet been told.
+  terminalNoticePending?: "retry-exhausted";
   flowId?: string;
   expectedRevision?: number;
   // Durable flow status carried onto the runtime object by the store reader
@@ -213,6 +223,7 @@ export function workToRuntime(
     ...(state.busySkipCount !== undefined ? { busySkipCount: state.busySkipCount } : {}),
     ...(state.idleRetry ? { idleRetry: state.idleRetry } : {}),
     ...(state.succeeded ? { succeeded: state.succeeded } : {}),
+    ...(state.terminalNoticePending ? { terminalNoticePending: state.terminalNoticePending } : {}),
     status,
     flowId: flow.flowId,
     expectedRevision: flow.revision,

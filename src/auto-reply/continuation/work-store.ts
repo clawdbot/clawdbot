@@ -554,18 +554,103 @@ export function requeuePendingWork(
  * the race and gets `false`, so terminal side effects that must happen exactly
  * once (operator log, agent-visible outcome) can key off the return value
  * instead of a separate dedupe path.
+ *
+ * `terminalNoticePending` records, in this same CAS write, that the agent still
+ * owes a visible outcome. Persisting the obligation atomically with the failure
+ * is what makes the notice survive a crash: the in-memory system-event queue is
+ * explicitly non-durable, and recovery skips terminal rows unless they carry
+ * this flag ({@link listPendingTerminalNoticeWork}).
  */
-export function markPendingWorkFailed(work: PendingContinuationWork, summary: string): boolean {
+export function markPendingWorkFailed(
+  work: PendingContinuationWork,
+  summary: string,
+  options: { terminalNoticePending?: "retry-exhausted" } = {},
+): boolean {
   if (!work.flowId || work.expectedRevision === undefined) {
     return false;
   }
+  const current = getTaskFlowById(work.flowId);
+  const state = (current ? decodeWorkState(current) : undefined) ?? buildFallbackWorkState(work);
   return failFlow({
     flowId: work.flowId,
     expectedRevision: work.expectedRevision,
     currentStep: "Continuation work wake failed",
     blockedSummary: summary,
+    ...(options.terminalNoticePending
+      ? { stateJson: { ...state, terminalNoticePending: options.terminalNoticePending } }
+      : {}),
     updatedAt: Date.now(),
   }).applied;
+}
+
+/**
+ * Every terminalized row still owing the agent a visible outcome.
+ *
+ * Terminal rows are invisible to {@link listPendingWorkSessionKeysForRecovery}
+ * (it only yields queued/running work), so this is the dedicated recovery read
+ * for the notice obligation.
+ */
+export function listPendingTerminalNoticeWork(): PendingContinuationWork[] {
+  const pending: PendingContinuationWork[] = [];
+  for (const flow of listTaskFlowRecords()) {
+    if (!isContinuationWorkFlow(flow) || flow.status !== "failed") {
+      continue;
+    }
+    const state = decodeWorkState(flow);
+    if (!state?.terminalNoticePending) {
+      continue;
+    }
+    pending.push(workToRuntime(flow, state, "running"));
+  }
+  return pending;
+}
+
+/**
+ * Read one row's outstanding notice obligation with a current revision.
+ *
+ * The caller that terminalized the row holds a pre-CAS revision, so it cannot
+ * drive the follow-up clear itself; both the live and recovery paths re-read
+ * here to act on fresh state.
+ */
+export function readPendingTerminalNoticeWork(flowId: string): PendingContinuationWork | undefined {
+  const flow = getTaskFlowById(flowId);
+  if (!flow || !isContinuationWorkFlow(flow) || flow.status !== "failed") {
+    return undefined;
+  }
+  const state = decodeWorkState(flow);
+  return state?.terminalNoticePending ? workToRuntime(flow, state, "running") : undefined;
+}
+
+/**
+ * Release the notice obligation once delivery is durably owned elsewhere.
+ *
+ * CAS-guarded like every other transition here, so two concurrent drains cannot
+ * both hand off the same notice.
+ */
+export function clearPendingTerminalNotice(work: PendingContinuationWork): boolean {
+  if (!work.flowId || work.expectedRevision === undefined) {
+    return false;
+  }
+  const current = getTaskFlowById(work.flowId);
+  if (!current) {
+    return false;
+  }
+  const state = decodeWorkState(current);
+  if (!state?.terminalNoticePending) {
+    return false;
+  }
+  const { terminalNoticePending: _cleared, ...rest } = state;
+  const updated = updateFlowRecordByIdExpectedRevision({
+    flowId: work.flowId,
+    expectedRevision: work.expectedRevision,
+    patch: { stateJson: rest, updatedAt: Date.now() },
+  });
+  if (!updated.applied) {
+    log.warn(
+      `[continuation:work-terminal-notice-clear-not-committed] flowId=${work.flowId} expectedRevision=${work.expectedRevision}`,
+    );
+  }
+  return updated.applied;
 }
 
 /**

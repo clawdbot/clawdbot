@@ -30,6 +30,7 @@ import {
   queuedPendingWorkCount,
   supersedeQueuedTurnEndParkedWork,
 } from "./work-store.js";
+import { drainPendingTerminalNotices } from "./work-terminal-notice.js";
 
 const log = createSubsystemLogger("continuation/work-dispatch");
 const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
@@ -789,11 +790,16 @@ export async function recoverPendingContinuationWork(): Promise<{
   dispatched: number;
   failed: number;
   reaped: number;
+  terminalNotices: number;
 }> {
   const runtimeConfig = resolveContinuationRuntimeConfig();
   if (!runtimeConfig.enabled) {
-    return { sessions: 0, dispatched: 0, failed: 0, reaped: 0 };
+    return { sessions: 0, dispatched: 0, failed: 0, reaped: 0, terminalNotices: 0 };
   }
+  // Terminal rows are invisible to the pending-work scan below, so replay the
+  // notices they still owe before dispatching live work. Any notice whose
+  // handoff was interrupted by the restart is re-driven here.
+  const terminalNotices = await drainPendingTerminalNotices();
   const sessionKeys = listPendingWorkSessionKeysForRecovery();
   const includeRunningUpdatedAtOrBefore = Date.now() - RUNNING_WORK_RECOVERY_STALE_MS;
   let dispatched = 0;
@@ -810,5 +816,5 @@ export async function recoverPendingContinuationWork(): Promise<{
     failed += result.failed;
     reaped += result.reaped;
   }
-  return { sessions: sessionKeys.length, dispatched, failed, reaped };
+  return { sessions: sessionKeys.length, dispatched, failed, reaped, terminalNotices };
 }

@@ -22,6 +22,7 @@ import {
   reconcileUndeliverableGrantedWork,
   requeuePendingWork,
 } from "./work-store.js";
+import { deliverPendingTerminalNotice } from "./work-terminal-notice.js";
 
 const log = createSubsystemLogger("continuation/work-dispatch");
 const TRANSIENT_ERROR_RETRY_MS = 5_000;
@@ -591,23 +592,26 @@ export async function executePendingContinuationWork(
         ? { kind: "requeued", sessionKey: work.sessionKey, dueAt: retryDueAt }
         : { kind: "unchanged" };
     }
-    // Retries are exhausted: this wake will never run. The row terminalizes
-    // either way, but the operator log and the agent-visible outcome are keyed
-    // off the CAS result so a re-entrant or recovered caller holding a stale
-    // claim cannot report the same terminal outcome twice.
-    const terminalized = markPendingWorkFailed(work, message);
+    // Retries are exhausted: this wake will never run. The notice obligation is
+    // persisted in the SAME CAS that fails the row, so a crash before the agent
+    // is told leaves the obligation readable in the store rather than lost with
+    // the in-memory event queue. The CAS result stays the dedupe authority: a
+    // re-entrant or recovered caller holding a stale claim loses it and reports
+    // nothing.
+    const terminalized = markPendingWorkFailed(work, message, {
+      terminalNoticePending: "retry-exhausted",
+    });
     if (terminalized) {
       log.error(
         `[continuation:work-drive-error-exhausted] flowId=${work.flowId ?? "none"} session=${work.sessionKey} hop=${work.hop} attempts=${retryCount} maxRetries=${MAX_TRANSIENT_ERROR_RETRY_COUNT} error=${message}`,
       );
-      // Reason text is deliberately withheld: the raw driver error can carry
-      // provider payloads, URLs, or credentials, and this string is injected
-      // into the model's context. The durable row keeps the detail for
-      // operators.
-      enqueueSystemEvent(
-        `[system:continuation-warning] continue_work permanently failed after exhausting ${MAX_TRANSIENT_ERROR_RETRY_COUNT} retries; the scheduled follow-up turn will not run. Reissue continue_work if the work is still needed.`,
-        { sessionKey: work.sessionKey, trusted: true },
-      );
+      // Hand the persisted obligation to the durable delivery queue. A failure
+      // here leaves the flag set for the startup drain to replay.
+      await deliverPendingTerminalNotice(work).catch((deliveryErr: unknown) => {
+        log.error(
+          `[continuation:work-terminal-notice-error] flowId=${work.flowId ?? "none"} session=${work.sessionKey} error=${formatErrorMessage(deliveryErr)}`,
+        );
+      });
     }
     return { kind: "failed" };
   }

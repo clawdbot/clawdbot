@@ -58,6 +58,7 @@ const hoisted = vi.hoisted(() => {
       dispatched: 0,
       failed: 0,
       reaped: 0,
+      terminalNotices: 0,
     })),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
@@ -475,7 +476,7 @@ describe("server-runtime-services", () => {
     });
     hoisted.recoverPendingContinuationWork.mockImplementationOnce(async () => {
       order.push("work");
-      return { sessions: 0, dispatched: 0, failed: 0, reaped: 0 };
+      return { sessions: 0, dispatched: 0, failed: 0, reaped: 0, terminalNotices: 0 };
     });
 
     activateScheduledServicesForTest();

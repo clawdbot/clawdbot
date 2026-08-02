@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const turnGrants: unknown[] = [];
 const systemEvents: unknown[] = [];
+const sessionDeliveryEnqueues: { idempotencyKey?: string }[] = [];
+const sessionDeliveryAcks: string[] = [];
 const activeQueueDeliveries: unknown[] = [];
 const workTransitionEvents: string[] = [];
 const replyRegistryReceivers = new Set<unknown>();
@@ -254,6 +256,20 @@ vi.mock("../../infra/system-events.js", () => ({
   },
 }));
 
+// The durable queue has its own real-store proof in
+// work-terminal-notice.durability.test.ts; here it is recorded so this unit
+// suite can assert the handoff without touching SQLite.
+vi.mock("../../infra/session-delivery-queue-storage.js", () => ({
+  enqueueSessionDelivery: (payload: { idempotencyKey?: string }) => {
+    sessionDeliveryEnqueues.push(payload);
+    return Promise.resolve(`delivery-${payload.idempotencyKey ?? sessionDeliveryEnqueues.length}`);
+  },
+  ackSessionDelivery: (id: string) => {
+    sessionDeliveryAcks.push(id);
+    return Promise.resolve();
+  },
+}));
+
 vi.mock("../../infra/continuation-tracer.js", () => ({
   emitContinuationWorkFireSpan: emitContinuationWorkFireSpanMock,
   emitContinuationWorkSpan: vi.fn(),
@@ -396,6 +412,7 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
       expectedRevision: number;
       currentStep?: string | null;
       blockedSummary?: string | null;
+      stateJson?: unknown;
       updatedAt?: number;
       endedAt?: number;
     }) => {
@@ -410,6 +427,7 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
       flow.status = "failed";
       flow.currentStep = params.currentStep ?? flow.currentStep;
       flow.blockedSummary = params.blockedSummary ?? null;
+      flow.stateJson = params.stateJson ?? flow.stateJson;
       flow.updatedAt = params.updatedAt ?? endedAt;
       flow.endedAt = endedAt;
       flow.revision += 1;
@@ -543,6 +561,8 @@ describe("continuation_work transient-error retry exhaustion", () => {
     vi.useFakeTimers({ now: 1_000_000 });
     turnGrants.length = 0;
     systemEvents.length = 0;
+    sessionDeliveryEnqueues.length = 0;
+    sessionDeliveryAcks.length = 0;
     activeQueueDeliveries.length = 0;
     workTransitionEvents.length = 0;
     replyRegistryReceivers.clear();
@@ -697,6 +717,25 @@ describe("continuation_work transient-error retry exhaustion", () => {
     expect(terminalExhaustionLogs()).toHaveLength(1);
     expect(terminalExhaustionLogs()[0]).toContain(`session=${sessionKey}`);
     expect(terminalExhaustionLogs()[0]).toContain(`maxRetries=${MAX_TRANSIENT_RETRIES}`);
+
+    // The notice is handed to the durable queue before the volatile fast path,
+    // and the in-memory event carries that row's ack id so it is acknowledged
+    // only after the prompt consumes it.
+    expect(sessionDeliveryEnqueues).toHaveLength(1);
+    expect(sessionDeliveryEnqueues[0]).toMatchObject({
+      kind: "systemEvent",
+      sessionKey,
+      idempotencyKey: `continuation-work-terminal-notice:${workFlow()?.flowId}`,
+    });
+    expect(sessionDeliveryAcks).toEqual([]);
+    expect(terminalEvent?.options).toMatchObject({
+      sessionDeliveryAckId: expect.stringContaining("continuation-work-terminal-notice:"),
+    });
+    // The obligation is released only after that handoff.
+    expect(
+      (workFlow()?.stateJson as { terminalNoticePending?: string } | undefined)
+        ?.terminalNoticePending,
+    ).toBeUndefined();
   });
 
   it("does not re-announce the terminal outcome when a concurrent writer already advanced the row", async () => {

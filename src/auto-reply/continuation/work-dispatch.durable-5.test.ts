@@ -812,7 +812,13 @@ describe("durable continuation_work dispatch", () => {
 
     const result = await recoverPendingContinuationWork();
 
-    expect(result).toEqual({ sessions: 1, dispatched: 0, failed: 0, reaped: 0 });
+    expect(result).toEqual({
+      sessions: 1,
+      dispatched: 0,
+      failed: 0,
+      reaped: 0,
+      terminalNotices: 0,
+    });
     expect(flow).toMatchObject({ status: "running" });
     expect(flow.stateJson).not.toMatchObject({ busySkipCount: expect.any(Number) });
     expect(turnGrants).toHaveLength(0);
@@ -844,7 +850,13 @@ describe("durable continuation_work dispatch", () => {
 
     const result = await recoverPendingContinuationWork();
 
-    expect(result).toEqual({ sessions: 1, dispatched: 0, failed: 0, reaped: 0 });
+    expect(result).toEqual({
+      sessions: 1,
+      dispatched: 0,
+      failed: 0,
+      reaped: 0,
+      terminalNotices: 0,
+    });
     expect(flow.status).toBe("succeeded");
     expect(flow.currentStep).toBe("Same-session continuation turn granted");
     expect(turnGrants).toHaveLength(0);
