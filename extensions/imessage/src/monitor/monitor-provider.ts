@@ -488,7 +488,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const recoveryCursorRowid = loadIMessageRecoveryCursor(
     accountInfo.accountId,
     recoveryCursorDbIdentity,
-    { migrateLegacyCatchup: !catchupCfg.enabled },
+    { migrateLegacyCatchup: !catchupCfg.enabled, watermarkRowid: recoveryBoundaryRowid },
   );
   const watchSinceRowid = catchupCfg.enabled
     ? null

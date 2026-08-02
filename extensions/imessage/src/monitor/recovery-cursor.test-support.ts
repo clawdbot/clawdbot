@@ -94,6 +94,29 @@ describe("iMessage recovery cursor", () => {
     expect(loadIMessageRecoveryCursor("default", DB)).toBe(12396);
   });
 
+  it("rewinds a cursor above the database watermark when chat.db is replaced at the same path", () => {
+    advanceIMessageRecoveryCursor("default", DB, 9000);
+    expect(
+      loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false, watermarkRowid: 5 }),
+    ).toBe(5);
+    expect(loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBe(5);
+    advanceIMessageRecoveryCursor("default", DB, 6);
+    expect(loadIMessageRecoveryCursor("default", DB)).toBe(6);
+  });
+
+  it("keeps a cursor at or below the database watermark", () => {
+    advanceIMessageRecoveryCursor("default", DB, 4990);
+    expect(loadIMessageRecoveryCursor("default", DB, { watermarkRowid: 5000 })).toBe(4990);
+    expect(loadIMessageRecoveryCursor("default", DB, { watermarkRowid: 4990 })).toBe(4990);
+    expect(loadIMessageRecoveryCursor("default", DB, { watermarkRowid: null })).toBe(4990);
+  });
+
+  it("rewinds a migrated legacy catchup cursor above the database watermark", () => {
+    writeLegacyCatchupCursor("default", 9000);
+    expect(loadIMessageRecoveryCursor("default", DB, { watermarkRowid: 5 })).toBe(5);
+    expect(loadIMessageRecoveryCursor("default", DB)).toBe(5);
+  });
+
   it("ignores non-finite rowids", () => {
     advanceIMessageRecoveryCursor("default", DB, Number.NaN);
     expect(loadIMessageRecoveryCursor("default", DB)).toBeNull();

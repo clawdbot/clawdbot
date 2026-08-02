@@ -1194,6 +1194,101 @@ describe("iMessage monitor last-route updates", () => {
     ).toBe(4996);
   });
 
+  it("tails a chat.db replaced at the same path instead of suppressing every row below the stale cursor", async () => {
+    const stateDir = createTestStateDir("openclaw-imsg-db-replaced-");
+    const dbPath = path.join(stateDir, "chat.db");
+    advanceIMessageRecoveryCursor(
+      "default",
+      resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
+      9000,
+    );
+    const { DatabaseSync } = await import("node:sqlite");
+    const restored = new DatabaseSync(dbPath);
+    try {
+      restored.exec("CREATE TABLE message (guid TEXT, sender TEXT, text TEXT, created_at TEXT);");
+      restored
+        .prepare(
+          "INSERT INTO message(rowid, guid, sender, text, created_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          5,
+          "RESTORED-GUID-5",
+          "+15550001111",
+          "restored history",
+          new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+        );
+    } finally {
+      restored.close();
+    }
+
+    let sinceRowid: unknown;
+    const client = createIMessageWatchClient({
+      request: async (method: string, params?: Record<string, unknown>) => {
+        if (method === "watch.subscribe") {
+          sinceRowid = params?.since_rowid;
+        }
+        return { subscription: 1 };
+      },
+      onClose: async (notify) => {
+        const live = new DatabaseSync(dbPath);
+        try {
+          live
+            .prepare(
+              "INSERT INTO message(rowid, guid, sender, text, created_at) VALUES (?, ?, ?, ?, ?)",
+            )
+            .run(
+              6,
+              "REPLACEMENT-GUID-6",
+              "+15550001111",
+              "sent after the restore",
+              new Date().toISOString(),
+            );
+          const rows = live
+            .prepare(
+              "SELECT rowid AS id, guid, sender, text, created_at FROM message WHERE rowid > ? ORDER BY rowid",
+            )
+            .all(typeof sinceRowid === "number" ? sinceRowid : 0) as Array<{
+            id: number;
+            guid: string;
+            sender: string;
+            text: string;
+            created_at: string;
+          }>;
+          for (const row of rows) {
+            notify({
+              id: row.id,
+              guid: row.guid,
+              chat_id: 123,
+              sender: row.sender,
+              is_from_me: false,
+              text: row.text,
+              is_group: false,
+              created_at: row.created_at,
+            });
+          }
+        } finally {
+          live.close();
+        }
+        await Promise.resolve();
+        await Promise.resolve();
+      },
+    });
+
+    await runIMessageMonitor({ imessage: { dbPath } });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true, since_rowid: 5 },
+      { timeoutMs: 10_000 },
+    );
+    await vi.waitFor(() => {
+      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      loadIMessageRecoveryCursor("default", resolveIMessageRecoveryCursorDbIdentity({ dbPath })),
+    ).toBe(6);
+  });
+
   it("repairs anchorless group watch payloads before routing or cursor updates", async () => {
     openClawStates.push(
       await createOpenClawTestState({
