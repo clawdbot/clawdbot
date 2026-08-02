@@ -341,6 +341,158 @@ describe("waitForAgentJob timeout fallback", () => {
     await expect(waitPromise).resolves.toMatchObject(terminalOutcome);
   });
 
+  it.each([
+    {
+      label: "restart error before a later provider end",
+      first: {
+        phase: "error",
+        endedAt: 1_100,
+        aborted: true,
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        error: "Restart interrupted the run",
+      },
+      second: {
+        phase: "end",
+        endedAt: 1_200,
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      expected: {
+        status: "error",
+        endedAt: 1_100,
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        error: "Restart interrupted the run",
+      },
+    },
+    {
+      label: "RPC cancellation error before a later provider end",
+      first: {
+        phase: "error",
+        endedAt: 1_100,
+        aborted: true,
+        stopReason: "rpc",
+        error: "RPC cancelled the run",
+      },
+      second: {
+        phase: "end",
+        endedAt: 1_200,
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      expected: {
+        status: "error",
+        endedAt: 1_100,
+        stopReason: "rpc",
+        error: "RPC cancelled the run",
+      },
+    },
+    {
+      label: "restart error after an earlier provider end",
+      first: {
+        phase: "error",
+        endedAt: 1_200,
+        aborted: true,
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        error: "Restart interrupted the run",
+      },
+      second: {
+        phase: "end",
+        endedAt: 1_100,
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      expected: {
+        status: "timeout",
+        endedAt: 1_100,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+      },
+    },
+    {
+      label: "provider end before a later restart error",
+      first: {
+        phase: "end",
+        endedAt: 1_100,
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      second: {
+        phase: "error",
+        endedAt: 1_200,
+        aborted: true,
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        error: "Restart interrupted the run",
+      },
+      expected: {
+        status: "timeout",
+        endedAt: 1_100,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+      },
+    },
+    {
+      label: "provider end after an earlier RPC cancellation error",
+      first: {
+        phase: "end",
+        endedAt: 1_200,
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      second: {
+        phase: "error",
+        endedAt: 1_100,
+        aborted: true,
+        stopReason: "rpc",
+        error: "RPC cancelled the run",
+      },
+      expected: {
+        status: "error",
+        endedAt: 1_100,
+        stopReason: "rpc",
+        error: "RPC cancelled the run",
+      },
+    },
+  ])("preserves canonical terminal precedence for $label", async ({ first, second, expected }) => {
+    const runId = `run-timeout-fallback-cross-phase-${runSequence++}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { startedAt: 1_000, ...first },
+    });
+    const freshWaitPromise = waitForAgentJob({
+      runId,
+      timeoutMs: 20_000,
+      ignoreCachedSnapshot: true,
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { startedAt: 1_000, ...second },
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(waitPromise).resolves.toMatchObject({ startedAt: 1_000, ...expected });
+    await expect(freshWaitPromise).resolves.toMatchObject({ startedAt: 1_000, ...expected });
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject(expected);
+  });
+
   it("preserves earlier cancellation over an exhausted fallback provider timeout", async () => {
     const runId = `run-timeout-fallback-exhausted-cancelled-${runSequence++}`;
 
