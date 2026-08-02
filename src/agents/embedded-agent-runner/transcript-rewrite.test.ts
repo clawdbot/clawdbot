@@ -9,6 +9,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { beforeAll, describe, expect, it } from "vitest";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
+  appendTranscriptMessage,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
