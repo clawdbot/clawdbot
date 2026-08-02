@@ -55,4 +55,34 @@ describe("trusted in-process Gateway session creation", () => {
       { scopes: ["operator.write"] },
     );
   });
+
+  it("carries visible-spawn policy through signed identity on fallback dispatch", async () => {
+    mocks.hasContext = false;
+    const inheritedToolPolicy = {
+      version: 1 as const,
+      allow: ["read", "sessions_spawn"],
+      deny: ["exec"],
+    };
+
+    await callInProcessGatewayToolWithCreation(
+      "sessions.create",
+      { agentId: "main", parentSessionKey: "agent:main:main", spawnDepth: 1 },
+      {
+        via: "spawn",
+        actor: { type: "agent", id: "agent:main:main" },
+        inheritedToolPolicy,
+      },
+    );
+
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+      "sessions.create",
+      {},
+      { agentId: "main", parentSessionKey: "agent:main:main", spawnDepth: 1 },
+      {
+        scopes: ["operator.write"],
+        requireAgentRuntimeIdentity: true,
+        sessionSpawnContext: { inheritedToolPolicy },
+      },
+    );
+  });
 });

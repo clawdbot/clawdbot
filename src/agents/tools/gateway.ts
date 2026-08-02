@@ -15,7 +15,10 @@ import {
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
+import {
+  type AgentRuntimeSessionSpawnContext,
+  mintAgentRuntimeIdentityToken,
+} from "../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
@@ -340,6 +343,7 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
   required?: boolean;
+  sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 }): Promise<string | undefined> {
   const optionalLocalIdentity = OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS.has(params.method);
   if (
@@ -366,7 +370,10 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     throw new Error("agent gateway calls require the trusted local gateway context");
   }
   try {
-    return await mintAgentRuntimeIdentityToken(identity);
+    return await mintAgentRuntimeIdentityToken({
+      ...identity,
+      ...(params.sessionSpawnContext ? { sessionSpawnContext: params.sessionSpawnContext } : {}),
+    });
   } catch (error) {
     if (optionalLocalIdentity && !params.required) {
       return undefined;
@@ -508,6 +515,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     expectFinal?: boolean;
     scopes?: OperatorScope[];
     requireAgentRuntimeIdentity?: boolean;
+    sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
     signal?: AbortSignal;
   },
 ) {
@@ -526,6 +534,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     opts,
     target: gateway.target,
     required: extra?.requireAgentRuntimeIdentity,
+    sessionSpawnContext: extra?.sessionSpawnContext,
   });
   const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({
     method,

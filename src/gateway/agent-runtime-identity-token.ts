@@ -28,6 +28,15 @@ export type AgentRuntimeIdentity = {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+};
+
+export type AgentRuntimeSessionSpawnContext = {
+  inheritedToolPolicy: {
+    version: 1;
+    allow: string[];
+    deny: string[];
+  };
 };
 
 type AgentRuntimeIdentityTokenPayload = {
@@ -37,7 +46,28 @@ type AgentRuntimeIdentityTokenPayload = {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
+
+function decodeStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    return undefined;
+  }
+  return value.map((entry) => entry.trim()).filter(Boolean);
+}
+
+function decodeSessionSpawnContext(value: unknown): AgentRuntimeSessionSpawnContext | undefined {
+  if (!isRecord(value) || !isRecord(value.inheritedToolPolicy)) {
+    return undefined;
+  }
+  const policy = value.inheritedToolPolicy;
+  const allow = decodeStringList(policy.allow);
+  const deny = decodeStringList(policy.deny);
+  if (policy.version !== 1 || !allow || !deny) {
+    return undefined;
+  }
+  return { inheritedToolPolicy: { version: 1, allow, deny } };
+}
 
 async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {
   return (await loadExecApprovalsAsync()).socket?.token?.trim() || null;
@@ -175,6 +205,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       turnSourceAccountId?: unknown;
       messageActionContext?: unknown;
       cronSelfManagementContext?: unknown;
+      sessionSpawnContext?: unknown;
     };
     if (
       raw.kind !== AGENT_RUNTIME_IDENTITY_TOKEN_KIND ||
@@ -219,6 +250,13 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     if (rawCronSelfManagement !== undefined && !cronSelfManagementContext) {
       return undefined;
     }
+    const sessionSpawnContext =
+      raw.sessionSpawnContext === undefined
+        ? undefined
+        : decodeSessionSpawnContext(raw.sessionSpawnContext);
+    if (raw.sessionSpawnContext !== undefined && !sessionSpawnContext) {
+      return undefined;
+    }
     return {
       kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
       agentId,
@@ -226,6 +264,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
       ...(messageActionContext ? { messageActionContext } : {}),
       ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
+      ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
     };
   } catch {
     return undefined;
@@ -239,6 +278,7 @@ export async function mintAgentRuntimeIdentityToken(params: {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementJobId?: string;
+  sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 }): Promise<string> {
   if (
     params.messageActionContext?.sourceReplyFinal === true &&
@@ -272,6 +312,7 @@ export async function mintAgentRuntimeIdentityToken(params: {
     ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
     ...(messageActionContext ? { messageActionContext } : {}),
     ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
+    ...(params.sessionSpawnContext ? { sessionSpawnContext: params.sessionSpawnContext } : {}),
   });
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
   return `${payload}.${signature}`;
@@ -307,5 +348,6 @@ export async function verifyAgentRuntimeIdentityToken(
     ...(payload.cronSelfManagementContext
       ? { cronSelfManagementContext: payload.cronSelfManagementContext }
       : {}),
+    ...(payload.sessionSpawnContext ? { sessionSpawnContext: payload.sessionSpawnContext } : {}),
   };
 }

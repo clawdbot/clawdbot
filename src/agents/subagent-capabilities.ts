@@ -92,6 +92,20 @@ function shouldInspectStoredSubagentEnvelope(sessionKey: string): boolean {
   return isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey);
 }
 
+function isDashboardSessionKey(sessionKey: string): boolean {
+  return parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
+}
+
+function canInspectStoredSubagentEnvelope(
+  sessionKey: string,
+  store?: SessionCapabilityStore,
+): boolean {
+  return (
+    shouldInspectStoredSubagentEnvelope(sessionKey) ||
+    (Boolean(store) && isDashboardSessionKey(sessionKey))
+  );
+}
+
 function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string): boolean {
   const leftAgentId = normalizeOptionalLowercaseString(
     parseAgentSessionKey(leftSessionKey)?.agentId,
@@ -131,6 +145,7 @@ export function resolveSubagentCapabilityStore(
   opts?: {
     cfg?: OpenClawConfig;
     store?: SessionCapabilityStore;
+    spawnedBy?: string | null;
   },
 ): SessionCapabilityStore | undefined {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
@@ -140,7 +155,13 @@ export function resolveSubagentCapabilityStore(
   if (opts?.store) {
     return opts.store;
   }
-  if (!opts?.cfg || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+  const spawnedDashboard =
+    Boolean(normalizeOptionalString(opts?.spawnedBy)) &&
+    isDashboardSessionKey(normalizedSessionKey);
+  if (
+    !opts?.cfg ||
+    (!shouldInspectStoredSubagentEnvelope(normalizedSessionKey) && !spawnedDashboard)
+  ) {
     return undefined;
   }
   const parsed = parseAgentSessionKey(normalizedSessionKey);
@@ -204,7 +225,8 @@ function isStoredSubagentEnvelopeSession(
   if (isSubagentSessionKey(normalizedSessionKey)) {
     return true;
   }
-  if (!isAcpSessionKey(normalizedSessionKey)) {
+  const dashboardSession = isDashboardSessionKey(normalizedSessionKey);
+  if (!isAcpSessionKey(normalizedSessionKey) && !dashboardSession) {
     return false;
   }
 
@@ -215,6 +237,14 @@ function isStoredSubagentEnvelopeSession(
       cfg: params.cfg,
       store: params.store,
     });
+  if (dashboardSession) {
+    return (
+      typeof entry?.spawnDepth === "number" &&
+      Number.isInteger(entry.spawnDepth) &&
+      entry.spawnDepth >= 1 &&
+      Boolean(normalizeOptionalString(entry.spawnedBy))
+    );
+  }
   if (
     normalizeSubagentRole(entry?.subagentRole) ||
     normalizeSubagentControlScope(entry?.subagentControlScope)
@@ -257,7 +287,10 @@ export function isSubagentEnvelopeSession(
   if (isSubagentSessionKey(normalizedSessionKey)) {
     return true;
   }
-  if (!isAcpSessionKey(normalizedSessionKey)) {
+  if (!isAcpSessionKey(normalizedSessionKey) && !isDashboardSessionKey(normalizedSessionKey)) {
+    return false;
+  }
+  if (isDashboardSessionKey(normalizedSessionKey) && !opts?.entry && !opts?.store) {
     return false;
   }
   const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
@@ -282,7 +315,10 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
   },
 ): PersistedSubagentToolPolicyEnvelope | undefined {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
-  if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+  if (
+    !normalizedSessionKey ||
+    !canInspectStoredSubagentEnvelope(normalizedSessionKey, opts?.store)
+  ) {
     return undefined;
   }
   const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
@@ -382,7 +418,10 @@ export function resolveStoredSubagentInheritedToolDenylist(
   },
 ): string[] {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
-  if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+  if (
+    !normalizedSessionKey ||
+    !canInspectStoredSubagentEnvelope(normalizedSessionKey, opts?.store)
+  ) {
     return [];
   }
   const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
@@ -403,7 +442,10 @@ export function resolveStoredSubagentInheritedToolAllowlist(
   },
 ): string[] {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
-  if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+  if (
+    !normalizedSessionKey ||
+    !canInspectStoredSubagentEnvelope(normalizedSessionKey, opts?.store)
+  ) {
     return [];
   }
   const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);

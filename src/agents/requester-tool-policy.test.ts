@@ -101,6 +101,36 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.subagentPolicy).toBeDefined();
   });
 
+  it("uses a persisted projection for a spawn-owned dashboard child", async () => {
+    const parentSessionKey = "agent:main:main";
+    const childSessionKey = "agent:main:dashboard:visible-child";
+    await writeSession(childSessionKey, {
+      spawnedBy: parentSessionKey,
+      parentSessionKey,
+      spawnDepth: 1,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "sessions_spawn"],
+      inheritedToolDeny: ["exec"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: childSessionKey,
+      spawnedBy: parentSessionKey,
+    });
+
+    expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("persisted-child");
+    expect(result.senderPolicy).toBeUndefined();
+    expect(result.groupPolicy).toBeUndefined();
+    expect(result.inheritedToolPolicy).toEqual({
+      allow: ["read", "sessions_spawn"],
+      deny: ["exec"],
+    });
+    expect(result.subagentPolicy).toBeDefined();
+  });
+
   it("keeps the sender snapshot while applying current non-sender restrictions", async () => {
     const childSessionKey = "agent:main:subagent:web-search";
     await writeSession(childSessionKey, {

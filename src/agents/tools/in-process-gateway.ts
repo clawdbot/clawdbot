@@ -49,6 +49,15 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
       syntheticScopes: scopes,
     });
   }
-  // The fallback is a real Gateway request; trusted creation metadata never crosses the wire.
-  return await callGatewayTool<T>(method, {}, params, { scopes });
+  // The fallback is a real local Gateway request. Carry spawn policy only in
+  // the signed agent-runtime identity token, never in model-authored params.
+  return await callGatewayTool<T>(method, {}, params, {
+    scopes,
+    ...(creation.via === "spawn" && creation.inheritedToolPolicy
+      ? {
+          requireAgentRuntimeIdentity: true,
+          sessionSpawnContext: { inheritedToolPolicy: creation.inheritedToolPolicy },
+        }
+      : {}),
+  });
 }
