@@ -437,7 +437,12 @@ async function resolveReadOnlyToolsEffectiveInventory(
         toolOverrides: context.toolOverrides,
       });
       if (catalog) {
-        return projectMcpCatalog({ base, catalog, context, workspaceDir: context.workspaceDir });
+        return await projectMcpCatalog({
+          base,
+          catalog,
+          context,
+          workspaceDir: context.workspaceDir,
+        });
       }
     } catch (error) {
       logWarn(
@@ -477,15 +482,15 @@ async function resolveReadOnlyToolsEffectiveInventory(
   if (!catalog) {
     return maybeAppendMcpNotice(base, mcpConfig.serverNames, "not-listed");
   }
-  return projectMcpCatalog({ base, catalog, context, workspaceDir: runtime.workspaceDir });
+  return await projectMcpCatalog({ base, catalog, context, workspaceDir: runtime.workspaceDir });
 }
 
-function projectMcpCatalog(params: {
+async function projectMcpCatalog(params: {
   base: EffectiveToolInventoryResult;
   catalog: Parameters<typeof buildBundleMcpToolsFromCatalog>[0]["catalog"];
   context: TrustedToolsEffectiveContext;
   workspaceDir: string;
-}): EffectiveToolInventoryResult {
+}): Promise<EffectiveToolInventoryResult> {
   const projectedMcpTools = buildBundleMcpToolsFromCatalog({
     catalog: params.catalog,
     reservedToolNames: params.base.groups.flatMap((group) => group.tools.map((tool) => tool.id)),
@@ -496,7 +501,7 @@ function projectMcpCatalog(params: {
     mcpTools: projectedMcpTools,
   });
   const agentDir = resolveAgentDir(params.context.cfg, params.context.agentId);
-  const runtimeModelContext = resolveEffectiveToolInventoryRuntimeModelContext({
+  const runtimeModelContext = await resolveEffectiveToolInventoryRuntimeModelContextAsync({
     cfg: params.context.cfg,
     agentId: params.context.agentId,
     agentDir,

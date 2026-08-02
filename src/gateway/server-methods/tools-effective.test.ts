@@ -532,6 +532,31 @@ describe("tools.effective handler", () => {
     });
   });
 
+  it("uses async model context while projecting a warm MCP catalog", async () => {
+    mockWarmMcpTool();
+    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockImplementation(() => {
+      throw new Error("synchronous model context should not be used");
+    });
+    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync.mockResolvedValue({
+      modelApi: "openai-responses",
+      runtimeModel: {
+        id: "gpt-4.1",
+        name: "GPT 4.1",
+        provider: "openai",
+        api: "openai-responses",
+      },
+    });
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(
+      runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
+    ).toHaveBeenCalledTimes(2);
+    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).not.toHaveBeenCalled();
+  });
+
   it("projects MCP tools from the session-owning native harness catalog", async () => {
     const loaded = runtimeMocks.loadSessionEntry();
     runtimeMocks.loadSessionEntry.mockReturnValueOnce({
