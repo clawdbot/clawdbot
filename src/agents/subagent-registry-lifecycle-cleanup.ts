@@ -552,6 +552,7 @@ export function createSubagentRegistryLifecycleCleanup(
       timeoutMs: params.subagentAnnounceTimeoutMs,
       cleanup: suppressSessionEffects ? "keep" : cleanup,
       roundOneReply: pendingPayload.frozenResultText ?? undefined,
+      terminalReply: pendingPayload.terminalReply,
       fallbackReply: pendingPayload.fallbackFrozenResultText ?? undefined,
       waitForCompletion: false,
       startedAt: pendingPayload.startedAt,

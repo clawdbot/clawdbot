@@ -417,6 +417,64 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it.each([
+    {
+      terminalReply: { disposition: "visible", text: "authoritative final" } as const,
+      resultText: "authoritative final",
+    },
+    {
+      terminalReply: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+    },
+    {
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+    },
+  ])(
+    "persists $terminalReply.disposition producer evidence without transcript inference",
+    async ({ terminalReply, resultText }) => {
+      const entry = createRunEntry({ expectsCompletionMessage: true });
+      const captureSubagentCompletionReply = vi.fn(async () => "stale transcript reply");
+      const runSubagentAnnounceFlow = vi.fn(async () => true);
+      const controller = createLifecycleController({
+        entry,
+        captureSubagentCompletionReply,
+        runSubagentAnnounceFlow,
+      });
+
+      await completeRun(controller, entry, {
+        triggerCleanup: true,
+        terminalReply,
+      });
+
+      expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
+      expect(entry.completion).toMatchObject({ terminalReply, resultText });
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
+        expect.objectContaining({ terminalReply }),
+      );
+    },
+  );
+
+  it("merges late visible reply evidence into an already-terminal completion", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    const captureSubagentCompletionReply = vi.fn(async () => "legacy fallback");
+    const controller = createLifecycleController({ entry, captureSubagentCompletionReply });
+
+    await completeRun(controller, entry, {
+      terminalReply: { disposition: "empty" },
+    });
+    await completeRun(controller, entry, {
+      endedAt: 4_001,
+      terminalReply: { disposition: "visible", text: "late authoritative reply" },
+    });
+
+    expect(entry.completion).toMatchObject({
+      resultText: "late authoritative reply",
+      terminalReply: { disposition: "visible", text: "late authoritative reply" },
+    });
+    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
+  });
+
   it("runs detached cleanup outside a disposed requester transcript owner", async () => {
     const sessionKey = "agent:main:disposed-cleanup-owner";
     const entry = createRunEntry({

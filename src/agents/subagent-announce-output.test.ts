@@ -158,15 +158,13 @@ describe("readSubagentOutput", () => {
   });
 
   it.each(["toolUse", "functionCall", "function_call"])(
-    "reports visible tool activity for provider-specific %s transcript blocks",
+    "does not synthesize output from provider-specific %s transcript blocks",
     async (type) => {
       installOutputDeps({
         messages: [{ role: "assistant", content: [{ type, name: "read" }] }],
       });
 
-      await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-        "1 tool call(s) made without visible output.",
-      );
+      await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
     },
   );
 
@@ -265,7 +263,7 @@ describe("readSubagentOutput", () => {
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 
-  it("reports only tool calls belonging to the latest user turn", async () => {
+  it("does not synthesize output from tool calls in the latest user turn", async () => {
     installOutputDeps({
       messages: [
         {
@@ -280,9 +278,7 @@ describe("readSubagentOutput", () => {
       ],
     });
 
-    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-      "1 tool call(s) made without visible output.",
-    );
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 
   it("does not fall back to tool output when the last assistant turn is empty", async () => {

@@ -914,6 +914,24 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
+  it("records producer-owned empty output without consulting transcript fallback", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-empty",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      terminalReply: { disposition: "empty" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(chatHistoryMock).not.toHaveBeenCalled();
+    expect(readLatestAssistantReplyMock).not.toHaveBeenCalled();
+    expect(getAgentCall()?.params?.message).toContain("(no output)");
+  });
+
   it("uses fallback reply when wake continuation returns NO_REPLY", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",

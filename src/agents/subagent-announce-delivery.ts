@@ -7,6 +7,7 @@ import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercio
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
+import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
@@ -31,6 +32,7 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { sanitizeAgentRunTerminalReplyText } from "./agent-run-terminal-reply.js";
 import { resolveDefaultAgentId } from "./agent-scope-config.js";
 import {
   getAgentCommandDeliveryFailure,
@@ -687,7 +689,10 @@ function resolveTextCompletionDirectFallback(events: readonly AgentInternalEvent
     if (event.status !== "ok") {
       continue;
     }
-    const result = typeof event.result === "string" ? event.result.trim() : "";
+    const result =
+      typeof event.result === "string"
+        ? sanitizeAgentRunTerminalReplyText(sanitizePendingFinalDeliveryText(event.result))
+        : "";
     if (result && result !== "(no output)") {
       return result;
     }

@@ -1,3 +1,4 @@
+import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type {
   SubagentCompletionDeliveryState,
   SubagentCompletionState,
@@ -32,6 +33,11 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
     entry.pauseReason !== "sessions_yield"
       ? "interrupted-recovery"
       : undefined;
+  if (entry.completion) {
+    entry.completion.terminalReply = normalizeAgentRunTerminalReplySnapshot(
+      entry.completion.terminalReply,
+    );
+  }
   const killReconciliation = entry.killReconciliation;
   if (
     !killReconciliation ||

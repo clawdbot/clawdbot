@@ -22,6 +22,10 @@ import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.js";
+import {
+  sanitizeAgentRunTerminalReplyText,
+  type AgentRunTerminalReplySnapshot,
+} from "../agent-run-terminal-reply.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
@@ -496,7 +500,7 @@ export function createAcpVisibleTextAccumulator() {
         const leadCandidate = resolveNextCandidate(pendingSilentPrefix, chunk);
         const trimmedLeadCandidate = leadCandidate.trim();
         if (
-          isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
+          trimmedLeadCandidate.toUpperCase() === SILENT_REPLY_TOKEN ||
           isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
         ) {
           pendingSilentPrefix = leadCandidate;
@@ -537,6 +541,17 @@ export function createAcpVisibleTextAccumulator() {
     },
     finalizeRaw(): string {
       return visibleText;
+    },
+    finalizeReplySnapshot(): AgentRunTerminalReplySnapshot {
+      const text = sanitizeAgentRunTerminalReplyText(visibleText);
+      if (text) {
+        return { disposition: "visible", text };
+      }
+      // ACP owns this distinction only until finalization; preserve it before
+      // the buffered exact control token is otherwise indistinguishable from no output.
+      return pendingSilentPrefix.trim().toUpperCase() === SILENT_REPLY_TOKEN
+        ? { disposition: "silent" }
+        : { disposition: "empty" };
     },
   };
 }

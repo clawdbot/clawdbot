@@ -42,6 +42,7 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
       required: true,
       resultText: "done",
       capturedAt: 260,
+      terminalReply: { disposition: "visible", text: "done" },
     },
     delivery: {
       status: "pending",

@@ -1,6 +1,7 @@
 import type { SubagentEndReason } from "../context-engine/types.js";
 /** Persisted execution, completion, delivery, and attachment state for child runs. */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
@@ -21,6 +22,7 @@ export type SubagentCompletionRequest = {
   suppressSessionEffects?: boolean;
   recoverInterrupted?: true;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 export type ContextEngineSubagentEndedParams = {
@@ -55,6 +57,7 @@ export type PendingFinalDeliveryPayload = {
   frozenResultText?: string | null;
   fallbackFrozenResultText?: string | null;
   wakeOnDescendantSettle?: boolean;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 export type SubagentRestartRecoveryReceipt = {
@@ -89,6 +92,7 @@ export type SubagentCompletionState = {
   capturedAt?: number;
   fallbackResultText?: string | null;
   fallbackCapturedAt?: number;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 export type SwarmCollectorStatus = "done" | "failed" | "killed" | "timeout";

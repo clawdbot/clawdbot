@@ -175,6 +175,7 @@ export async function runAcpAgentCommand(params: {
 
   const finalTextRaw = visibleTextAccumulator.finalizeRaw();
   const finalText = visibleTextAccumulator.finalize();
+  const terminalReply = visibleTextAccumulator.finalizeReplySnapshot();
   let sessionEntry = params.sessionEntry;
   try {
     const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
@@ -247,11 +248,13 @@ export async function runAcpAgentCommand(params: {
     abortSignal: params.opts.abortSignal,
     stopReason,
     resultStatus,
+    terminalReply,
   });
 
   const result = applyAgentRunAbortMetadata(
     attemptExecutionRuntime.buildAcpResult({
       payloadText: finalText,
+      terminalReply,
       startedAt,
       stopReason,
       resultStatus,

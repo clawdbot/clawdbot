@@ -376,4 +376,48 @@ describe("runEmbeddedAgentEntry", () => {
     expect(result.outcome).toBe("exhausted");
     expect(result.result.payloads).toEqual([]);
   });
+
+  it.each([
+    {
+      name: "embedded visible reply",
+      meta: { finalAssistantVisibleText: "visible", finalAssistantRawText: "visible" },
+      expected: { disposition: "visible", text: "visible" },
+    },
+    {
+      name: "CLI exact silence",
+      meta: { finalAssistantVisibleText: "NO_REPLY", finalAssistantRawText: "NO_REPLY" },
+      expected: { disposition: "silent" },
+    },
+    {
+      name: "clean empty reply",
+      meta: {},
+      expected: { disposition: "empty" },
+    },
+  ])("records the producer-owned terminal snapshot for $name", async ({ name, meta, expected }) => {
+    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "completed" as const,
+      result: await params.run(params.provider, params.model),
+      provider: params.provider,
+      model: params.model,
+      attempts: [],
+    }));
+    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
+    const result = await runEmbeddedAgentEntry({
+      selection: { cfg: {}, provider: "provider", model: "model" },
+      identity: { runId: `terminal-${name}`, agentId: "main", sessionId: "session-1" },
+      harness: {
+        workspaceDir: "/tmp/workspace",
+        preparation: { kind: "direct" },
+        resolveRuntimeOverride: () => undefined,
+      },
+      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+      sessionOverride: { kind: "preserve" },
+      runCandidate: async (provider, model) => ({
+        ...makeResult({ provider, model }),
+        meta: { ...makeResult({ provider, model }).meta, ...meta },
+      }),
+    });
+
+    expect(result.terminal.metadata.terminalReply).toEqual(expected);
+  });
 });

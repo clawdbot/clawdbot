@@ -40,7 +40,6 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
-  type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
@@ -53,6 +52,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type {
+  SubagentCompletionRequest,
   SubagentProgressOrigin,
   SubagentRestartRecoveryReceipt,
   SubagentRunRecord,
@@ -212,6 +212,7 @@ export function markSubagentRunPausedAfterYield(params: {
   if (completion.resultText !== undefined) {
     completion.resultText = undefined;
     completion.capturedAt = undefined;
+    completion.terminalReply = undefined;
     mutated = true;
   }
   return mutated;
@@ -294,16 +295,7 @@ export function createSubagentRunManager(params: {
     preserveTranscript?: boolean;
     provisionalKill?: boolean;
   }): void;
-  completeSubagentRun(args: {
-    runId: string;
-    endedAt?: number;
-    outcome: SubagentRunOutcome;
-    reason: SubagentLifecycleEndedReason;
-    sendFarewell?: boolean;
-    accountId?: string;
-    triggerCleanup: boolean;
-    startedAt?: number;
-  }): Promise<void>;
+  completeSubagentRun(args: SubagentCompletionRequest): Promise<void>;
   resolveSubagentTask(entry: SubagentRunRecord): DetachedTaskFindResult;
 }) {
   const findRunByIdentity = (runId: string): SubagentRunRecord | undefined =>
@@ -543,6 +535,7 @@ export function createSubagentRunManager(params: {
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
         startedAt: observedStartedAt,
+        terminalReply: wait.terminalReply,
       };
       await params.completeSubagentRun(completionForRetry);
     } catch (error) {
