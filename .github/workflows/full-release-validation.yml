@@ -308,6 +308,10 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
+          NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
+          NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
         run: |
           set -euo pipefail
           # Lane-selection inputs must match the prior run's manifest exactly;
@@ -321,6 +325,10 @@ jobs:
             --arg releasePackageSpec "$RELEASE_PACKAGE_SPEC" \
             --arg packageAcceptancePackageSpec "$PACKAGE_ACCEPTANCE_PACKAGE_SPEC" \
             --arg codexPluginSpec "$CODEX_PLUGIN_SPEC" \
+            --arg npmTelegramPackageSpec "$NPM_TELEGRAM_PACKAGE_SPEC" \
+            --arg npmTelegramProviderMode "$NPM_TELEGRAM_PROVIDER_MODE" \
+            --arg npmTelegramScenario "$NPM_TELEGRAM_SCENARIO" \
+            --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             '{
               provider: $provider,
               mode: $mode,
@@ -329,7 +337,11 @@ jobs:
               crossOsSuiteFilter: $crossOsSuiteFilter,
               releasePackageSpec: $releasePackageSpec,
               packageAcceptancePackageSpec: $packageAcceptancePackageSpec,
-              codexPluginSpec: $codexPluginSpec
+              codexPluginSpec: $codexPluginSpec,
+              npmTelegramPackageSpec: $npmTelegramPackageSpec,
+              npmTelegramProviderMode: $npmTelegramProviderMode,
+              npmTelegramScenario: $npmTelegramScenario,
+              allowUnreleasedChangelog: $allowUnreleasedChangelog
             }')"
           bash workflow/scripts/github/find-reusable-release-validation.sh \
             --target-sha "$TARGET_SHA" \
@@ -1544,6 +1556,10 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
+          NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
+          NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
         run: |
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"
@@ -1615,6 +1631,10 @@ jobs:
             --arg releasePackageSpec "$RELEASE_PACKAGE_SPEC" \
             --arg packageAcceptancePackageSpec "$PACKAGE_ACCEPTANCE_PACKAGE_SPEC" \
             --arg codexPluginSpec "$CODEX_PLUGIN_SPEC" \
+            --arg npmTelegramPackageSpec "$NPM_TELEGRAM_PACKAGE_SPEC" \
+            --arg npmTelegramProviderMode "$NPM_TELEGRAM_PROVIDER_MODE" \
+            --arg npmTelegramScenario "$NPM_TELEGRAM_SCENARIO" \
+            --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             '{
               version: 3,
               workflowName: $workflowName,
@@ -1637,7 +1657,11 @@ jobs:
                 crossOsSuiteFilter: $crossOsSuiteFilter,
                 releasePackageSpec: $releasePackageSpec,
                 packageAcceptancePackageSpec: $packageAcceptancePackageSpec,
-                codexPluginSpec: $codexPluginSpec
+                codexPluginSpec: $codexPluginSpec,
+                npmTelegramPackageSpec: $npmTelegramPackageSpec,
+                npmTelegramProviderMode: $npmTelegramProviderMode,
+                npmTelegramScenario: $npmTelegramScenario,
+                allowUnreleasedChangelog: $allowUnreleasedChangelog
               },
               controls: {
                 stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),

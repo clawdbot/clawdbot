@@ -3584,9 +3584,13 @@ describe("package artifact reuse", () => {
 
   it("runs full release children from the trusted workflow ref", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const evidenceReuseJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "evidence_reuse");
     const npmTelegramJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "npm_telegram");
     const performanceJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance");
+    const summaryJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
+    const evidenceReuseStep = workflowStep(evidenceReuseJob, "Find reusable validation evidence");
     const dispatchStep = workflowStep(npmTelegramJob, "Dispatch and monitor npm Telegram E2E");
+    const manifestStep = workflowStep(summaryJob, "Write release validation manifest");
 
     expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
     expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1');
@@ -3602,6 +3606,19 @@ describe("package artifact reuse", () => {
       'contains(fromJSON(\'["all","npm-telegram"]\'), inputs.rerun_group)',
     );
     expect(npmTelegramJob.if).toContain("needs.evidence_reuse.outputs.reuse != 'true'");
+    expect(evidenceReuseStep.env).toMatchObject({
+      ALLOW_UNRELEASED_CHANGELOG:
+        "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}",
+      NPM_TELEGRAM_PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
+      NPM_TELEGRAM_PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
+      NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
+    });
+    expectTextToIncludeAll(evidenceReuseStep.run, [
+      "npmTelegramPackageSpec: $npmTelegramPackageSpec",
+      "npmTelegramProviderMode: $npmTelegramProviderMode",
+      "npmTelegramScenario: $npmTelegramScenario",
+      "allowUnreleasedChangelog: $allowUnreleasedChangelog",
+    ]);
     expect(dispatchStep.env).toEqual({
       CHILD_WORKFLOW_KIND: "npm-telegram",
       CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
@@ -3613,6 +3630,19 @@ describe("package artifact reuse", () => {
       SCENARIO: "${{ inputs.npm_telegram_scenario }}",
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
     });
+    expect(manifestStep.env).toMatchObject({
+      ALLOW_UNRELEASED_CHANGELOG:
+        "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}",
+      NPM_TELEGRAM_PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
+      NPM_TELEGRAM_PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
+      NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
+    });
+    expectTextToIncludeAll(manifestStep.run, [
+      "npmTelegramPackageSpec: $npmTelegramPackageSpec",
+      "npmTelegramProviderMode: $npmTelegramProviderMode",
+      "npmTelegramScenario: $npmTelegramScenario",
+      "allowUnreleasedChangelog: $allowUnreleasedChangelog",
+    ]);
     expectTextToIncludeAll(dispatchStep.run, [
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"',
       'dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"',

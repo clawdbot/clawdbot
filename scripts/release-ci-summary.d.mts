@@ -39,7 +39,10 @@ export function expectedChildDispatches(
   trustedRef: string;
   workflow: string;
 }[];
-export function requiredChildKeysForRerunGroup(rerunGroup: unknown): Set<string>;
+export function requiredChildKeysForRerunGroup(
+  rerunGroup: unknown,
+  validationInputs?: Record<string, unknown>,
+): Set<string>;
 export function expectedSelectedChildDispatches(
   parentRunId: unknown,
   parentRunAttempt: unknown,
