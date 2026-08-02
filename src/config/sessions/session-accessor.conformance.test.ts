@@ -443,9 +443,9 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ]) {
         expect(adapter.readSessionUpdatedAt(scopedEntry(sessionKey))).toBe(oldTimestamp);
       }
-      expect(
-        adapter.readSessionUpdatedAt(scopedEntry("agent:main:lifecycle-cleanup-fresh")),
-      ).toBe(nowMs);
+      expect(adapter.readSessionUpdatedAt(scopedEntry("agent:main:lifecycle-cleanup-fresh"))).toBe(
+        nowMs,
+      );
 
       await expect(
         adapter.cleanupSessionLifecycleArtifacts({
