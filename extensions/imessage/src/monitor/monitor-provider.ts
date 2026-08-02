@@ -493,13 +493,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     recoveryCursorDbIdentity,
     { migrateLegacyCatchup: !catchupCfg.enabled, watermarkRowid: recoveryBoundaryRowid },
   );
-  const watchSinceRowid = catchupCfg.enabled
+  const reconciledWatchSinceRowid = catchupCfg.enabled
     ? null
     : recoveryCursorRowid !== null
       ? recoveryBoundaryRowid !== null
         ? Math.max(recoveryCursorRowid, recoveryBoundaryRowid - IMESSAGE_RECOVERY_MAX_ROWS)
         : recoveryCursorRowid
       : recoveryBoundaryRowid;
+  // imsg reserves cursor 0 for a subscribe-time MAX(ROWID) self-fence. Use the
+  // exclusive cursor before SQLite's first generated ROWID instead.
+  const watchSinceRowid = reconciledWatchSinceRowid === 0 ? -1 : reconciledWatchSinceRowid;
 
   let latestAdvancedRecoveryCursorRowid = recoveryCursorRowid ?? -1;
   const durableRecoveryCursorRowids = new Set<number>();
