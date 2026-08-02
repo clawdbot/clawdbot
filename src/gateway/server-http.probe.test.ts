@@ -192,6 +192,7 @@ describe("startup plugin HTTP routing", () => {
             { name: "empty header", accept: "" },
             { name: "rejected HTML with wildcard", accept: "text/html;q=0, */*" },
             { name: "nonzero HTML quality", accept: "text/html;q=0.5" },
+            { name: "text wildcard", accept: "text/*" },
           ];
           const nonHtmlCases = [
             { name: "JSON", accept: "application/json" },
@@ -199,6 +200,7 @@ describe("startup plugin HTTP routing", () => {
             { name: "zero-quality HTML", accept: "text/html;q=0" },
             { name: "zero-quality wildcard", accept: "*/*;q=0" },
             { name: "mixed-case zero quality", accept: "text/html;Q=0" },
+            { name: "zero-quality text wildcard", accept: "text/*;q=0" },
           ];
           for (const ready of [false, true]) {
             sidecarsReady = ready;

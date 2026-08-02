@@ -22,7 +22,10 @@ export function acceptsControlUiHtmlResponse(accept: string | undefined): boolea
     }
     const mediaType = rawMediaType?.trim().toLowerCase();
     return (
-      mediaType === "*/*" || mediaType === "text/html" || mediaType === "application/xhtml+xml"
+      mediaType === "*/*" ||
+      mediaType === "text/*" ||
+      mediaType === "text/html" ||
+      mediaType === "application/xhtml+xml"
     );
   });
 }
