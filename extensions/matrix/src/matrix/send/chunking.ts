@@ -37,6 +37,16 @@ type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
 
 const getCore = () => getMatrixRuntime();
 
+function normalizeMatrixEventLimit(limit: number, text: string): number {
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return limit;
+  }
+  const normalized = Math.max(1, Math.floor(limit));
+  // A UTF-16 limit of one cannot contain an astral code point without splitting its surrogate
+  // pair. Treat that single code point as the smallest valid Matrix event instead.
+  return normalized === 1 && /[\u{10000}-\u{10ffff}]/u.test(text) ? 2 : normalized;
+}
+
 function protectMatrixUnderlineTags(markdown: string): MatrixSpoilerProtection {
   const codeRegions = findCodeRegions(markdown);
   const metadataRanges = findMatrixMarkdownMetadataRanges(markdown);
@@ -170,11 +180,14 @@ export function prepareMatrixSingleText(
       accountId: opts.accountId,
       supportsBlockTables: MATRIX_FORMAT_PROFILE.constructs.table === "native",
     });
-  const singleEventLimit = Math.min(
-    getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
-    MATRIX_FORMAT_PROFILE.chunk.limit,
-  );
   const convertedText = renderMatrixMarkdownTables(trimmedText, tableMode);
+  const singleEventLimit = normalizeMatrixEventLimit(
+    Math.min(
+      getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
+      MATRIX_FORMAT_PROFILE.chunk.limit,
+    ),
+    convertedText,
+  );
   const eventTextLength = Math.max(
     convertedText.length,
     markdownToMatrixBody(convertedText).length,

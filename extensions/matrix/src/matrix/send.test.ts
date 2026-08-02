@@ -441,6 +441,36 @@ describe("sendMessageMatrix durable delivery", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
+  it("dispatches fractional BMP and astral limits through the real send path", async () => {
+    chunkMarkdownTextWithModeMock.mockImplementation((text) => Array.from(text));
+
+    resolveTextChunkLimitMock.mockReturnValue(0.5);
+    const bmp = makeClient();
+    await sendMessageMatrix("room:!room:example", "ABCD", {
+      client: bmp.client,
+      cfg: {} as never,
+    });
+    expect(bmp.sendMessage).toHaveBeenCalledTimes(4);
+    expect(bmp.sendMessage.mock.calls.map((call) => requireRecord(call[1]).body)).toEqual([
+      "A",
+      "B",
+      "C",
+      "D",
+    ]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1.5);
+    const astral = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀😀", {
+      client: astral.client,
+      cfg: {} as never,
+    });
+    expect(astral.sendMessage).toHaveBeenCalledTimes(2);
+    expect(astral.sendMessage.mock.calls.map((call) => requireRecord(call[1]).body)).toEqual([
+      "😀",
+      "😀",
+    ]);
+  });
+
   it("persists the complete event plan before the first provider dispatch", async () => {
     const { client, sendMessage } = makeClient();
     const deliveryIdentity = resolveMatrixDurableDeliveryIdentity({
