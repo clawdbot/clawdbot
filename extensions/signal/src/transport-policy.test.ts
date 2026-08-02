@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
   assignSignalManagedNativePort,
-  preferredManagedNativePortFromConnectionUrl,
+  inferLegacyManagedNativePortFromConnectionUrl,
 } from "./transport-policy.js";
 
 type SignalManagedNativeTransport = Extract<SignalTransportConfig, { kind: "managed-native" }>;
@@ -19,10 +19,10 @@ function managedTransport(url: string, httpHost?: string): SignalManagedNativeTr
   };
 }
 
-describe("preferredManagedNativePortFromConnectionUrl", () => {
+describe("inferLegacyManagedNativePortFromConnectionUrl", () => {
   it("prefers a local connection URL port when httpPort is omitted", () => {
     expect(
-      preferredManagedNativePortFromConnectionUrl({
+      inferLegacyManagedNativePortFromConnectionUrl({
         kind: "managed-native",
         url: "http://127.0.0.1:8082",
       }),
@@ -31,7 +31,7 @@ describe("preferredManagedNativePortFromConnectionUrl", () => {
 
   it("does not override an explicit managed port", () => {
     expect(
-      preferredManagedNativePortFromConnectionUrl({
+      inferLegacyManagedNativePortFromConnectionUrl({
         kind: "managed-native",
         url: "http://127.0.0.1:8082",
         httpPort: 9090,
@@ -41,7 +41,7 @@ describe("preferredManagedNativePortFromConnectionUrl", () => {
 
   it("does not infer from a connection URL on a different bind host", () => {
     expect(
-      preferredManagedNativePortFromConnectionUrl({
+      inferLegacyManagedNativePortFromConnectionUrl({
         kind: "managed-native",
         url: "http://127.0.0.1:8080",
         httpHost: "127.0.0.2",
@@ -67,5 +67,14 @@ describe("assignSignalManagedNativePort", () => {
     );
     expect(next.url).toBe("http://[::1]:8080");
     expect(next.httpPort).toBe(9090);
+  });
+
+  it("keeps an omitted-port canonical connection URL independent", () => {
+    const next = assignSignalManagedNativePort(
+      { kind: "managed-native", url: "http://127.0.0.1:8082" },
+      8080,
+    );
+    expect(next.url).toBe("http://127.0.0.1:8082");
+    expect(next.httpPort).toBe(8080);
   });
 });

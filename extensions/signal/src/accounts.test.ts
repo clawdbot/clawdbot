@@ -309,7 +309,7 @@ describe("resolveSignalAccount", () => {
     });
   });
 
-  it("binds an implicit managed daemon to a non-default local connection URL port", () => {
+  it("preserves an independent canonical connection URL when httpPort is omitted", () => {
     const cfg = {
       channels: {
         signal: {
@@ -325,7 +325,7 @@ describe("resolveSignalAccount", () => {
       kind: "managed-native",
       baseUrl: "http://127.0.0.1:8082",
       httpHost: "127.0.0.1",
-      httpPort: 8082,
+      httpPort: 8080,
     });
   });
 

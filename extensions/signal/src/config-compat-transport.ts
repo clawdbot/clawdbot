@@ -2,7 +2,7 @@ import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
   isValidSignalManagedNativePort,
-  preferredManagedNativePortFromConnectionUrl,
+  inferLegacyManagedNativePortFromConnectionUrl,
 } from "./transport-policy.js";
 import { buildSignalTransportHttpUrl, normalizeSignalTransportUrl } from "./transport-url.js";
 
@@ -130,7 +130,7 @@ export function buildManagedNativeTransport(
   const rawHttpPort = value("httpPort");
   const inferredHttpPort =
     typeof rawHttpPort !== "number"
-      ? preferredManagedNativePortFromConnectionUrl({
+      ? inferLegacyManagedNativePortFromConnectionUrl({
           kind: "managed-native",
           ...(url ? { url } : {}),
           ...(httpHost ? { httpHost } : {}),

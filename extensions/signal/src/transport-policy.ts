@@ -67,7 +67,9 @@ export function resolveLocalSignalTransportPort(baseUrl: string): number | undef
   }
 }
 
-export function preferredManagedNativePortFromConnectionUrl(
+// Legacy flat config is the only path allowed to infer a daemon bind from its URL.
+// Canonical transport.url may intentionally point at a distinct connection endpoint.
+export function inferLegacyManagedNativePortFromConnectionUrl(
   transport: SignalTransportConfig,
 ): number | undefined {
   if (transport.kind !== "managed-native" || transport.httpPort !== undefined || !transport.url) {
@@ -128,12 +130,7 @@ export function assignSignalManagedNativePort(
     throw new Error("Signal managed native port must be an integer between 1 and 65535.");
   }
   const connectionUrlValue = transport.url;
-  const preferredBindPort = preferredManagedNativePortFromConnectionUrl(transport);
-  const bindTransport =
-    transport.httpPort === undefined && preferredBindPort !== undefined
-      ? { ...transport, httpPort: preferredBindPort }
-      : transport;
-  if (!connectionUrlValue || !isSignalManagedNativeConnectionUrlForBind(bindTransport)) {
+  if (!connectionUrlValue || !isSignalManagedNativeConnectionUrlForBind(transport)) {
     return { ...transport, httpPort };
   }
   const connectionUrl = new URL(connectionUrlValue);

@@ -15,7 +15,6 @@ import {
   assignSignalManagedNativePort,
   DEFAULT_SIGNAL_MANAGED_NATIVE_PORT,
   isSignalManagedNativeConnectionUrlForBind,
-  preferredManagedNativePortFromConnectionUrl,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
 import { buildSignalTransportHttpUrl } from "./transport-url.js";
@@ -178,10 +177,7 @@ function resolveSignalManagedNativePort(params: {
       } else {
         implicitManagedAccountIds.push(accountId);
       }
-      const preferredBindPort = preferredManagedNativePortFromConnectionUrl(transport);
-      const effectiveBindTransport =
-        preferredBindPort === undefined ? transport : { ...transport, httpPort: preferredBindPort };
-      if (transport.url && !isSignalManagedNativeConnectionUrlForBind(effectiveBindTransport)) {
+      if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
         const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
         if (localConnectionPort !== undefined) {
           reservedPorts.add(localConnectionPort);
@@ -193,14 +189,7 @@ function resolveSignalManagedNativePort(params: {
   }
 
   for (const accountId of implicitManagedAccountIds) {
-    const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
-    const preferredPort = preferredManagedNativePortFromConnectionUrl(
-      accountConfig.transport ?? { kind: "managed-native" },
-    );
-    const port = allocateSignalManagedNativePort({
-      reservedPorts,
-      ...(preferredPort !== undefined ? { preferredPort } : {}),
-    });
+    const port = allocateSignalManagedNativePort({ reservedPorts });
     reservedPorts.add(port);
     if (normalizeAccountId(accountId) === params.accountId) {
       return port;
