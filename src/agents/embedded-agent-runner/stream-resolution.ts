@@ -2,6 +2,7 @@
  * Resolves provider stream functions and API keys for embedded agents.
  */
 import type { LlmRuntime } from "@openclaw/ai";
+import { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
@@ -257,6 +258,33 @@ export function resolveEmbeddedAgentStreamFn(
   });
 }
 
+/**
+ * Merges the caller's request signal with the run's cancellation signal without
+ * dropping the LLM request-activity channel.
+ *
+ * Transports report "still working" with `notifyLlmRequestActivity(options.signal)`
+ * for turns that have not produced a visible event yet (buffered Claude refusals,
+ * hidden reasoning), and that registry is keyed by signal identity. The composite
+ * returned by `AbortSignal.any()` is a different object than the signal the idle
+ * watchdog listens on, so without this bridge those keep-alives land on a signal
+ * nobody listens to and the turn is aborted as idle while the model is answering.
+ */
+function composeRunSignal(callerSignal: AbortSignal, runSignal: AbortSignal): AbortSignal {
+  const composedSignal = AbortSignal.any([callerSignal, runSignal]);
+  const disposeActivityBridge = onLlmRequestActivity(composedSignal, () => {
+    notifyLlmRequestActivity(callerSignal);
+  });
+  // Dispose from `callerSignal`, never from `composedSignal`: Node keeps composite
+  // signals that carry an `abort` listener in a process-wide strong set
+  // (`gcPersistentSignals` in `lib/internal/abort_controller.js`) until the last
+  // listener is removed, which would pin one composite per request for the process.
+  // On the happy path the disposal never runs — the caller signal is not aborted
+  // on normal completion — so the bridge and the composite it captures simply die
+  // with the per-request caller signal, and the WeakMap entry goes with them.
+  callerSignal.addEventListener("abort", disposeActivityBridge, { once: true });
+  return composedSignal;
+}
+
 function wrapEmbeddedAgentStreamFn(
   inner: StreamFn,
   params: {
@@ -277,7 +305,7 @@ function wrapEmbeddedAgentStreamFn(
     const callerSignal = embeddedOptions?.signal;
     const signal =
       callerSignal && params.runSignal && callerSignal !== params.runSignal
-        ? AbortSignal.any([callerSignal, params.runSignal])
+        ? composeRunSignal(callerSignal, params.runSignal)
         : (callerSignal ?? params.runSignal);
     let merged =
       params.sessionId && !embeddedOptions?.sessionId

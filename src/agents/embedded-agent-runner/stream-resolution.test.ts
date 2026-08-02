@@ -1,17 +1,27 @@
 import type { LlmRuntime } from "@openclaw/ai";
-import { defaultLlmRuntime, getApiProvider } from "@openclaw/ai/internal/runtime";
+import {
+  defaultLlmRuntime,
+  getApiProvider,
+  notifyLlmRequestActivity,
+  onLlmRequestActivity,
+} from "@openclaw/ai/internal/runtime";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import * as providerTransportStream from "@openclaw/ai/transports";
 // Stream resolution tests cover how embedded runs choose provider, boundary,
 // native Codex, or custom stream functions and pass auth/cache/signal options.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessageEventStream,
+} from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Model } from "../../llm/types.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
+import { streamWithIdleTimeout } from "./run/llm-idle-timeout.js";
 import {
   describeEmbeddedAgentStreamStrategy as describeEmbeddedAgentStreamStrategyImpl,
   resolveEmbeddedAgentApiKey,
@@ -88,6 +98,7 @@ async function expectStreamResultRecord(
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   streamMocks.streamSimple.mockReset();
   streamMocks.anthropicVertex.mockReset();
   if (streamMocks.delegate) {
@@ -806,6 +817,94 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       expect(result.signal).toMatchObject({ aborted: true, reason: abortReason });
     },
   );
+
+  it("keeps provider request activity reaching the caller signal after the run signal merge", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const runController = new AbortController();
+    const callerController = new AbortController();
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      sessionId: "session-1",
+      signal: runController.signal,
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as never,
+    });
+
+    const result = await expectStreamResultRecord(
+      streamFn({ provider: "openai", id: "gpt-5.4" } as never, {} as never, {
+        signal: callerController.signal,
+      }),
+      "merged activity signal result",
+    );
+    const mergedSignal = result.signal as AbortSignal;
+    expect(mergedSignal).not.toBe(callerController.signal);
+
+    const onCallerActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(callerController.signal, onCallerActivity);
+    try {
+      // Transports report liveness on the signal they receive, which is the merged
+      // one; the idle watchdog listens on the signal it handed in.
+      notifyLlmRequestActivity(mergedSignal);
+      expect(onCallerActivity).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("keeps the idle watchdog armed when a merged run signal turn only reports hidden progress", async () => {
+    vi.useFakeTimers();
+    const runController = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    // Mirrors the shipping transports: nothing visible for 120ms, liveness reported
+    // only through notifyLlmRequestActivity(options.signal).
+    const providerStreamFn = vi.fn(
+      (_model: unknown, _context: unknown, options?: { signal?: AbortSignal }) => {
+        requestSignal = options?.signal;
+        const stream = createAssistantMessageEventStream();
+        setTimeout(() => {
+          stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
+        }, 120);
+        return stream;
+      },
+    );
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn: providerStreamFn as never,
+      sessionId: "session-1",
+      signal: runController.signal,
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as never,
+    });
+
+    // Production topology: the idle watchdog wraps the merged stream fn from the
+    // outside (attempt-stream.ts), so the signal it creates is the caller signal
+    // the merge composes with the run signal.
+    const guarded = streamWithIdleTimeout(streamFn, 50);
+    const stream = guarded(
+      { provider: "openai", id: "gpt-5.4" } as never,
+      {} as never,
+      {} as never,
+    ) as AssistantMessageEventStream;
+    const iterator = stream[Symbol.asyncIterator]();
+    const next = iterator.next();
+
+    setTimeout(() => notifyLlmRequestActivity(requestSignal), 40);
+    setTimeout(() => notifyLlmRequestActivity(requestSignal), 80);
+    await vi.advanceTimersByTimeAsync(120);
+
+    await expect(next).resolves.toEqual({
+      done: false,
+      value: { type: "text_delta", contentIndex: 0, delta: "done" },
+    });
+    await iterator.return?.();
+  });
 
   it("injects the resolved run api key into the OpenClaw native Codex Responses fallback", async () => {
     const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
