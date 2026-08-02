@@ -402,19 +402,6 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
   };
 }
 
-/** Normalized terminal reason for an agent run. */
-type AgentRunTerminalReason =
-  | "completed"
-  | "hard_timeout"
-  | "timed_out"
-  | "cancelled"
-  | "aborted"
-  | "blocked"
-  | "abandoned"
-  | "failed";
-
-type AgentRunTerminalClassification = "success" | "timeout" | "cancellation" | "failure";
-
 const AGENT_RUN_TERMINAL_CLASSIFICATION = {
   completed: "success",
   hard_timeout: "timeout",
@@ -424,7 +411,10 @@ const AGENT_RUN_TERMINAL_CLASSIFICATION = {
   blocked: "failure",
   abandoned: "failure",
   failed: "failure",
-} as const satisfies Record<AgentRunTerminalReason, AgentRunTerminalClassification>;
+} as const;
+
+/** Normalized terminal reason for an agent run. */
+type AgentRunTerminalReason = keyof typeof AGENT_RUN_TERMINAL_CLASSIFICATION;
 
 /** Normalized terminal outcome for an agent run. */
 export type AgentRunTerminalOutcome = {
@@ -440,35 +430,8 @@ export type AgentRunTerminalOutcome = {
 };
 
 /** Collapses terminal reasons into the four projections shared by run consumers. */
-export function classifyAgentRunTerminalOutcome(
-  outcome: Pick<AgentRunTerminalOutcome, "reason">,
-): AgentRunTerminalClassification {
+export function classifyAgentRunTerminalOutcome(outcome: Pick<AgentRunTerminalOutcome, "reason">) {
   return AGENT_RUN_TERMINAL_CLASSIFICATION[outcome.reason];
-}
-
-/** Carries a canonical terminal outcome when an embedded attempt exits by throwing. */
-export class AgentRunTerminalOutcomeError extends Error {
-  readonly terminalOutcome: AgentRunTerminalOutcome;
-
-  constructor(error: unknown, terminalOutcome: AgentRunTerminalOutcome) {
-    super(error instanceof Error ? error.message : String(error), { cause: error });
-    this.name = "AgentRunTerminalOutcomeError";
-    this.terminalOutcome = terminalOutcome;
-  }
-}
-
-/** Finds a canonical terminal outcome through ordinary error wrapper boundaries. */
-export function findAgentRunTerminalOutcome(error: unknown): AgentRunTerminalOutcome | undefined {
-  let candidate = error;
-  const seen = new Set<object>();
-  while (candidate && typeof candidate === "object" && !seen.has(candidate)) {
-    seen.add(candidate);
-    if (candidate instanceof AgentRunTerminalOutcomeError) {
-      return candidate.terminalOutcome;
-    }
-    candidate = (candidate as { cause?: unknown }).cause;
-  }
-  return undefined;
 }
 
 /** Raw terminal input collected from run wait/liveness/timeout paths. */
