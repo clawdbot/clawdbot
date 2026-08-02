@@ -2,6 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
+import { expect as expectBrowser } from "playwright/test";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -367,6 +368,49 @@ describeControlUiE2e("Control UI session ownership", () => {
       visibility: "shared",
     });
     expect(await gateway.getRequests("session.visibility.set")).toHaveLength(1);
+  });
+
+  it("keeps rejected visibility-only sharing changes visible after the menu closes", async () => {
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessions = draftSessionsList();
+    const ownerSession = sessions.sessions[0];
+    if (!ownerSession) {
+      throw new Error("expected owner draft fixture");
+    }
+    Object.assign(ownerSession, { sharingRole: "owner" });
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey: "agent:main:ada",
+      allowedSessionVisibilities: ["shared", "draft"],
+      deferredMethods: ["session.visibility.set"],
+      featureMethods: ["chat.metadata", "chat.startup", "session.visibility.set"],
+      operatorScopes: ["operator.write"],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": sessions },
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Ready.", { exact: true }).waitFor();
+    await currentPage.getByRole("button", { name: "Thread sharing" }).click();
+    const dropdown = currentPage.locator(".chat-pane__sharing-menu");
+    await expect.poll(() => dropdown.getAttribute("open")).not.toBeNull();
+    expect(await dropdown.locator(".chat-pane__sharing-title").count()).toBe(1);
+    await currentPage.getByText("Publish draft", { exact: true }).click();
+    await gateway.waitForRequest("session.visibility.set");
+    await expect.poll(() => dropdown.getAttribute("open")).toBeNull();
+    expect(await gateway.getRequests("session.members.list")).toHaveLength(0);
+
+    const message = "visibility change rejected";
+    await gateway.rejectDeferred("session.visibility.set", {
+      code: "INVALID_REQUEST",
+      message,
+    });
+    const alert = currentPage.getByRole("alert").filter({ hasText: message });
+    await expectBrowser(alert).toBeVisible();
+
+    await currentPage.getByRole("button", { name: "Thread sharing" }).click();
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-status--error")).toBeVisible();
   });
 
   it("lets a read-scoped owner inspect sharing but blocks mutations", async () => {

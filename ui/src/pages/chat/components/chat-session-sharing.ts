@@ -172,12 +172,12 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
                 : html`<div class="chat-pane__sharing-status">
                     ${t("chat.sessionSharing.noPeople")}
                   </div>`}
-            ${props.state?.error
-              ? html`<div class="chat-pane__sharing-status chat-pane__sharing-status--error">
-                  ${props.state.error}
-                </div>`
-              : nothing}
           `
+        : nothing}
+      ${props.state?.error
+        ? html`<div class="chat-pane__sharing-status chat-pane__sharing-status--error">
+            ${props.state.error}
+          </div>`
         : nothing}
     </wa-dropdown>
   `;

@@ -136,6 +136,19 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     }
   }
 
+  protected publishSharingFailure(cacheKey: string, sessionKey: string, error: unknown): void {
+    this.setSessionSharingState(cacheKey, {
+      ...(this.sessionSharingStates.get(cacheKey) ?? { loading: false }),
+      loading: false,
+      error: String(error),
+    });
+    // Sharing errors stay with their session; the visible page slot belongs
+    // only to the selected session after same-connection navigation.
+    if (areUiSessionKeysEquivalent(this.state?.sessionKey, sessionKey)) {
+      this.publishHeaderError(error);
+    }
+  }
+
   protected async setSessionVisibility(
     row: GatewaySessionRow,
     visibility: SessionVisibility,
@@ -181,11 +194,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       ) {
         return;
       }
-      this.setSessionSharingState(cacheKey, {
-        ...(this.sessionSharingStates.get(cacheKey) ?? { loading: false }),
-        loading: false,
-        error: String(error),
-      });
+      this.publishSharingFailure(cacheKey, currentRow.key, error);
     }
   }
 
@@ -238,11 +247,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       ) {
         return;
       }
-      this.setSessionSharingState(cacheKey, {
-        ...(this.sessionSharingStates.get(cacheKey) ?? { loading: false }),
-        loading: false,
-        error: String(error),
-      });
+      this.publishSharingFailure(cacheKey, currentRow.key, error);
     }
   }
 
