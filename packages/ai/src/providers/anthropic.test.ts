@@ -1837,6 +1837,120 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("withholds every toolcall_end when a parallel sibling carries truncated JSON arguments", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_parallel_bad", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_1", name: "exec", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"command":"date"}' },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "call_2", name: "write", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"path":"/et' },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 4 },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    // The valid first block must not escape: no toolcall_end may ship once any
+    // sibling fails terminal validation.
+    expect(eventTypes).not.toContain("toolcall_end");
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "Anthropic completed tool call has invalid JSON arguments",
+    );
+    expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
+  });
+
+  it("releases every parallel tool call once the whole sealed set validates", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_parallel_ok", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_1", name: "exec", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"command":"date"}' },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "call_2", name: "write", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"path":"/etc/hosts"}' },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 4 },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const toolcallEnds: string[] = [];
+    for await (const event of stream) {
+      if (event.type === "toolcall_end") {
+        toolcallEnds.push(event.toolCall.id);
+      }
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolcallEnds).toEqual(["call_1", "call_2"]);
+    expect(result.content).toEqual([
+      { type: "toolCall", id: "call_1", name: "exec", arguments: { command: "date" } },
+      { type: "toolCall", id: "call_2", name: "write", arguments: { path: "/etc/hosts" } },
+    ]);
+  });
+
   it("discards buffered Fable output when the stream fails before terminal status", async () => {
     const client = createAnthropicSseClient([
       {

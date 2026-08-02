@@ -1218,6 +1218,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           }
           pendingTextEnds.length = 0;
         };
+        // Completed tool-call blocks whose completion events are held back
+        // until the whole-turn terminal gate validates every sibling.
+        const sealedToolCalls: Array<{
+          contentIndex: number;
+          block: Extract<TransportContentBlock, { type: "toolCall" }>;
+        }> = [];
         const eventIndexKey = (eventIndex: unknown) =>
           typeof eventIndex === "number" ? eventIndex : -1;
         const appendReasoningContentThinkingDelta = (
@@ -1363,6 +1369,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               // the surviving text prefix the fallback model continued from.
               refusalBuffer?.discard();
               pendingTextEnds.length = 0;
+              sealedToolCalls.length = 0;
               blockIndexes.clear();
               pendingThinkingSignatures.clear();
               applyAnthropicFallbackBoundary({
@@ -1663,16 +1670,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (block.type === "toolCall") {
-              if (typeof block.partialJson === "string" && block.partialJson.trim() !== "") {
-                block.arguments = parseAnthropicToolCallArgumentsStrict(block.partialJson);
-              }
-              delete block.partialJson;
-              eventSink.push({
-                type: "toolcall_end",
-                contentIndex: index,
-                toolCall: block as never,
-                partial: output as never,
-              });
+              // Hold the completion event back: terminal validation runs on the
+              // whole sealed set after the stream ends, so a malformed sibling
+              // can never strand an earlier valid toolcall_end (all-or-nothing).
+              sealedToolCalls.push({ contentIndex: index, block });
               finishReasoningContentSidecars(event.index);
             }
             continue;
@@ -1711,6 +1712,26 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error(output.errorMessage ?? "An unknown error occurred");
+        }
+        // Terminal gate: strictly validate every completed tool call before
+        // releasing any toolcall_end. The lenient streaming parser repairs
+        // truncated JSON into a partial object; an empty buffer means the start
+        // block's input already carries the complete arguments. A strict
+        // failure throws into the error path, which retains no tool calls.
+        for (const sealed of sealedToolCalls) {
+          const partialJson = sealed.block.partialJson;
+          if (typeof partialJson === "string" && partialJson.trim() !== "") {
+            sealed.block.arguments = parseAnthropicToolCallArgumentsStrict(partialJson);
+          }
+          delete sealed.block.partialJson;
+        }
+        for (const sealed of sealedToolCalls) {
+          eventSink.push({
+            type: "toolcall_end",
+            contentIndex: sealed.contentIndex,
+            toolCall: sealed.block as never,
+            partial: output as never,
+          });
         }
         refusalBuffer?.flush();
         // Backstop: streaming tags commentary at the tool-boundary above, but

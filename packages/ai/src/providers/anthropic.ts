@@ -418,6 +418,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       };
       const blocks = output.content as Block[];
       const blockIndexes = new Map<number, number>();
+      // Completed tool-call blocks whose completion events are held back until
+      // the whole-turn terminal gate validates every sibling.
+      const sealedToolCalls: Array<{
+        contentIndex: number;
+        block: ToolCall & { partialJson: string };
+      }> = [];
 
       for await (const event of iterateAnthropicEvents(response, refusalBuffer !== undefined)) {
         if (event.type === "message_start") {
@@ -444,6 +450,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             // surviving text prefix the fallback model continued from.
             refusalBuffer?.discard();
             blockIndexes.clear();
+            sealedToolCalls.length = 0;
             applyAnthropicFallbackBoundary({
               output,
               boundary: fallbackBoundary,
@@ -611,22 +618,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
                 partial: output,
               });
             } else if (block.type === "toolCall") {
-              // Terminal seal must be strict: the lenient streaming parse would
-              // salvage truncated JSON into a partial object and execute the
-              // tool with incomplete arguments. An empty buffer means the start
-              // block's input already carries the complete arguments.
-              if (block.partialJson.trim() !== "") {
-                block.arguments = parseAnthropicToolCallArgumentsStrict(block.partialJson);
-              }
-              // Finalize in-place and strip the scratch buffer so replay only
-              // carries parsed arguments.
-              delete (block as { partialJson?: string }).partialJson;
-              eventSink.push({
-                type: "toolcall_end",
-                contentIndex: index,
-                toolCall: block,
-                partial: output,
-              });
+              // Hold the completion event back: terminal validation runs on the
+              // whole sealed set after the stream ends, so a malformed sibling
+              // can never strand an earlier valid toolcall_end (all-or-nothing).
+              sealedToolCalls.push({ contentIndex: index, block });
             }
           }
         } else if (event.type === "message_delta") {
@@ -652,6 +647,27 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 
       if (output.stopReason === "aborted" || output.stopReason === "error") {
         throw new Error(output.errorMessage ?? "An unknown error occurred");
+      }
+
+      // Terminal gate: strictly validate every completed tool call before
+      // releasing any toolcall_end. The lenient streaming parser repairs
+      // truncated JSON into a partial object; an empty buffer means the start
+      // block's input already carries the complete arguments. A strict failure
+      // throws into the error path, which retains no tool calls at all.
+      for (const sealed of sealedToolCalls) {
+        if (sealed.block.partialJson.trim() !== "") {
+          sealed.block.arguments = parseAnthropicToolCallArgumentsStrict(sealed.block.partialJson);
+        }
+        // Strip the scratch buffer so replay only carries parsed arguments.
+        delete (sealed.block as { partialJson?: string }).partialJson;
+      }
+      for (const sealed of sealedToolCalls) {
+        eventSink.push({
+          type: "toolcall_end",
+          contentIndex: sealed.contentIndex,
+          toolCall: sealed.block,
+          partial: output,
+        });
       }
 
       refusalBuffer?.flush();
