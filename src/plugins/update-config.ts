@@ -10,11 +10,13 @@ import {
   getExternalizedBundledPluginLookupIds,
   type ExternalizedBundledPluginBridge,
 } from "./externalized-bundled-plugins.js";
+import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { resolvePluginInstallDir } from "./install.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import {
   auditDeclaredOpenClawHostDependency,
+  reconcileRegisteredOpenClawHostLinks,
   relinkDeclaredOpenClawHostDependency,
 } from "./plugin-peer-link.js";
 import { resetPluginSlotsToDefaults } from "./slots.js";
@@ -390,6 +392,21 @@ export function disablePluginAfterUpdateFailure(
       slots: resetPluginSlotsToDefaults(pluginsConfig.slots, pluginId),
     },
   };
+}
+
+/** Repairs a legacy npm-owned extensions-root host without reinstalling its package. */
+export async function repairRegisteredOpenClawHostLink(params: {
+  pluginId: string;
+  record: PluginInstallRecord;
+  logger: PluginUpdateLogger;
+}): Promise<boolean> {
+  const result = await reconcileRegisteredOpenClawHostLinks({
+    installRecords: { [params.pluginId]: params.record },
+    extensionsDir: resolveDefaultPluginExtensionsDir(),
+    mode: "repair",
+    logger: params.logger,
+  });
+  return result.repaired > 0;
 }
 
 export async function repairOpenClawPeerLinksForNpmInstalls(params: {

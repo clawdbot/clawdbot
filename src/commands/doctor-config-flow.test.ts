@@ -716,8 +716,11 @@ vi.mock("./doctor/shared/plugin-tool-allowlist-warnings.js", () => ({
   collectPluginToolAllowlistWarnings: vi.fn(() => []),
 }));
 
-vi.mock("../doctor-plugin-registry.js", () => ({
+vi.mock("../doctor-plugin-host-links.js", () => ({
   maybeRepairPluginOpenClawHostLinks: vi.fn(async () => undefined),
+}));
+
+vi.mock("../doctor-plugin-registry.js", () => ({
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(() => undefined),
 }));
 

@@ -11,10 +11,8 @@ import {
   maybeRepairOpenAICodexAuthConfig,
 } from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
-import {
-  maybeRepairPluginOpenClawHostLinks,
-  maybeRepairStaleManagedNpmBundledPlugins,
-} from "../doctor-plugin-registry.js";
+import { maybeRepairPluginOpenClawHostLinks } from "../doctor-plugin-host-links.js";
+import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
 import { migrateLegacySkillWorkshopProposals } from "../doctor-skill-workshop-sqlite.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
@@ -127,7 +125,6 @@ export async function runDoctorRepairSequence(params: {
     prompter: { shouldRepair: true },
   });
   await maybeRepairPluginOpenClawHostLinks({
-    config: state.candidate,
     env,
     prompter: { shouldRepair: true },
   });

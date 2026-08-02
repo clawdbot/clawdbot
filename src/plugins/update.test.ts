@@ -6,6 +6,7 @@ import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const APP_ROOT = "/app";
 
@@ -1599,30 +1600,33 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it.each(["peerDependencies", "dependencies"] as const)(
-    "repairs a copied stale %s host for an unchanged npm plugin without reinstalling it",
+    "repairs every copied stale %s host for unchanged npm plugins without reinstalling them",
     async (dependencyField) => {
-      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-legacy-"));
-      tempDirs.push(stateDir);
-      const installPath = path.join(stateDir, "extensions", "email");
-      const staleHostDir = path.join(installPath, "node_modules", "openclaw");
-      fs.mkdirSync(staleHostDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(installPath, "package.json"),
-        JSON.stringify({
-          name: "@clawemail/email",
+      const stateDir = makeTrackedTempDir("openclaw-plugin-update-legacy", tempDirs);
+      const plugins = ["email", "calendar"].map((pluginId) => {
+        const packageName = `@clawemail/${pluginId}`;
+        const installPath = path.join(stateDir, "extensions", pluginId);
+        const staleHostDir = path.join(installPath, "node_modules", "openclaw");
+        fs.mkdirSync(staleHostDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(installPath, "package.json"),
+          JSON.stringify({
+            name: packageName,
+            version: "2026.7.1",
+            [dependencyField]: { openclaw: ">=2026.7.1" },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(staleHostDir, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
+        );
+        mockNpmViewMetadata({
+          name: packageName,
           version: "2026.7.1",
-          [dependencyField]: { openclaw: ">=2026.7.1" },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(staleHostDir, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
-      );
-      mockNpmViewMetadata({
-        name: "@clawemail/email",
-        version: "2026.7.1",
-        integrity: "sha512-same",
-        shasum: "same",
+          integrity: "sha512-same",
+          shasum: "same",
+        });
+        return { pluginId, packageName, installPath, staleHostDir };
       });
       installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
 
@@ -1630,29 +1634,36 @@ describe("updateNpmInstalledPlugins", () => {
         updateNpmInstalledPlugins({
           config: {
             plugins: {
-              installs: {
-                email: {
-                  source: "npm",
-                  spec: "@clawemail/email",
-                  installPath,
-                  resolvedName: "@clawemail/email",
-                  resolvedVersion: "2026.7.1",
-                  resolvedSpec: "@clawemail/email@2026.7.1",
-                  integrity: "sha512-same",
-                  shasum: "same",
-                },
-              },
+              installs: Object.fromEntries(
+                plugins.map(({ pluginId, packageName, installPath }) => [
+                  pluginId,
+                  {
+                    source: "npm" as const,
+                    spec: packageName,
+                    installPath,
+                    resolvedName: packageName,
+                    resolvedVersion: "2026.7.1",
+                    resolvedSpec: `${packageName}@2026.7.1`,
+                    integrity: "sha512-same",
+                    shasum: "same",
+                  },
+                ]),
+              ),
             },
           },
-          pluginIds: ["email"],
+          pluginIds: plugins.map(({ pluginId }) => pluginId),
         }),
       );
 
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-      expect(fs.lstatSync(staleHostDir).isSymbolicLink()).toBe(true);
-      expect(fs.realpathSync(staleHostDir)).toBe(fs.realpathSync(process.cwd()));
+      for (const { staleHostDir } of plugins) {
+        expect(fs.lstatSync(staleHostDir).isSymbolicLink()).toBe(true);
+        expect(fs.realpathSync(staleHostDir)).toBe(fs.realpathSync(process.cwd()));
+      }
       expect(result.changed).toBe(true);
-      expect(result.outcomes[0]?.status).toBe("unchanged");
+      expect(result.outcomes.map(({ pluginId, status }) => ({ pluginId, status }))).toEqual(
+        plugins.map(({ pluginId }) => ({ pluginId, status: "unchanged" })),
+      );
     },
   );
 

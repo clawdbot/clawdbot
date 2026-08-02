@@ -35,8 +35,11 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
   materializePluginAutoEnableCandidates: mocks.materializePluginAutoEnableCandidates,
 }));
 
-vi.mock("../doctor-plugin-registry.js", () => ({
+vi.mock("../doctor-plugin-host-links.js", () => ({
   maybeRepairPluginOpenClawHostLinks: mocks.maybeRepairPluginOpenClawHostLinks,
+}));
+
+vi.mock("../doctor-plugin-registry.js", () => ({
   maybeRepairStaleManagedNpmBundledPlugins: mocks.maybeRepairStaleManagedNpmBundledPlugins,
 }));
 
@@ -523,7 +526,6 @@ describe("doctor repair sequencing", () => {
     expect(cleanupCall?.prompter).toEqual({ shouldRepair: true });
     expect(mocks.maybeRepairPluginOpenClawHostLinks).toHaveBeenCalledOnce();
     const peerLinkCall = mocks.maybeRepairPluginOpenClawHostLinks.mock.calls[0]?.[0];
-    expect(peerLinkCall?.config.plugins?.entries?.["google-meet"]).toEqual({ enabled: true });
     expect(peerLinkCall?.prompter).toEqual({ shouldRepair: true });
     expect(peerLinkCall?.env).toBe(process.env);
   });

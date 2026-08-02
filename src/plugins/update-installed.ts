@@ -11,7 +11,6 @@ import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { PLUGIN_INSTALL_ERROR_CODE, resolvePluginInstallDir } from "./install.js";
 import {
   buildNpmResolutionInstallFields,
@@ -23,10 +22,7 @@ import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
-import {
-  auditDeclaredOpenClawHostDependency,
-  reconcileRegisteredOpenClawHostLinks,
-} from "./plugin-peer-link.js";
+import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
 import {
   buildClawHubTrustSkippedOutcome,
   buildDryRunPluginUpdateOutcome,
@@ -55,6 +51,7 @@ import {
   hasRunnableInstalledNpmPayload,
   migratePluginConfigId,
   repairOpenClawPeerLinksForNpmInstalls,
+  repairRegisteredOpenClawHostLink,
   resolveRecordedExtensionsDir,
   withoutPluginInstallRecord,
 } from "./update-config.js";
@@ -280,20 +277,11 @@ export async function updateNpmInstalledPlugins(params: {
       return fallbackExpectedIntegrity;
     };
 
-    if (record.source === "npm" && !effectiveSpec) {
+    if ((record.source === "npm" || record.source === "git") && !effectiveSpec) {
       outcomes.push({
         pluginId,
         status: "skipped",
-        message: `Skipping "${pluginId}" (missing npm spec).`,
-      });
-      continue;
-    }
-
-    if (record.source === "git" && !effectiveSpec) {
-      outcomes.push({
-        pluginId,
-        status: "skipped",
-        message: `Skipping "${pluginId}" (missing git spec).`,
+        message: `Skipping "${pluginId}" (missing ${record.source} spec).`,
       });
       continue;
     }
@@ -363,14 +351,7 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
     if (!params.dryRun && record.source === "npm" && currentVersion) {
-      // Existing user-owned legacy installs can relink their host without reinstalling npm payloads.
-      const hostLinkRepair = await reconcileRegisteredOpenClawHostLinks({
-        installRecords: { [pluginId]: record },
-        extensionsDir: resolveDefaultPluginExtensionsDir(),
-        mode: "repair",
-        logger,
-      });
-      changed ||= hostLinkRepair.repaired > 0;
+      changed = (await repairRegisteredOpenClawHostLink({ pluginId, record, logger })) || changed;
     }
     // Payload validation is filesystem work needed only to preserve state after metadata failures.
     // Every failure path below ends this plugin iteration, so the result cannot be reused.
