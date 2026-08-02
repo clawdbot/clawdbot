@@ -15,8 +15,15 @@ import {
 
 const suite = createSessionManagementE2eSuite();
 
-async function confirmDelete(page: import("playwright").Page) {
+async function confirmDelete(page: import("playwright").Page, proofName?: string) {
   const dialog = page.locator("openclaw-modal-dialog").last();
+  const nativeDialog = dialog.locator("wa-dialog").locator("dialog");
+  await expect
+    .poll(() => nativeDialog.evaluate((element) => getComputedStyle(element).opacity))
+    .toBe("1");
+  if (proofName) {
+    await captureUiProof(page, proofName);
+  }
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
 }
 
@@ -59,8 +66,7 @@ suite.define(() => {
         ],
       });
       await remove.click();
-      await captureUiProof(page, "styled-confirm-delete-archived.png");
-      await confirmDelete(page);
+      await confirmDelete(page, "styled-confirm-delete-archived.png");
 
       await expect
         .poll(async () =>
