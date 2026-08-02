@@ -362,7 +362,6 @@ const config = {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
-    "src/boards/board-layout.ts": ["types"],
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
     // Test and E2E callers reach these hooks through runtime.test-support.ts;
@@ -375,28 +374,20 @@ const config = {
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
-    "src/plugins/command-registration.ts": ["exports"],
     "src/plugins/compaction-provider.ts": ["exports"],
     "src/plugins/interactive-registry.ts": ["exports"],
-    "src/plugins/loader-module-runtime.ts": ["exports"],
     "src/plugins/memory-state.ts": ["exports", "types"],
     "src/plugins/session-discussion-registry.ts": ["exports"],
     "src/tasks/detached-task-runtime-state.ts": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
-    // GatewayBoardProvider and boardExists are constructed/asserted by the
-    // focused Control UI provider tests, not by a separate production module.
-    "ui/src/lib/board/provider.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
     // Focused tests consume these diagnostic/test seams; production code uses
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],
-    // The resolver's executable-path validation is covered through focused tests;
-    // production imports only the narrower op resolver.
-    "extensions/onepassword/onepassword-op-path.js": ["exports"],
     // Focused CLI tests exercise plan construction through this explicit test seam.
     "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are
