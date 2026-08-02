@@ -35,12 +35,6 @@ type DiscordIngressDispatch = (
   lifecycle: DiscordIngressLifecycle,
 ) => Promise<DiscordIngressDispatchResult | void> | DiscordIngressDispatchResult | void;
 
-type DiscordIngressMonitor = {
-  accept: (rawMessage: APIMessage) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
 const DiscordIngressPayloadError = createChannelIngressError("DiscordIngressPayloadError");
 
 function inspectDiscordMessage(rawMessage: unknown): { eventId: string; laneKey: string } {
@@ -103,7 +97,7 @@ export function createDiscordIngressMonitor(params: {
   runtime: Pick<RuntimeEnv, "error" | "log">;
   dispatch: DiscordIngressDispatch;
   queue?: ChannelIngressQueue<DiscordIngressPayload>;
-}): DiscordIngressMonitor {
+}) {
   const queue =
     params.queue ??
     getDiscordRuntime().state.openChannelIngressQueue<DiscordIngressPayload>({

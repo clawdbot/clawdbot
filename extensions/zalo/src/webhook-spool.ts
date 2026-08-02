@@ -31,12 +31,6 @@ export type ZaloWebhookIngressLifecycle = ReturnType<
 export const ZaloWebhookPayloadError = createChannelIngressError("ZaloWebhookPayloadError");
 export type ZaloWebhookPayloadError = InstanceType<typeof ZaloWebhookPayloadError>;
 
-type ZaloWebhookIngress = {
-  accept: (rawEvent: string) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
 function parseRawRecord(rawEvent: string): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -143,7 +137,7 @@ function createZaloWebhookIngress(options: {
   runtime: Pick<ZaloRuntimeEnv, "error" | "log">;
   deliver: (update: ZaloUpdate, lifecycle: ZaloWebhookIngressLifecycle) => Promise<void>;
   queue?: ChannelIngressQueue<ZaloWebhookSpoolPayload>;
-}): ZaloWebhookIngress {
+}) {
   const queue =
     options.queue ??
     getZaloRuntime().state.openChannelIngressQueue<ZaloWebhookSpoolPayload>({

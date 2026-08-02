@@ -45,6 +45,7 @@ export type {
 } from "../channels/message-access/index.js";
 export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
 
+export { createStandardRawEventIngressMonitor } from "../channels/message/ingress-monitor.js";
 import type { ChannelIngressMonitorLifecycle } from "../channels/message/ingress-monitor.js";
 
 type ChannelIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;

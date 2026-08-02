@@ -204,10 +204,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
       // +2: shared ingress error factory through channel-outbound and channel-message.
       // +2: shared ingress retention defaults through channel-outbound and channel-message.
+      // +1: standard raw-event ingress profile replacing two channel-local shells.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
-      4820,
+      4821,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -244,10 +245,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: watched-sessions prompt block for plugin-owned harness runtimes.
       // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
       // +2: shared ingress error factory through channel-outbound and channel-message.
+      // +1: standard raw-event ingress profile replacing two channel-local shells.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
-      2897,
+      2898,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
