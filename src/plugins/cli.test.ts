@@ -21,6 +21,8 @@ vi.mock("./loader.js", () => ({
   loadOpenClawPluginCliRegistry: (...args: unknown[]) =>
     mocks.loadOpenClawPluginCliRegistry(...args),
   loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
+  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+    mocks.loadOpenClawPlugins({ ...options, activate: false }),
 }));
 
 vi.mock("./activation-planner.js", () => ({
