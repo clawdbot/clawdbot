@@ -1,46 +1,118 @@
+// Covers provider fallback when a run-scoped native hook approval cannot decide.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { callGatewayTool } from "../tools/gateway.js";
+import type { AgentRunPluginApprovalHost } from "../agent-run-approval.js";
 import { invokeNativeHookRelay, registerNativeHookRelay, testing } from "./native-hook-relay.js";
-
-vi.mock("../tools/gateway.js", () => ({
-  callGatewayTool: vi.fn(),
-}));
-
-const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 afterEach(() => {
   vi.restoreAllMocks();
-  mockCallGatewayTool.mockReset();
   testing.clearNativeHookRelaysForTests();
 });
 
-describe("native hook relay approval wait handling", () => {
-  it("defers when waitDecision reports a stale approval id", async () => {
-    mockCallGatewayTool
-      .mockResolvedValueOnce({ id: "plugin:approval-stale", status: "accepted" })
-      .mockRejectedValueOnce(new Error("approval expired or not found"));
-    const relay = registerNativeHookRelay({
-      provider: "codex",
-      sessionId: "session-1",
-      runId: "run-1",
+async function invokePermissionRequest(params: {
+  request?: AgentRunPluginApprovalHost["request"];
+  signal?: AbortSignal;
+}) {
+  const relay = registerNativeHookRelay({
+    provider: "codex",
+    sessionId: "session-1",
+    runId: "run-1",
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.request
+      ? { approvalContext: { approvalHost: { plugin: { request: params.request } } } }
+      : {}),
+  });
+  return invokeNativeHookRelay({
+    provider: "codex",
+    relayId: relay.relayId,
+    event: "permission_request",
+    rawPayload: {
+      hook_event_name: "PermissionRequest",
+      tool_name: "Bash",
+      tool_input: { command: "cat /tmp/private-key" },
+    },
+  });
+}
+
+describe("native hook relay approval fallback", () => {
+  it.each([
+    {
+      name: "has no approval host",
+      request: undefined,
+    },
+    {
+      name: "times out",
+      request: vi.fn<AgentRunPluginApprovalHost["request"]>(async () => ({
+        outcome: "timed-out",
+      })),
+    },
+    {
+      name: "reports unavailable",
+      request: vi.fn<AgentRunPluginApprovalHost["request"]>(async () => ({
+        outcome: "unavailable",
+        reason: "no reviewer",
+      })),
+    },
+  ])("defers to the provider when the run $name", async ({ request }) => {
+    await expect(invokePermissionRequest({ request })).resolves.toEqual({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  it("defers to the provider when the approval host fails", async () => {
+    const request = vi.fn<AgentRunPluginApprovalHost["request"]>(async () => {
+      throw new Error("approval transport failed");
+    });
+
+    await expect(invokePermissionRequest({ request })).resolves.toEqual({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  it("passes cancellation to the approval host and defers after cancellation", async () => {
+    const abortController = new AbortController();
+    const request = vi.fn<AgentRunPluginApprovalHost["request"]>(
+      ({ signal }) =>
+        new Promise((_, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              const reason = signal.reason;
+              reject(
+                reason instanceof Error ? reason : new Error("approval aborted", { cause: reason }),
+              );
+            },
+            { once: true },
+          );
+        }),
+    );
+
+    const response = invokePermissionRequest({
+      request,
+      signal: abortController.signal,
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    abortController.abort(new Error("run cancelled"));
+
+    await expect(response).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(request.mock.calls[0]?.[0].signal).toBe(abortController.signal);
+  });
+
+  it("defers when the host resolves allow after the run is cancelled", async () => {
+    const abortController = new AbortController();
+    const request = vi.fn<AgentRunPluginApprovalHost["request"]>(async () => {
+      abortController.abort(new Error("run cancelled"));
+      return { outcome: "resolved", decision: "allow-once" };
     });
 
     await expect(
-      invokeNativeHookRelay({
-        provider: "codex",
-        relayId: relay.relayId,
-        event: "permission_request",
-        rawPayload: {
-          hook_event_name: "PermissionRequest",
-          tool_name: "Bash",
-          tool_input: { command: "cat /tmp/private-key" },
-        },
+      invokePermissionRequest({
+        request,
+        signal: abortController.signal,
       }),
     ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
-
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
   });
 });

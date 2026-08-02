@@ -2,16 +2,14 @@
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
+  type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
-  approvalRequestExplicitlyUnavailable,
-  mapExecDecisionToOutcome,
+  mapPluginApprovalResultToOutcome,
   requestPluginApproval,
   type AppServerApprovalOutcome,
-  type ExecApprovalDecision,
-  waitForPluginApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
 import type {
   CodexAppPolicyContextEntry,
@@ -699,17 +697,9 @@ async function requestPluginApprovalOutcome(params: {
       severity: "warning",
       toolName: "codex_mcp_tool_approval",
       allowedDecisions: params.allowedDecisions,
+      signal: params.signal,
     });
-
-    const approvalId = requestResult?.id;
-    if (!approvalId) {
-      return "unavailable";
-    }
-
-    const decision = approvalRequestExplicitlyUnavailable(requestResult)
-      ? null
-      : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
-    return mapExecDecisionToOutcome(decision);
+    return params.signal?.aborted ? "cancelled" : mapPluginApprovalResultToOutcome(requestResult);
   } catch {
     return params.signal?.aborted ? "cancelled" : "denied";
   }

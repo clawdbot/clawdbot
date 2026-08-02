@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  createGatewayAgentRunApprovalHost,
+  gatewayAgentRunApprovalHost,
+} from "../../agents/agent-run-approval.gateway.js";
+import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
@@ -249,6 +253,12 @@ export async function getReplyFromConfig(
   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
     finalizeInboundContext(ctx),
   );
+  const approvalReviewerDeviceId = normalizeOptionalString(finalized.ApprovalReviewerDeviceId);
+  const approvalHost = approvalReviewerDeviceId
+    ? createGatewayAgentRunApprovalHost({
+        approvalReviewerDeviceIds: [approvalReviewerDeviceId],
+      })
+    : gatewayAgentRunApprovalHost;
   const initialAgentScope = resolverTiming.measureSync("reply.resolve_agent_scope", () => {
     const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
     const resolvedAgentSessionKey = targetSessionKey || finalized.SessionKey;
@@ -397,6 +407,7 @@ export async function getReplyFromConfig(
     "reply.native_slash_command_fast_path",
     () =>
       maybeResolveNativeSlashCommandFastReply({
+        approvalHost,
         ctx: finalized,
         cfg,
         agentId,
@@ -784,6 +795,7 @@ export async function getReplyFromConfig(
     logResolverTiming("milestone", "before_fast_directive_prepared_reply");
     const fastReplyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
       runPreparedReply({
+        approvalHost,
         ctx,
         sessionCtx,
         cfg,
@@ -949,6 +961,7 @@ export async function getReplyFromConfig(
 
   const inlineActionResult = await traceGetReplyPhase("reply.handle_inline_actions", () =>
     handleInlineActions({
+      approvalHost,
       ctx,
       sessionCtx,
       cfg,
@@ -1100,6 +1113,7 @@ export async function getReplyFromConfig(
   logResolverTiming("milestone", "before_run_prepared_reply");
   const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
     runPreparedReply({
+      approvalHost,
       ctx,
       sessionCtx,
       cfg,

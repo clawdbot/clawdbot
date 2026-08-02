@@ -1,5 +1,5 @@
 // Discord plugin module implements ingress behavior.
-import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -111,6 +111,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
+  agentRuntime: NonNullable<ChannelRuntimeSurface["agent"]>;
   context?: DiscordVoiceIngressContext;
   toolsAllow?: string[];
   admissionAllowFrom?: string[];
@@ -132,7 +133,7 @@ export async function runDiscordVoiceAgentTurn(params: {
     return null;
   }
   const voiceModel = normalizeOptionalString(params.discordConfig.voice?.model);
-  const result = await agentCommandFromIngress(
+  const result = await params.agentRuntime.runIngress(
     {
       message: params.message,
       sessionKey: params.entry.route.sessionKey,

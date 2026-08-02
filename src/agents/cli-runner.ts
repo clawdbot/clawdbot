@@ -567,7 +567,11 @@ async function runCliAgentInternal(
   let result: EmbeddedAgentRunResult | undefined;
   let runError: unknown;
   try {
-    result = await runPreparedCliAgent(context, diagnosticLifecycle);
+    const { withoutSessionMcpRuntimeCapture } =
+      await import("./agent-bundle-mcp-runtime-capture.js");
+    result = await withoutSessionMcpRuntimeCapture(
+      async () => await runPreparedCliAgent(context, diagnosticLifecycle),
+    );
   } catch (error) {
     runError = error;
   }
@@ -585,15 +589,21 @@ async function runCliAgentInternal(
     }
   }
   if (params.cleanupBundleMcpOnRunEnd === true) {
-    // The run's session ID is immutable; its session key can already belong to
-    // a newer run. Never retire the newer runtime or close the shared listener.
     try {
-      const { retireSessionMcpRuntime } = await import("./agent-bundle-mcp-tools.js");
-      await retireSessionMcpRuntime({
-        sessionId: params.sessionId,
-        reason: "cli-run-end",
-        onError: recordCleanupError,
-      });
+      if (context.bundleMcpRuntimeCollector) {
+        const { completeDeferredSessionMcpRuntimeRetirement, retireSessionMcpRuntimeInstance } =
+          await import("./agent-bundle-mcp-tools.js");
+        await context.bundleMcpRuntimeCollector.closeAndRetire({
+          retire: async (runtime) =>
+            await retireSessionMcpRuntimeInstance({
+              runtime,
+              reason: "cli-run-end",
+              preserveActiveLeases: true,
+              onError: recordCleanupError,
+            }),
+          complete: completeDeferredSessionMcpRuntimeRetirement,
+        });
+      }
     } catch (error) {
       recordCleanupError(error);
     }

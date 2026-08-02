@@ -324,6 +324,7 @@ export async function spawnSubagentDirect(
       requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
     const { childLaunch, queuedLaunch, progressOrigin, shouldAnnounceCompletion, spawnedMetadata } =
       buildSubagentLaunchRequest({
+        approvalHost: ctx.approvalHost,
         childDepth,
         maxSpawnDepth,
         spawnMode,
@@ -372,6 +373,7 @@ export async function spawnSubagentDirect(
           timeoutMs: childLaunch.timeoutMs,
         },
         childLaunch.authorization,
+        childLaunch.approvalHost ? { approvalHost: childLaunch.approvalHost } : undefined,
       );
 
     const emitSpawnLifecycleHooks = createSubagentSpawnLifecycleEmitter({

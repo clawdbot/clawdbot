@@ -1,4 +1,3 @@
-import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeExecApprovalWarningTextWithStatus } from "../../infra/exec-approval-command-display.js";
 import type { ExecAsk, ExecSecurity } from "../../infra/exec-approvals.js";
 import {
@@ -8,7 +7,7 @@ import {
   truncatePluginApprovalDetail,
 } from "../../infra/plugin-approvals.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
-import { callGatewayTool } from "../tools/gateway.js";
+import type { AgentRunApprovalHost } from "../agent-run-approval.js";
 
 type ClaudeNativeToolApprovalPlan = "allow" | "deny" | "prompt";
 type ClaudeNativeToolApprovalDecision = "allow-once" | "allow-always" | "deny";
@@ -20,7 +19,6 @@ const CLAUDE_NATIVE_TOOL_DESCRIPTION_HEAD_CHARS = 300;
 const CLAUDE_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS = 80;
 const CLAUDE_NATIVE_TOOL_DESCRIPTION_MAX_CHARS =
   CLAUDE_NATIVE_TOOL_DESCRIPTION_HEAD_CHARS + CLAUDE_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS;
-const CLAUDE_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS = 10_000;
 const CLAUDE_NATIVE_TOOL_ALLOWED_DECISIONS = [
   "allow-once",
   "allow-always",
@@ -93,53 +91,6 @@ function resolveClaudeNativeToolAllowedDecisions(params: {
     : CLAUDE_NATIVE_TOOL_ALLOWED_DECISIONS;
 }
 
-function toAbortError(reason: unknown): Error {
-  return reason instanceof Error ? reason : new Error("Claude native tool approval aborted");
-}
-
-async function raceClaudeNativeToolApprovalAbort<T>(
-  promise: Promise<T>,
-  abortSignal: AbortSignal | undefined,
-): Promise<T> {
-  if (!abortSignal) {
-    return promise;
-  }
-  let onAbort: (() => void) | undefined;
-  const abortPromise = new Promise<never>((_, reject) => {
-    if (abortSignal.aborted) {
-      reject(toAbortError(abortSignal.reason));
-      return;
-    }
-    onAbort = () => reject(toAbortError(abortSignal.reason));
-    abortSignal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([promise, abortPromise]);
-  } finally {
-    if (onAbort) {
-      abortSignal.removeEventListener("abort", onAbort);
-    }
-  }
-}
-
-function waitForClaudeNativeToolApproval(params: {
-  id: string;
-  gatewayTimeoutMs: number;
-  abortSignal?: AbortSignal;
-}): Promise<{ id?: string; decision?: unknown }> {
-  return raceClaudeNativeToolApprovalAbort(
-    callGatewayTool(
-      "plugin.approval.waitDecision",
-      { timeoutMs: params.gatewayTimeoutMs },
-      { id: params.id },
-      // Abort must reach the RPC too, or the gateway keeps the approval prompt
-      // live for its full timeout after the Claude run already ended.
-      { signal: params.abortSignal },
-    ),
-    params.abortSignal,
-  );
-}
-
 export async function requestClaudeNativeToolApproval(params: {
   toolName: string;
   toolInput: Record<string, unknown>;
@@ -147,14 +98,12 @@ export async function requestClaudeNativeToolApproval(params: {
   sessionKey?: string;
   agentId?: string;
   toolCallId?: string;
+  approvalHost?: AgentRunApprovalHost;
   abortSignal?: AbortSignal;
   ask: ExecAsk;
 }): Promise<ClaudeNativeToolApprovalOutcome> {
   try {
     const timeoutMs = DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
-    const gatewayTimeoutMs =
-      addTimerTimeoutGraceMs(timeoutMs, CLAUDE_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS) ??
-      timeoutMs + CLAUDE_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS;
     const description = formatClaudeNativeToolDescription(params.toolInput);
     const detail = truncatePluginApprovalDetail(description.compact);
     const detailSanitization =
@@ -189,49 +138,33 @@ export async function requestClaudeNativeToolApproval(params: {
       toolName: params.toolName,
       descriptionTruncated: description.truncated,
     });
-    const requestResult: {
-      id?: string;
-      decision?: unknown;
-    } = await raceClaudeNativeToolApprovalAbort(
-      callGatewayTool(
-        "plugin.approval.request",
-        { timeoutMs: gatewayTimeoutMs },
-        {
-          pluginId: params.pluginId,
-          toolName: params.toolName,
-          toolCallId: params.toolCallId,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          title: formatClaudeNativeToolTitle(params.toolName),
-          description: description.text,
-          detail,
-          severity: "warning",
-          allowedDecisions,
-          timeoutMs,
-          twoPhase: true,
-        },
-        { expectFinal: false, signal: params.abortSignal },
-      ),
-      params.abortSignal,
-    );
-    const id = typeof requestResult?.id === "string" ? requestResult.id : "";
-    if (!id) {
+    const approvalHost = params.approvalHost?.plugin;
+    if (!approvalHost) {
       return { kind: "deny", reason: "unavailable" };
     }
-    let decision: unknown;
-    if (Object.hasOwn(requestResult ?? {}, "decision")) {
-      decision = requestResult.decision;
-    } else {
-      const waitResult = await waitForClaudeNativeToolApproval({
-        id,
-        gatewayTimeoutMs,
-        abortSignal: params.abortSignal,
-      });
-      decision = waitResult?.id === id ? waitResult.decision : undefined;
+    const result = await approvalHost.request({
+      request: {
+        pluginId: params.pluginId,
+        toolName: params.toolName,
+        toolCallId: params.toolCallId,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        title: formatClaudeNativeToolTitle(params.toolName),
+        description: description.text,
+        detail,
+        severity: "warning",
+        allowedDecisions,
+      },
+      timeoutMs,
+      signal: params.abortSignal,
+    });
+    if (result.outcome !== "resolved") {
+      return { kind: "deny", reason: "unavailable" };
     }
     if (params.abortSignal?.aborted) {
       return { kind: "deny", reason: "unavailable" };
     }
+    const decision = result.decision;
     if (decision === "allow-once") {
       return { kind: "allow", grantAlways: false };
     }

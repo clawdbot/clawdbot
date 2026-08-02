@@ -1322,11 +1322,13 @@ describe("Codex app-server dynamic tool build", () => {
     });
   });
 
-  it("passes the approval reviewer device into Codex dynamic tools", async () => {
+  it("passes the exact approval host and reviewer device into Codex dynamic tools", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
+    const approvalHost = { plugin: { request: vi.fn() } };
     params.disableTools = false;
+    params.approvalHost = approvalHost;
     params.approvalReviewerDeviceId = "device-ios-reviewer";
     params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
@@ -1340,6 +1342,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(factoryOptions[0]).toMatchObject({
       approvalReviewerDeviceId: "device-ios-reviewer",
     });
+    expect((factoryOptions[0] as { approvalHost?: unknown }).approvalHost).toBe(approvalHost);
   });
 
   it("forwards tool outcome ordering into Codex dynamic tools", async () => {

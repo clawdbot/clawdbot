@@ -39,6 +39,7 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
+import type { AgentRunApprovalHost } from "../agent-run-approval.js";
 import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { listAgentIds } from "../agent-scope.js";
 import {
@@ -62,6 +63,7 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readStringParam } from "./common.js";
 import {
+  callAgentGatewayWithApprovalHost,
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
 } from "./in-process-gateway.js";
@@ -333,6 +335,7 @@ function shouldFallbackCronRunScopedActiveDelivery(
 }
 
 async function startAgentRun(params: {
+  approvalHost?: AgentRunApprovalHost;
   callGateway: GatewayCaller;
   runId: string;
   sendParams: Record<string, unknown>;
@@ -388,14 +391,18 @@ async function startAgentRun(params: {
       }
       const fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
       if (fallbackSessionKey && shouldFallbackCronRunScopedActiveDelivery(queueOutcome)) {
-        const response = await params.callGateway<{ runId: string }>({
-          method: "agent",
-          params: {
-            ...params.sendParams,
-            sessionKey: fallbackSessionKey,
-            idempotencyKey: crypto.randomUUID(),
+        const response = await callAgentGatewayWithApprovalHost<{ runId: string }>({
+          callGateway: params.callGateway,
+          approvalHost: params.approvalHost,
+          request: {
+            method: "agent",
+            params: {
+              ...params.sendParams,
+              sessionKey: fallbackSessionKey,
+              idempotencyKey: crypto.randomUUID(),
+            },
+            timeoutMs: 10_000,
           },
-          timeoutMs: 10_000,
         });
         return {
           ok: true,
@@ -409,10 +416,14 @@ async function startAgentRun(params: {
         formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
       throw new Error(queueSummary);
     }
-    const response = await params.callGateway<{ runId: string }>({
-      method: "agent",
-      params: params.sendParams,
-      timeoutMs: 10_000,
+    const response = await callAgentGatewayWithApprovalHost<{ runId: string }>({
+      callGateway: params.callGateway,
+      approvalHost: params.approvalHost,
+      request: {
+        method: "agent",
+        params: params.sendParams,
+        timeoutMs: 10_000,
+      },
     });
     return {
       ok: true,
@@ -439,6 +450,7 @@ export function createSessionsSendTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  approvalHost?: AgentRunApprovalHost;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -918,11 +930,13 @@ export function createSessionsSendTool(opts?: {
               roundOneReply,
               waitRunId,
               notifyRequesterOnWaitFailure,
+              approvalHost: opts?.approvalHost,
             });
           };
 
           if (timeoutSeconds === 0) {
             const start = await startAgentRun({
+              approvalHost: opts?.approvalHost,
               callGateway: gatewayCall,
               runId,
               sendParams,
@@ -948,6 +962,7 @@ export function createSessionsSendTool(opts?: {
           }
 
           const start = await startAgentRun({
+            approvalHost: opts?.approvalHost,
             callGateway: gatewayCall,
             runId,
             sendParams,

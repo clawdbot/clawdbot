@@ -236,6 +236,46 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingChatType).toBe("channel");
   });
 
+  it("splits collect batches by approval host object identity", async () => {
+    const key = `test-collect-approval-host-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    const settings = createQueueSettings();
+    const firstHost = {};
+    const secondHost = {};
+
+    for (const [prompt, approvalHost] of [
+      ["one", firstHost],
+      ["two", firstHost],
+      ["three", secondHost],
+    ] as const) {
+      const item = createRun({
+        prompt,
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingChatType: "channel",
+      });
+      enqueueFollowupRun(
+        key,
+        {
+          ...item,
+          run: { ...item.run, approvalHost },
+        },
+        settings,
+      );
+    }
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.run.approvalHost).toBe(firstHost);
+    expect(calls[0]?.prompt).toContain("one");
+    expect(calls[0]?.prompt).toContain("two");
+    expect(calls[0]?.prompt).not.toContain("three");
+    expect(calls[1]?.run.approvalHost).toBe(secondHost);
+    expect(calls[1]?.prompt).toContain("three");
+  });
+
   it("collects Slack top-level messages when reply anchors are disabled", async () => {
     const key = `test-collect-slack-reply-off-${Date.now()}`;
     const { calls, done, runFollowup } = createDrainRecorder();

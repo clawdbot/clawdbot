@@ -796,6 +796,28 @@ describe("gateway tool defaults", () => {
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
   });
 
+  it("forwards approval runtime ownership and abort cleanup", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ id: "plugin:approval-id" });
+    const signal = new AbortController().signal;
+    const onSignalAbort: NonNullable<CallGatewayOptions["onSignalAbort"]> = vi.fn();
+
+    await callGatewayTool(
+      "plugin.approval.request",
+      {},
+      { title: "approve", description: "test" },
+      {
+        signal,
+        onSignalAbort,
+        instanceId: "approval-runtime-instance",
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.signal).toBe(signal);
+    expect(call.onSignalAbort).toBe(onSignalAbort);
+    expect(call.instanceId).toBe("approval-runtime-instance");
+  });
+
   it("marks local approval resolve calls as approval runtime calls", async () => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
 

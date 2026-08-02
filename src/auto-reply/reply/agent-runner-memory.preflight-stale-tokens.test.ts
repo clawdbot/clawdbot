@@ -128,6 +128,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
   });
 
   it("compacts when totalTokens is large and fresh", async () => {
+    const approvalHost = {};
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -147,9 +148,29 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       sessionEntry,
     );
 
-    await runWithEntry(sessionEntry, sessionFile);
+    const followupRun = createTestFollowupRun({
+      sessionId: "session",
+      sessionFile,
+      sessionKey: "agent:main:main",
+      approvalHost,
+    });
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
 
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalHost }),
+    );
   });
 
   it.each([

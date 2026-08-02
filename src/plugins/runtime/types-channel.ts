@@ -17,6 +17,7 @@ import type {
   MatchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.types.js";
 import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
+import type { ChannelRuntimeSurface } from "../../channels/plugins/channel-runtime-surface.types.js";
 import type { LoadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.types.js";
 import type { ResolveMarkdownTableMode } from "../../config/markdown-tables.types.js";
 import type {
@@ -77,6 +78,7 @@ type PluginRuntimeChannelContextRegistry = {
 };
 
 export type PluginRuntimeChannel = {
+  agent: NonNullable<ChannelRuntimeSurface["agent"]>;
   text: {
     chunkByNewline: typeof import("../../auto-reply/chunk.js").chunkByNewline;
     chunkMarkdownText: typeof import("../../auto-reply/chunk.js").chunkMarkdownText;

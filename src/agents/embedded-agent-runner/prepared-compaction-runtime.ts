@@ -307,6 +307,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
               : undefined,
           sessionId: params.sessionId,
           runId: params.runId,
+          approvalHost: params.approvalHost,
           oneShotCliRun: params.oneShotCliRun,
           groupId: params.groupId,
           groupChannel: params.groupChannel,

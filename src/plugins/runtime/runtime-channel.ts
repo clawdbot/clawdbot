@@ -80,6 +80,26 @@ import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-r
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
 import type { PluginRuntime } from "./types.js";
 
+type AgentIngressArgs = Parameters<
+  typeof import("../../agents/agent-command.js").agentCommandFromIngress
+>;
+
+async function runGatewayOwnedAgentIngress(...args: AgentIngressArgs) {
+  const [opts, runtime, deps] = args;
+  const [{ agentCommandFromIngress }, { gatewayAgentRunApprovalHost }] = await Promise.all([
+    import("../../agents/agent-command.js"),
+    import("../../agents/agent-run-approval.gateway.js"),
+  ]);
+  return await agentCommandFromIngress(
+    {
+      ...opts,
+      approvalHost: opts.approvalHost ?? gatewayAgentRunApprovalHost,
+    },
+    runtime,
+    deps,
+  );
+}
+
 export function createRuntimeChannel(): PluginRuntime["channel"] {
   const sessionRuntime = {
     resolveStorePath,
@@ -92,6 +112,9 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
   };
   const channelRuntime = {
+    agent: {
+      runIngress: runGatewayOwnedAgentIngress,
+    },
     text: {
       chunkByNewline,
       chunkMarkdownText,

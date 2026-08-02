@@ -577,6 +577,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
     const client = createFakeClient();
+    const approvalHost = { plugin: { request: vi.fn() } };
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const result = await runCodexAppServerSideQuestion(
@@ -601,6 +602,7 @@ describe("runCodexAppServerSideQuestion", () => {
         senderUsername: "rosita",
         senderE164: "+15550001",
         senderIsOwner: true,
+        approvalHost,
       }),
     );
 
@@ -733,6 +735,7 @@ describe("runCodexAppServerSideQuestion", () => {
       messageActionTurnCapability: "turn-capability-1",
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+    expect(toolOptions).toHaveProperty("approvalHost", approvalHost);
   });
 
   it("rebinds side-question handlers when selection retry replaces the client", async () => {
@@ -1462,13 +1465,19 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("forwards side-thread command approvals through the active native hook relay", async () => {
     const client = createFakeClient();
+    const approvalHost = { plugin: { request: vi.fn() } };
     let relayIdDuringFork: string | undefined;
+    let relayApprovalContextDuringFork: unknown;
     let approvalResponse: unknown;
     handleCodexAppServerApprovalRequestMock.mockResolvedValueOnce({ decision: "decline" });
     client.request.mockImplementation(async (method: string, requestParams: unknown) => {
       if (method === "thread/fork") {
         const config = (requestParams as { config?: Record<string, unknown> }).config;
         relayIdDuringFork = extractRelayIdFromThreadConfig(config);
+        relayApprovalContextDuringFork =
+          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
+            relayIdDuringFork!,
+          )?.approvalContext;
         return threadResult("side-thread");
       }
       if (method === "thread/inject_items") {
@@ -1506,6 +1515,10 @@ describe("runCodexAppServerSideQuestion", () => {
           sessionKey: "agent:main:session-1",
           messageChannel: "discord",
           messageProvider: "discord-voice",
+          messageTo: "channel:ops",
+          agentAccountId: "account-1",
+          messageThreadId: "thread-1",
+          approvalHost,
           opts: { runId: "run-side-approval" },
         }),
         { nativeHookRelay: { enabled: true } },
@@ -1520,7 +1533,11 @@ describe("runCodexAppServerSideQuestion", () => {
           requestParams?: Record<string, unknown>;
           threadId?: string;
           turnId?: string;
-          paramsForRun?: { messageChannel?: string; messageProvider?: string };
+          paramsForRun?: {
+            messageChannel?: string;
+            messageProvider?: string;
+            approvalHost?: unknown;
+          };
           nativeHookRelay?: { relayId?: string; allowedEvents?: readonly string[] };
         }
       | undefined;
@@ -1544,6 +1561,15 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(approvalArgs?.nativeHookRelay).toMatchObject({
       relayId: relayIdDuringFork,
       allowedEvents: expect.arrayContaining(["pre_tool_use"]),
+    });
+    expect(approvalArgs?.paramsForRun?.approvalHost).toBe(approvalHost);
+    expect(relayApprovalContextDuringFork).toEqual({
+      approvalHost,
+      trigger: "user",
+      turnSourceChannel: "discord",
+      turnSourceTo: "channel:ops",
+      turnSourceAccountId: "account-1",
+      turnSourceThreadId: "thread-1",
     });
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),

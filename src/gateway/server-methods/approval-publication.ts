@@ -19,6 +19,16 @@ type ApprovalRequest =
   | PluginApprovalRequestPayload
   | SystemAgentApprovalRequestPayload;
 
+type PublishedApprovalResolved = {
+  id: string;
+  decision: ExecApprovalResolved["decision"];
+  resolvedBy: string | null;
+  ts: number;
+  request: ApprovalRequest;
+  status?: "cancelled";
+  terminalReason?: "run-aborted" | "gateway-restart";
+};
+
 export type ExecApprovalIosPushDelivery = {
   handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
 };
@@ -67,13 +77,28 @@ export async function publishAppliedApprovalResolution(params: {
   const decision = params.record.decision ?? "deny";
   const resolvedBy = params.liveRecord.resolvedBy ?? null;
   const ts = params.record.resolvedAtMs ?? Date.now();
-  const event = {
+  const eventBase = {
     id: params.record.id,
     decision,
     resolvedBy,
     ts,
     request: params.liveRecord.request,
   };
+  const event: PublishedApprovalResolved =
+    params.record.kind === "plugin" &&
+    params.record.status === "cancelled" &&
+    (params.record.terminalReason === "run-aborted" ||
+      params.record.terminalReason === "gateway-restart")
+      ? {
+          ...eventBase,
+          // The kind-specific handler resolves the durable record and live
+          // manager record together; only their shared generic publisher
+          // erases the plugin payload relation.
+          request: params.liveRecord.request as PluginApprovalRequestPayload,
+          status: "cancelled",
+          terminalReason: params.record.terminalReason,
+        }
+      : eventBase;
   await runSideEffect({
     context: params.context,
     approvalKind: params.record.kind,

@@ -520,6 +520,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       restoredCronContinuation,
       canUseInternalRuntimeHandoff,
       execApprovalFollowupApprovalId,
+      approvalReviewerDeviceId: ownerDeviceId,
       client,
       context,
       respond,

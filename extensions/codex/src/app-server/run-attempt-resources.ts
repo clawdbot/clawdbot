@@ -206,8 +206,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       channelId: hookChannelId,
       ...(requester ? { requester } : {}),
       approvalContext: {
+        approvalHost: params.approvalHost,
         trigger: params.trigger,
-        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
         turnSourceChannel: requesterChannel,
         turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
         turnSourceAccountId: params.agentAccountId,

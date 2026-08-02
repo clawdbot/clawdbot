@@ -68,6 +68,12 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "question.resolve", scope: "operator.questions", since: "2026.7" },
   { name: "question.get", scope: "operator.questions", since: "2026.7" },
   { name: "question.list", scope: "operator.questions", since: "2026.7" },
+  {
+    name: "plugin.approval.cancel",
+    scope: "operator.approvals",
+    since: "2026.7",
+    advertise: false,
+  },
   { name: "plugin.approval.list", scope: "operator.approvals", since: "<=2026.7" },
   { name: "plugin.approval.request", scope: "operator.approvals", since: "<=2026.7" },
   { name: "plugin.approval.waitDecision", scope: "operator.approvals", since: "<=2026.7" },

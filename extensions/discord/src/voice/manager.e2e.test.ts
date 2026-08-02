@@ -3,6 +3,7 @@ import { DAVESession } from "@discordjs/voice";
 import { expectDefined } from "@openclaw/normalization-core";
 import { VoiceOpcodes, type VoiceSendPayload } from "discord-api-types/voice/v8";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type {
   RealtimeVoiceAgentControlResult,
   RealtimeVoiceSessionHarness,
@@ -338,6 +339,11 @@ let segmentModule: typeof import("./segment.js");
 const { configureVoiceStateGateway, createClient, createClientWithMember } =
   createDiscordVoiceTestHelpers(updateVoiceStateMock);
 const createRuntime = createVoiceTestRuntime;
+const agentRuntime = {
+  runIngress: agentCommandMock as unknown as NonNullable<
+    ChannelRuntimeSurface["agent"]
+  >["runIngress"],
+};
 
 describe("DiscordVoiceManager", () => {
   beforeAll(async () => {
@@ -431,6 +437,7 @@ describe("DiscordVoiceManager", () => {
       discordConfig,
       accountId,
       runtime: createRuntime(),
+      agentRuntime,
     });
 
   const createAgentProxyManager = () =>
@@ -5931,6 +5938,7 @@ describe("DiscordVoiceManager", () => {
       discordConfig,
       admissionAllowFrom: ["discord:u-owner"],
       runtime: createRuntime(),
+      agentRuntime,
       fetchGuildName: async () => "Guild One",
       speakerContext,
       enqueuePlayback,

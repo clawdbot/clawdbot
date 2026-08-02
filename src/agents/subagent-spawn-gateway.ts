@@ -1,3 +1,4 @@
+import type { AgentRunApprovalHost } from "./agent-run-approval.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { resolveSubagentRunTimerDelayMs } from "./subagent-run-timeout.js";
@@ -14,6 +15,7 @@ const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 export async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
   authorization?: SubagentLaunchAuthorization,
+  runtime?: { approvalHost: AgentRunApprovalHost },
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
   // Subagent lifecycle requires methods spanning multiple scope tiers
   // (sessions.delete → admin, agent → write). When each call
@@ -36,6 +38,9 @@ export async function callSubagentGateway(
   const allowModelOverride = authorization !== undefined;
   const deps = getSubagentSpawnDeps();
   const hasInProcessGateway = deps.hasInProcessGatewayContext();
+  if (runtime && !hasInProcessGateway) {
+    throw new Error("Process-local approval hosts cannot cross the Gateway transport.");
+  }
   const needsOutOfProcessModelOverrideAuth = allowModelOverride && !hasInProcessGateway;
   const scopes =
     params.scopes ??
@@ -64,6 +69,7 @@ export async function callSubagentGateway(
       {
         expectFinal: request.expectFinal,
         ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
+        ...(runtime ? { agentRunApprovalHost: runtime.approvalHost } : {}),
         ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
         ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),

@@ -216,6 +216,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           sessionKey: sandboxSessionKey,
           sessionId: params.sessionId,
           runId: params.runId,
+          approvalHost: params.approvalHost,
           channelId: params.currentChannelId,
         },
       });

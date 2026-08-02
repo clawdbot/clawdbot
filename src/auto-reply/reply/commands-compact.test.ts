@@ -142,6 +142,7 @@ describe("handleCompactCommand", () => {
       compacted: false,
     });
     const abortController = new AbortController();
+    const approvalHost = {};
 
     const result = await handleCompactCommand(
       {
@@ -163,6 +164,7 @@ describe("handleCompactCommand", () => {
           SenderE164: "+15551234567",
         },
         agentDir: "/tmp/openclaw-agent-compact",
+        approvalHost,
         opts: { abortSignal: abortController.signal },
         sessionEntry: {
           sessionId: "session-1",
@@ -183,6 +185,7 @@ describe("handleCompactCommand", () => {
     const call = requireCompactEmbeddedAgentSessionCall();
     expect(call.sessionId).toBe("session-1");
     expect(call.abortSignal).toBe(abortController.signal);
+    expect(call.approvalHost).toBe(approvalHost);
     expect(call.sessionKey).toBe("agent:main:main");
     expect(call.allowGatewaySubagentBinding).toBe(true);
     expect(call.trigger).toBe("manual");

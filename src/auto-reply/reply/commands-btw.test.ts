@@ -120,6 +120,8 @@ describe("handleBtwCommand", () => {
 
   it("delegates to the side-question runner", async () => {
     const params = buildParams("/btw what changed?");
+    const approvalHost = { plugin: { request: vi.fn() } };
+    params.approvalHost = approvalHost;
     params.command.senderId = "sender-1";
     params.command.senderIsOwner = true;
     params.ctx.AccountId = "account-1";
@@ -180,6 +182,7 @@ describe("handleBtwCommand", () => {
     expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(runnerArgs.messageActionTurnCapability).toEqual(expect.any(String));
     expect(runnerArgs.opts).toMatchObject({ runId: expect.any(String) });
+    expect(runnerArgs.approvalHost).toBe(approvalHost);
     expect(resolvedTurnContext).toMatchObject({
       requesterAccountId: "account-1",
       requesterSenderId: "sender-1",

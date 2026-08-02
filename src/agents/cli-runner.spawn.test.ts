@@ -29,6 +29,7 @@ import {
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
+import { gatewayAgentRunApprovalHost } from "./agent-run-approval.gateway.js";
 import {
   registerExecApprovalRequestForHostOrThrow,
   resolveRegisteredExecApprovalDecision,
@@ -40,7 +41,7 @@ import {
 import {
   buildClaudeControlRequestEvents,
   buildClaudeLiveBackend,
-  buildClaudeLiveRunContext,
+  buildClaudeLiveRunContext as buildBaseClaudeLiveRunContext,
   buildPreparedCliRunContext,
   captureModelCallDiagnostics,
   createCancelableLiveRunLifecycle,
@@ -115,6 +116,12 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
+
+function buildClaudeLiveRunContext(overrides: PreparedCliRunContextOverrides = {}) {
+  const context = buildBaseClaudeLiveRunContext(overrides);
+  context.params.approvalHost = gatewayAgentRunApprovalHost;
+  return context;
+}
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
@@ -3439,7 +3446,11 @@ describe("runCliAgent spawn path", () => {
         toolName: "Bash",
         toolCallId: "tool-allow-once-1",
       }),
-      { expectFinal: false },
+      expect.objectContaining({
+        expectFinal: false,
+        instanceId: expect.any(String),
+        onSignalAbort: expect.any(Function),
+      }),
     );
   });
 
@@ -3484,7 +3495,11 @@ describe("runCliAgent spawn path", () => {
         detail: JSON.stringify({ file_path: "/tmp/out.txt", content }),
         allowedDecisions: ["allow-once", "deny"],
       }),
-      { expectFinal: false },
+      expect.objectContaining({
+        expectFinal: false,
+        instanceId: expect.any(String),
+        onSignalAbort: expect.any(Function),
+      }),
     );
   });
 

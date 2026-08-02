@@ -11,8 +11,6 @@ const resolveModelAuthMode = vi.hoisted(() => vi.fn());
 const resolveRuntimeCliBackends = vi.hoisted(() => vi.fn());
 const resolveCliRuntimeExecutionProvider = vi.hoisted(() => vi.fn());
 const runCliAgent = vi.hoisted(() => vi.fn());
-const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
-const retireSessionMcpRuntimeForSessionKey = vi.hoisted(() => vi.fn());
 
 vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore,
@@ -27,10 +25,6 @@ vi.mock("../../plugins/cli-backends.runtime.js", () => ({
 }));
 vi.mock("../cli-runner.runtime.js", () => ({
   runCliAgent,
-}));
-vi.mock("../agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntime,
-  retireSessionMcpRuntimeForSessionKey,
 }));
 const transcriptRecorder = vi.hoisted(() => ({
   noteToolEvent: vi.fn(),
@@ -73,8 +67,6 @@ beforeEach(() => {
   resolveModelAuthMode.mockReset();
   resolveRuntimeCliBackends.mockReset();
   runCliAgent.mockReset();
-  retireSessionMcpRuntime.mockReset();
-  retireSessionMcpRuntimeForSessionKey.mockReset();
   resolveCliRuntimeExecutionProvider.mockReset();
   ensureAuthProfileStore.mockReturnValue({ profiles: {} });
   resolveAuthProfileOrder.mockReturnValue([]);
@@ -86,8 +78,6 @@ beforeEach(() => {
     { id: "google-gemini-cli" },
   ]);
   resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);
-  retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
-  retireSessionMcpRuntime.mockResolvedValue(true);
   runCliAgent.mockResolvedValue(cliRunResult());
   transcriptRecorder.noteToolEvent.mockReset();
   transcriptRecorder.noteAssistantText.mockReset();
@@ -335,8 +325,10 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
 describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   it("maps the embedded run onto a one-shot restricted CLI run", async () => {
     runCliAgent.mockResolvedValue(cliRunResult());
+    const approvalHost = {};
     const params = baseRunParams({
       toolsAllow: ["memory_search", "memory_get", "notes_retrieve_context"],
+      approvalHost,
     });
 
     const result = await runEmbeddedAgentViaCliBackendIfEligible(params);
@@ -353,6 +345,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       disableCliLiveSession: true,
       cleanupCliLiveSessionOnRunEnd: true,
       requireExplicitMessageTarget: true,
+      approvalHost,
       cliToolAvailability: {
         native: [],
         openClaw: ["memory_search", "memory_get", "notes_retrieve_context"],
@@ -483,23 +476,17 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(observed).toHaveLength(2);
   });
 
-  it("retires only the run's session MCP runtime instead of the process-wide server", async () => {
+  it("delegates one-shot MCP cleanup to the exact CLI run owner", async () => {
     runCliAgent.mockResolvedValue(cliRunResult());
     const params = baseRunParams({ cleanupBundleMcpOnRunEnd: true });
     await runEmbeddedAgentViaCliBackendIfEligible(params);
-    // The CLI runner's flag would close the shared loopback MCP server, which
-    // concurrent turns may still be using; it must never be forwarded.
-    expect(runCliAgent.mock.calls[0]?.[0]).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
-    expect(retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: params.sessionKey }),
-    );
-    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
+    expect(runCliAgent.mock.calls[0]?.[0]).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
   });
 
   it("skips MCP runtime cleanup when the caller did not request it", async () => {
     runCliAgent.mockResolvedValue(cliRunResult());
     await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams());
-    expect(retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
+    expect(runCliAgent.mock.calls[0]?.[0]).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
   });
 
   it("mirrors the run into the transcript recorder", async () => {

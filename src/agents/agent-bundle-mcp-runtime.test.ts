@@ -12,6 +12,12 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
+  captureSessionMcpRuntime,
+  createSessionMcpRuntimeCollector,
+  withSessionMcpRuntimeCapture,
+  withoutSessionMcpRuntimeCapture,
+} from "./agent-bundle-mcp-runtime-capture.js";
+import {
   completeDeferredSessionMcpRuntimeRetirement,
   createBundleMcpJsonSchemaValidator,
   createSessionMcpRuntime,
@@ -20,8 +26,10 @@ import {
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
+  peekSessionMcpRuntime,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
+  retireSessionMcpRuntimeInstance,
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
@@ -933,6 +941,7 @@ describe("session MCP runtime", () => {
 
   it("releases a runtime lease when catalog materialization fails", async () => {
     let activeLeases = 0;
+    const disposeRuntime = vi.fn(async () => {});
     const runtime = {
       ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
       acquireLease: () => {
@@ -946,8 +955,11 @@ describe("session MCP runtime", () => {
       },
     };
 
-    await expect(materializeBundleMcpToolsForRun({ runtime })).rejects.toThrow("catalog failed");
+    await expect(materializeBundleMcpToolsForRun({ runtime, disposeRuntime })).rejects.toThrow(
+      "catalog failed",
+    );
     expect(activeLeases).toBe(0);
+    expect(disposeRuntime).toHaveBeenCalledOnce();
   });
 
   it("uses the internal catalog timeout for MCP tools/list after connecting", async () => {
@@ -2700,6 +2712,74 @@ process.on("SIGINT", shutdown);`,
     expect(contentB.text).toBe("FROM-CONFIG-B");
   });
 
+  it("immediately revokes a leased static runtime when MCP config changes", async () => {
+    const disposals: Array<ReturnType<typeof vi.fn>> = [];
+    const manager = testing.createSessionMcpRuntimeManager({
+      enableIdleSweepTimer: false,
+      createRuntime: (params) => {
+        let activeLeases = 0;
+        const dispose = vi.fn<() => Promise<void>>().mockResolvedValue();
+        disposals.push(dispose);
+        return {
+          ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: params.configFingerprint ?? "fingerprint",
+          get activeLeases() {
+            return activeLeases;
+          },
+          acquireLease: () => {
+            activeLeases += 1;
+            return () => {
+              activeLeases -= 1;
+            };
+          },
+          dispose,
+        };
+      },
+    });
+    const request = {
+      sessionId: "session-static-credential-rotation",
+      workspaceDir: "/workspace",
+    };
+    const runtimeA = await manager.getOrCreate({
+      ...request,
+      cfg: {
+        mcp: {
+          servers: {
+            secured: {
+              command: "node",
+              env: { MCP_TOKEN: "credential-one" },
+            },
+          },
+        },
+      },
+    });
+    const release = runtimeA.acquireLease?.();
+
+    const runtimeB = await manager.getOrCreate({
+      ...request,
+      cfg: {
+        mcp: {
+          servers: {
+            secured: {
+              command: "node",
+              env: { MCP_TOKEN: "credential-two" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(runtimeB).not.toBe(runtimeA);
+    expect(disposals).toHaveLength(2);
+    expect(disposals[0]).toHaveBeenCalledOnce();
+    expect(manager.peekSession({ sessionId: request.sessionId })).toBe(runtimeB);
+
+    release?.();
+    await manager.disposeAll();
+  });
+
   it("disposes catalog startup in-flight without leaving cached runtimes", async () => {
     let notifyCatalogStarted: (() => void) | undefined;
     const catalogStarted = new Promise<void>((resolve) => {
@@ -2762,6 +2842,438 @@ process.on("SIGINT", shutdown);`,
     expect(testing.getCachedSessionIds()).not.toContain("session-retire");
 
     await expect(retireSessionMcpRuntime({ sessionId: " ", reason: "test" })).resolves.toBe(false);
+  });
+
+  it("does not retire a replacement through a stale runtime instance", async () => {
+    const sessionId = "session-exact-retirement";
+    const sessionKey = "agent:test:session-exact-retirement";
+    const runtimeA = await getOrCreateSessionMcpRuntime({
+      sessionId,
+      sessionKey,
+      workspaceDir: "/workspace-a",
+      cfg: { mcp: {} },
+    });
+    const runtimeB = await getOrCreateSessionMcpRuntime({
+      sessionId,
+      sessionKey,
+      workspaceDir: "/workspace-b",
+      cfg: { mcp: {} },
+    });
+    expect(runtimeB).not.toBe(runtimeA);
+
+    await expect(
+      retireSessionMcpRuntimeInstance({
+        runtime: runtimeA,
+        reason: "stale-run-end",
+        preserveActiveLeases: true,
+      }),
+    ).resolves.toBe(false);
+    expect(peekSessionMcpRuntime({ sessionId })).toBe(runtimeB);
+
+    await expect(
+      retireSessionMcpRuntimeInstance({
+        runtime: runtimeB,
+        reason: "current-run-end",
+        preserveActiveLeases: true,
+      }),
+    ).resolves.toBe(true);
+    expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();
+  });
+
+  it("leases the exact captured runtime until retirement is armed", async () => {
+    const collector = createSessionMcpRuntimeCollector();
+    const runtime = await withSessionMcpRuntimeCapture(
+      collector.capture,
+      async () =>
+        await getOrCreateSessionMcpRuntime({
+          sessionId: "session-runtime-capture",
+          workspaceDir: "/workspace",
+          cfg: { mcp: {} },
+        }),
+    );
+
+    expect(runtime.activeLeases).toBe(1);
+    const retire = vi.fn(async (captured: SessionMcpRuntime) => {
+      expect(captured).toBe(runtime);
+      expect(runtime.activeLeases).toBe(1);
+      return true;
+    });
+    const complete = vi.fn(async (captured: SessionMcpRuntime) => {
+      expect(captured).toBe(runtime);
+      expect(runtime.activeLeases).toBe(0);
+      return true;
+    });
+
+    await collector.closeAndRetire({ retire, complete });
+
+    expect(retire).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it("does not inherit a parent runtime capture across an owned child boundary", async () => {
+    const parentCapture = vi.fn();
+    const runtime = { sessionId: "child-owned-runtime" } as SessionMcpRuntime;
+
+    await withSessionMcpRuntimeCapture(parentCapture, async () => {
+      await withoutSessionMcpRuntimeCapture(async () => {
+        captureSessionMcpRuntime(runtime);
+      });
+    });
+
+    expect(parentCapture).not.toHaveBeenCalled();
+  });
+
+  it("retires a runtime captured after the collector closes in lease order", async () => {
+    const collector = createSessionMcpRuntimeCollector();
+    const events: string[] = [];
+    let resolveCompleted: (() => void) | undefined;
+    const completed = new Promise<void>((resolve) => {
+      resolveCompleted = resolve;
+    });
+    const acquireLease = vi.fn(() => {
+      events.push("lease");
+      return () => {
+        events.push("release");
+      };
+    });
+    const runtime = { sessionId: "late-runtime", acquireLease } as unknown as SessionMcpRuntime;
+    const retire = vi.fn(async () => {
+      events.push("retire");
+      return true;
+    });
+    const complete = vi.fn(async () => {
+      events.push("complete");
+      resolveCompleted?.();
+      return true;
+    });
+
+    await collector.closeAndRetire({ retire, complete });
+    collector.capture(runtime);
+    await completed;
+
+    expect(events).toEqual(["lease", "retire", "release", "complete"]);
+    expect(retire).toHaveBeenCalledWith(runtime);
+    expect(complete).toHaveBeenCalledWith(runtime);
+  });
+
+  it("drains a runtime captured while collector retirement is in progress", async () => {
+    const collector = createSessionMcpRuntimeCollector();
+    const events: string[] = [];
+    let allowFirstRetirement: (() => void) | undefined;
+    const firstRetirementBlocked = new Promise<void>((resolve) => {
+      allowFirstRetirement = resolve;
+    });
+    let notifyFirstRetirementStarted: (() => void) | undefined;
+    const firstRetirementStarted = new Promise<void>((resolve) => {
+      notifyFirstRetirementStarted = resolve;
+    });
+    const makeCapturedRuntime = (name: string) =>
+      ({
+        sessionId: `crossing-${name}`,
+        acquireLease: () => {
+          events.push(`${name}:lease`);
+          return () => {
+            events.push(`${name}:release`);
+          };
+        },
+      }) as unknown as SessionMcpRuntime;
+    const first = makeCapturedRuntime("first");
+    const late = makeCapturedRuntime("late");
+    collector.capture(first);
+
+    const closePromise = collector.closeAndRetire({
+      retire: async (runtime) => {
+        const name = runtime === first ? "first" : "late";
+        events.push(`${name}:retire`);
+        if (runtime === first) {
+          notifyFirstRetirementStarted?.();
+          await firstRetirementBlocked;
+        }
+        return true;
+      },
+      complete: async (runtime) => {
+        events.push(`${runtime === first ? "first" : "late"}:complete`);
+        return true;
+      },
+    });
+    await firstRetirementStarted;
+    collector.capture(late);
+    allowFirstRetirement?.();
+    await closePromise;
+
+    expect(events).toEqual([
+      "first:lease",
+      "first:retire",
+      "late:lease",
+      "late:retire",
+      "late:release",
+      "late:complete",
+      "first:release",
+      "first:complete",
+    ]);
+  });
+
+  it("reports post-close retirement failures through the async error sink", async () => {
+    const collector = createSessionMcpRuntimeCollector();
+    const onAsyncError = vi.fn();
+    const release = vi.fn();
+    const runtime = {
+      sessionId: "late-runtime-error",
+      acquireLease: () => release,
+    } as unknown as SessionMcpRuntime;
+    await collector.closeAndRetire({
+      retire: async () => {
+        throw new Error("late retirement failed");
+      },
+      complete: vi.fn(async () => true),
+      onAsyncError,
+    });
+
+    collector.capture(runtime);
+    await waitForPredicate(
+      () => onAsyncError.mock.calls.length === 1,
+      "late retirement error sink",
+      1_000,
+    );
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(onAsyncError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Failed to retire a late-captured session MCP runtime",
+      }),
+    );
+  });
+
+  it("does not retire an overlapping replacement through a late capture", async () => {
+    const collector = createSessionMcpRuntimeCollector();
+    let allowLateRetirement: (() => void) | undefined;
+    const lateRetirementBlocked = new Promise<void>((resolve) => {
+      allowLateRetirement = resolve;
+    });
+    let notifyLateRetirementComplete: (() => void) | undefined;
+    const lateRetirementComplete = new Promise<void>((resolve) => {
+      notifyLateRetirementComplete = resolve;
+    });
+    await collector.closeAndRetire({
+      retire: async (runtime) => {
+        await lateRetirementBlocked;
+        return await retireSessionMcpRuntimeInstance({
+          runtime,
+          reason: "late-overlap-test",
+          preserveActiveLeases: true,
+        });
+      },
+      complete: async (runtime) => {
+        const completed = await completeDeferredSessionMcpRuntimeRetirement(runtime);
+        notifyLateRetirementComplete?.();
+        return completed;
+      },
+    });
+    const sessionId = "session-late-runtime-overlap";
+    const runtimeA = await getOrCreateSessionMcpRuntime({
+      sessionId,
+      workspaceDir: "/workspace-a",
+      cfg: { mcp: {} },
+    });
+    collector.capture(runtimeA);
+    const runtimeB = await getOrCreateSessionMcpRuntime({
+      sessionId,
+      workspaceDir: "/workspace-b",
+      cfg: { mcp: {} },
+    });
+
+    allowLateRetirement?.();
+    await lateRetirementComplete;
+
+    expect(runtimeB).not.toBe(runtimeA);
+    expect(peekSessionMcpRuntime({ sessionId })).toBe(runtimeB);
+  });
+
+  it("keeps a runtime alive until every concurrent collector releases its claim", async () => {
+    const sessionId = "session-runtime-concurrent-capture";
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId,
+      workspaceDir: "/workspace",
+      cfg: { mcp: {} },
+    });
+    const first = createSessionMcpRuntimeCollector();
+    const second = createSessionMcpRuntimeCollector();
+    first.capture(runtime);
+    second.capture(runtime);
+    expect(runtime.activeLeases).toBe(2);
+    const retirement = {
+      retire: async (captured: SessionMcpRuntime) =>
+        await retireSessionMcpRuntimeInstance({
+          runtime: captured,
+          reason: "collector-test",
+          preserveActiveLeases: true,
+        }),
+      complete: completeDeferredSessionMcpRuntimeRetirement,
+    };
+
+    await first.closeAndRetire(retirement);
+    expect(runtime.activeLeases).toBe(1);
+    expect(peekSessionMcpRuntime({ sessionId })).toBe(runtime);
+
+    await second.closeAndRetire(retirement);
+    expect(runtime.activeLeases).toBe(0);
+    expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();
+  });
+
+  it("preserves an exact runtime while a newer run owns a lease", async () => {
+    const sessionId = "session-exact-retirement-lease";
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId,
+      sessionKey: "agent:test:session-exact-retirement-lease",
+      workspaceDir: "/workspace",
+      cfg: { mcp: {} },
+    });
+    const release = runtime.acquireLease?.();
+
+    await expect(
+      retireSessionMcpRuntimeInstance({
+        runtime,
+        reason: "overlapping-run-end",
+        preserveActiveLeases: true,
+      }),
+    ).resolves.toBe(true);
+    expect(peekSessionMcpRuntime({ sessionId })).toBe(runtime);
+
+    release?.();
+    await expect(completeDeferredSessionMcpRuntimeRetirement(runtime)).resolves.toBe(true);
+    expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();
+  });
+
+  it("retires an armed runtime without deleting its replacement", async () => {
+    const disposeByWorkspace = new Map<string, ReturnType<typeof vi.fn>>();
+    const manager = testing.createSessionMcpRuntimeManager({
+      enableIdleSweepTimer: false,
+      createRuntime: (params) => {
+        const dispose = vi.fn<() => Promise<void>>().mockResolvedValue();
+        disposeByWorkspace.set(params.workspaceDir, dispose);
+        let activeLeases = 0;
+        return {
+          ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: params.configFingerprint ?? "fingerprint",
+          get activeLeases() {
+            return activeLeases;
+          },
+          acquireLease: () => {
+            activeLeases += 1;
+            return () => {
+              activeLeases -= 1;
+            };
+          },
+          dispose,
+        };
+      },
+    });
+    const sessionId = "session-exact-retirement-replacement";
+    const runtimeA = await manager.getOrCreate({
+      sessionId,
+      workspaceDir: "/workspace-a",
+      cfg: { mcp: {} },
+    });
+    const release = runtimeA.acquireLease?.();
+
+    await expect(
+      manager.retireRuntimeInstance(runtimeA, { preserveActiveLeases: true }),
+    ).resolves.toBe(true);
+
+    const runtimeB = await manager.getOrCreate({
+      sessionId,
+      workspaceDir: "/workspace-b",
+      cfg: { mcp: {} },
+    });
+    expect(runtimeB).not.toBe(runtimeA);
+    expect(disposeByWorkspace.get("/workspace-a")).not.toHaveBeenCalled();
+
+    release?.();
+    await expect(manager.completeDeferredRetirement(sessionId, runtimeA)).resolves.toBe(true);
+    expect(disposeByWorkspace.get("/workspace-a")).toHaveBeenCalledOnce();
+    expect(manager.peekSession({ sessionId })).toBe(runtimeB);
+    await manager.disposeAll();
+  });
+
+  it("retries exact runtime disposal without exposing the failed runtime for reuse", async () => {
+    const dispose = vi.fn<() => Promise<void>>().mockRejectedValueOnce(new Error("dispose failed"));
+    dispose.mockResolvedValueOnce();
+    let activeLeases = 0;
+    const manager = testing.createSessionMcpRuntimeManager({
+      enableIdleSweepTimer: false,
+      createRuntime: (params) => ({
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        get activeLeases() {
+          return activeLeases;
+        },
+        acquireLease: () => {
+          activeLeases += 1;
+          return () => {
+            activeLeases -= 1;
+          };
+        },
+        dispose,
+      }),
+    });
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-exact-retirement-retry",
+      workspaceDir: "/workspace",
+    });
+
+    await expect(manager.retireRuntimeInstance(runtime)).rejects.toThrow(
+      "Failed to retire exact MCP runtime",
+    );
+    expect(manager.peekSession({ sessionId: runtime.sessionId })).toBeUndefined();
+
+    await expect(manager.retireRuntimeInstance(runtime)).resolves.toBe(true);
+    expect(dispose).toHaveBeenCalledTimes(2);
+    await manager.disposeAll();
+  });
+
+  it("keeps failed exact retirement state retryable across disposeAll", async () => {
+    const dispose = vi.fn<() => Promise<void>>().mockRejectedValueOnce(new Error("dispose failed"));
+    dispose.mockResolvedValueOnce();
+    let activeLeases = 0;
+    const manager = testing.createSessionMcpRuntimeManager({
+      enableIdleSweepTimer: false,
+      createRuntime: (params) => ({
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        get activeLeases() {
+          return activeLeases;
+        },
+        acquireLease: () => {
+          activeLeases += 1;
+          return () => {
+            activeLeases -= 1;
+          };
+        },
+        dispose,
+      }),
+    });
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-exact-dispose-all-retry",
+      workspaceDir: "/workspace",
+    });
+    const release = runtime.acquireLease?.();
+    await expect(
+      manager.retireRuntimeInstance(runtime, { preserveActiveLeases: true }),
+    ).resolves.toBe(true);
+    release?.();
+
+    await expect(manager.disposeAll()).rejects.toThrow("Failed to dispose exact MCP runtimes");
+    expect(testing.getBookkeepingSizes(manager).exactRetirement).toBe(1);
+
+    await expect(manager.retireRuntimeInstance(runtime)).resolves.toBe(true);
+    expect(dispose).toHaveBeenCalledTimes(2);
+    await manager.disposeAll();
   });
 
   it("preserves a runtime while a bounded app view lease is active", async () => {
@@ -3031,6 +3543,57 @@ process.on("SIGINT", shutdown);`,
     await manager.disposeAll();
   });
 
+  it("completes required session retirement after exact cleanup drains unrelated work", async () => {
+    const disposeByWorkspace = new Map<string, ReturnType<typeof vi.fn>>();
+    const manager = testing.createSessionMcpRuntimeManager({
+      enableIdleSweepTimer: false,
+      createRuntime: (params) => {
+        let activeLeases = 0;
+        const dispose = vi.fn<() => Promise<void>>().mockResolvedValue();
+        disposeByWorkspace.set(params.workspaceDir, dispose);
+        return {
+          ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: params.configFingerprint ?? "fingerprint",
+          get activeLeases() {
+            return activeLeases;
+          },
+          acquireLease: () => {
+            activeLeases += 1;
+            return () => {
+              activeLeases -= 1;
+            };
+          },
+          dispose,
+        };
+      },
+    });
+    const sessionId = "session-required-after-exact";
+    const runtimeA = await manager.getOrCreate({
+      sessionId,
+      workspaceDir: "/workspace-a",
+      cfg: { mcp: {} },
+    });
+    const releaseA = runtimeA.acquireLease?.();
+    await manager.retireRuntimeInstance(runtimeA, { preserveActiveLeases: true });
+    expect(manager.deferRetirement(sessionId, { retainAcrossReuse: true })).toBe(true);
+
+    const runtimeB = await manager.getOrCreate({
+      sessionId,
+      workspaceDir: "/workspace-b",
+      cfg: { mcp: {} },
+    });
+    expect(runtimeB).not.toBe(runtimeA);
+
+    releaseA?.();
+    await expect(manager.completeDeferredRetirement(sessionId, runtimeA)).resolves.toBe(true);
+    expect(disposeByWorkspace.get("/workspace-a")).toHaveBeenCalledOnce();
+    expect(disposeByWorkspace.get("/workspace-b")).toHaveBeenCalledOnce();
+    expect(manager.listSessionIds()).not.toContain(sessionId);
+    await manager.disposeAll();
+  });
+
   it("retires global session runtimes by session key", async () => {
     await getOrCreateSessionMcpRuntime({
       sessionId: "session-retire-key",
@@ -3181,6 +3744,95 @@ describe("requester-scoped MCP connection resolution", () => {
     expect(manager.listSessionIds()).toEqual(["session-shared"]);
     expect(manager.listRuntimeKeys()).toHaveLength(3);
 
+    await manager.disposeAll();
+  });
+
+  it("drains overlapping exact retirements after the shared lease releases", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) => ({
+          url: `https://mcp.example.test/${ctx.requesterSenderId}`,
+        }),
+      },
+    ]);
+
+    const disposeByPart = new Map<string, ReturnType<typeof vi.fn>>();
+    const manager = testing.createSessionMcpRuntimeManager({
+      enableIdleSweepTimer: false,
+      createRuntime: (params) => {
+        const part = params.requesterScope?.requesterSenderId ?? "static";
+        const dispose = vi.fn<() => Promise<void>>().mockResolvedValue();
+        disposeByPart.set(part, dispose);
+        let activeLeases = 0;
+        return {
+          ...makeRuntime([{ toolName: "probe", description: "probe" }], part),
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: params.configFingerprint ?? "fingerprint",
+          requesterScope: params.requesterScope,
+          get activeLeases() {
+            return activeLeases;
+          },
+          acquireLease: () => {
+            activeLeases += 1;
+            return () => {
+              activeLeases -= 1;
+            };
+          },
+          dispose,
+        };
+      },
+    });
+    const cfg = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+    const runtimeA = await manager.getOrCreate({
+      sessionId: "session-overlapping-retirements",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    const runtimeB = await manager.getOrCreate({
+      sessionId: "session-overlapping-retirements",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-b",
+      messageChannel: "telegram",
+    });
+    const releaseA = runtimeA.acquireLease?.();
+    const releaseB = runtimeB.acquireLease?.();
+
+    await expect(
+      manager.retireRuntimeInstance(runtimeA, { preserveActiveLeases: true }),
+    ).resolves.toBe(true);
+    await expect(
+      manager.retireRuntimeInstance(runtimeB, { preserveActiveLeases: true }),
+    ).resolves.toBe(true);
+
+    releaseA?.();
+    await expect(manager.completeDeferredRetirement(runtimeA.sessionId, runtimeA)).resolves.toBe(
+      false,
+    );
+    expect(disposeByPart.get("sender-a")).not.toHaveBeenCalled();
+
+    releaseB?.();
+    await expect(manager.completeDeferredRetirement(runtimeB.sessionId, runtimeB)).resolves.toBe(
+      true,
+    );
+    expect(disposeByPart.get("static")).toHaveBeenCalledOnce();
+    expect(disposeByPart.get("sender-a")).toHaveBeenCalledOnce();
+    expect(disposeByPart.get("sender-b")).toHaveBeenCalledOnce();
+    expect(manager.listRuntimeKeys()).toEqual([]);
+    expect(testing.getBookkeepingSizes(manager).exactRetirement).toBe(0);
     await manager.disposeAll();
   });
 
@@ -4061,6 +4713,7 @@ describe("requester-scoped MCP connection resolution", () => {
       sessionKeys: 0,
       idleTtl: 0,
       deferredRetirement: 0,
+      exactRetirement: 0,
       advertisedScopedCatalogs: 0,
     });
   });
@@ -4154,6 +4807,249 @@ describe("requester-scoped MCP connection resolution", () => {
     });
     expect(resolveCalls).toBe(3);
     expect(createCount).toBe(3);
+
+    await manager.disposeAll();
+  });
+
+  it("revokes an already-retiring requester runtime immediately when credentials rotate", async () => {
+    let token = "credential-one";
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpConnectionRevalidateMsForTest(1_000);
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({
+          url: "https://mcp.example.test/user",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      },
+    ]);
+
+    let nowMs = 10_000;
+    const requesterDisposals: Array<ReturnType<typeof vi.fn>> = [];
+    const manager = testing.createSessionMcpRuntimeManager({
+      now: () => nowMs,
+      enableIdleSweepTimer: false,
+      createRuntime: (params) => {
+        let activeLeases = 0;
+        const dispose = vi.fn<() => Promise<void>>().mockResolvedValue();
+        if (params.requesterScope) {
+          requesterDisposals.push(dispose);
+        }
+        return {
+          ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: params.configFingerprint ?? "fingerprint",
+          requesterScope: params.requesterScope,
+          get activeLeases() {
+            return activeLeases;
+          },
+          acquireLease: () => {
+            activeLeases += 1;
+            return () => {
+              activeLeases -= 1;
+            };
+          },
+          dispose,
+        };
+      },
+    });
+    const request = {
+      sessionId: "session-retiring-credential-rotation",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    };
+    const firstRuntime = await manager.getOrCreate(request);
+    const release = firstRuntime.acquireLease?.();
+    await manager.retireRuntimeInstance(firstRuntime, { preserveActiveLeases: true });
+    expect(requesterDisposals[0]).not.toHaveBeenCalled();
+
+    token = "credential-two";
+    nowMs += 1_001;
+    const replacementRuntime = await manager.getOrCreate(request);
+
+    expect(replacementRuntime).not.toBe(firstRuntime);
+    expect(requesterDisposals).toHaveLength(2);
+    expect(requesterDisposals[0]).toHaveBeenCalledOnce();
+
+    release?.();
+    await manager.completeDeferredRetirement(firstRuntime.sessionId, firstRuntime);
+    await manager.disposeAll();
+  });
+
+  it("lets an unchanged retiring requester runtime drain its active lease", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpConnectionRevalidateMsForTest(1_000);
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({
+          url: "https://mcp.example.test/user",
+          headers: { Authorization: "Bearer stable-credential" },
+        }),
+      },
+    ]);
+
+    let nowMs = 10_000;
+    const requesterDisposals: Array<ReturnType<typeof vi.fn>> = [];
+    const manager = testing.createSessionMcpRuntimeManager({
+      now: () => nowMs,
+      enableIdleSweepTimer: false,
+      createRuntime: (params) => {
+        let activeLeases = 0;
+        const dispose = vi.fn<() => Promise<void>>().mockResolvedValue();
+        if (params.requesterScope) {
+          requesterDisposals.push(dispose);
+        }
+        return {
+          ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: params.configFingerprint ?? "fingerprint",
+          requesterScope: params.requesterScope,
+          get activeLeases() {
+            return activeLeases;
+          },
+          acquireLease: () => {
+            activeLeases += 1;
+            return () => {
+              activeLeases -= 1;
+            };
+          },
+          dispose,
+        };
+      },
+    });
+    const request = {
+      sessionId: "session-retiring-stable-credential",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    };
+    const firstRuntime = await manager.getOrCreate(request);
+    const release = firstRuntime.acquireLease?.();
+    await manager.retireRuntimeInstance(firstRuntime, { preserveActiveLeases: true });
+    expect(requesterDisposals[0]).not.toHaveBeenCalled();
+
+    nowMs += 1_001;
+    const replacementRuntime = await manager.getOrCreate(request);
+
+    expect(replacementRuntime).not.toBe(firstRuntime);
+    expect(requesterDisposals).toHaveLength(2);
+    expect(requesterDisposals[0]).not.toHaveBeenCalled();
+
+    release?.();
+    await manager.completeDeferredRetirement(firstRuntime.sessionId, firstRuntime);
+    expect(requesterDisposals[0]).toHaveBeenCalledOnce();
+
+    await manager.disposeAll();
+  });
+
+  it("retires remaining managed parts after a captured combined runtime is partially replaced", async () => {
+    let token = "credential-one";
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpConnectionRevalidateMsForTest(1_000);
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({
+          url: "https://mcp.example.test/user",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      },
+    ]);
+
+    let nowMs = 10_000;
+    const staticDispose = vi.fn<() => Promise<void>>().mockResolvedValue();
+    const requesterDisposals: Array<ReturnType<typeof vi.fn>> = [];
+    const manager = testing.createSessionMcpRuntimeManager({
+      now: () => nowMs,
+      enableIdleSweepTimer: false,
+      createRuntime: (params) => {
+        let activeLeases = 0;
+        const dispose = params.requesterScope
+          ? vi.fn<() => Promise<void>>().mockResolvedValue()
+          : staticDispose;
+        if (params.requesterScope) {
+          requesterDisposals.push(dispose);
+        }
+        return {
+          ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: params.configFingerprint ?? "fingerprint",
+          requesterScope: params.requesterScope,
+          get activeLeases() {
+            return activeLeases;
+          },
+          acquireLease: () => {
+            activeLeases += 1;
+            return () => {
+              activeLeases -= 1;
+            };
+          },
+          dispose,
+        };
+      },
+    });
+    const request = {
+      sessionId: "session-partial-combined-retirement",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            shared: { command: "true" },
+            "user-mail": { transport: "streamable-http" },
+          },
+        },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    };
+    const firstRuntime = await manager.getOrCreate(request);
+    const releaseFirst = firstRuntime.acquireLease?.();
+
+    token = "credential-two";
+    nowMs += 1_001;
+    const secondRuntime = await manager.getOrCreate(request);
+    const releaseSecond = secondRuntime.acquireLease?.();
+    const firstParts = (
+      firstRuntime as SessionMcpRuntime & {
+        managedParts: readonly SessionMcpRuntime[];
+      }
+    ).managedParts;
+    const secondParts = (
+      secondRuntime as SessionMcpRuntime & {
+        managedParts: readonly SessionMcpRuntime[];
+      }
+    ).managedParts;
+    expect(firstParts).toHaveLength(2);
+    expect(secondParts).toHaveLength(2);
+    expect(secondParts[0]).toBe(firstParts[0]);
+    expect(secondParts[1]).not.toBe(firstParts[1]);
+    expect(requesterDisposals[0]).toHaveBeenCalledOnce();
+    expect(staticDispose).not.toHaveBeenCalled();
+
+    await expect(
+      manager.retireRuntimeInstance(firstRuntime, { preserveActiveLeases: true }),
+    ).resolves.toBe(true);
+    await expect(manager.retireRuntimeInstance(firstParts[1]!)).resolves.toBe(false);
+    releaseFirst?.();
+    await manager.completeDeferredRetirement(firstRuntime.sessionId, firstRuntime);
+    expect(staticDispose).not.toHaveBeenCalled();
+    expect(testing.getBookkeepingSizes(manager).exactRetirement).toBe(1);
+
+    releaseSecond?.();
+    await manager.completeDeferredRetirement(firstRuntime.sessionId, firstRuntime);
+    expect(staticDispose).toHaveBeenCalledOnce();
 
     await manager.disposeAll();
   });

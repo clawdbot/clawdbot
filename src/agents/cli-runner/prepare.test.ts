@@ -26,6 +26,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import type { AgentRunApprovalHost } from "../agent-run-approval.js";
 import { readExternalCliBootstrapCredential as readExternalCliBootstrapCredentialImpl } from "../auth-profiles/external-cli-sync.js";
 import { resolveApiKeyForProfile as resolveApiKeyForProfileImpl } from "../auth-profiles/oauth.js";
 import {
@@ -2820,6 +2821,11 @@ describe("prepareCliRunContext", () => {
   });
 
   it("binds current turn context into the bundle MCP client grant", async () => {
+    const approvalHost: AgentRunApprovalHost = {
+      plugin: {
+        request: vi.fn(async () => ({ outcome: "unavailable" as const, reason: "test" })),
+      },
+    };
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
@@ -2904,6 +2910,7 @@ describe("prepareCliRunContext", () => {
       taskSuggestionDeliveryMode: "gateway",
       requireExplicitMessageTarget: true,
       approvalReviewerDeviceId: "reviewer-device",
+      approvalHost,
       senderId: "canonical-sender",
       senderName: "Canonical Name",
       senderUsername: "canonical-user",
@@ -2979,6 +2986,7 @@ describe("prepareCliRunContext", () => {
         spawnedBy: "agent:main:telegram:group:parent",
       },
       runtimeOwnerToken: "loopback-owner-token",
+      approvalHost,
     });
     context.preparedBackend.mcpClientGrantCapture?.activate("capture-test");
     context.preparedBackend.mcpClientGrantCapture?.deactivate("capture-test");

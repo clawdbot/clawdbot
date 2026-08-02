@@ -1,35 +1,14 @@
-// Covers gateway waitDecision id binding for native hook relay permission approvals.
+// Covers run-scoped approval-host binding for native hook PermissionRequest events.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { callGatewayTool } from "../tools/gateway.js";
+import type { AgentRunPluginApprovalHost } from "../agent-run-approval.js";
 import { invokeNativeHookRelay, registerNativeHookRelay, testing } from "./native-hook-relay.js";
 
-vi.mock("../tools/gateway.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../tools/gateway.js")>()),
-  callGatewayTool: vi.fn(),
-}));
-
-const mockCallGatewayTool = vi.mocked(callGatewayTool);
-
 afterEach(() => {
-  // restoreAllMocks does not clear call history on module-mock vi.fn()s.
-  mockCallGatewayTool.mockReset();
   vi.restoreAllMocks();
   testing.clearNativeHookRelaysForTests();
 });
 
-function mockGatewayApproval(waitResult: { id?: string; decision?: string | null }) {
-  mockCallGatewayTool.mockImplementation(async (method: string) => {
-    if (method === "plugin.approval.request") {
-      return { id: "approval-1", status: "accepted" };
-    }
-    if (method === "plugin.approval.waitDecision") {
-      return waitResult;
-    }
-    throw new Error(`unexpected gateway method: ${method}`);
-  });
-}
-
-async function invokePermissionRequest(relayId: string) {
+async function invokePermissionRequest(relayId: string, command = "printf binding") {
   return invokeNativeHookRelay({
     provider: "codex",
     relayId,
@@ -37,21 +16,36 @@ async function invokePermissionRequest(relayId: string) {
     rawPayload: {
       hook_event_name: "PermissionRequest",
       cwd: "/repo",
+      model: "gpt-5.4",
       tool_name: "Bash",
-      tool_use_id: "native-binding-call-1",
-      tool_input: { command: "printf binding" },
+      tool_use_id: `native-binding-${command}`,
+      tool_input: { command },
     },
   });
 }
 
-describe("native hook relay approval id binding", () => {
-  it("accepts a waitDecision reply bound to the requested approval id", async () => {
-    mockGatewayApproval({ id: "approval-1", decision: "allow-once" });
+describe("native hook relay approval host binding", () => {
+  it("routes PermissionRequest through the registration-scoped plugin approval host", async () => {
+    const abortController = new AbortController();
+    const request = vi.fn<AgentRunPluginApprovalHost["request"]>(async () => ({
+      outcome: "resolved",
+      decision: "allow-once",
+    }));
     const relay = registerNativeHookRelay({
       provider: "codex",
-      relayId: "codex-approval-binding-match",
+      relayId: "codex-approval-host-binding",
+      agentId: "agent-1",
       sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
       runId: "run-1",
+      signal: abortController.signal,
+      approvalContext: {
+        approvalHost: { plugin: { request } },
+        turnSourceAccountId: "account-1",
+        turnSourceChannel: "discord",
+        turnSourceThreadId: "thread-1",
+        turnSourceTo: "channel-1",
+      },
     });
 
     const response = await invokePermissionRequest(relay.relayId);
@@ -62,25 +56,147 @@ describe("native hook relay approval id binding", () => {
         decision: { behavior: "allow" },
       },
     });
+    expect(request).toHaveBeenCalledWith({
+      request: {
+        pluginId: "openclaw-native-hook-relay-codex",
+        title: "Codex permission request",
+        description: "Tool: exec\nCwd: /repo\nModel: gpt-5.4\nCommand: printf binding",
+        severity: "warning",
+        toolName: "exec",
+        toolCallId: "native-binding-printf binding",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        agentId: "agent-1",
+        sessionKey: "agent:main:session-1",
+        turnSourceAccountId: "account-1",
+        turnSourceChannel: "discord",
+        turnSourceThreadId: "thread-1",
+        turnSourceTo: "channel-1",
+      },
+      timeoutMs: 120_000,
+      signal: abortController.signal,
+    });
   });
 
-  it("defers when a waitDecision reply carries a different approval id", async () => {
-    mockGatewayApproval({ id: "approval-other", decision: "allow-once" });
-    const relay = registerNativeHookRelay({
+  it("keeps concurrent relay approvals bound to their own host", async () => {
+    const firstRequest = vi.fn<AgentRunPluginApprovalHost["request"]>(async () => ({
+      outcome: "resolved",
+      decision: "allow-always",
+    }));
+    const secondRequest = vi.fn<AgentRunPluginApprovalHost["request"]>(async () => ({
+      outcome: "resolved",
+      decision: "deny",
+    }));
+    const firstRelay = registerNativeHookRelay({
       provider: "codex",
-      relayId: "codex-approval-binding-mismatch",
+      relayId: "codex-approval-host-first",
       sessionId: "session-1",
       runId: "run-1",
+      approvalContext: { approvalHost: { plugin: { request: firstRequest } } },
+    });
+    const secondRelay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-approval-host-second",
+      sessionId: "session-2",
+      runId: "run-2",
+      approvalContext: { approvalHost: { plugin: { request: secondRequest } } },
     });
 
-    const response = await invokePermissionRequest(relay.relayId);
-
-    // A misrouted reply must never release the gate; the relay falls back to
-    // the provider's own approval path via the noop response.
-    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
+    const [firstResponse, secondResponse] = await Promise.all([
+      invokePermissionRequest(firstRelay.relayId, "printf first"),
+      invokePermissionRequest(secondRelay.relayId, "printf second"),
     ]);
+
+    expect(JSON.parse(firstResponse.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "allow" },
+      },
+    });
+    expect(JSON.parse(secondResponse.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: "Denied by user" },
+      },
+    });
+    expect(firstRequest).toHaveBeenCalledTimes(1);
+    expect(secondRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse allow-always decisions across live relays with identical input", async () => {
+    const firstRequest = vi.fn<AgentRunPluginApprovalHost["request"]>(async () => ({
+      outcome: "resolved",
+      decision: "allow-always",
+    }));
+    const secondRequest = vi.fn<AgentRunPluginApprovalHost["request"]>(async () => ({
+      outcome: "resolved",
+      decision: "deny",
+    }));
+    const firstRelay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-approval-cache-first",
+      sessionId: "session-1",
+      runId: "run-1",
+      approvalContext: { approvalHost: { plugin: { request: firstRequest } } },
+    });
+    const secondRelay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-approval-cache-second",
+      sessionId: "session-2",
+      runId: "run-2",
+      approvalContext: { approvalHost: { plugin: { request: secondRequest } } },
+    });
+
+    const firstResponse = await invokePermissionRequest(firstRelay.relayId, "printf shared");
+    const secondResponse = await invokePermissionRequest(secondRelay.relayId, "printf shared");
+
+    expect(JSON.parse(firstResponse.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "allow" },
+      },
+    });
+    expect(JSON.parse(secondResponse.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: "Denied by user" },
+      },
+    });
+    expect(firstRequest).toHaveBeenCalledTimes(1);
+    expect(secondRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps identical allow-always decisions cached independently per live relay", async () => {
+    const firstRequest = vi.fn<AgentRunPluginApprovalHost["request"]>(async () => ({
+      outcome: "resolved",
+      decision: "allow-always",
+    }));
+    const secondRequest = vi.fn<AgentRunPluginApprovalHost["request"]>(async () => ({
+      outcome: "resolved",
+      decision: "allow-always",
+    }));
+    const firstRelay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-approval-cache-independent-first",
+      sessionId: "session-1",
+      runId: "run-1",
+      approvalContext: { approvalHost: { plugin: { request: firstRequest } } },
+    });
+    const secondRelay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-approval-cache-independent-second",
+      sessionId: "session-2",
+      runId: "run-2",
+      approvalContext: { approvalHost: { plugin: { request: secondRequest } } },
+    });
+
+    await invokePermissionRequest(firstRelay.relayId, "printf shared");
+    await invokePermissionRequest(secondRelay.relayId, "printf shared");
+    await invokePermissionRequest(firstRelay.relayId, "printf shared");
+    await invokePermissionRequest(secondRelay.relayId, "printf shared");
+    secondRelay.unregister();
+    await invokePermissionRequest(firstRelay.relayId, "printf shared");
+
+    expect(firstRequest).toHaveBeenCalledTimes(1);
+    expect(secondRequest).toHaveBeenCalledTimes(1);
   });
 });

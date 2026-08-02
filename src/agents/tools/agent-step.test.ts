@@ -1,26 +1,11 @@
 // Agent step tests cover nested session handoff, transcript bookkeeping, and
-// MCP runtime retirement after completed nested turns.
+// exact command-owned cleanup after completed or timed-out nested turns.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CallGatewayOptions } from "../../gateway/call.js";
+import { noAgentRunApprovalHost, type AgentRunApprovalHost } from "../agent-run-approval.js";
 import { runAgentStep } from "./agent-step.js";
 import { testing } from "./agent-step.test-support.js";
 
-const runWaitMocks = vi.hoisted(() => ({
-  waitForAgentRunAndReadUpdatedAssistantReply: vi.fn(),
-}));
-
-const bundleMcpRuntimeMocks = vi.hoisted(() => ({
-  retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
-}));
-
-vi.mock("../run-wait.js", () => ({
-  waitForAgentRunAndReadUpdatedAssistantReply:
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply,
-}));
-
-vi.mock("../agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntimeForSessionKey: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
-}));
+type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
 
 describe("runAgentStep", () => {
   afterEach(() => {
@@ -28,19 +13,15 @@ describe("runAgentStep", () => {
     vi.clearAllMocks();
   });
 
-  it("retires bundle MCP runtime after successful nested agent steps", async () => {
+  it("keeps hostless nested steps process-local with command-owned cleanup", async () => {
     // Nested steps disable automatic delivery and carry provenance so the reply
     // returns through the message tool path instead of the channel.
-    const gatewayCalls: CallGatewayOptions[] = [];
+    const agentCommandFromIngress = vi.fn(async (_opts: Parameters<AgentCommandRunner>[0]) => ({
+      payloads: [{ text: "done", mediaUrl: null }],
+      meta: { durationMs: 1 },
+    }));
     testing.setDepsForTest({
-      callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
-        gatewayCalls.push(opts);
-        return { runId: "run-nested" } as T;
-      },
-    });
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
-      status: "ok",
-      replyText: "done",
+      agentCommandFromIngress,
     });
 
     await expect(
@@ -52,16 +33,7 @@ describe("runAgentStep", () => {
       }),
     ).resolves.toBe("done");
 
-    const params = gatewayCalls[0]?.params as
-      | {
-          message?: string;
-          sessionKey?: string;
-          deliver?: boolean;
-          sourceReplyDeliveryMode?: string;
-          lane?: string;
-          inputProvenance?: { kind?: string; sourceTool?: string };
-        }
-      | undefined;
+    const params = agentCommandFromIngress.mock.calls[0]?.[0];
     expect(params?.message).toContain("[Inter-session message");
     expect(params?.sessionKey).toBe("agent:main:subagent:child");
     expect(params?.deliver).toBe(false);
@@ -71,48 +43,120 @@ describe("runAgentStep", () => {
     expect(params?.inputProvenance?.sourceTool).toBe("sessions_send");
     expect(params?.message).toContain("isUser=false");
     expect(params?.message).toContain("hello");
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
-      sessionKey: "agent:main:subagent:child",
-      reason: "nested-agent-step-complete",
-    });
+    expect(params?.approvalHost).toBe(noAgentRunApprovalHost);
+    expect(params?.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(params?.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
-  it("does not retire bundle MCP runtime while nested agent steps are still pending", async () => {
+  it("keeps an injected approval host on normal nested turns", async () => {
+    const approvalHost: AgentRunApprovalHost = {
+      plugin: {
+        request: vi.fn(),
+      },
+    };
+    const agentCommandFromIngress = vi.fn(
+      async (_opts: { approvalHost?: AgentRunApprovalHost }) => ({
+        payloads: [{ text: "done", mediaUrl: null }],
+        meta: { durationMs: 1 },
+      }),
+    );
     testing.setDepsForTest({
-      callGateway: async <T = unknown>(): Promise<T> => ({ runId: "run-pending" }) as T,
-    });
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
-      status: "timeout",
+      agentCommandFromIngress,
     });
 
     await expect(
       runAgentStep({
         sessionKey: "agent:main:subagent:child",
-        message: "hello",
+        message: "continue",
         extraSystemPrompt: "reply briefly",
         timeoutMs: 10_000,
+        approvalHost,
+      }),
+    ).resolves.toBe("done");
+
+    expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
+    expect(agentCommandFromIngress.mock.calls[0]?.[0].approvalHost).toBe(approvalHost);
+  });
+
+  it("aborts a nested step at the caller deadline", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const agentCommandFromIngress = vi.fn(
+      async (opts: Parameters<AgentCommandRunner>[0]) =>
+        await new Promise<never>((_resolve, reject) => {
+          capturedSignal = opts.abortSignal;
+          const rejectAbort = () =>
+            reject(
+              opts.abortSignal?.reason instanceof Error
+                ? opts.abortSignal.reason
+                : new Error("nested step aborted"),
+            );
+          if (opts.abortSignal?.aborted) {
+            rejectAbort();
+            return;
+          }
+          opts.abortSignal?.addEventListener("abort", rejectAbort, { once: true });
+        }),
+    );
+    testing.setDepsForTest({
+      agentCommandFromIngress,
+    });
+
+    await expect(
+      runAgentStep({
+        sessionKey: "agent:main:subagent:child",
+        message: "do not hang",
+        extraSystemPrompt: "reply briefly",
+        timeoutMs: 5,
       }),
     ).resolves.toBeUndefined();
 
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(capturedSignal?.reason).toMatchObject({ name: "TimeoutError" });
+    const params = agentCommandFromIngress.mock.calls[0]?.[0];
+    expect(params?.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
+  it("discards a late reply when the backend delays abort handling", async () => {
+    let resolveCommand: ((value: Awaited<ReturnType<AgentCommandRunner>>) => void) | undefined;
+    const agentCommandFromIngress = vi.fn(
+      async (_opts: Parameters<AgentCommandRunner>[0]) =>
+        await new Promise<Awaited<ReturnType<AgentCommandRunner>>>((resolve) => {
+          resolveCommand = resolve;
+        }),
+    );
+    testing.setDepsForTest({
+      agentCommandFromIngress,
+    });
+
+    await expect(
+      runAgentStep({
+        sessionKey: "agent:main:subagent:child",
+        message: "respect the deadline",
+        extraSystemPrompt: "reply briefly",
+        timeoutMs: 5,
+      }),
+    ).resolves.toBeUndefined();
+    expect(agentCommandFromIngress.mock.calls[0]?.[0].cleanupBundleMcpOnRunEnd).toBe(true);
+
+    resolveCommand?.({
+      payloads: [{ text: "too late", mediaUrl: null }],
+      meta: { durationMs: 1 },
+    });
+    await Promise.resolve();
   });
 
   it("forwards explicit transcript bodies for nested bookkeeping turns", async () => {
-    const gatewayCalls: CallGatewayOptions[] = [];
-    const agentCommandFromIngress = vi.fn(async () => ({
+    const approvalHost: AgentRunApprovalHost = {
+      plugin: {
+        request: vi.fn(),
+      },
+    };
+    const agentCommandFromIngress = vi.fn(async (_opts: Parameters<AgentCommandRunner>[0]) => ({
       payloads: [{ text: "done", mediaUrl: null }],
       meta: { durationMs: 1 },
     }));
     testing.setDepsForTest({
       agentCommandFromIngress,
-      callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
-        gatewayCalls.push(opts);
-        return { runId: "run-nested" } as T;
-      },
-    });
-    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
-      status: "ok",
-      replyText: "done",
     });
 
     await runAgentStep({
@@ -121,21 +165,29 @@ describe("runAgentStep", () => {
       transcriptMessage: "",
       extraSystemPrompt: "announce only",
       timeoutMs: 10_000,
+      approvalHost,
     });
 
-    expect(gatewayCalls).toStrictEqual([]);
     expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
     const ingressCalls = agentCommandFromIngress.mock.calls as unknown as Array<
-      [{ message?: string; sourceReplyDeliveryMode?: string; transcriptMessage?: string }]
+      [
+        {
+          message?: string;
+          sourceReplyDeliveryMode?: string;
+          transcriptMessage?: string;
+          approvalHost?: AgentRunApprovalHost;
+        },
+      ]
     >;
     const ingress = ingressCalls[0]?.[0];
     expect(ingress?.message).toContain("internal announce step");
     expect(ingress?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(ingress?.transcriptMessage).toBe("");
+    expect(ingress?.approvalHost).toBe(approvalHost);
   });
 
   it("does not return failed transcript-mode output as an announce reply", async () => {
-    const agentCommandFromIngress = vi.fn(async () => ({
+    const agentCommandFromIngress = vi.fn(async (_opts: Parameters<AgentCommandRunner>[0]) => ({
       payloads: [
         {
           text: "⚠️ Agent couldn't generate a response. Please try again.",
@@ -155,7 +207,6 @@ describe("runAgentStep", () => {
     }));
     testing.setDepsForTest({
       agentCommandFromIngress,
-      callGateway: async <T = unknown>(): Promise<T> => ({ runId: "unused" }) as T,
     });
 
     await expect(
@@ -168,10 +219,8 @@ describe("runAgentStep", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
-      sessionKey: "agent:main:subagent:child",
-      reason: "nested-agent-step-complete",
-    });
+    const params = agentCommandFromIngress.mock.calls[0]?.[0];
+    expect(params?.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
   it("returns trusted terminal presentations from incomplete transcript turns", async () => {
@@ -191,7 +240,6 @@ describe("runAgentStep", () => {
     }));
     testing.setDepsForTest({
       agentCommandFromIngress,
-      callGateway: async <T = unknown>(): Promise<T> => ({ runId: "unused" }) as T,
     });
 
     await expect(

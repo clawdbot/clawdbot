@@ -95,6 +95,8 @@ export type PluginApprovalPendingView = PluginApprovalViewBase & {
 export type PluginApprovalResolvedView = PluginApprovalViewBase & {
   phase: "resolved";
   decision: ExecApprovalDecision;
+  status?: "cancelled";
+  terminalReason?: "run-aborted" | "gateway-restart";
   resolvedBy?: string | null;
 };
 

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { gatewayAgentRunApprovalHost } from "../../agents/agent-run-approval.gateway.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -29,7 +30,7 @@ const configMocks = vi.hoisted(() => ({
 }));
 
 const agentIngressMocks = vi.hoisted(() => ({
-  agentCommandFromIngress: vi.fn(async () => ({ ok: true })),
+  agentCommandFromIngress: vi.fn(async (_opts: unknown) => ({ ok: true })),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -102,7 +103,20 @@ describe("agent handler session create events", () => {
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
           broadcastToConnIds,
         } as never,
-        client: null,
+        client: {
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: {
+              id: "gateway-client",
+              version: "test",
+              platform: "test",
+              mode: "backend",
+            },
+            device: { id: "device-reviewer" },
+            scopes: ["operator.write", "operator.approvals"],
+          },
+        } as never,
         isWebchatConnect: () => false,
         req: { id: "req-agent-create-event" } as never,
       },
@@ -137,5 +151,10 @@ describe("agent handler session create events", () => {
       },
       { timeout: 2_000, interval: 5 },
     );
+    const ingressOptions = firstMockCall(agentIngressMocks.agentCommandFromIngress)?.[0] as
+      | { approvalHost?: unknown }
+      | undefined;
+    expect(ingressOptions?.approvalHost).toBeDefined();
+    expect(ingressOptions?.approvalHost).not.toBe(gatewayAgentRunApprovalHost);
   });
 });

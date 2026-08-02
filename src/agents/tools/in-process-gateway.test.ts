@@ -18,7 +18,11 @@ vi.mock("../../gateway/server-plugins.js", () => ({
 
 vi.mock("./gateway.js", () => ({ callGatewayTool: mocks.callGatewayTool }));
 
-import { callInProcessGatewayToolWithCreation } from "./in-process-gateway.js";
+import type { AgentRunApprovalHost } from "../agent-run-approval.js";
+import {
+  callAgentGatewayWithApprovalHost,
+  callInProcessGatewayToolWithCreation,
+} from "./in-process-gateway.js";
 
 describe("trusted in-process Gateway session creation", () => {
   beforeEach(() => {
@@ -54,5 +58,93 @@ describe("trusted in-process Gateway session creation", () => {
       { agentId: "main" },
       { scopes: ["operator.write"] },
     );
+  });
+});
+
+describe("host-aware agent Gateway dispatch", () => {
+  beforeEach(() => {
+    mocks.hasContext = true;
+    mocks.dispatch.mockReset().mockResolvedValue({ runId: "run-1" });
+    mocks.callGatewayTool.mockReset();
+  });
+
+  it("keeps the exact process-local approval host on in-process agent launches", async () => {
+    const approvalHost: AgentRunApprovalHost = {
+      plugin: {
+        request: vi.fn(),
+      },
+    };
+    const callGateway = vi.fn();
+
+    await callAgentGatewayWithApprovalHost({
+      approvalHost,
+      callGateway,
+      request: {
+        method: "agent",
+        params: { message: "hello", sessionKey: "agent:main:worker" },
+        timeoutMs: 10_000,
+      },
+    });
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "agent",
+      { message: "hello", sessionKey: "agent:main:worker" },
+      {
+        agentRunApprovalHost: approvalHost,
+        forceSyntheticClient: true,
+        syntheticScopes: ["operator.write"],
+        timeoutMs: 10_000,
+      },
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("serializes an explicit fail-closed marker when no approval host exists", async () => {
+    mocks.hasContext = false;
+    const callGateway = vi.fn().mockResolvedValue({ runId: "run-1" });
+
+    await callAgentGatewayWithApprovalHost({
+      callGateway,
+      request: {
+        method: "agent",
+        params: { message: "hello", sessionKey: "agent:main:worker" },
+        timeoutMs: 10_000,
+      },
+    });
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "agent",
+      params: {
+        message: "hello",
+        sessionKey: "agent:main:worker",
+        approvalHostMode: "none",
+      },
+      scopes: ["operator.write"],
+      timeoutMs: 10_000,
+    });
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects process-local approval hosts outside an in-process Gateway context", async () => {
+    mocks.hasContext = false;
+    const callGateway = vi.fn();
+    const approvalHost: AgentRunApprovalHost = {
+      plugin: {
+        request: vi.fn(),
+      },
+    };
+
+    await expect(
+      callAgentGatewayWithApprovalHost({
+        approvalHost,
+        callGateway,
+        request: {
+          method: "agent",
+          params: { message: "hello", sessionKey: "agent:main:worker" },
+        },
+      }),
+    ).rejects.toThrow("Process-local approval hosts cannot cross the Gateway transport.");
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 });

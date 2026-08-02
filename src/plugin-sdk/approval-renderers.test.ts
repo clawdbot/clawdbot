@@ -318,6 +318,32 @@ describe("plugin-sdk/approval-renderers", () => {
         },
       },
     },
+    {
+      name: "renders plugin cancellation distinctly from denial",
+      payload: buildPluginApprovalResolvedReplyPayload({
+        resolved: {
+          id: "plugin-approval-cancelled",
+          decision: "deny",
+          status: "cancelled",
+          terminalReason: "run-aborted",
+          resolvedBy: "approval-runtime",
+          ts: 2_000,
+        },
+      }),
+      textExpected: (text: string) => {
+        expect(text).toContain("Plugin approval cancelled");
+        expect(text).toContain("Cancelled by approval-runtime");
+        expect(text).not.toContain("Plugin approval denied");
+      },
+      presentationExpected: undefined,
+      channelDataExpected: {
+        execApproval: {
+          approvalId: "plugin-approval-cancelled",
+          approvalSlug: "plugin-a",
+          state: "resolved",
+        },
+      },
+    },
   ])("$name", ({ payload, textExpected, presentationExpected, channelDataExpected }) => {
     if (payload.text === undefined) {
       throw new Error("expected rendered approval text");

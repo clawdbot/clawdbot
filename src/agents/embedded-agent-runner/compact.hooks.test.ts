@@ -1001,6 +1001,20 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("preserves the approval host when rebuilding compaction tools", async () => {
+    const approvalHost = { plugin: { request: vi.fn() } } as never;
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+      approvalHost,
+    });
+
+    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), { approvalHost });
+  });
+
   it.each([
     { input: ["text"], modelHasVision: false },
     { input: ["text", "image"], modelHasVision: true },

@@ -17,7 +17,7 @@ import {
   type ExecApprovalRequest,
 } from "./exec-approvals.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "./plugin-approval-canonical-decisions.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
@@ -141,10 +141,13 @@ export function buildResolvedApprovalView(
   const approvalKind = resolveApprovalRequestKind(request);
   if (approvalKind === "plugin") {
     const pluginRequest = request as PluginApprovalRequest;
+    const pluginResolved = resolved as PluginApprovalResolved;
     return {
       ...buildPluginViewBase(pluginRequest, "resolved"),
-      decision: resolved.decision,
-      resolvedBy: resolved.resolvedBy,
+      decision: pluginResolved.decision,
+      ...(pluginResolved.status ? { status: pluginResolved.status } : {}),
+      ...(pluginResolved.terminalReason ? { terminalReason: pluginResolved.terminalReason } : {}),
+      resolvedBy: pluginResolved.resolvedBy,
     };
   }
   const execRequest = request as ExecApprovalRequest;

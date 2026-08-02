@@ -6,6 +6,7 @@ import * as pluginApprovals from "./plugin-approvals.js";
 import * as plugins from "./plugins.js";
 
 export const PluginLifecycleProtocolSchemas = {
+  PluginApprovalCancelParams: pluginApprovals.PluginApprovalCancelParamsSchema,
   PluginApprovalRequestParams: pluginApprovals.PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: pluginApprovals.PluginApprovalResolveParamsSchema,
   PluginCatalogClawHubInstall: plugins.PluginCatalogClawHubInstallSchema,

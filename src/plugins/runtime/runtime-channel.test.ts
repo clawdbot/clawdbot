@@ -1,7 +1,21 @@
 // Runtime channel tests cover channel plugin runtime send, reply, and capability behavior.
 import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import type { AgentRunApprovalHost } from "../../agents/agent-run-approval.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
+
+const agentMocks = vi.hoisted(() => ({
+  runIngress: vi.fn(),
+  gatewayHost: { plugin: { request: vi.fn() } } as AgentRunApprovalHost,
+}));
+
+vi.mock("../../agents/agent-command.js", () => ({
+  agentCommandFromIngress: agentMocks.runIngress,
+}));
+
+vi.mock("../../agents/agent-run-approval.gateway.js", () => ({
+  gatewayAgentRunApprovalHost: agentMocks.gatewayHost,
+}));
 
 function requireWatcherEvent(mock: ReturnType<typeof vi.fn>, index: number) {
   const event = mock.mock.calls[index]?.[0] as { type?: string } | undefined;
@@ -10,6 +24,40 @@ function requireWatcherEvent(mock: ReturnType<typeof vi.fn>, index: number) {
   }
   return event;
 }
+
+describe("agent", () => {
+  it("supplies the Gateway-owned approval host", async () => {
+    const channel = createRuntimeChannel();
+
+    await channel.agent.runIngress({
+      message: "hello",
+      allowModelOverride: false,
+    });
+
+    expect(agentMocks.runIngress).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalHost: agentMocks.gatewayHost }),
+      undefined,
+      undefined,
+    );
+  });
+
+  it("preserves an explicitly supplied approval host", async () => {
+    const channel = createRuntimeChannel();
+    const approvalHost: AgentRunApprovalHost = {};
+
+    await channel.agent.runIngress({
+      approvalHost,
+      message: "hello",
+      allowModelOverride: false,
+    });
+
+    expect(agentMocks.runIngress).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalHost }),
+      undefined,
+      undefined,
+    );
+  });
+});
 
 describe("runtimeContexts", () => {
   it("registers, resolves, watches, and unregisters contexts", () => {

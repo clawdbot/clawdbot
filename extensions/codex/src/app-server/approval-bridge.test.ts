@@ -13,10 +13,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
-import {
-  requestPluginApproval,
-  waitForPluginApprovalDecision,
-} from "./plugin-approval-roundtrip.js";
+import { requestPluginApproval } from "./plugin-approval-roundtrip.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
@@ -45,6 +42,16 @@ const mockResolveNativeHookRelayDeferredToolApproval = vi.mocked(
 );
 const mockReviewExecRequestWithConfiguredModel = vi.mocked(reviewExecRequestWithConfiguredModel);
 const mockRunBeforeToolCallHook = vi.mocked(runBeforeToolCallHook);
+type AppServerPluginApprovalResult = Awaited<ReturnType<typeof requestPluginApproval>>;
+const mockPluginApprovalRequest =
+  vi.fn<
+    (params: {
+      request: Record<string, unknown>;
+      timeoutMs: number;
+      signal?: AbortSignal;
+      onRegistered?: (registration: { id: string }) => void;
+    }) => Promise<AppServerPluginApprovalResult>
+  >();
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -116,6 +123,11 @@ function createParams(): EmbeddedRunAttemptParams {
     agentAccountId: "default",
     currentThreadTs: "thread-ts",
     onAgentEvent: vi.fn(),
+    approvalHost: {
+      plugin: {
+        request: mockPluginApprovalRequest,
+      },
+    },
   } as unknown as EmbeddedRunAttemptParams;
 }
 
@@ -138,6 +150,79 @@ describe("Codex app-server approval bridge", () => {
       blocked: false,
       params,
     }));
+    mockPluginApprovalRequest.mockReset();
+    mockPluginApprovalRequest.mockImplementation(async (params) => {
+      const requestResult = (await mockCallGatewayTool(
+        "plugin.approval.request",
+        { timeoutMs: params.timeoutMs + 10_000 },
+        {
+          ...params.request,
+          timeoutMs: params.timeoutMs,
+          twoPhase: true,
+        },
+        { expectFinal: false },
+      )) as { id?: string; decision?: unknown; deliveryRoute?: string } | undefined;
+      if (!requestResult?.id) {
+        return {
+          outcome: "unavailable",
+          reason: "Codex app-server approval route unavailable.",
+        };
+      }
+      params.onRegistered?.({ id: requestResult.id });
+      let requestDecisionDescriptor: PropertyDescriptor | undefined;
+      try {
+        requestDecisionDescriptor = Object.getOwnPropertyDescriptor(requestResult, "decision");
+      } catch {
+        requestDecisionDescriptor = undefined;
+      }
+      if (
+        requestDecisionDescriptor &&
+        "value" in requestDecisionDescriptor &&
+        requestDecisionDescriptor.value === null
+      ) {
+        return {
+          outcome: "unavailable",
+          reason: "Codex app-server approval route unavailable.",
+        };
+      }
+      try {
+        const waitResult = (await mockCallGatewayTool(
+          "plugin.approval.waitDecision",
+          { timeoutMs: params.timeoutMs + 10_000 },
+          { id: requestResult.id },
+        )) as { id?: string; decision?: unknown } | undefined;
+        if (waitResult?.id !== requestResult.id) {
+          return {
+            outcome: "unavailable",
+            reason: "Codex app-server approval route unavailable.",
+          };
+        }
+        if (
+          waitResult.decision === "allow-once" ||
+          waitResult.decision === "allow-always" ||
+          waitResult.decision === "deny"
+        ) {
+          return { outcome: "resolved", decision: waitResult.decision };
+        }
+        if (waitResult.decision === null) {
+          return {
+            outcome: "timed-out",
+            ...(requestResult.deliveryRoute === "turn-source"
+              ? { deliveryRoute: "turn-source" as const }
+              : {}),
+          };
+        }
+        return {
+          outcome: "unavailable",
+          reason: "Codex app-server approval route unavailable.",
+        };
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("approval expired or not found")) {
+          return { outcome: "timed-out" };
+        }
+        throw error;
+      }
+    });
   });
 
   it("auto-accepts app-server command approvals in yolo mode without opening plugin approvals", async () => {
@@ -195,6 +280,75 @@ describe("Codex app-server approval bridge", () => {
       reason: "needs write access",
       message: "Codex app-server approval auto-approved by runtime policy.",
     });
+  });
+
+  it("fails closed when the active run has no plugin approval host", async () => {
+    const params = createParams();
+    params.approvalHost = undefined;
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-no-host",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockPluginApprovalRequest).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "unavailable",
+      message: "Codex app-server approval unavailable.",
+    });
+  });
+
+  it("passes plugin approval metadata through the active run host", async () => {
+    const params = createParams();
+    mockPluginApprovalRequest.mockResolvedValueOnce({
+      outcome: "resolved",
+      decision: "allow-once",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-host",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockPluginApprovalRequest).toHaveBeenCalledWith({
+      request: {
+        pluginId: "openclaw-codex-app-server",
+        title: "Codex app-server command approval",
+        description: "Command: pnpm test\nSession: agent:main:session-1",
+        severity: "warning",
+        toolName: "codex_command_approval",
+        toolCallId: "cmd-host",
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat-1",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "thread-ts",
+      },
+      timeoutMs: 120_000,
+      signal: undefined,
+      onRegistered: expect.any(Function),
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -374,6 +528,8 @@ describe("Codex app-server approval bridge", () => {
           channel: "telegram",
           accountId: "default",
         },
+        approvalHost: params.approvalHost,
+        trigger: undefined,
         workspaceDir: undefined,
         turnSourceChannel: "telegram",
         turnSourceTo: "chat-1",
@@ -381,8 +537,14 @@ describe("Codex app-server approval bridge", () => {
         turnSourceThreadId: "thread-ts",
       },
     });
-    findApprovalEvent(params, { status: "pending", approvalId: "plugin:approval-1" });
-    findApprovalEvent(params, { status: "approved", approvalId: "plugin:approval-1" });
+    findApprovalEvent(params, {
+      status: "pending",
+      approvalId: "plugin:approval-1",
+    });
+    findApprovalEvent(params, {
+      status: "approved",
+      approvalId: "plugin:approval-1",
+    });
   });
 
   it("keeps configured exec auto-review on the human approval route", async () => {
@@ -426,7 +588,7 @@ describe("Codex app-server approval bridge", () => {
       "plugin.approval.request",
       "plugin.approval.waitDecision",
     ]);
-    findApprovalEvent(params, { status: "denied", approvalId: "plugin:approval-auto-review" });
+    findApprovalEvent(params, { status: "denied" });
   });
 
   it("falls back to plugin approval when no exec auto-review model is configured", async () => {
@@ -1423,11 +1585,9 @@ describe("Codex app-server approval bridge", () => {
     ]);
     findApprovalEvent(params, {
       status: "pending",
-      approvalId: "plugin:approval-native-noop",
     });
     findApprovalEvent(params, {
       status: "approved",
-      approvalId: "plugin:approval-native-noop",
     });
   });
 
@@ -2298,7 +2458,6 @@ describe("Codex app-server approval bridge", () => {
     ]);
     findApprovalEvent(params, {
       status: "denied",
-      approvalId: "plugin:approval-untrusted",
     });
   });
 
@@ -2448,24 +2607,60 @@ describe("Codex app-server approval bridge", () => {
     ]);
     findApprovalEvent(params, {
       status: "unavailable",
-      approvalId: "plugin:approval-stale",
       reason: "needs write access",
       message: "Codex app-server approval unavailable.",
     });
   });
 
-  it("does not classify a matching abort reason as a stale gateway wait", async () => {
+  it("forwards the run abort signal to the plugin approval host", async () => {
     const controller = new AbortController();
-    mockCallGatewayTool.mockImplementationOnce(() => new Promise(() => {}));
+    const params = createParams();
+    mockPluginApprovalRequest.mockImplementationOnce(
+      ({ signal, onRegistered }) =>
+        new Promise((_resolve, reject) => {
+          onRegistered?.({ id: "plugin:approval-aborted" });
+          signal?.addEventListener(
+            "abort",
+            () => {
+              const reason = signal.reason;
+              reject(
+                reason instanceof Error ? reason : new Error("approval aborted", { cause: reason }),
+              );
+            },
+            { once: true },
+          );
+        }),
+    );
 
-    const pending = waitForPluginApprovalDecision({
-      approvalId: "plugin:approval-abort",
+    const pending = handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-abort",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
       signal: controller.signal,
     });
-    await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mockPluginApprovalRequest).toHaveBeenCalledOnce());
     controller.abort(new Error("approval expired or not found"));
 
-    await expect(pending).rejects.toThrow("approval expired or not found");
+    await expect(pending).resolves.toEqual({ decision: "cancel" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockPluginApprovalRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    findApprovalEvent(params, {
+      status: "pending",
+      approvalId: "plugin:approval-aborted",
+    });
+    findApprovalEvent(params, {
+      status: "failed",
+      approvalId: "plugin:approval-aborted",
+    });
   });
 
   it("preserves an accepted approval expiry as timed out", async () => {
@@ -2493,7 +2688,6 @@ describe("Codex app-server approval bridge", () => {
     expect(onNativeToolFailureDisposition).toHaveBeenCalledWith("cmd-expired", "timed_out");
     findApprovalEvent(params, {
       status: "unavailable",
-      approvalId: "plugin:approval-expired",
     });
   });
 
@@ -2523,7 +2717,6 @@ describe("Codex app-server approval bridge", () => {
     expect(onNativeToolFailureDisposition).toHaveBeenCalledWith("cmd-mismatch", "failed");
     findApprovalEvent(params, {
       status: "unavailable",
-      approvalId: "plugin:approval-mismatch",
     });
   });
 
@@ -2585,7 +2778,6 @@ describe("Codex app-server approval bridge", () => {
     ]);
     findApprovalEvent(params, {
       status: "denied",
-      approvalId: "plugin:future-approval",
     });
   });
   it("labels permission approvals explicitly with permission detail", async () => {
@@ -2880,7 +3072,10 @@ describe("Codex app-server approval bridge", () => {
   );
 
   it("does not split surrogate pairs at gateway title and description caps", async () => {
-    mockCallGatewayTool.mockResolvedValueOnce({ id: "plugin:approval-utf16-gateway" });
+    mockPluginApprovalRequest.mockResolvedValueOnce({
+      outcome: "resolved",
+      decision: "allow-once",
+    });
 
     await requestPluginApproval({
       paramsForRun: createParams(),
@@ -2890,9 +3085,14 @@ describe("Codex app-server approval bridge", () => {
       toolName: "codex_utf16_test",
     });
 
-    const payload = gatewayRequestPayload();
+    const hostCall = mockPluginApprovalRequest.mock.calls[0]?.[0];
+    if (!hostCall) {
+      throw new Error("Expected plugin approval host request");
+    }
+    const payload = hostCall.request;
     expect(payload.title).toBe(`${"t".repeat(76)}...`);
     expect(payload.description).toBe(`${"d".repeat(252)}...`);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -9,6 +9,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { gatewayAgentRunApprovalHost } from "../agents/agent-run-approval.gateway.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
@@ -400,6 +401,7 @@ async function runResponsesAgentCommand(params: {
 }) {
   return agentCommandFromIngress(
     {
+      approvalHost: gatewayAgentRunApprovalHost,
       message: params.message,
       images: params.images.length > 0 ? params.images : undefined,
       clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,

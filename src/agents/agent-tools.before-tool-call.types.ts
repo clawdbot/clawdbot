@@ -13,6 +13,7 @@ import type {
   PluginHookToolRequesterContext,
 } from "../plugins/types.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
+import type { AgentRunApprovalHost } from "./agent-run-approval.js";
 import type { AgentTool } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -30,6 +31,8 @@ export type ToolOutcomeObservation = {
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 
 export type HookContext = {
+  /** Operator approval capabilities owned by the adapter that launched this run. */
+  approvalHost?: AgentRunApprovalHost;
   agentId?: string;
   config?: OpenClawConfig;
   /** Tool execution cwd for host-derived path facts. */
@@ -42,8 +45,6 @@ export type HookContext = {
   runId?: string;
   /** What initiated this run, used to reject approvals on unattended surfaces. */
   trigger?: string;
-  /** Device-scoped operator session allowed to review approvals initiated by this run. */
-  approvalReviewerDeviceId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
   /** Host-derived message requester for sender-aware tool hooks. */

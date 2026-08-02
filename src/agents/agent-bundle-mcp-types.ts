@@ -174,6 +174,11 @@ export type SessionMcpRuntimeManager = {
     sessionId?: string;
     sessionKey?: string;
   }) => SessionMcpRuntime | undefined;
+  /** Retires only the supplied runtime objects when they are still the managed instances. */
+  retireRuntimeInstance: (
+    runtime: SessionMcpRuntime,
+    opts?: { preserveActiveLeases?: boolean },
+  ) => Promise<boolean>;
   disposeSession: (sessionId: string) => Promise<void>;
   /** Required retirement stays armed when a stopping run creates or reuses a runtime. */
   deferRetirement: (sessionId: string, opts?: { retainAcrossReuse?: boolean }) => boolean;

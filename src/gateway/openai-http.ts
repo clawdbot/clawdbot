@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+import { gatewayAgentRunApprovalHost } from "../agents/agent-run-approval.gateway.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
@@ -1070,21 +1071,24 @@ export async function handleOpenAiHttpRequest(
   const mergedExtraSystemPrompt = [prompt.extraSystemPrompt, toolChoicePrompt]
     .filter((part): part is string => Boolean(part))
     .join("\n\n");
-  const commandInput = buildAgentCommandInput({
-    prompt: {
-      message: prompt.message,
-      extraSystemPrompt: mergedExtraSystemPrompt || undefined,
-      images: images.length > 0 ? images : undefined,
-    },
-    clientTools: resolvedClientTools.length > 0 ? resolvedClientTools : undefined,
-    modelOverride,
-    sessionKey,
-    runId,
-    messageChannel,
-    senderIsOwner,
-    abortSignal: abortController.signal,
-    streamParams,
-  });
+  const commandInput = {
+    ...buildAgentCommandInput({
+      prompt: {
+        message: prompt.message,
+        extraSystemPrompt: mergedExtraSystemPrompt || undefined,
+        images: images.length > 0 ? images : undefined,
+      },
+      clientTools: resolvedClientTools.length > 0 ? resolvedClientTools : undefined,
+      modelOverride,
+      sessionKey,
+      runId,
+      messageChannel,
+      senderIsOwner,
+      abortSignal: abortController.signal,
+      streamParams,
+    }),
+    approvalHost: gatewayAgentRunApprovalHost,
+  };
 
   if (!stream) {
     const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);

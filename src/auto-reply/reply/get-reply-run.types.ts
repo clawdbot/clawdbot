@@ -1,4 +1,5 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { AgentRunApprovalHost } from "../../agents/agent-run-approval.js";
 import type { AutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -41,6 +42,7 @@ export type ExecOverrides = Pick<
 >;
 
 export type RunPreparedReplyParams = {
+  approvalHost?: AgentRunApprovalHost;
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   cfg: OpenClawConfig;

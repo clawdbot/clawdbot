@@ -914,6 +914,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       contextTokenBudget: contextWindowTokens,
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
       ownerNumbers: params.followupRun.run.ownerNumbers,
+      approvalHost: params.followupRun.run.approvalHost,
       abortSignal: params.replyOperation.abortSignal,
     });
 

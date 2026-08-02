@@ -9,6 +9,7 @@ import type {
   ErrorShape,
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { AgentRunApprovalHost } from "../../agents/agent-run-approval.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -89,6 +90,8 @@ export type GatewayClient = {
     /** Trusted session creation provenance; never accepted from Gateway wire params. */
     sessionCreation?: TrustedSessionCreation;
     allowModelOverride?: boolean;
+    /** Process-local approval capabilities inherited by a nested agent turn. */
+    agentRunApprovalHost?: AgentRunApprovalHost;
     approvalRuntime?: boolean;
     cronRunContinuation?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;

@@ -81,6 +81,25 @@ describe("AgentParamsSchema", () => {
     ).toBe(true);
   });
 
+  it("accepts only the explicit fail-closed approval host mode", () => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "run without approvals",
+        sessionKey: "agent:main:main",
+        approvalHostMode: "none",
+        idempotencyKey: "approval-host-none",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "select an invalid host",
+        sessionKey: "agent:main:main",
+        approvalHostMode: "gateway",
+        idempotencyKey: "approval-host-invalid",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects host-owned delivery media constraints from public requests", () => {
     expect(
       Value.Check(AgentParamsSchema, {

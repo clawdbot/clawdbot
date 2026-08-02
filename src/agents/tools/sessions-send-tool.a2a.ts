@@ -8,6 +8,7 @@ import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import type { AgentRunApprovalHost } from "../agent-run-approval.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
@@ -94,6 +95,7 @@ export async function runSessionsSendA2AFlow(params: {
   roundOneReply?: string;
   waitRunId?: string;
   notifyRequesterOnWaitFailure?: boolean;
+  approvalHost?: AgentRunApprovalHost;
 }) {
   const runContextId = params.waitRunId ?? "unknown";
   try {
@@ -134,6 +136,7 @@ export async function runSessionsSendA2AFlow(params: {
             lane: resolveNestedAgentLaneForSession(params.requesterSessionKey),
             sourceSessionKey: params.targetSessionKey,
             sourceTool: "sessions_send",
+            approvalHost: params.approvalHost,
           });
         }
         return;
@@ -205,6 +208,7 @@ export async function runSessionsSendA2AFlow(params: {
           sourceChannel:
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
+          approvalHost: params.approvalHost,
         });
         if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
           break;
@@ -236,6 +240,7 @@ export async function runSessionsSendA2AFlow(params: {
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
+      approvalHost: params.approvalHost,
     });
     if (
       announceTarget &&

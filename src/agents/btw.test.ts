@@ -1138,6 +1138,7 @@ describe("runBtwSideQuestion", () => {
 
   it("keeps a model-locked session on its persisted harness for BTW", async () => {
     const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Locked Codex answer." });
+    const approvalHost = { plugin: { request: vi.fn() } };
     registerAgentHarness({
       id: "codex",
       label: "Codex test harness",
@@ -1160,10 +1161,12 @@ describe("runBtwSideQuestion", () => {
         agentHarnessId: "codex",
         modelSelectionLocked: true,
       }),
+      approvalHost,
     });
 
     expect(result).toEqual({ text: "Locked Codex answer." });
     expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toHaveProperty("approvalHost", approvalHost);
     expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentHarnessId: "codex" }),
     );

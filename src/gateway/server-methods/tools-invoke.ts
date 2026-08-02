@@ -7,6 +7,7 @@ import {
   validateToolsInvokeParams,
   type ToolsInvokeResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { gatewayAgentRunApprovalHost } from "../../agents/agent-run-approval.gateway.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { invokeGatewayTool } from "../tools-invoke-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -62,6 +63,7 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       }),
       toolCallIdPrefix: "rpc",
       approvalMode: params.confirm === true ? "request" : "report",
+      ...(params.confirm === true ? { approvalHost: gatewayAgentRunApprovalHost } : {}),
     });
 
     if (outcome.ok) {

@@ -84,6 +84,10 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   requestedByConnId?: string | null;
   requestedByDeviceId?: string | null;
   requestedByClientId?: string | null;
+  /** Process-local runtime owner for cross-connection cancellation; never persisted. */
+  requestedByInstanceId?: string | null;
+  /** Process-local request identity for cancellation before the approval id is returned. */
+  requestedByRuntimeRequestId?: string | null;
   requestedByDeviceTokenAuth?: boolean;
   approvalReviewerDeviceIds?: string[];
   resolvedAtMs?: number;

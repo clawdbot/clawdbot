@@ -4,16 +4,14 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
-import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
-import { toErrorObject } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
+import type { AgentRunPluginApprovalHost } from "../agent-run-approval.js";
 import {
   cancelDeferredPluginToolApproval,
   requestDeferredPluginToolApproval,
   type DeferredPluginToolApproval,
 } from "../agent-tools.before-tool-call.js";
-import { callGatewayTool } from "../tools/gateway.js";
 import {
   nativeHookRelayParamsWereRewritten,
   normalizeNativeHookToolName,
@@ -36,6 +34,15 @@ import { readOptionalString, truncateText } from "./native-hook-relay-utils.js";
 
 export type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
 
+type NativeHookRelayPermissionApprovalHandler = (params: {
+  request: NativeHookRelayPermissionApprovalRequest;
+  approvalHost?: AgentRunPluginApprovalHost;
+  turnSourceAccountId?: string;
+  turnSourceChannel?: string;
+  turnSourceThreadId?: string | number;
+  turnSourceTo?: string;
+}) => Promise<NativeHookRelayPermissionApprovalResult>;
+
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
 const PERMISSION_ALLOW_ALWAYS_TTL_MS = 30 * 60 * 1000;
 const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
@@ -56,7 +63,7 @@ const {
   permissionAllowAlwaysApprovals,
 } = nativeHookRelayState;
 
-let nativeHookRelayPermissionApprovalRequester: NativeHookRelayPermissionApprovalRequester =
+let nativeHookRelayPermissionApprovalRequester: NativeHookRelayPermissionApprovalHandler =
   requestNativeHookRelayPermissionApproval;
 let nativeHookRelayDeferredToolApprovalRequester: NativeHookRelayDeferredToolApprovalRequester =
   requestDeferredPluginToolApproval;
@@ -191,7 +198,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
     registration: params.registration,
     request,
   });
-  if (hasNativeHookRelayPermissionAllowAlways(allowAlwaysKey)) {
+  if (hasNativeHookRelayPermissionAllowAlways(allowAlwaysKey, params.registration.relayId)) {
     return params.adapter.renderPermissionDecisionResponse("allow");
   }
   const pendingApproval = pendingPermissionApprovals.get(approvalKey);
@@ -206,7 +213,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
       return params.adapter.renderPermissionDecisionResponse("allow");
     }
     if (decision === "allow-always") {
-      rememberNativeHookRelayPermissionAllowAlways(allowAlwaysKey);
+      rememberNativeHookRelayPermissionAllowAlways(allowAlwaysKey, params.registration.relayId);
       return params.adapter.renderPermissionDecisionResponse("allow");
     }
     if (decision === "deny") {
@@ -234,7 +241,14 @@ async function startNativeHookRelayPermissionApprovalWithBudget(params: {
     return "defer";
   }
   const approval: Promise<NativeHookRelayPermissionApprovalResult> =
-    nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
+    nativeHookRelayPermissionApprovalRequester({
+      request: params.request,
+      approvalHost: params.registration.approvalContext?.approvalHost?.plugin,
+      turnSourceAccountId: params.registration.approvalContext?.turnSourceAccountId,
+      turnSourceChannel: params.registration.approvalContext?.turnSourceChannel,
+      turnSourceThreadId: params.registration.approvalContext?.turnSourceThreadId,
+      turnSourceTo: params.registration.approvalContext?.turnSourceTo,
+    }).finally(() => {
       if (pendingPermissionApprovals.get(params.approvalKey) === approval) {
         pendingPermissionApprovals.delete(params.approvalKey);
       }
@@ -419,24 +433,33 @@ function consumeNativeHookRelayPermissionBudget(relayId: string, now = Date.now(
   return true;
 }
 
-function hasNativeHookRelayPermissionAllowAlways(key: string, now = Date.now()): boolean {
+function hasNativeHookRelayPermissionAllowAlways(
+  key: string,
+  relayId: string,
+  now = Date.now(),
+): boolean {
   const validNow = asDateTimestampMs(now);
   if (validNow === undefined) {
     return false;
   }
-  const entry = permissionAllowAlwaysApprovals.get(key);
+  const cacheKey = `${relayId}:${key}`;
+  const entry = permissionAllowAlwaysApprovals.get(cacheKey);
   if (!entry) {
     return false;
   }
   const expiresAtMs = asDateTimestampMs(entry.expiresAtMs);
   if (expiresAtMs === undefined || expiresAtMs <= validNow) {
-    permissionAllowAlwaysApprovals.delete(key);
+    permissionAllowAlwaysApprovals.delete(cacheKey);
     return false;
   }
   return true;
 }
 
-function rememberNativeHookRelayPermissionAllowAlways(key: string, now = Date.now()): void {
+function rememberNativeHookRelayPermissionAllowAlways(
+  key: string,
+  relayId: string,
+  now = Date.now(),
+): void {
   pruneNativeHookRelayPermissionAllowAlways(now);
   const expiresAtMs = resolveExpiresAtMsFromDurationMs(PERMISSION_ALLOW_ALWAYS_TTL_MS, {
     nowMs: now,
@@ -444,7 +467,7 @@ function rememberNativeHookRelayPermissionAllowAlways(key: string, now = Date.no
   if (expiresAtMs === undefined) {
     return;
   }
-  permissionAllowAlwaysApprovals.set(key, { expiresAtMs });
+  permissionAllowAlwaysApprovals.set(`${relayId}:${key}`, { expiresAtMs, relayId });
   while (permissionAllowAlwaysApprovals.size > MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES) {
     const oldestKey = permissionAllowAlwaysApprovals.keys().next().value;
     if (typeof oldestKey !== "string") {
@@ -474,16 +497,24 @@ export function removeNativeHookRelayPermissionState(relayId: string): void {
       pendingPermissionApprovals.delete(key);
     }
   }
+  for (const [key, entry] of permissionAllowAlwaysApprovals) {
+    if (entry.relayId === relayId) {
+      permissionAllowAlwaysApprovals.delete(key);
+    }
+  }
 }
 
 async function requestNativeHookRelayPermissionApproval(
-  request: NativeHookRelayPermissionApprovalRequest,
+  params: Parameters<NativeHookRelayPermissionApprovalHandler>[0],
 ): Promise<NativeHookRelayPermissionApprovalResult> {
+  const approvalHost = params.approvalHost;
+  if (!approvalHost) {
+    return "defer";
+  }
+  const request = params.request;
   const timeoutMs = DEFAULT_PERMISSION_TIMEOUT_MS;
-  const requestResult: { id?: string; decision?: string | null } = await callGatewayTool(
-    "plugin.approval.request",
-    { timeoutMs: timeoutMs + 10_000 },
-    {
+  const result = await approvalHost.request({
+    request: {
       pluginId: `openclaw-native-hook-relay-${request.provider}`,
       title: truncateText(
         `${nativeHookRelayProviderDisplayName(request.provider)} permission request`,
@@ -503,28 +534,21 @@ async function requestNativeHookRelayPermissionApproval(
       ],
       agentId: request.agentId,
       sessionKey: request.sessionKey,
-      timeoutMs,
-      twoPhase: true,
+      turnSourceAccountId: params.turnSourceAccountId,
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceThreadId: params.turnSourceThreadId,
+      turnSourceTo: params.turnSourceTo,
     },
-    { expectFinal: false },
-  );
-  const approvalId = requestResult?.id;
-  if (!approvalId) {
+    timeoutMs,
+    signal: request.signal,
+  });
+  if (request.signal?.aborted) {
     return "defer";
   }
-  let decision: string | null | undefined;
-  if (Object.hasOwn(requestResult ?? {}, "decision")) {
-    decision = requestResult.decision;
-  } else {
-    const waitResult = await waitForNativeHookRelayApprovalDecision({
-      approvalId,
-      signal: request.signal,
-      timeoutMs,
-    });
-    // Bind the verdict to the request that parked this call. A stale or
-    // misrouted reply must never release a different tool gate.
-    decision = waitResult?.id === approvalId ? waitResult.decision : undefined;
+  if (result.outcome !== "resolved") {
+    return "defer";
   }
+  const decision = result.decision;
   if (decision === PluginApprovalResolutions.ALLOW_ONCE) {
     return "allow";
   }
@@ -535,43 +559,6 @@ async function requestNativeHookRelayPermissionApproval(
     return "deny";
   }
   return "defer";
-}
-
-async function waitForNativeHookRelayApprovalDecision(params: {
-  approvalId: string;
-  signal?: AbortSignal;
-  timeoutMs: number;
-}): Promise<{ id?: string; decision?: string | null } | undefined> {
-  const waitPromise: Promise<{ id?: string; decision?: string | null } | undefined> =
-    callGatewayTool(
-      "plugin.approval.waitDecision",
-      { timeoutMs: params.timeoutMs + 10_000 },
-      { id: params.approvalId },
-    ).catch((error: unknown) => {
-      if (isApprovalNotFoundError(error)) {
-        return undefined;
-      }
-      throw error;
-    });
-  if (!params.signal) {
-    return waitPromise;
-  }
-  let onAbort: (() => void) | undefined;
-  const abortPromise = new Promise<never>((_, reject) => {
-    if (params.signal!.aborted) {
-      reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
-      return;
-    }
-    onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
-    params.signal!.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([waitPromise, abortPromise]);
-  } finally {
-    if (onAbort) {
-      params.signal.removeEventListener("abort", onAbort);
-    }
-  }
 }
 
 export function formatPermissionApprovalDescriptionForTests(
@@ -634,7 +621,7 @@ function nativeHookRelayProviderDisplayName(provider: NativeHookRelayProvider): 
 export function setNativeHookRelayPermissionApprovalRequesterForTests(
   requester: NativeHookRelayPermissionApprovalRequester,
 ): void {
-  nativeHookRelayPermissionApprovalRequester = requester;
+  nativeHookRelayPermissionApprovalRequester = ({ request }) => requester(request);
 }
 
 export function setNativeHookRelayDeferredToolApprovalRequesterForTests(

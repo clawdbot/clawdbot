@@ -20,6 +20,7 @@ import type {
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
+import type { AgentRunApprovalHost } from "./agent-run-approval.js";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
@@ -597,6 +598,7 @@ type RunBtwSideQuestionParams = {
   blockReplyChunking?: BlockReplyChunking;
   resolvedBlockStreamingBreak?: "text_end" | "message_end";
   opts?: GetReplyOptions;
+  approvalHost?: AgentRunApprovalHost;
   isNewSession: boolean;
   messageChannel?: string;
   messageProvider?: string;

@@ -30,6 +30,86 @@ function gatewayToolArg(index = 0, argIndex = 0) {
   return mockCallArg(mockCallGatewayTool, index, argIndex);
 }
 
+async function requestApprovalThroughMockGateway(params: {
+  request: Record<string, unknown>;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}) {
+  const requestResult = (await mockCallGatewayTool(
+    "plugin.approval.request",
+    { timeoutMs: params.timeoutMs + 10_000 },
+    {
+      ...params.request,
+      timeoutMs: params.timeoutMs,
+      twoPhase: true,
+    },
+    { expectFinal: false },
+  )) as { id?: string; decision?: unknown; deliveryRoute?: string } | undefined;
+  const approvalId = requestResult?.id;
+  if (!approvalId) {
+    return { outcome: "unavailable" as const, reason: "approval route unavailable" };
+  }
+  const ownDecision = Object.getOwnPropertyDescriptor(requestResult, "decision");
+  if (ownDecision && "value" in ownDecision && ownDecision.value === null) {
+    return { outcome: "unavailable" as const, reason: "approval route unavailable" };
+  }
+
+  const waitPromise = mockCallGatewayTool(
+    "plugin.approval.waitDecision",
+    { timeoutMs: params.timeoutMs + 10_000 },
+    { id: approvalId },
+  ) as Promise<{ id?: string; decision?: unknown } | undefined>;
+  let onAbort: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    if (!params.signal) {
+      return;
+    }
+    if (params.signal.aborted) {
+      const reason = params.signal.reason;
+      reject(reason instanceof Error ? reason : new Error("approval aborted", { cause: reason }));
+      return;
+    }
+    onAbort = () => {
+      const reason = params.signal?.reason;
+      reject(reason instanceof Error ? reason : new Error("approval aborted", { cause: reason }));
+    };
+    params.signal.addEventListener("abort", onAbort, { once: true });
+  });
+  let waitResult: { id?: string; decision?: unknown } | undefined;
+  try {
+    waitResult = params.signal
+      ? await Promise.race([waitPromise, abortPromise])
+      : await waitPromise;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("approval expired or not found")) {
+      return { outcome: "timed-out" as const };
+    }
+    throw error;
+  } finally {
+    if (onAbort) {
+      params.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+  if (waitResult?.id !== approvalId) {
+    return { outcome: "unavailable" as const, reason: "approval route unavailable" };
+  }
+  if (
+    waitResult.decision === "allow-once" ||
+    waitResult.decision === "allow-always" ||
+    waitResult.decision === "deny"
+  ) {
+    return { outcome: "resolved" as const, decision: waitResult.decision };
+  }
+  return waitResult.decision === null
+    ? {
+        outcome: "timed-out" as const,
+        ...(requestResult.deliveryRoute === "turn-source"
+          ? { deliveryRoute: "turn-source" as const }
+          : {}),
+      }
+    : { outcome: "unavailable" as const, reason: "approval route unavailable" };
+}
+
 function createParams(): EmbeddedRunAttemptParams {
   return {
     sessionKey: "agent:main:session-1",
@@ -38,6 +118,11 @@ function createParams(): EmbeddedRunAttemptParams {
     currentChannelId: "chat-1",
     agentAccountId: "default",
     currentThreadTs: "thread-ts",
+    approvalHost: {
+      plugin: {
+        request: requestApprovalThroughMockGateway,
+      },
+    },
   } as unknown as EmbeddedRunAttemptParams;
 }
 

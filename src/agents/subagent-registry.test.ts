@@ -1108,7 +1108,11 @@ describe("subagent registry seam flow", () => {
       execution: { status: "queued" as const },
       completion: { required: false },
       queuedLaunch: {
-        request: { sessionKey: `agent:main:subagent:${runId}`, idempotencyKey: runId },
+        request: {
+          sessionKey: `agent:main:subagent:${runId}`,
+          idempotencyKey: runId,
+          approvalHostMode: "none",
+        },
         authorization: {
           modelOverride: { provider: "openai", model: "gpt-5.4" },
         },
@@ -1154,6 +1158,7 @@ describe("subagent registry seam flow", () => {
           idempotencyKey: "run-queued-one",
           provider: "openai",
           model: "gpt-5.4",
+          approvalHostMode: "none",
         },
         scopes: ["operator.admin"],
       });
@@ -1170,6 +1175,54 @@ describe("subagent registry seam flow", () => {
     expect(acceptedRun).not.toHaveProperty("sessionStartedAt");
     expect(acceptedRun?.execution).not.toHaveProperty("startedAt");
     expect(mod.getSubagentRunByRunId("run-queued-two")?.execution?.status).toBe("queued");
+  });
+
+  it("fails restored collectors that lost a process-local approval host", async () => {
+    const now = Date.now();
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+    }) => {
+      params.runs.set(
+        "run-queued-approval-host",
+        createSubagentRunRecord({
+          runId: "run-queued-approval-host",
+          childSessionKey: "agent:main:subagent:queued-approval-host",
+          swarmRequesterSessionKey: "agent:main:main",
+          task: "do not replay without the owning approval host",
+          collect: true,
+          groupId: "approval-host-restore",
+          createdAt: now,
+          execution: { status: "queued" },
+          completion: { required: false },
+          queuedLaunch: {
+            request: { sessionKey: "agent:main:subagent:queued-approval-host" },
+            requiresProcessLocalApprovalHost: true,
+            timeoutMs: 1_000,
+            schedulerGroupKey: '["agent:main:main","approval-host-restore"]',
+            maxConcurrent: 1,
+          },
+        }),
+      );
+      return 1;
+    }) as never);
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:queued-approval-host": {
+        sessionId: "queued-approval-host",
+        updatedAt: now,
+      },
+    });
+
+    mod.initSubagentRegistry();
+
+    await waitForFast(() =>
+      expect(mod.getSubagentRunByRunId("run-queued-approval-host")).toMatchObject({
+        execution: { status: "terminal" },
+        collectorCompletion: { status: "failed" },
+      }),
+    );
+    expect(mocks.callGateway.mock.calls.some(([request]) => request.method === "agent")).toBe(
+      false,
+    );
   });
 
   it("preserves a lifecycle start that arrives before collector acceptance returns", async () => {

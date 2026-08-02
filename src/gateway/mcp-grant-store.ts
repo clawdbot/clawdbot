@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import type { SessionMcpRuntimeCapture } from "../agents/agent-bundle-mcp-runtime-capture.js";
+import type { AgentRunApprovalHost } from "../agents/agent-run-approval.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
@@ -79,9 +81,16 @@ interface McpLoopbackClientGrant {
 }
 
 type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
+  approvalHost?: AgentRunApprovalHost;
+  captureSessionMcpRuntime?: SessionMcpRuntimeCapture;
   runtimeOwnerToken: string;
-  activeCaptureKey?: string;
+  activeCapture?: {
+    key: string;
+    abortController: AbortController;
+  };
 };
+
+export type McpLoopbackClientGrantAuthorization = "active" | "capture-ended" | "grant-revoked";
 
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1h
 const MAX_TTL_MS = 12 * 60 * 60 * 1000;
@@ -164,6 +173,8 @@ function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
 export function mintMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
   runtimeOwnerToken: string;
+  approvalHost?: AgentRunApprovalHost;
+  captureSessionMcpRuntime?: SessionMcpRuntimeCapture;
 }): McpLoopbackClientGrant {
   const sessionKey = params.context.sessionKey.trim();
   if (!sessionKey) {
@@ -177,6 +188,10 @@ export function mintMcpLoopbackClientGrant(params: {
     token: crypto.randomBytes(32).toString("hex"),
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
+    ...(params.approvalHost ? { approvalHost: params.approvalHost } : {}),
+    ...(params.captureSessionMcpRuntime
+      ? { captureSessionMcpRuntime: params.captureSessionMcpRuntime }
+      : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
   return structuredClone({
@@ -199,7 +214,16 @@ export function activateMcpLoopbackClientGrantCapture(params: {
   if (!grant || grant.runtimeOwnerToken !== params.runtimeOwnerToken) {
     return false;
   }
-  clientGrantsByToken.set(params.token, { ...grant, activeCaptureKey: captureKey });
+  if (grant.activeCapture?.key === captureKey) {
+    return true;
+  }
+  grant.activeCapture?.abortController.abort(
+    new Error("MCP loopback client grant capture replaced"),
+  );
+  clientGrantsByToken.set(params.token, {
+    ...grant,
+    activeCapture: { key: captureKey, abortController: new AbortController() },
+  });
   return true;
 }
 
@@ -213,11 +237,14 @@ export function deactivateMcpLoopbackClientGrantCapture(params: {
   if (
     !grant ||
     grant.runtimeOwnerToken !== params.runtimeOwnerToken ||
-    grant.activeCaptureKey !== params.captureKey
+    grant.activeCapture?.key !== params.captureKey
   ) {
     return false;
   }
-  const { activeCaptureKey: _activeCaptureKey, ...inactiveGrant } = grant;
+  grant.activeCapture.abortController.abort(
+    new Error("MCP loopback client grant capture deactivated"),
+  );
+  const { activeCapture: _activeCapture, ...inactiveGrant } = grant;
   clientGrantsByToken.set(params.token, inactiveGrant);
   return true;
 }
@@ -226,27 +253,67 @@ export function resolveMcpLoopbackClientGrant(params: {
   token: string;
   runtimeOwnerToken: string;
   captureKey: string;
-}): { context: McpLoopbackRequestContext; captureKey: string } | undefined {
+}):
+  | {
+      context: McpLoopbackRequestContext;
+      captureKey: string;
+      signal: AbortSignal;
+      approvalHost?: AgentRunApprovalHost;
+      captureSessionMcpRuntime?: SessionMcpRuntimeCapture;
+    }
+  | undefined {
   const grant = clientGrantsByToken.get(params.token);
   if (
     !grant ||
     grant.runtimeOwnerToken !== params.runtimeOwnerToken ||
-    !grant.activeCaptureKey ||
-    grant.activeCaptureKey !== params.captureKey
+    !grant.activeCapture ||
+    grant.activeCapture.key !== params.captureKey
   ) {
     return undefined;
   }
-  return structuredClone({ context: grant.context, captureKey: grant.activeCaptureKey });
+  return {
+    context: structuredClone(grant.context),
+    captureKey: grant.activeCapture.key,
+    signal: grant.activeCapture.abortController.signal,
+    ...(grant.approvalHost ? { approvalHost: grant.approvalHost } : {}),
+    ...(grant.captureSessionMcpRuntime
+      ? { captureSessionMcpRuntime: grant.captureSessionMcpRuntime }
+      : {}),
+  };
+}
+
+export function resolveMcpLoopbackClientGrantAuthorization(params: {
+  token: string;
+  runtimeOwnerToken: string;
+  captureKey: string;
+}): McpLoopbackClientGrantAuthorization {
+  const grant = clientGrantsByToken.get(params.token);
+  if (!grant || grant.runtimeOwnerToken !== params.runtimeOwnerToken) {
+    return "grant-revoked";
+  }
+  if (!grant.activeCapture || grant.activeCapture.key !== params.captureKey) {
+    return "capture-ended";
+  }
+  return "active";
 }
 
 export function revokeMcpLoopbackClientGrant(token: string): boolean {
-  return clientGrantsByToken.delete(token);
+  const grant = clientGrantsByToken.get(token);
+  if (!grant) {
+    return false;
+  }
+  grant.activeCapture?.abortController.abort(new Error("MCP loopback client grant revoked"));
+  clientGrantsByToken.delete(token);
+  return true;
 }
 
 export function revokeMcpLoopbackClientGrantsForRuntime(runtimeOwnerToken: string): number {
   let removed = 0;
   for (const [token, grant] of clientGrantsByToken) {
     if (grant.runtimeOwnerToken === runtimeOwnerToken) {
+      grant.activeCapture?.abortController.abort(
+        new Error("MCP loopback client grant runtime revoked"),
+      );
       clientGrantsByToken.delete(token);
       removed += 1;
     }

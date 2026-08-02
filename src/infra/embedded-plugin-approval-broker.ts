@@ -21,8 +21,6 @@ type ApprovalEvent =
   | { event: "plugin.approval.resolved"; payload: PluginApprovalResolved }
   | { event: "plugin.approval.removed"; payload: { id: string } };
 
-let activeBroker: EmbeddedPluginApprovalBroker | null = null;
-
 export class EmbeddedPluginApprovalBroker {
   private readonly pending = new Map<string, PendingApproval>();
   private readonly listeners = new Set<(event: ApprovalEvent) => void>();
@@ -42,7 +40,8 @@ export class EmbeddedPluginApprovalBroker {
     request: PluginApprovalRequestPayload;
     timeoutMs: number;
     signal?: AbortSignal;
-  }): Promise<{ id: string; decision: ExecApprovalDecision | null }> {
+    onRegistered?: (registration: { id: string }) => void;
+  }): Promise<{ outcome: "resolved"; decision: ExecApprovalDecision } | { outcome: "timed-out" }> {
     if (params.signal?.aborted) {
       throw params.signal.reason ?? new Error("approval request aborted");
     }
@@ -60,6 +59,15 @@ export class EmbeddedPluginApprovalBroker {
       resolve = resolvePromise;
       reject = rejectPromise;
     });
+    const awaitDecision = async () => {
+      const result = await decision;
+      if (params.signal?.aborted) {
+        throw params.signal.reason ?? new Error("approval request aborted");
+      }
+      return result === null
+        ? { outcome: "timed-out" as const }
+        : { outcome: "resolved" as const, decision: result };
+    };
     const timer = setTimeout(() => {
       const entry = this.pending.get(id);
       if (!entry) {
@@ -70,7 +78,8 @@ export class EmbeddedPluginApprovalBroker {
       this.emit({ event: "plugin.approval.removed", payload: { id } });
     }, params.timeoutMs);
     timer.unref?.();
-    this.pending.set(id, { record, timer, resolve, reject });
+    const pendingEntry = { record, timer, resolve, reject };
+    this.pending.set(id, pendingEntry);
 
     const abort = () => {
       const entry = this.pending.get(id);
@@ -82,11 +91,31 @@ export class EmbeddedPluginApprovalBroker {
       entry.reject(params.signal?.reason ?? new Error("approval request aborted"));
       this.emit({ event: "plugin.approval.removed", payload: { id } });
     };
+    try {
+      params.onRegistered?.({ id });
+    } catch (error) {
+      if (this.pending.get(id) === pendingEntry) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        resolve(null);
+        this.emit({ event: "plugin.approval.removed", payload: { id } });
+      }
+      throw error;
+    }
+    if (this.pending.get(id) !== pendingEntry) {
+      return await awaitDecision();
+    }
+    if (params.signal?.aborted) {
+      clearTimeout(timer);
+      this.pending.delete(id);
+      resolve(null);
+      this.emit({ event: "plugin.approval.removed", payload: { id } });
+      throw params.signal.reason ?? new Error("approval request aborted");
+    }
     params.signal?.addEventListener("abort", abort, { once: true });
-
     this.emit({ event: "plugin.approval.requested", payload: record });
     try {
-      return { id, decision: await decision };
+      return await awaitDecision();
     } finally {
       params.signal?.removeEventListener("abort", abort);
     }
@@ -119,6 +148,8 @@ export class EmbeddedPluginApprovalBroker {
   }
 
   stop(reason: unknown = new Error("embedded plugin approval broker stopped")): void {
+    // Stop one embedded-backend lifecycle generation. The broker intentionally
+    // remains reusable so a stopped TUI backend can subscribe and run again.
     for (const [id, entry] of this.pending) {
       clearTimeout(entry.timer);
       entry.reject(reason);
@@ -131,18 +162,4 @@ export class EmbeddedPluginApprovalBroker {
   private emit(event: ApprovalEvent): void {
     notifyListeners(this.listeners, event);
   }
-}
-
-export function setEmbeddedPluginApprovalBroker(broker: EmbeddedPluginApprovalBroker | null): void {
-  activeBroker = broker;
-}
-
-export function clearEmbeddedPluginApprovalBroker(broker: EmbeddedPluginApprovalBroker): void {
-  if (activeBroker === broker) {
-    activeBroker = null;
-  }
-}
-
-export function getEmbeddedPluginApprovalBroker(): EmbeddedPluginApprovalBroker | null {
-  return activeBroker;
 }

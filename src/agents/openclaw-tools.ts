@@ -21,6 +21,7 @@ import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
+import type { AgentRunApprovalHost } from "./agent-run-approval.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import {
   type HookContext,
@@ -112,6 +113,8 @@ export function createOpenClawTools(
     runSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
     runId?: string;
+    /** Operator approval capabilities inherited by nested in-process agent turns. */
+    approvalHost?: AgentRunApprovalHost;
     agentAccountId?: string;
     /** Trusted account used only for Gateway authorization; delivery keeps agentAccountId. */
     gatewayCallerAccountId?: string;
@@ -651,11 +654,13 @@ export function createOpenClawTools(
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
+            approvalHost: options?.approvalHost,
           }),
         ]),
     ...(includeSubagentSpawnTool
       ? [
           createSessionsSpawnTool({
+            approvalHost: options?.approvalHost,
             agentSessionKey: options?.agentSessionKey,
             requesterTurnRunId: options?.runId,
             completionOwnerKey: options?.runSessionKey,

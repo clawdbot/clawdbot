@@ -274,6 +274,7 @@ import {
   QuestionResolveParamsSchema,
   QuestionGetParamsSchema,
   QuestionListParamsSchema,
+  PluginApprovalCancelParamsSchema,
   PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParamsSchema,
   PluginsListParamsSchema,
@@ -665,6 +666,7 @@ export const validateQuestionWaitAnswerParams = lazyCompile(QuestionWaitAnswerPa
 export const validateQuestionResolveParams = lazyCompile(QuestionResolveParamsSchema);
 export const validateQuestionGetParams = lazyCompile(QuestionGetParamsSchema);
 export const validateQuestionListParams = lazyCompile(QuestionListParamsSchema);
+export const validatePluginApprovalCancelParams = lazyCompile(PluginApprovalCancelParamsSchema);
 export const validatePluginApprovalRequestParams = lazyCompile(PluginApprovalRequestParamsSchema);
 export const validatePluginApprovalResolveParams = lazyCompile(PluginApprovalResolveParamsSchema);
 export const validatePluginsListParams = lazyCompile(PluginsListParamsSchema);

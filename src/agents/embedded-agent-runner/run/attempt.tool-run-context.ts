@@ -5,6 +5,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import type { AgentRunApprovalHost } from "../../agent-run-approval.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
 /**
@@ -16,17 +17,20 @@ export function buildEmbeddedAttemptToolRunContext(params: {
   memoryFlushWritePath?: string;
   toolsAllow?: string[];
   trace?: DiagnosticTraceContext;
+  approvalHost?: AgentRunApprovalHost;
 }): {
   trigger?: EmbeddedRunTrigger;
   jobId?: string;
   memoryFlushWritePath?: string;
   runtimeToolAllowlist?: string[];
   trace?: DiagnosticTraceContext;
+  approvalHost?: AgentRunApprovalHost;
 } {
   return {
     trigger: params.trigger,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
+    ...(params.approvalHost ? { approvalHost: params.approvalHost } : {}),
     ...(params.toolsAllow ? { runtimeToolAllowlist: params.toolsAllow } : {}),
     // Freeze trace metadata at the attempt boundary so later mutable diagnostic updates do not
     // rewrite the facts attached to tool calls already in flight.

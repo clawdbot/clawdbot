@@ -329,6 +329,19 @@ describe("sessions_spawn tool", () => {
     expect(spawnContext.requesterRunId).toBe("parent-run");
   });
 
+  it("preserves the parent approval host identity for native child runs", async () => {
+    const approvalHost = { plugin: { request: vi.fn() } } as never;
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      approvalHost,
+    });
+
+    await tool.execute("child", { task: "inherit approvals" });
+
+    const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
+    expect(spawnContext.approvalHost).toBe(approvalHost);
+  });
+
   it("forwards host-only Code Mode idempotency metadata", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

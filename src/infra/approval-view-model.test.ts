@@ -1,8 +1,12 @@
 // Tests approval view model formatting for prompts and decisions.
 import { describe, expect, it } from "vitest";
-import { buildPendingApprovalView, resolveApprovalRequestKind } from "./approval-view-model.js";
+import {
+  buildPendingApprovalView,
+  buildResolvedApprovalView,
+  resolveApprovalRequestKind,
+} from "./approval-view-model.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
 describe("buildPendingApprovalView", () => {
   it("passes command analysis through exec approval views", () => {
@@ -88,6 +92,35 @@ describe("buildPendingApprovalView", () => {
         decision: "deny",
       },
     ]);
+  });
+
+  it("preserves plugin cancellation as a distinct terminal state", () => {
+    const request: PluginApprovalRequest = {
+      id: "plugin-approval",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        title: "Use protected tool",
+        description: "The plugin needs operator consent.",
+      },
+    };
+    const resolved: PluginApprovalResolved = {
+      id: request.id,
+      decision: "deny",
+      status: "cancelled",
+      terminalReason: "run-aborted",
+      resolvedBy: "approval-runtime",
+      ts: 3,
+    };
+
+    expect(buildResolvedApprovalView(request, resolved)).toMatchObject({
+      approvalKind: "plugin",
+      phase: "resolved",
+      decision: "deny",
+      status: "cancelled",
+      terminalReason: "run-aborted",
+      resolvedBy: "approval-runtime",
+    });
   });
 
   it.each([

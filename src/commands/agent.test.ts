@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 // Register shared mocks before imports bind their production exports.
 import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
+import { noAgentRunApprovalHost } from "../agents/agent-run-approval.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
@@ -156,6 +157,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         thinkLevel: params.resolvedThinkLevel,
         fastMode: params.fastMode,
         verboseLevel: params.resolvedVerboseLevel,
+        approvalHost: opts.approvalHost,
         timeoutMs: params.timeoutMs,
         runId: params.runId,
         lane: opts.lane,
@@ -510,6 +512,7 @@ describe("agentCommand", () => {
 
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(getLastEmbeddedCall()?.sessionId).toBe("existing-harness-session");
+      expect(getLastEmbeddedCall()?.approvalHost).toBe(noAgentRunApprovalHost);
     });
   });
 

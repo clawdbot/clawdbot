@@ -704,6 +704,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       search: vi.fn() as unknown as PluginRuntime["webSearch"]["search"],
     },
     channel: {
+      agent: {
+        runIngress: vi.fn() as unknown as PluginRuntime["channel"]["agent"]["runIngress"],
+      },
       text: {
         chunkByNewline: vi.fn((text: string) => (text ? [text] : [])),
         chunkMarkdownText: vi.fn((text: string) => [text]),

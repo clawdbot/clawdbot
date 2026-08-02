@@ -36,8 +36,8 @@ const {
   prepareCliRunContextMock,
   closeClaudeLiveSessionForContextMock,
   closeMcpLoopbackServerMock,
-  retireSessionMcpRuntimeForSessionKeyMock,
-  retireSessionMcpRuntimeMock,
+  completeDeferredSessionMcpRuntimeRetirementMock,
+  retireSessionMcpRuntimeInstanceMock,
 } = vi.hoisted(() => ({
   hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
   runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
@@ -49,8 +49,8 @@ const {
   prepareCliRunContextMock: vi.fn(),
   closeClaudeLiveSessionForContextMock: vi.fn(),
   closeMcpLoopbackServerMock: vi.fn(),
-  retireSessionMcpRuntimeForSessionKeyMock: vi.fn(),
-  retireSessionMcpRuntimeMock: vi.fn(),
+  completeDeferredSessionMcpRuntimeRetirementMock: vi.fn(),
+  retireSessionMcpRuntimeInstanceMock: vi.fn(),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -80,8 +80,8 @@ vi.mock("../gateway/mcp-http.js", () => ({
 }));
 
 vi.mock("./agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntimeForSessionKey: retireSessionMcpRuntimeForSessionKeyMock,
-  retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
+  completeDeferredSessionMcpRuntimeRetirement: completeDeferredSessionMcpRuntimeRetirementMock,
+  retireSessionMcpRuntimeInstance: retireSessionMcpRuntimeInstanceMock,
 }));
 
 const baseRunParams = {
@@ -98,6 +98,7 @@ const baseRunParams = {
 } as const;
 
 let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
+let capturedSessionMcpRuntimes: unknown[] = [];
 
 async function captureRejectedClaudeRun(
   params: Parameters<typeof runCliAgent>[0],
@@ -122,7 +123,12 @@ async function captureRejectedClaudeRun(
   return { error, events };
 }
 
-function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
+function makeStubContext(
+  params: typeof baseRunParams & {
+    trigger?: string;
+    cleanupBundleMcpOnRunEnd?: boolean;
+  },
+) {
   // Stub only the prepared context shape runCliAgent needs after the hook gate.
   return {
     params,
@@ -137,6 +143,23 @@ function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
     backendResolved: {},
     preparedBackend: { backend: { sessionMode: "none" } },
     reusableCliSession: { mode: "none" },
+    ...(params.cleanupBundleMcpOnRunEnd
+      ? {
+          bundleMcpRuntimeCollector: {
+            capture: (runtime: unknown) => capturedSessionMcpRuntimes.push(runtime),
+            closeAndRetire: async (retirement: {
+              retire: (runtime: unknown) => Promise<boolean>;
+              complete: (runtime: unknown) => Promise<boolean>;
+            }) => {
+              for (const runtime of capturedSessionMcpRuntimes) {
+                if (await retirement.retire(runtime)) {
+                  await retirement.complete(runtime);
+                }
+              }
+            },
+          },
+        }
+      : {}),
   } as unknown;
 }
 
@@ -153,10 +176,9 @@ beforeEach(() => {
   );
   closeClaudeLiveSessionForContextMock.mockReset();
   closeMcpLoopbackServerMock.mockReset();
-  retireSessionMcpRuntimeForSessionKeyMock.mockReset();
-  retireSessionMcpRuntimeForSessionKeyMock.mockResolvedValue(true);
-  retireSessionMcpRuntimeMock.mockReset();
-  retireSessionMcpRuntimeMock.mockResolvedValue(true);
+  capturedSessionMcpRuntimes = [{ sessionId: "test-session" }];
+  completeDeferredSessionMcpRuntimeRetirementMock.mockReset().mockResolvedValue(true);
+  retireSessionMcpRuntimeInstanceMock.mockReset().mockResolvedValue(true);
 });
 
 beforeAll(async () => {
@@ -699,12 +721,33 @@ describe("runCliAgent before_agent_reply seam", () => {
     await runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true });
 
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: "test-session", reason: "cli-run-end" }),
+    expect(retireSessionMcpRuntimeInstanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: expect.objectContaining({ sessionId: "test-session" }),
+        reason: "cli-run-end",
+        preserveActiveLeases: true,
+      }),
     );
-    expect(retireSessionMcpRuntimeForSessionKeyMock).not.toHaveBeenCalled();
     expect(closeMcpLoopbackServerMock).not.toHaveBeenCalled();
+  });
+
+  it("captures and retires a session MCP runtime lazily created during execution", async () => {
+    const lazyRuntime = { sessionId: "test-session" };
+    capturedSessionMcpRuntimes = [];
+    executePreparedCliRunMock.mockImplementation(async () => {
+      capturedSessionMcpRuntimes.push(lazyRuntime);
+      return { text: "real reply" };
+    });
+
+    await runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true });
+
+    expect(retireSessionMcpRuntimeInstanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: lazyRuntime,
+        reason: "cli-run-end",
+        preserveActiveLeases: true,
+      }),
+    );
   });
 
   it("does not retire a newer MCP runtime after its stable session key is rebound", async () => {
@@ -719,17 +762,17 @@ describe("runCliAgent before_agent_reply seam", () => {
       workspaceDir: baseRunParams.workspaceDir,
       cfg: { mcp: { servers: {} } },
     };
-    retireSessionMcpRuntimeForSessionKeyMock.mockImplementation(
-      mcpTools.retireSessionMcpRuntimeForSessionKey,
+    retireSessionMcpRuntimeInstanceMock.mockImplementation(
+      mcpTools.retireSessionMcpRuntimeInstance,
     );
-    retireSessionMcpRuntimeMock.mockImplementation(mcpTools.retireSessionMcpRuntime);
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
 
     try {
-      await mcpTools.getOrCreateSessionMcpRuntime({
+      const originalRuntime = await mcpTools.getOrCreateSessionMcpRuntime({
         ...runtimeParams,
         sessionId: originalSessionId,
       });
+      capturedSessionMcpRuntimes = [originalRuntime];
       const successorRuntime = await mcpTools.getOrCreateSessionMcpRuntime({
         ...runtimeParams,
         sessionId: successorSessionId,
@@ -747,7 +790,6 @@ describe("runCliAgent before_agent_reply seam", () => {
         successorRuntime,
       );
       expect(mcpTools.peekSessionMcpRuntime({ sessionKey })).toBe(successorRuntime);
-      expect(retireSessionMcpRuntimeForSessionKeyMock).not.toHaveBeenCalled();
       expect(closeMcpLoopbackServerMock).not.toHaveBeenCalled();
     } finally {
       await mcpTools.retireSessionMcpRuntime({ sessionId: originalSessionId, reason: "test-end" });
@@ -755,16 +797,18 @@ describe("runCliAgent before_agent_reply seam", () => {
     }
   });
 
-  it("retires the immutable session ID without resolving a rebound session key", async () => {
+  it("retires the captured runtime without resolving mutable session ownership", async () => {
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
 
     await runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true });
 
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: "test-session", reason: "cli-run-end" }),
+    expect(retireSessionMcpRuntimeInstanceMock).toHaveBeenCalledTimes(1);
+    expect(retireSessionMcpRuntimeInstanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: expect.objectContaining({ sessionId: "test-session" }),
+        reason: "cli-run-end",
+      }),
     );
-    expect(retireSessionMcpRuntimeForSessionKeyMock).not.toHaveBeenCalled();
     expect(closeMcpLoopbackServerMock).not.toHaveBeenCalled();
   });
 
@@ -773,7 +817,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       text: "",
       didSendViaMessagingTool: true,
     });
-    retireSessionMcpRuntimeMock.mockImplementation(
+    retireSessionMcpRuntimeInstanceMock.mockImplementation(
       async ({ onError }: { onError?: (error: unknown) => void }) => {
         onError?.(new Error("session mcp retire failed"));
         return false;
@@ -789,7 +833,7 @@ describe("runCliAgent before_agent_reply seam", () => {
 
   it("surfaces session MCP retirement failures when nothing was delivered", async () => {
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
-    retireSessionMcpRuntimeMock.mockImplementation(
+    retireSessionMcpRuntimeInstanceMock.mockImplementation(
       async ({ onError }: { onError?: (error: unknown) => void }) => {
         onError?.(new Error("session mcp retire failed"));
         return false;

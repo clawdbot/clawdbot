@@ -1,6 +1,7 @@
 // Discord plugin module implements segment behavior.
 import path from "node:path";
 import { Readable } from "node:stream";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -34,6 +35,7 @@ export async function processDiscordVoiceSegment(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
+  agentRuntime: NonNullable<ChannelRuntimeSurface["agent"]>;
   admissionAllowFrom?: string[];
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
@@ -127,6 +129,7 @@ export async function processDiscordVoiceSegment(params: {
       cfg: params.cfg,
       discordConfig: params.discordConfig,
       runtime: params.runtime,
+      agentRuntime: params.agentRuntime,
       context: ingress,
       admissionAllowFrom: params.admissionAllowFrom,
       fetchGuildName: params.fetchGuildName,

@@ -1,13 +1,8 @@
 /**
- * Approval transport for before_tool_call policy decisions.
- * Owns request/wait routing, embedded approval bridging, deferred approvals,
- * timeout classification, and owner-provided approval outcomes.
+ * Approval policy for before_tool_call decisions.
+ * Applies host-provided decisions to hook policy, deferred approvals, timeout
+ * classification, and owner-provided approval outcomes.
  */
-import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
-import { GatewayClientRequestError } from "../gateway/client.js";
-import { isEmbeddedMode } from "../infra/embedded-mode.js";
-import { getEmbeddedPluginApprovalBroker } from "../infra/embedded-plugin-approval-broker.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import {
   describeNativePluginApprovalClientSetup,
   resolveApprovalInitiatingSurfaceState,
@@ -32,7 +27,6 @@ import type {
   HookContext,
   HookOutcome,
 } from "./agent-tools.before-tool-call.types.js";
-import { callGatewayTool } from "./tools/gateway.js";
 
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
 const log = createSubsystemLogger("agents/tools");
@@ -46,10 +40,6 @@ function resolvePluginToolApprovalTimeoutMs(approval: PluginApprovalRequest): nu
     return DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
   }
   return Math.min(Math.floor(approval.timeoutMs), MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
-}
-
-function resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs: number): number {
-  return addTimerTimeoutGraceMs(timeoutMs, 10_000) ?? DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000;
 }
 
 export function mergeParamsWithApprovalOverrides(
@@ -166,7 +156,7 @@ function resolveUnavailablePluginApprovalSurfaceReason(ctx?: HookContext): strin
   if (trigger !== "user") {
     return `Plugin approval unavailable: ${trigger} runs have no approval-capable initiating surface.`;
   }
-  if (!ctx?.turnSourceChannel?.trim() && !ctx?.approvalReviewerDeviceId?.trim()) {
+  if (!ctx?.turnSourceChannel?.trim() && !ctx?.approvalHost?.plugin) {
     return "Plugin approval unavailable: non-interactive CLI runs have no approval-capable initiating surface.";
   }
   if (initiatingSurface.kind === "disabled") {
@@ -189,74 +179,8 @@ async function requestPluginToolApproval(params: {
 }): Promise<HookOutcome> {
   const approval = params.approval;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
-  const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
   const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
-  let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   try {
-    const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
-    if (embeddedApprovalBroker) {
-      const result = await embeddedApprovalBroker.request({
-        request: {
-          pluginId: approval.pluginId,
-          title: approval.title,
-          description: approval.description,
-          severity: approval.severity,
-          allowedDecisions: approval.allowedDecisions,
-          toolName: params.toolName,
-          toolCallId: params.toolCallId,
-          agentId: params.ctx?.agentId,
-          sessionKey: params.ctx?.sessionKey,
-          turnSourceChannel: params.ctx?.turnSourceChannel,
-          turnSourceTo: params.ctx?.turnSourceTo,
-          turnSourceAccountId: params.ctx?.turnSourceAccountId,
-          turnSourceThreadId: params.ctx?.turnSourceThreadId,
-        },
-        timeoutMs,
-        signal: params.signal,
-      });
-      const decision = result.decision;
-      const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
-      notifyPluginApprovalResolution(approval, resolution);
-      if (
-        resolution === PluginApprovalResolutions.ALLOW_ONCE ||
-        resolution === PluginApprovalResolutions.ALLOW_ALWAYS
-      ) {
-        return {
-          blocked: false,
-          params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
-          approvalResolution: resolution,
-        };
-      }
-      if (resolution === PluginApprovalResolutions.DENY) {
-        return {
-          blocked: true,
-          kind: "failure",
-          disposition: "blocked",
-          deniedReason: "plugin-approval",
-          reason: "Denied by user",
-          params: params.baseParams,
-        };
-      }
-      // Veto carries the plugin-supplied reason; plain timeouts record a
-      // timed_out failure disposition for the audit ledger.
-      return approval.timeoutReason
-        ? {
-            blocked: true,
-            kind: "veto",
-            deniedReason: "plugin-approval",
-            reason: approval.timeoutReason,
-            params: params.baseParams,
-          }
-        : {
-            blocked: true,
-            kind: "failure",
-            disposition: "timed_out",
-            deniedReason: "plugin-approval",
-            reason: "Approval timed out",
-            params: params.baseParams,
-          };
-    }
-
     const unavailableSurfaceReason = resolveUnavailablePluginApprovalSurfaceReason(params.ctx);
     if (unavailableSurfaceReason) {
       notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
@@ -269,19 +193,20 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
-
-    gatewayApprovalPhase = "request";
-    const requestResult: {
-      id?: string;
-      status?: string;
-      decision?: unknown;
-      deliveryRoute?: string;
-    } = await callGatewayTool(
-      "plugin.approval.request",
-      // Buffer beyond the approval timeout so the gateway can clean up
-      // and respond before the client-side RPC timeout fires.
-      { timeoutMs: gatewayTimeoutMs },
-      {
+    const approvalHost = params.ctx?.approvalHost?.plugin;
+    if (!approvalHost) {
+      notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
+      return {
+        blocked: true,
+        kind: "failure",
+        disposition: "failed",
+        deniedReason: "plugin-approval-unavailable",
+        reason: "Plugin approval unavailable: this run has no approval host.",
+        params: params.baseParams,
+      };
+    }
+    const hostResult = await approvalHost.request({
+      request: {
         pluginId: approval.pluginId,
         title: approval.title,
         description: approval.description,
@@ -291,88 +216,33 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
-        ...(params.ctx?.approvalReviewerDeviceId
-          ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
-          : {}),
         turnSourceChannel: params.ctx?.turnSourceChannel,
         turnSourceTo: params.ctx?.turnSourceTo,
         turnSourceAccountId: params.ctx?.turnSourceAccountId,
         turnSourceThreadId: params.ctx?.turnSourceThreadId,
-        timeoutMs,
-        twoPhase: true,
       },
-      { expectFinal: false },
-    );
-    gatewayApprovalPhase = "none";
-    const id = requestResult?.id;
-    if (!id) {
+      timeoutMs,
+      signal: params.signal,
+    });
+    if (params.signal?.aborted) {
+      throw params.signal.reason ?? new Error("approval request aborted");
+    }
+    if (hostResult.outcome === "unavailable") {
       notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
       return {
         blocked: true,
         kind: "failure",
         disposition: "failed",
         deniedReason: "plugin-approval",
-        reason: approval.description || "Plugin approval request failed",
+        reason: buildPluginApprovalFailureReason({
+          fallbackReason: hostResult.reason,
+          ctx: params.ctx,
+        }),
         params: params.baseParams,
       };
     }
-    const hasImmediateDecision = Object.hasOwn(requestResult ?? {}, "decision");
-    let decision: unknown;
-    if (hasImmediateDecision) {
-      decision = requestResult?.decision;
-      if (decision === null) {
-        notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
-        return {
-          blocked: true,
-          kind: "failure",
-          disposition: "failed",
-          deniedReason: "plugin-approval",
-          reason: buildPluginApprovalFailureReason({
-            fallbackReason: "Plugin approval unavailable (no approval route)",
-            ctx: params.ctx,
-          }),
-          params: params.baseParams,
-        };
-      }
-    } else {
-      // Wait for the decision, but abort early if the agent run is cancelled
-      // so the user isn't blocked for the full approval timeout.
-      gatewayApprovalPhase = "wait";
-      const waitPromise: Promise<{
-        id?: string;
-        decision?: unknown;
-      }> = callGatewayTool(
-        "plugin.approval.waitDecision",
-        // Buffer beyond the approval timeout so the gateway can clean up
-        // and respond before the client-side RPC timeout fires.
-        { timeoutMs: gatewayTimeoutMs },
-        { id },
-      );
-      let waitResult: { id?: string; decision?: unknown } | undefined;
-      if (params.signal) {
-        let onAbort: (() => void) | undefined;
-        const abortPromise = new Promise<never>((_, reject) => {
-          if (params.signal!.aborted) {
-            reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
-            return;
-          }
-          onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
-          params.signal!.addEventListener("abort", onAbort, { once: true });
-        });
-        try {
-          waitResult = await Promise.race([waitPromise, abortPromise]);
-        } finally {
-          if (onAbort) {
-            params.signal.removeEventListener("abort", onAbort);
-          }
-        }
-      } else {
-        waitResult = await waitPromise;
-      }
-      // Bind the verdict to the request that parked this call. A stale or
-      // misrouted reply must never release a different tool gate.
-      decision = waitResult?.id === id ? waitResult.decision : undefined;
-    }
+
+    const decision = hostResult.outcome === "resolved" ? hostResult.decision : undefined;
     const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
     notifyPluginApprovalResolution(approval, resolution);
     if (
@@ -397,7 +267,7 @@ async function requestPluginToolApproval(params: {
     }
     const fallbackTimeoutReason = approval.timeoutReason ?? "Approval timed out";
     const timeoutReason =
-      requestResult?.deliveryRoute === "turn-source"
+      hostResult.outcome === "timed-out" && hostResult.deliveryRoute === "turn-source"
         ? buildPluginApprovalFailureReason({
             fallbackReason: fallbackTimeoutReason,
             ctx: params.ctx,
@@ -430,22 +300,13 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
-    // INVALID_REQUEST means different things before and after registration.
-    const invalidRequest =
-      err instanceof GatewayClientRequestError && err.gatewayCode === "INVALID_REQUEST";
-    const reason =
-      invalidRequest && gatewayApprovalPhase === "request"
-        ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
-        : invalidRequest && gatewayApprovalPhase === "wait"
-          ? `Plugin approval no longer available: ${formatErrorMessage(err)}`
-          : "Plugin approval required (gateway unavailable)";
-    log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
+    log.warn(`plugin approval host request failed; blocking tool call: ${String(err)}`);
     return {
       blocked: true,
       kind: "failure",
       disposition: resolveToolErrorDiagnostic(err, signal).terminalReason,
       deniedReason: "plugin-approval",
-      reason,
+      reason: "Plugin approval required (approval host unavailable)",
       params: params.baseParams,
     };
   }
@@ -565,21 +426,4 @@ export async function resolveSkillWorkshopApprovalForFinalParams(params: {
     signal: params.signal,
     baseParams: params.params,
   });
-}
-
-// Success output schemas do not describe policy-layer terminal results. Track
-// identity so catalog boundaries can reject them without trusting spoofable status fields.
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value, { cause: value });
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

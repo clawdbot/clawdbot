@@ -3,7 +3,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   buildBundleMcpToolsFromCatalog,
@@ -308,6 +308,75 @@ describe("createBundleMcpToolRuntime", () => {
         content: "pong",
       },
     });
+  });
+
+  it("releases owned resources when catalog projection fails", async () => {
+    let activeLeases = 0;
+    const disposeRuntime = vi.fn(async () => {});
+    const tool = {
+      serverName: "demo",
+      safeServerName: "demo",
+      toolName: "broken",
+      fallbackDescription: "broken",
+      get inputSchema(): never {
+        throw new Error("schema projection failed");
+      },
+    } satisfies McpCatalogTool;
+    const runtime = {
+      ...makeToolRuntime({ tools: [tool], serverName: "demo" }),
+      acquireLease: () => {
+        activeLeases += 1;
+        return () => {
+          activeLeases -= 1;
+        };
+      },
+    };
+
+    await expect(materializeBundleMcpToolsForRun({ runtime, disposeRuntime })).rejects.toThrow(
+      "schema projection failed",
+    );
+
+    expect(activeLeases).toBe(0);
+    expect(disposeRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces every cleanup failure without replacing the materialization cause", async () => {
+    const releaseLease = vi.fn(() => {
+      throw new Error("lease release failed");
+    });
+    const disposeRuntime = vi.fn(() => {
+      throw new Error("runtime dispose failed");
+    });
+    const tool = {
+      serverName: "demo",
+      safeServerName: "demo",
+      toolName: "broken",
+      fallbackDescription: "broken",
+      get inputSchema(): never {
+        throw new Error("schema projection failed");
+      },
+    } satisfies McpCatalogTool;
+    const runtime = {
+      ...makeToolRuntime({ tools: [tool], serverName: "demo" }),
+      acquireLease: () => releaseLease,
+    };
+
+    const error = await materializeBundleMcpToolsForRun({ runtime, disposeRuntime }).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({
+      message: "schema projection failed",
+      cause: expect.objectContaining({ message: "schema projection failed" }),
+      errors: [
+        expect.objectContaining({ message: "schema projection failed" }),
+        expect.objectContaining({ message: "lease release failed" }),
+        expect.objectContaining({ message: "runtime dispose failed" }),
+      ],
+    });
+    expect(releaseLease).toHaveBeenCalledOnce();
+    expect(disposeRuntime).toHaveBeenCalledOnce();
   });
 
   it("preserves non-text MCP content alongside structuredContent without duplicating mirrored text", async () => {

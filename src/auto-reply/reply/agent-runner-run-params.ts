@@ -101,6 +101,7 @@ export function buildEmbeddedRunBaseParams(params: {
     inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
     channelContext: params.run.channelContext,
+    approvalHost: params.run.approvalHost,
     approvalReviewerDeviceId: params.run.approvalReviewerDeviceId,
     enforceFinalTag,
     silentExpected: params.run.silentExpected,

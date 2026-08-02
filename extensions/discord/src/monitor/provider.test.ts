@@ -43,9 +43,15 @@ const {
   voiceRuntimeModuleLoadedMock,
 } = getProviderMonitorTestMocks();
 
-const { voiceAutoJoinMock } = vi.hoisted(() => ({
-  voiceAutoJoinMock: vi.fn(async () => undefined),
-}));
+const { voiceAutoJoinMock, voiceManagerConstructorMock } = vi.hoisted(() => {
+  const autoJoin = vi.fn(async () => undefined);
+  return {
+    voiceAutoJoinMock: autoJoin,
+    voiceManagerConstructorMock: vi.fn(function DiscordVoiceManager() {
+      return { autoJoin };
+    }),
+  };
+});
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
 let providerTesting: typeof import("./provider.test-support.js").discordProviderTestSupport;
@@ -147,9 +153,7 @@ function expectMessagesContainAll(messages: string[], expected: string[]): void 
 vi.mock("../voice/manager.runtime.js", () => {
   voiceRuntimeModuleLoadedMock();
   return {
-    DiscordVoiceManager: function DiscordVoiceManager() {
-      return { autoJoin: voiceAutoJoinMock };
-    },
+    DiscordVoiceManager: voiceManagerConstructorMock,
     DiscordVoiceGuildCreateListener: function DiscordVoiceGuildCreateListener() {},
     DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
     DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
@@ -243,6 +247,7 @@ describe("monitorDiscordProvider", () => {
     providerTesting.reset();
     resetDiscordProviderMonitorMocks();
     voiceAutoJoinMock.mockClear();
+    voiceManagerConstructorMock.mockClear();
     providerTesting.setFetchDiscordApplicationId(async () => "app-1");
     providerTesting.setCreateDiscordNativeCommand(((
       ...args: Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0] extends
@@ -260,9 +265,7 @@ describe("monitorDiscordProvider", () => {
     providerTesting.setLoadDiscordVoiceRuntime(async () => {
       voiceRuntimeModuleLoadedMock();
       return {
-        DiscordVoiceManager: function DiscordVoiceManager() {
-          return { autoJoin: voiceAutoJoinMock };
-        },
+        DiscordVoiceManager: voiceManagerConstructorMock,
         DiscordVoiceGuildCreateListener: function DiscordVoiceGuildCreateListener() {},
         DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
         DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
@@ -466,9 +469,58 @@ describe("monitorDiscordProvider", () => {
     await monitorDiscordProvider({
       config: baseConfig(),
       runtime: baseRuntime(),
+      channelRuntime: createTestChannelRuntime(),
     });
 
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Discord online but disables voice without the Gateway-owned agent runtime", async () => {
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: true },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+      },
+    });
+
+    const runtime = baseRuntime();
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    expect(voiceRuntimeModuleLoadedMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Discord voice disabled: Gateway channel runtime unavailable",
+    );
+  });
+
+  it("passes the Gateway-owned agent runtime to Discord voice", async () => {
+    const channelRuntime = createTestChannelRuntime();
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: true },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+      channelRuntime,
+    });
+
+    expect(voiceManagerConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentRuntime: channelRuntime.agent }),
+    );
   });
 
   it("loads the Discord voice runtime for existing voice config blocks", async () => {
@@ -486,6 +538,7 @@ describe("monitorDiscordProvider", () => {
     await monitorDiscordProvider({
       config: baseConfig(),
       runtime: baseRuntime(),
+      channelRuntime: createTestChannelRuntime(),
     });
 
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);

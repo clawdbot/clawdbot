@@ -82,6 +82,7 @@ export async function compactEmbeddedRunForRecovery(
   const activeSession = input.getActiveSession();
   const runtimeContext = {
     ...buildEmbeddedCompactionRuntimeContext({
+      approvalHost: runParams.approvalHost,
       sessionKey: runParams.sessionKey,
       messageChannel: runParams.messageChannel,
       messageProvider: runParams.messageProvider,

@@ -16,7 +16,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-
 import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
-import { callGateway } from "../../gateway/call.js";
+import { callGateway, type CallGatewayOptions } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
@@ -209,6 +209,7 @@ const APPROVAL_RUNTIME_METHODS = new Set<string>([
   "exec.approval.request",
   "exec.approval.resolve",
   "exec.approval.waitDecision",
+  "plugin.approval.cancel",
   "plugin.approval.request",
   "plugin.approval.waitDecision",
 ]);
@@ -509,6 +510,8 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     scopes?: OperatorScope[];
     requireAgentRuntimeIdentity?: boolean;
     signal?: AbortSignal;
+    onSignalAbort?: CallGatewayOptions["onSignalAbort"];
+    instanceId?: string;
   },
 ) {
   const gateway = resolveGatewayOptions(opts);
@@ -540,10 +543,12 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     params: callParams,
     timeoutMs: gateway.timeoutMs,
     signal: extra?.signal,
+    onSignalAbort: extra?.onSignalAbort,
     expectFinal: extra?.expectFinal,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,
+    ...(extra?.instanceId ? { instanceId: extra.instanceId } : {}),
     ...(approvalRuntimeToken ? { approvalRuntimeToken } : {}),
     ...(agentRuntimeIdentityToken ? { agentRuntimeIdentityToken } : {}),
     ...(deviceIdentity ? { deviceIdentity } : {}),

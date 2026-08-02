@@ -9,7 +9,7 @@ import type {
 
 type NativeHookRelayApprovalContext = Pick<
   HookContext,
-  | "approvalReviewerDeviceId"
+  | "approvalHost"
   | "trigger"
   | "turnSourceAccountId"
   | "turnSourceChannel"
@@ -250,5 +250,5 @@ export type NativeHookRelaySharedState = {
   pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
   permissionApprovalWindows: Map<string, number[]>;
-  permissionAllowAlwaysApprovals: Map<string, { expiresAtMs: number }>;
+  permissionAllowAlwaysApprovals: Map<string, { expiresAtMs: number; relayId: string }>;
 };

@@ -8,7 +8,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -40,6 +39,11 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import type {
+  AgentRunApprovalHost,
+  AgentRunPluginApprovalHost,
+  AgentRunPluginApprovalResult,
+} from "./agent-run-approval.js";
 import {
   getBeforeToolCallFailureDisposition,
   getBeforeToolCallPolicyDiagnosticState,
@@ -53,6 +57,23 @@ import { callGatewayTool } from "./tools/gateway.js";
 
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+
+function createMockPluginApprovalHost(
+  result: AgentRunPluginApprovalResult = {
+    outcome: "resolved",
+    decision: PluginApprovalResolutions.ALLOW_ONCE,
+  },
+): {
+  approvalHost: AgentRunApprovalHost;
+  request: ReturnType<typeof vi.fn<AgentRunPluginApprovalHost["request"]>>;
+} {
+  const request = vi.fn<AgentRunPluginApprovalHost["request"]>();
+  request.mockResolvedValue(result);
+  return {
+    approvalHost: { plugin: { request } },
+    request,
+  };
+}
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
@@ -1198,12 +1219,14 @@ describe("before_tool_call loop detection behavior", () => {
     hookRunner.runBeforeToolCall.mockResolvedValueOnce({
       requireApproval: { title: "Approve", description: "Approve tool" },
     });
-    const mockCallGateway = vi.mocked(callGatewayTool);
-    mockCallGateway.mockResolvedValueOnce({ id: "approval-1", decision: "deny" });
+    const { approvalHost } = createMockPluginApprovalHost({
+      outcome: "resolved",
+      decision: PluginApprovalResolutions.DENY,
+    });
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
     const tool = wrapToolWithBeforeToolCallHook(
       { name: "exec", execute } as unknown as AnyAgentTool,
-      { agentId: "main", sessionKey: "session-key", runId: "run-1" },
+      { agentId: "main", sessionKey: "session-key", runId: "run-1", approvalHost },
     );
 
     await withToolExecutionEvents(async (emitted, flush) => {
@@ -1225,7 +1248,6 @@ describe("before_tool_call loop detection behavior", () => {
       });
       expect(JSON.stringify(emitted)).not.toContain("private");
     });
-    mockCallGateway.mockReset();
   });
 
   it("emits a blocked terminal diagnostic when approval is report-only", async () => {
@@ -1952,6 +1974,8 @@ describe("before_tool_call loop detection behavior", () => {
 
 describe("before_tool_call requireApproval handling", () => {
   let hookRunner: TestHookRunner;
+  let approvalHost: AgentRunApprovalHost;
+  let requestApproval: ReturnType<typeof vi.fn<AgentRunPluginApprovalHost["request"]>>;
   const mockCallGateway = vi.mocked(callGatewayTool);
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -1974,18 +1998,20 @@ describe("before_tool_call requireApproval handling", () => {
     ];
   }
 
-  function requireGatewayCall(index: number): unknown[] {
-    const call = mockCallGateway.mock.calls[index] as unknown[] | undefined;
-    if (!call) {
-      throw new Error(`missing gateway call ${index + 1}`);
-    }
-    return call;
-  }
-
   function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
     for (const [key, value] of Object.entries(fields)) {
       expect(record[key]).toEqual(value);
     }
+  }
+
+  function requireApprovalHostCall(
+    index = 0,
+  ): Parameters<AgentRunPluginApprovalHost["request"]>[0] {
+    const call = requestApproval.mock.calls[index];
+    if (!call) {
+      throw new Error(`missing approval host request ${index + 1}`);
+    }
+    return call[0];
   }
 
   function registerTelegramPluginApprovalSetup(): void {
@@ -2018,8 +2044,18 @@ describe("before_tool_call requireApproval handling", () => {
     // preloads hook-runner-global before this test's module reset/mocks take effect.
     setGlobalHookRunnerForTest(hookRunner);
     mockCallGateway.mockReset();
+    ({ approvalHost, request: requestApproval } = createMockPluginApprovalHost());
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
+
+  function runWithMockApprovalHost(
+    args: Parameters<typeof runBeforeToolCallHook>[0],
+  ): ReturnType<typeof runBeforeToolCallHook> {
+    return runBeforeToolCallHook({
+      ...args,
+      ctx: { ...args.ctx, approvalHost },
+    });
+  }
 
   async function runAbortDuringApprovalWait(options?: {
     abortReason?: unknown;
@@ -2034,11 +2070,25 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     const controller = new AbortController();
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-abort", status: "accepted" });
-    mockCallGateway.mockImplementationOnce(() => new Promise(() => {}));
+    requestApproval.mockImplementationOnce(
+      ({ signal }) =>
+        new Promise((_resolve, reject) => {
+          const rejectWithAbort = () => {
+            const reason = signal?.reason;
+            reject(
+              reason instanceof Error ? reason : new Error("run cancelled", { cause: reason }),
+            );
+          };
+          if (signal?.aborted) {
+            rejectWithAbort();
+            return;
+          }
+          signal?.addEventListener("abort", rejectWithAbort, { once: true });
+        }),
+    );
     setTimeout(() => controller.abort(options?.abortReason ?? new Error("run cancelled")), 10);
 
-    return await runBeforeToolCallHook({
+    return await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
@@ -2393,7 +2443,7 @@ describe("before_tool_call requireApproval handling", () => {
     });
   });
 
-  it("calls gateway RPC and unblocks on allow-once", async () => {
+  it("requests approval from the injected host and unblocks on allow-once", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Sensitive",
@@ -2402,63 +2452,60 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    // First call: plugin.approval.request → returns server-generated id
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-1", status: "accepted" });
-    // Second call: plugin.approval.waitDecision → returns allow-once
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-1", decision: "allow-once" });
-
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: { command: "rm -rf" },
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
-    expect(result.blocked).toBe(false);
-    expect(mockCallGateway).toHaveBeenCalledTimes(2);
-    const requestCall = requireGatewayCall(0);
-    expect(requestCall[0]).toBe("plugin.approval.request");
-    requireRecord(requestCall[1], "approval request gateway client");
-    expect(requireRecord(requestCall[2], "approval request params").twoPhase).toBe(true);
-    expect(requestCall[3]).toEqual({ expectFinal: false });
-    const waitCall = requireGatewayCall(1);
-    expect(waitCall[0]).toBe("plugin.approval.waitDecision");
-    requireRecord(waitCall[1], "approval wait gateway client");
-    expect(waitCall[2]).toEqual({ id: "server-id-1" });
+    expect(result).toEqual({
+      blocked: false,
+      params: { command: "rm -rf" },
+      approvalResolution: "allow-once",
+    });
+    expect(requestApproval).toHaveBeenCalledOnce();
+    expect(requireApprovalHostCall()).toEqual({
+      request: {
+        pluginId: "sage",
+        title: "Sensitive",
+        description: "Sensitive op",
+        severity: undefined,
+        allowedDecisions: undefined,
+        toolName: "exec",
+        toolCallId: undefined,
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: undefined,
+        turnSourceTo: undefined,
+        turnSourceAccountId: undefined,
+        turnSourceThreadId: undefined,
+      },
+      timeoutMs: expect.any(Number),
+      signal: undefined,
+    });
   });
 
-  it("caps oversized plugin approval timeouts before calling gateway", async () => {
+  it("caps oversized plugin approval timeouts at the host request boundary", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Oversized timeout",
-        description: "Still valid gateway payload",
+        description: "Still valid host payload",
         pluginId: "sage",
         timeoutMs: Number.MAX_SAFE_INTEGER,
       },
     });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-oversized", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-oversized", decision: "allow-once" });
 
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: { command: "rm -rf" },
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
     expect(result.blocked).toBe(false);
-    const requestCall = requireGatewayCall(0);
-    expect(requireRecord(requestCall[1], "approval request gateway client").timeoutMs).toBe(
-      MAX_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000,
-    );
-    expect(requireRecord(requestCall[2], "approval request params").timeoutMs).toBe(
-      MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
-    );
-    const waitCall = requireGatewayCall(1);
-    expect(requireRecord(waitCall[1], "approval wait gateway client").timeoutMs).toBe(
-      MAX_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000,
-    );
+    expect(requireApprovalHostCall().timeoutMs).toBe(MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
   });
 
-  it("blocks on deny decision", async () => {
+  it("blocks on a denied host outcome", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Dangerous",
@@ -2466,10 +2513,12 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-2", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-2", decision: "deny" });
+    requestApproval.mockResolvedValueOnce({
+      outcome: "resolved",
+      decision: PluginApprovalResolutions.DENY,
+    });
 
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
@@ -2487,10 +2536,9 @@ describe("before_tool_call requireApproval handling", () => {
         description: "Will time out",
       },
     });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-timeout", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-timeout", decision: null });
+    requestApproval.mockResolvedValueOnce({ outcome: "timed-out" });
 
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
@@ -2512,14 +2560,12 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({
-      id: "server-id-3",
-      status: "accepted",
+    requestApproval.mockResolvedValueOnce({
+      outcome: "timed-out",
       deliveryRoute: "turn-source",
     });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-3", decision: null });
 
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: {
@@ -2539,12 +2585,7 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
-  it.each([
-    ["a timeout", null],
-    ["an explicit timeout decision", PluginApprovalResolutions.TIMEOUT],
-    ["an unknown decision", "approved"],
-    ["a malformed truthy decision", true as unknown as string],
-  ])("blocks on %s even when deprecated timeoutBehavior is allow", async (_label, decision) => {
+  it("blocks on a timed-out host outcome even when deprecated timeoutBehavior is allow", async () => {
     const onResolution = vi.fn();
     hookRunner.runBeforeToolCall.mockResolvedValue({
       params: { command: "safe-command" },
@@ -2556,10 +2597,9 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-4", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-4", decision });
+    requestApproval.mockResolvedValueOnce({ outcome: "timed-out" });
 
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: { command: "rm -rf /" },
       ctx: { agentId: "main", sessionKey: "main" },
@@ -2587,13 +2627,12 @@ describe("before_tool_call requireApproval handling", () => {
         onResolution,
       },
     });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-restricted", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({
-      id: "server-id-restricted",
+    requestApproval.mockResolvedValueOnce({
+      outcome: "resolved",
       decision: "allow-always",
     });
 
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: { command: "unsafe-command" },
       ctx: { agentId: "main", sessionKey: "main" },
@@ -2608,154 +2647,39 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.TIMEOUT);
   });
 
-  it("blocks a wait decision bound to another approval id", async () => {
-    const onResolution = vi.fn();
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      params: { command: "safe-command" },
-      requireApproval: {
-        title: "Bound approval",
-        description: "Must match the request id",
-        onResolution,
-      },
-    });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-bound", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({
-      id: "server-id-other",
-      decision: "allow-once",
-    });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "unsafe-command" },
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toMatchObject({
-      blocked: true,
-      disposition: "timed_out",
-      reason: "Approval timed out",
-      params: { command: "unsafe-command" },
-    });
-    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.TIMEOUT);
-  });
-
-  it("falls back to block on gateway error", async () => {
+  it("fails closed when the approval host request throws", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
-        title: "Gateway down",
-        description: "Gateway is unavailable",
+        title: "Host down",
+        description: "Approval host is unavailable",
       },
     });
 
-    mockCallGateway.mockRejectedValueOnce(new Error("unknown method plugin.approval.request"));
+    requestApproval.mockRejectedValueOnce(new Error("approval host disconnected"));
 
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
     expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Plugin approval required (gateway unavailable)");
+    expect(result).toHaveProperty("reason", "Plugin approval required (approval host unavailable)");
   });
 
-  it.each([
-    [
-      "surfaces validation rejections",
-      new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message:
-          "invalid plugin.approval.request params: at /title: must not have more than 80 characters",
-      }),
-      "Plugin approval request rejected: invalid plugin.approval.request params: at /title: must not have more than 80 characters",
-    ],
-    [
-      "keeps structured service failures on the unavailable fallback",
-      new GatewayClientRequestError({
-        code: "UNAVAILABLE",
-        message: "approval service unavailable",
-      }),
-      "Plugin approval required (gateway unavailable)",
-    ],
-  ])("%s", async (_label, error, expectedReason) => {
+  it("uses the reason supplied by an unavailable host outcome", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
-        title: "x".repeat(81),
-        description: "Gateway classification test",
-      },
-    });
-    mockCallGateway.mockRejectedValueOnce(error);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", expectedReason);
-  });
-
-  it("reports an expired accepted approval without calling it a request rejection", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: { title: "Approval", description: "Wait phase classification" },
-    });
-    mockCallGateway
-      .mockResolvedValueOnce({ id: "plugin:accepted", status: "accepted" })
-      .mockRejectedValueOnce(
-        new GatewayClientRequestError({
-          code: "INVALID_REQUEST",
-          message: "approval expired or not found",
-        }),
-      );
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toHaveProperty(
-      "reason",
-      "Plugin approval no longer available: approval expired or not found",
-    );
-  });
-
-  it("blocks when gateway returns no id", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "No ID",
-        description: "Registration returns no id",
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ status: "error" });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Registration returns no id");
-  });
-
-  it("blocks on immediate null decision without calling waitDecision even when timeoutBehavior is allow", async () => {
-    const onResolution = vi.fn();
-
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "No route",
+        title: "Unavailable host",
         description: "No approval route available",
-        timeoutBehavior: "allow",
-        onResolution,
       },
     });
+    requestApproval.mockResolvedValueOnce({
+      outcome: "unavailable",
+      reason: "Plugin approval unavailable (no approval route)",
+    });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-immediate", decision: null });
-
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
@@ -2763,18 +2687,39 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Plugin approval unavailable (no approval route)");
-    expect(onResolution).toHaveBeenCalledWith("cancelled");
-    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-    ]);
   });
 
-  it("unblocks immediately when abort signal fires during waitDecision", async () => {
+  it("blocks when the run aborts during the host request", async () => {
     const result = await runAbortDuringApprovalWait();
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
-    expect(mockCallGateway).toHaveBeenCalledTimes(2);
+    expect(requestApproval).toHaveBeenCalledOnce();
+  });
+
+  it("does not honor a host allow decision resolved after the run aborts", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Abortable",
+        description: "Must not allow after cancellation",
+      },
+    });
+    const controller = new AbortController();
+    const abortReason = new Error("run aborted before decision");
+    requestApproval.mockImplementationOnce(async () => {
+      controller.abort(abortReason);
+      return { outcome: "resolved", decision: "allow-once" };
+    });
+
+    const result = await runWithMockApprovalHost({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+      signal: controller.signal,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
   });
 
   it("classifies non-Error abort reasons as run abort cancellation", async () => {
@@ -2784,21 +2729,17 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
   });
 
-  it("removes abort listener after waitDecision resolves", async () => {
+  it("passes the run abort signal to the approval host", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
-        title: "Cleanup listener",
-        description: "Wait resolves quickly",
+        title: "Signal forwarding",
+        description: "Host owns cancellation",
       },
     });
 
     const controller = new AbortController();
-    const removeListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-cleanup", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-cleanup", decision: "allow-once" });
-
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
@@ -2806,7 +2747,7 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(removeListenerSpy.mock.calls.map(([type]) => type)).toContain("abort");
+    expect(requireApprovalHostCall().signal).toBe(controller.signal);
   });
 
   it("calls onResolution with allow-once on approval", async () => {
@@ -2820,10 +2761,7 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r1", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r1", decision: "allow-once" });
-
-    await runBeforeToolCallHook({
+    await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
@@ -2843,13 +2781,12 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-allow-always", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({
-      id: "server-id-allow-always",
+    requestApproval.mockResolvedValueOnce({
+      outcome: "resolved",
       decision: "allow-always",
     });
 
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: { command: "echo ok" },
       ctx: { agentId: "main", sessionKey: "main" },
@@ -2874,16 +2811,10 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r1-nonblocking", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({
-      id: "server-id-r1-nonblocking",
-      decision: "allow-once",
-    });
-
     let timeoutId: NodeJS.Timeout | undefined;
     try {
       const result = await Promise.race([
-        runBeforeToolCallHook({
+        runWithMockApprovalHost({
           toolName: "bash",
           params: {},
           ctx: { agentId: "main", sessionKey: "main" },
@@ -2920,10 +2851,12 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r2", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r2", decision: "deny" });
+    requestApproval.mockResolvedValueOnce({
+      outcome: "resolved",
+      decision: PluginApprovalResolutions.DENY,
+    });
 
-    await runBeforeToolCallHook({
+    await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
@@ -2932,7 +2865,7 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("deny");
   });
 
-  it("calls onResolution with timeout when decision is null", async () => {
+  it("calls onResolution with timeout on a timed-out host outcome", async () => {
     const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
@@ -2943,10 +2876,9 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r3", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r3", decision: null });
+    requestApproval.mockResolvedValueOnce({ outcome: "timed-out" });
 
-    await runBeforeToolCallHook({
+    await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
@@ -2955,27 +2887,30 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("timeout");
   });
 
-  it("calls onResolution with cancelled on gateway error", async () => {
+  it("calls onResolution with cancelled on an unavailable host outcome", async () => {
     const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
-        title: "Gateway error",
-        description: "Gateway will fail",
+        title: "Host unavailable",
+        description: "Host cannot route the approval",
         onResolution,
       },
     });
 
-    mockCallGateway.mockRejectedValueOnce(new Error("gateway down"));
+    requestApproval.mockResolvedValueOnce({
+      outcome: "unavailable",
+      reason: "Plugin approval required (approval host unavailable)",
+    });
 
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
     expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Plugin approval required (gateway unavailable)");
+    expect(result).toHaveProperty("reason", "Plugin approval required (approval host unavailable)");
     expect(onResolution).toHaveBeenCalledWith("cancelled");
   });
 
@@ -2988,29 +2923,7 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("cancelled");
   });
 
-  it("calls onResolution with cancelled when gateway returns no id", async () => {
-    const onResolution = vi.fn();
-
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "No ID",
-        description: "Registration returns no id",
-        onResolution,
-      },
-    });
-
-    mockCallGateway.mockResolvedValueOnce({ status: "error" });
-
-    await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(onResolution).toHaveBeenCalledWith("cancelled");
-  });
-
-  it("forwards turn source routing fields from ctx to plugin.approval.request", async () => {
+  it("forwards turn source routing fields from ctx to the approval host", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Channel-routed approval",
@@ -3019,10 +2932,7 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "route-id-1", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "route-id-1", decision: "allow-once" });
-
-    await runBeforeToolCallHook({
+    await runWithMockApprovalHost({
       toolName: "fetch",
       params: { url: "https://example.com" },
       ctx: {
@@ -3035,13 +2945,12 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    const requestCall = requireGatewayCall(0);
-    expect(requestCall[0]).toBe("plugin.approval.request");
-    const requestParams = requireRecord(requestCall[2], "approval request params");
-    expect(requestParams.turnSourceChannel).toBe("telegram");
-    expect(requestParams.turnSourceTo).toBe("-100123456789");
-    expect(requestParams.turnSourceAccountId).toBe("acct-42");
-    expect(requestParams.turnSourceThreadId).toBe(9001);
+    expect(requireApprovalHostCall().request).toMatchObject({
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-100123456789",
+      turnSourceAccountId: "acct-42",
+      turnSourceThreadId: 9001,
+    });
   });
 
   it("uses the transport channel when tool policy provider differs", async () => {
@@ -3055,11 +2964,6 @@ describe("before_tool_call requireApproval handling", () => {
 
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-route-"));
     await fs.writeFile(path.join(tempDir, "note.txt"), "hello");
-    mockCallGateway.mockResolvedValueOnce({ id: "transport-route-id", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({
-      id: "transport-route-id",
-      decision: "allow-once",
-    });
 
     const tools = createOpenClawCodingTools({
       workspaceDir: tempDir,
@@ -3069,7 +2973,7 @@ describe("before_tool_call requireApproval handling", () => {
       currentMessagingTarget: "channel:deliverable-1",
       agentAccountId: "acct-1",
       currentThreadTs: "thread-1",
-      approvalReviewerDeviceId: "device-tui-reviewer",
+      approvalHost,
     });
     const readTool = tools.find((tool) => tool.name === "read");
     if (!readTool) {
@@ -3077,14 +2981,12 @@ describe("before_tool_call requireApproval handling", () => {
     }
     await readTool.execute("tool-hook-route", { path: "note.txt" }, undefined, undefined);
 
-    const requestCall = requireGatewayCall(0);
-    expect(requestCall[0]).toBe("plugin.approval.request");
-    const requestParams = requireRecord(requestCall[2], "approval request params");
-    expect(requestParams.turnSourceChannel).toBe("discord");
-    expect(requestParams.turnSourceTo).toBe("channel:deliverable-1");
-    expect(requestParams.turnSourceAccountId).toBe("acct-1");
-    expect(requestParams.turnSourceThreadId).toBe("thread-1");
-    expect(requestParams.approvalReviewerDeviceIds).toEqual(["device-tui-reviewer"]);
+    expect(requireApprovalHostCall().request).toMatchObject({
+      turnSourceChannel: "discord",
+      turnSourceTo: "channel:deliverable-1",
+      turnSourceAccountId: "acct-1",
+      turnSourceThreadId: "thread-1",
+    });
   });
 
   it("omits turn source routing fields when ctx does not carry them", async () => {
@@ -3095,17 +2997,13 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "no-route-id", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "no-route-id", decision: "allow-once" });
-
-    await runBeforeToolCallHook({
+    await runWithMockApprovalHost({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
-    const requestCall = requireGatewayCall(0);
-    const requestParams = requireRecord(requestCall[2], "approval request params");
+    const requestParams = requireApprovalHostCall().request;
     expect(requestParams.turnSourceChannel).toBeUndefined();
     expect(requestParams.turnSourceTo).toBeUndefined();
     expect(requestParams.turnSourceAccountId).toBeUndefined();
@@ -3165,25 +3063,19 @@ describe("before_tool_call requireApproval handling", () => {
         description: "CLI command needs review",
       },
     });
-    mockCallGateway.mockResolvedValueOnce({ id: "interactive-id", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "interactive-id", decision: "allow-once" });
 
-    const result = await runBeforeToolCallHook({
+    const result = await runWithMockApprovalHost({
       toolName: "bash",
       params: { command: "gh run view 1" },
       ctx: {
         agentId: "main",
         sessionKey: "main",
         trigger: "user",
-        approvalReviewerDeviceId: "device-tui-reviewer",
       },
     });
 
     expect(result).toMatchObject({ blocked: false, approvalResolution: "allow-once" });
-    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expect(requestApproval).toHaveBeenCalledOnce();
   });
 });
 

@@ -974,6 +974,24 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toEqual({ status: "ok" });
   });
 
+  test("carries the exact approval host only in synthetic client context", async () => {
+    const approvalHost = { plugin: { request: vi.fn() } } as never;
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("agent-approval-host"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.req.params).not.toHaveProperty("approvalHost");
+      expect(opts.client?.internal?.agentRunApprovalHost).toBe(approvalHost);
+      opts.respond(true, { status: "ok" });
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "agent:main:subagent:child" },
+        { agentRunApprovalHost: approvalHost, forceSyntheticClient: true },
+      ),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
   test("carries scoped delivery media only in the synthetic client context", async () => {
     serverPluginsModule.setFallbackGatewayContext(createTestContext("scoped-delivery-media"));
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {

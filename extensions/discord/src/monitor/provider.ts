@@ -170,7 +170,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = slashCommand.ephemeral;
-  const voiceEnabled = resolveDiscordVoiceEnabled(discordCfg.voice);
+  const voiceConfigured = resolveDiscordVoiceEnabled(discordCfg.voice);
+  const voiceAgentRuntime = opts.channelRuntime?.agent;
+  const voiceEnabled = voiceConfigured && Boolean(voiceAgentRuntime);
+  if (voiceConfigured && !voiceAgentRuntime) {
+    runtime.log?.("Discord voice disabled: Gateway channel runtime unavailable");
+  }
 
   const allowlistResolved = await resolveDiscordAllowlistConfig({
     token,
@@ -401,6 +406,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         discordConfig: discordCfg,
         accountId: account.accountId,
         runtime,
+        agentRuntime: voiceAgentRuntime!,
         botUserId,
       });
       const { setDiscordTranscriptsVoiceManager } = await import("../voice/transcripts-source.js");

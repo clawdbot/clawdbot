@@ -2,7 +2,7 @@
  * Timeout defaults and normalizers for Codex app-server startup and turn
  * liveness watches.
  */
-import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 /** Minimum startup timeout accepted by the Codex app-server harness. */
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
@@ -160,11 +160,4 @@ export function resolveCodexTurnTerminalIdleTimeoutMs(
   );
   const defaultMs = Math.max(CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS, explicitRunBudgetMs);
   return resolvePositiveIntegerTimeoutMs(value, defaultMs);
-}
-
-/** Adds gateway grace time to a caller timeout without overflowing invalid values. */
-export function resolveCodexGatewayTimeoutWithGraceMs(timeoutMs: number, graceMs = 10_000): number {
-  const timeout = resolvePositiveIntegerTimeoutMs(timeoutMs, 1);
-  const grace = resolveTimerTimeoutMs(graceMs, 0, 0);
-  return addTimerTimeoutGraceMs(timeout, grace) ?? timeout;
 }

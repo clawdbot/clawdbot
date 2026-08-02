@@ -310,6 +310,10 @@ export function createSessionMcpRuntimeManager(
         (params.sessionKey ? store.sessionIdBySessionKey.get(params.sessionKey) : undefined);
       return sessionId ? store.runtimesBySessionId.get(sessionId) : undefined;
     },
+    async retireRuntimeInstance(runtime, retireOpts) {
+      const runtimes = isCombinedSessionMcpRuntime(runtime) ? runtime.managedParts : [runtime];
+      return await lifecycle.retireRuntimeParts(runtime, runtimes, retireOpts);
+    },
     async disposeSession(sessionId) {
       await lifecycle.disposeManagedSession(sessionId);
     },
@@ -337,10 +341,19 @@ export function createSessionMcpRuntimeManager(
       return true;
     },
     async completeDeferredRetirement(sessionId, runtime) {
-      if (
-        !store.deferredRetirementSessionIds.has(sessionId) ||
-        (runtime !== undefined && runtime.sessionId !== sessionId)
-      ) {
+      if (runtime !== undefined && runtime.sessionId !== sessionId) {
+        return false;
+      }
+      if (runtime !== undefined) {
+        const runtimes = isCombinedSessionMcpRuntime(runtime) ? runtime.managedParts : [runtime];
+        if (
+          (await lifecycle.completeExactRuntimeRetirement(runtime, runtimes)) &&
+          !store.requiredRetirementSessionIds.has(sessionId)
+        ) {
+          return true;
+        }
+      }
+      if (!store.deferredRetirementSessionIds.has(sessionId)) {
         return false;
       }
       if (
@@ -348,6 +361,10 @@ export function createSessionMcpRuntimeManager(
         (runtime?.activeLeases ?? 0) > 0
       ) {
         return false;
+      }
+      if (store.requiredRetirementSessionIds.has(sessionId)) {
+        await lifecycle.disposeManagedSession(sessionId, { preserveRequiredRetirement: true });
+        return true;
       }
       const managed = lifecycle
         .runtimeKeysForSessionId(sessionId)
@@ -377,6 +394,14 @@ export function createSessionMcpRuntimeManager(
       const chains = Array.from(store.requesterWorkChains.values());
       store.requesterWorkChains.clear();
       await Promise.allSettled(chains);
+      const exactErrors: unknown[] = [];
+      for (const sessionId of store.exactRetirementsBySessionId.keys()) {
+        try {
+          await lifecycle.disposeManagedSession(sessionId);
+        } catch (error) {
+          exactErrors.push(error);
+        }
+      }
       const inFlightRuntimes = Array.from(store.createInFlight.values());
       store.createInFlight.clear();
       const runtimes = Array.from(store.runtimesBySessionId.values());
@@ -397,6 +422,9 @@ export function createSessionMcpRuntimeManager(
         }
       }
       await Promise.allSettled(Array.from(allRuntimes, (runtime) => runtime.dispose()));
+      if (exactErrors.length > 0) {
+        throw new AggregateError(exactErrors, "Failed to dispose exact MCP runtimes");
+      }
     },
     sweepIdleRuntimes: lifecycle.sweepIdleRuntimes,
     listSessionIds() {
@@ -421,6 +449,7 @@ export function createSessionMcpRuntimeManager(
       sessionKeys: store.sessionIdBySessionKey.size,
       idleTtl: store.idleTtlMsBySessionId.size,
       deferredRetirement: store.deferredRetirementSessionIds.size,
+      exactRetirement: store.exactRetirementsBySessionId.size,
       advertisedScopedCatalogs: store.advertisedScopedCatalogBySessionId.size,
     }),
   });

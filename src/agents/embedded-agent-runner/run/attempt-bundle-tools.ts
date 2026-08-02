@@ -1,8 +1,10 @@
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
+import { withoutSessionMcpRuntimeCapture } from "../../agent-bundle-mcp-runtime-capture.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
+  retireSessionMcpRuntimeInstance,
 } from "../../agent-bundle-mcp-tools.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
@@ -93,23 +95,42 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     bundleMetadataSnapshot?.pluginIds === undefined
       ? bundleMetadataSnapshot?.manifestRegistry
       : undefined;
+  const createBundleMcpSessionRuntime = async () =>
+    await getOrCreateSessionMcpRuntime({
+      sessionId: params.attempt.sessionId,
+      sessionKey: params.attempt.sessionKey,
+      workspaceDir: params.effectiveWorkspace,
+      agentDir: params.agentDir,
+      cfg: params.attempt.config,
+      manifestRegistry: bundleManifestRegistry,
+      // senderId is only set from the verified inbound sender (sessionCtx.SenderId
+      // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs
+      // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
+      requesterSenderId: params.attempt.senderId,
+      agentAccountId: params.attempt.agentAccountId,
+      messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
+      toolOverrides: params.attempt.toolOverrides,
+    });
   const bundleMcpSessionRuntime = bundleMcpEnabled
-    ? await getOrCreateSessionMcpRuntime({
-        sessionId: params.attempt.sessionId,
-        sessionKey: params.attempt.sessionKey,
-        workspaceDir: params.effectiveWorkspace,
-        agentDir: params.agentDir,
-        cfg: params.attempt.config,
-        manifestRegistry: bundleManifestRegistry,
-        // senderId is only set from the verified inbound sender (sessionCtx.SenderId
-        // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs
-        // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
-        requesterSenderId: params.attempt.senderId,
-        agentAccountId: params.attempt.agentAccountId,
-        messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
-        toolOverrides: params.attempt.toolOverrides,
-      })
+    ? params.attempt.cleanupBundleMcpOnRunEnd === true
+      ? await withoutSessionMcpRuntimeCapture(createBundleMcpSessionRuntime)
+      : await createBundleMcpSessionRuntime()
     : undefined;
+  const disposeBundleMcpSessionRuntime =
+    bundleMcpSessionRuntime && params.attempt.cleanupBundleMcpOnRunEnd === true
+      ? async () => {
+          await retireSessionMcpRuntimeInstance({
+            runtime: bundleMcpSessionRuntime,
+            reason: "embedded-run-end",
+            // A newer overlapping turn keeps its own lease, so stale cleanup
+            // leaves the shared instance intact.
+            preserveActiveLeases: true,
+            onError: (error, sessionId) => {
+              log.warn(`bundle-mcp cleanup failed after run for ${sessionId}: ${String(error)}`);
+            },
+          });
+        }
+      : undefined;
   const bundleMcpRuntime = bundleMcpSessionRuntime
     ? await materializeBundleMcpToolsForRun({
         runtime: bundleMcpSessionRuntime,
@@ -117,6 +138,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           ...tools.map((tool) => tool.name),
           ...(clientTools?.map((tool) => tool.function.name) ?? []),
         ],
+        ...(disposeBundleMcpSessionRuntime
+          ? { disposeRuntime: disposeBundleMcpSessionRuntime }
+          : {}),
       })
     : undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;

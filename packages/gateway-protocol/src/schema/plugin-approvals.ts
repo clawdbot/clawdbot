@@ -44,6 +44,14 @@ export const PluginApprovalRequestParamsSchema = closedObject({
         "Trusted approval-runtime metadata naming operator devices that may review this approval; ordinary Gateway clients may send the field, but the Gateway only binds it for internal approval-runtime requests.",
     }),
   ),
+  runtimeRequestId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 128,
+      description:
+        "Internal approval-runtime request identity used to cancel one registration before its server-generated approval id is known.",
+    }),
+  ),
   turnSourceChannel: Type.Optional(Type.String()),
   turnSourceTo: Type.Optional(Type.String()),
   turnSourceAccountId: Type.Optional(Type.String()),
@@ -58,7 +66,16 @@ export const PluginApprovalResolveParamsSchema = closedObject({
   decision: NonEmptyString,
 });
 
+/** Internal approval-runtime cleanup for one exact request. */
+export const PluginApprovalCancelParamsSchema = Type.Union([
+  closedObject({ id: NonEmptyString }),
+  closedObject({
+    runtimeRequestId: Type.String({ minLength: 1, maxLength: 128 }),
+  }),
+]);
+
 // Owner-local wire types derived directly from local schema consts so the
 // public plugin-sdk declaration graph never pulls in the ProtocolSchemas registry.
 export type PluginApprovalRequestParams = Static<typeof PluginApprovalRequestParamsSchema>;
 export type PluginApprovalResolveParams = Static<typeof PluginApprovalResolveParamsSchema>;
+export type PluginApprovalCancelParams = Static<typeof PluginApprovalCancelParamsSchema>;

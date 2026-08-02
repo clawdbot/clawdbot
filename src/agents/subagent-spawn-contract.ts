@@ -1,4 +1,5 @@
 import type { FastMode } from "../shared/fast-mode.js";
+import type { AgentRunApprovalHost } from "./agent-run-approval.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
@@ -39,6 +40,8 @@ export type SpawnSubagentParams = {
 };
 
 export type SpawnSubagentContext = {
+  /** Parent-owned approval capabilities inherited by process-local child turns. */
+  approvalHost?: AgentRunApprovalHost;
   agentSessionKey?: string;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */

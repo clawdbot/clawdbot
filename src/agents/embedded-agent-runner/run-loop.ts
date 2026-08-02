@@ -6,11 +6,6 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  retireSessionMcpRuntime,
-  retireSessionMcpRuntimeForSessionKey,
-} from "../agent-bundle-mcp-tools.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
@@ -652,36 +647,5 @@ export async function runPreparedEmbeddedLoop(
         await contextEngine.dispose?.();
       },
     });
-    if (params.cleanupBundleMcpOnRunEnd === true) {
-      await runAgentCleanupStep({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        step: "bundle-mcp-retire",
-        log,
-        cleanup: async () => {
-          const onError = (errorLocal: unknown, sessionId: string) => {
-            log.warn(
-              `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(errorLocal)}`,
-            );
-          };
-          const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
-            sessionKey: params.sessionKey,
-            reason: "embedded-run-end",
-            // MCP App views hold bounded leases so their bridge can remain
-            // usable after a one-shot gateway run returns.
-            preserveActiveLeases: true,
-            onError,
-          });
-          if (!retiredBySessionKey) {
-            await retireSessionMcpRuntime({
-              sessionId: params.sessionId,
-              reason: "embedded-run-end",
-              preserveActiveLeases: true,
-              onError,
-            });
-          }
-        },
-      });
-    }
   }
 }

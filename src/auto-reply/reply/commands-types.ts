@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Shared command handler context and result contracts. */
+import type { AgentRunApprovalHost } from "../../agents/agent-run-approval.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
@@ -65,6 +66,8 @@ export type HandleCommandsParams = {
   storePath?: string;
   sessionScope?: SessionScope;
   workspaceDir: string;
+  /** Operator approval capabilities owned by the adapter handling this command. */
+  approvalHost?: AgentRunApprovalHost;
   opts?: GetReplyOptions;
   defaultGroupActivation: () => "always" | "mention";
   /** Catalog snapshot prepared by model selection for status rendering. */

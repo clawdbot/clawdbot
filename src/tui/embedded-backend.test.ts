@@ -1,15 +1,12 @@
 // Covers embedded backend behavior used by the TUI runtime.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentRunApprovalHost } from "../agents/agent-run-approval.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
-import {
-  clearEmbeddedPluginApprovalBroker,
-  getEmbeddedPluginApprovalBroker,
-} from "../infra/embedded-plugin-approval-broker.js";
 import { defaultRuntime } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -314,6 +311,17 @@ function emitRegisteredAgentEvent(evt: unknown) {
   }
 }
 
+function requireApprovalHost(callIndex: number) {
+  const commandOpts = agentCommandFromIngressMock.mock.calls[callIndex]?.[0] as
+    | { approvalHost?: AgentRunApprovalHost }
+    | undefined;
+  const approvalHost = commandOpts?.approvalHost;
+  if (!approvalHost?.plugin) {
+    throw new Error(`expected run-scoped plugin approval host for call ${String(callIndex)}`);
+  }
+  return approvalHost;
+}
+
 describe("EmbeddedTuiBackend", () => {
   const originalRuntimeLog = defaultRuntime.log;
   const originalRuntimeError = defaultRuntime.error;
@@ -414,11 +422,6 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   afterEach(() => {
-    const broker = getEmbeddedPluginApprovalBroker();
-    broker?.stop();
-    if (broker) {
-      clearEmbeddedPluginApprovalBroker(broker);
-    }
     vi.useRealTimers();
     EmbeddedTuiBackendForTest.resetRuntimeGlobalsForTest();
     setEmbeddedMode(false);
@@ -751,6 +754,11 @@ describe("EmbeddedTuiBackend", () => {
 
   it("bridges local plugin approvals without a Gateway", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
     const backend = new EmbeddedTuiBackend();
     const events: Array<{ event: string; payload: unknown }> = [];
     backend.onEvent = (event) => {
@@ -759,12 +767,14 @@ describe("EmbeddedTuiBackend", () => {
 
     backend.start();
     await flushMicrotasks();
-
-    const approvalBroker = getEmbeddedPluginApprovalBroker();
-    if (!approvalBroker) {
-      throw new Error("expected embedded plugin approval broker");
-    }
-    const decision = approvalBroker.request({
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "apply the pending skill",
+      runId: "run-local-plugin-approval",
+    });
+    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledOnce());
+    const approvalHost = requireApprovalHost(0);
+    const decision = approvalHost.plugin!.request({
       request: {
         title: "Apply workspace skill proposal",
         description: "Apply a pending workspace skill proposal into live workspace skills.",
@@ -791,10 +801,91 @@ describe("EmbeddedTuiBackend", () => {
     await expect(backend.resolvePluginApproval(approval?.id, "allow-once")).resolves.toEqual({
       ok: true,
     });
-    await expect(decision).resolves.toMatchObject({ decision: "allow-once" });
+    await expect(decision).resolves.toEqual({ outcome: "resolved", decision: "allow-once" });
 
+    pending.resolve({ payloads: [{ text: "done" }], meta: {} });
     await backend.stop();
-    expect(getEmbeddedPluginApprovalBroker()).toBeNull();
+  });
+
+  it("isolates plugin approvals between concurrent embedded backends", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const firstRun = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    const secondRun = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock
+      .mockReturnValueOnce(firstRun.promise)
+      .mockReturnValueOnce(secondRun.promise);
+    const firstBackend = new EmbeddedTuiBackend();
+    const secondBackend = new EmbeddedTuiBackend();
+
+    firstBackend.start();
+    secondBackend.start();
+    await Promise.all([
+      firstBackend.sendChat({
+        sessionKey: "agent:main:first",
+        message: "first",
+        runId: "run-first",
+      }),
+      secondBackend.sendChat({
+        sessionKey: "agent:main:second",
+        message: "second",
+        runId: "run-second",
+      }),
+    ]);
+    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2));
+
+    const firstHost = requireApprovalHost(0);
+    const secondHost = requireApprovalHost(1);
+    expect(firstHost).not.toBe(secondHost);
+    const firstDecision = firstHost.plugin!.request({
+      request: {
+        title: "First approval",
+        description: "First backend only",
+        sessionKey: "agent:main:first",
+      },
+      timeoutMs: 5_000,
+    });
+    const secondDecision = secondHost.plugin!.request({
+      request: {
+        title: "Second approval",
+        description: "Second backend only",
+        sessionKey: "agent:main:second",
+      },
+      timeoutMs: 5_000,
+    });
+    const [firstApproval] = (await firstBackend.listPluginApprovals()) as Array<{ id: string }>;
+    const [secondApproval] = (await secondBackend.listPluginApprovals()) as Array<{ id: string }>;
+
+    expect(firstApproval?.id).toBeDefined();
+    expect(secondApproval?.id).toBeDefined();
+    expect(firstApproval?.id).not.toBe(secondApproval?.id);
+    await expect(
+      secondBackend.resolvePluginApproval(firstApproval!.id, "allow-once"),
+    ).resolves.toEqual({ ok: false });
+    await expect(
+      firstBackend.resolvePluginApproval(firstApproval!.id, "allow-once"),
+    ).resolves.toEqual({ ok: true });
+    await expect(secondBackend.resolvePluginApproval(secondApproval!.id, "deny")).resolves.toEqual({
+      ok: true,
+    });
+    await expect(firstDecision).resolves.toEqual({
+      outcome: "resolved",
+      decision: "allow-once",
+    });
+    await expect(secondDecision).resolves.toEqual({
+      outcome: "resolved",
+      decision: "deny",
+    });
+
+    firstRun.resolve({ payloads: [{ text: "first done" }], meta: {} });
+    secondRun.resolve({ payloads: [{ text: "second done" }], meta: {} });
+    await secondBackend.stop();
+    await firstBackend.stop();
   });
 
   it("lists configured replace-mode models without loading the gateway catalog", async () => {
@@ -3826,6 +3917,11 @@ describe("EmbeddedTuiBackend", () => {
       expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
       expect(runBtwSideQuestionMock).toHaveBeenCalledTimes(1);
     });
+    const mainApprovalHost = requireApprovalHost(0);
+    const sideQuestionArgs = runBtwSideQuestionMock.mock.calls[0]?.[0] as
+      | { approvalHost?: AgentRunApprovalHost }
+      | undefined;
+    expect(sideQuestionArgs?.approvalHost).toBe(mainApprovalHost);
 
     const result = await backend.abortChat({ sessionKey: "agent:main:main" });
 

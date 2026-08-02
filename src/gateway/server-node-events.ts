@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { validateNodePresenceActivityPayload } from "../../packages/gateway-protocol/src/index.js";
+import { gatewayAgentRunApprovalHost } from "../agents/agent-run-approval.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDevicePresence, type NodePairingGeneration } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -106,7 +107,11 @@ function dispatchNodeAgentCommand(
       await onAdmissionRejected?.();
       return;
     }
-    await agentCommandFromIngress(input, defaultRuntime, ctx.deps);
+    await agentCommandFromIngress(
+      { ...input, approvalHost: input.approvalHost ?? gatewayAgentRunApprovalHost },
+      defaultRuntime,
+      ctx.deps,
+    );
   }).catch((err: unknown) => {
     ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
   });
@@ -290,7 +295,14 @@ function dispatchReservedVoiceAgentCommand(params: {
       isConnectionCurrent: params.isConnectionCurrent,
       start: () => {
         params.onStart();
-        return agentCommandFromIngress(params.input, defaultRuntime, params.ctx.deps);
+        return agentCommandFromIngress(
+          {
+            ...params.input,
+            approvalHost: params.input.approvalHost ?? gatewayAgentRunApprovalHost,
+          },
+          defaultRuntime,
+          params.ctx.deps,
+        );
       },
     });
     if (!admission) {

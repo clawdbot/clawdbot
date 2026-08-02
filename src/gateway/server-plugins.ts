@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { AgentRunApprovalHost } from "../agents/agent-run-approval.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagent-announce-handoff.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -215,6 +216,7 @@ function resolveRuntimeNodeInvokeSyntheticScopes(params: {
 }
 
 type DispatchGatewayMethodInProcessOptions = {
+  agentRunApprovalHost?: AgentRunApprovalHost;
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
   agentRunTracking?: "plugin_subagent";
@@ -264,6 +266,7 @@ export async function dispatchGatewayMethodInProcessRaw(
     ? registerSubagentCompletionToolHandoff(options.delegatedToolPolicyHandoff)
     : undefined;
   const syntheticClient = createSyntheticPluginRuntimeClient({
+    agentRunApprovalHost: options?.agentRunApprovalHost,
     allowModelOverride: options?.allowSyntheticModelOverride === true,
     agentRunTracking: options?.agentRunTracking,
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
@@ -282,13 +285,17 @@ export async function dispatchGatewayMethodInProcessRaw(
   });
   const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId ||
+    options?.agentRunApprovalHost ||
+      pluginRuntimeOwnerId ||
       options?.agentRunTracking ||
       options?.pluginSubagentRequester ||
       options?.runtimePluginToolGrant ||
       options?.delegatedToolPolicyHandoff ||
       scope?.client?.internal?.delegatedToolPolicyHandoffId
       ? {
+          ...(options?.agentRunApprovalHost
+            ? { agentRunApprovalHost: options.agentRunApprovalHost }
+            : {}),
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
           ...(options?.pluginSubagentRequester

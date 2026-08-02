@@ -10,6 +10,7 @@ import {
   resolveToolResultFailureKind,
 } from "../agents/tool-result-error.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
+import type { McpLoopbackClientGrantAuthorization } from "./mcp-grant-store.js";
 import type { McpLoopbackToolCallOutcome } from "./mcp-http.loopback-runtime.js";
 import {
   MCP_LOOPBACK_SERVER_NAME,
@@ -63,8 +64,8 @@ export async function handleMcpJsonRpc(params: {
   toolSchema: McpToolSchemaEntry[];
   hookContext?: HookContext;
   signal?: AbortSignal;
-  /** Revalidate short-lived client authority immediately before side effects. */
-  authorizeToolCall?: () => boolean;
+  /** Revalidate the exact client grant/capture authority around side effects. */
+  resolveToolCallAuthorization?: () => McpLoopbackClientGrantAuthorization;
   onToolCallResult?: (
     call: {
       toolName: string;
@@ -137,7 +138,13 @@ export async function handleMcpJsonRpc(params: {
       }
       const toolCallId = `mcp-${crypto.randomUUID()}`;
       let executedToolArgs = toolArgs;
+      let toolExecutionAdmitted = false;
+      let toolCallResultReported = false;
       const reportToolCallResult = (outcome: McpLoopbackToolCallOutcome) => {
+        if (toolCallResultReported) {
+          return;
+        }
+        toolCallResultReported = true;
         try {
           params.onToolCallResult?.({
             toolName,
@@ -148,7 +155,26 @@ export async function handleMcpJsonRpc(params: {
           // Observability callbacks must never alter the tool result returned to the MCP client.
         }
       };
+      const rejectExpiredAuthorization = (
+        authorization: Exclude<McpLoopbackClientGrantAuthorization, "active">,
+      ) => {
+        // A fully revoked grant still belongs to the admitted run, so retain
+        // blocked/delivery evidence. An ended or replaced capture owns nothing.
+        if (authorization === "grant-revoked") {
+          reportToolCallResult({ outcome: "blocked", deniedReason: "client-grant-revoked" });
+        }
+        return jsonRpcResult(id, {
+          content: [{ type: "text", text: "Tool call authorization expired" }],
+          isError: true,
+        });
+      };
+      const resolveAuthorization = (): McpLoopbackClientGrantAuthorization =>
+        params.resolveToolCallAuthorization?.() ?? "active";
       try {
+        let authorization = resolveAuthorization();
+        if (authorization !== "active") {
+          return rejectExpiredAuthorization(authorization);
+        }
         const preparedToolArgs = tool.prepareBeforeToolCallParams
           ? await tool.prepareBeforeToolCallParams(toolArgs, {
               toolCallId,
@@ -157,6 +183,10 @@ export async function handleMcpJsonRpc(params: {
             })
           : toolArgs;
         executedToolArgs = preparedToolArgs as Record<string, unknown>;
+        authorization = resolveAuthorization();
+        if (authorization !== "active") {
+          return rejectExpiredAuthorization(authorization);
+        }
         // Gateway before-tool hooks still run for loopback MCP calls so policy
         // and audit behavior matches native tool calls from normal chat runs.
         // Preserve prepared params so exec can restore private workdir/env state after hooks.
@@ -167,6 +197,10 @@ export async function handleMcpJsonRpc(params: {
           ctx: params.hookContext,
           signal: params.signal,
         });
+        authorization = resolveAuthorization();
+        if (authorization !== "active") {
+          return rejectExpiredAuthorization(authorization);
+        }
         if (hookResult.blocked) {
           const disposition = hookResult.kind === "failure" ? hookResult.disposition : "blocked";
           reportToolCallResult(
@@ -191,25 +225,45 @@ export async function handleMcpJsonRpc(params: {
         } catch {
           // Observability callbacks must never alter the tool result returned to the MCP client.
         }
-        if (params.authorizeToolCall && !params.authorizeToolCall()) {
-          reportToolCallResult({ outcome: "blocked", deniedReason: "client-grant-revoked" });
-          return jsonRpcResult(id, {
-            content: [{ type: "text", text: "Tool call authorization expired" }],
-            isError: true,
-          });
+        authorization = resolveAuthorization();
+        if (authorization !== "active") {
+          return rejectExpiredAuthorization(authorization);
         }
+        toolExecutionAdmitted = true;
         const result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
         const failureKind = resolveToolResultFailureKind(result);
-        reportToolCallResult(
-          failureKind === "blocked"
-            ? { outcome: "blocked", deniedReason: "tool_result_blocked" }
-            : { outcome: failureKind ?? "completed", result },
-        );
+        authorization = resolveAuthorization();
+        if (authorization !== "capture-ended") {
+          reportToolCallResult(
+            failureKind === "blocked"
+              ? { outcome: "blocked", deniedReason: "tool_result_blocked" }
+              : { outcome: failureKind ?? "completed", result },
+          );
+        }
+        // A tool may ignore abort. Capture its settled outcome, then revalidate
+        // before disclosing output to a client whose authority may have ended.
+        if (authorization !== "active") {
+          return rejectExpiredAuthorization(authorization);
+        }
         return jsonRpcResult(id, {
           content: normalizeToolCallContent(result),
           isError: failureKind !== undefined,
         });
       } catch (error) {
+        const authorization = resolveAuthorization();
+        if (toolExecutionAdmitted) {
+          // An admitted execution may settle after revocation. Preserve the actual
+          // terminal evidence exactly once, while still redacting the HTTP response.
+          if (authorization !== "capture-ended") {
+            reportToolCallResult({
+              outcome: params.signal?.aborted ? "unknown" : resolveToolExecutionErrorKind(error),
+              result: error,
+            });
+          }
+        }
+        if (authorization !== "active") {
+          return rejectExpiredAuthorization(authorization);
+        }
         // A disconnected request does not identify the enclosing run outcome,
         // but its payload may prove partial delivery and prevent a duplicate send.
         reportToolCallResult({

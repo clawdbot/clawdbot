@@ -2,6 +2,8 @@
 // Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionMcpRuntimeCapture } from "../agents/agent-bundle-mcp-runtime-capture.js";
+import type { AgentRunApprovalHost } from "../agents/agent-run-approval.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -63,8 +65,11 @@ type McpLoopbackRequestAuth = {
   senderIsOwner: boolean;
   boundSessionKey?: string;
   boundContext?: McpLoopbackRequestContext;
+  boundApprovalHost?: AgentRunApprovalHost;
+  boundSessionMcpRuntimeCapture?: SessionMcpRuntimeCapture;
   boundCaptureKey?: string;
   boundGrantToken?: string;
+  boundGrantSignal?: AbortSignal;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
@@ -143,8 +148,11 @@ function resolveMcpSender(params: {
     return {
       senderIsOwner: clientGrant.context.senderIsOwner,
       boundContext: clientGrant.context,
+      boundApprovalHost: clientGrant.approvalHost,
+      boundSessionMcpRuntimeCapture: clientGrant.captureSessionMcpRuntime,
       boundCaptureKey: clientGrant.captureKey,
       boundGrantToken: grantToken,
+      boundGrantSignal: clientGrant.signal,
     };
   }
   const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
@@ -280,8 +288,11 @@ export function validateMcpLoopbackRequest(params: {
     senderIsOwner: sender.senderIsOwner,
     boundSessionKey: sender.boundSessionKey,
     boundContext: sender.boundContext,
+    boundApprovalHost: sender.boundApprovalHost,
+    boundSessionMcpRuntimeCapture: sender.boundSessionMcpRuntimeCapture,
     boundCaptureKey: sender.boundCaptureKey,
     boundGrantToken: sender.boundGrantToken,
+    boundGrantSignal: sender.boundGrantSignal,
   };
 }
 

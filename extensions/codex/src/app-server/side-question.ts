@@ -554,6 +554,14 @@ export async function runCodexAppServerSideQuestion(
             messageProvider: params.messageProvider,
             currentChannelId: params.currentChannelId,
           }).channelId,
+          approvalContext: {
+            approvalHost: params.approvalHost,
+            trigger: "user",
+            turnSourceChannel: params.messageChannel ?? params.messageProvider,
+            turnSourceTo: params.messageTo ?? params.currentChannelId,
+            turnSourceAccountId: params.agentAccountId,
+            turnSourceThreadId: params.messageThreadId,
+          },
           requestTimeoutMs: appServer.requestTimeoutMs,
           completionTimeoutMs: Math.max(
             appServer.turnCompletionIdleTimeoutMs,
@@ -791,6 +799,7 @@ function registerCodexSideNativeHookRelay(params: {
   config: EmbeddedRunAttemptParams["config"];
   runId: string;
   channelId?: string;
+  approvalContext?: Parameters<typeof registerNativeHookRelay>[0]["approvalContext"];
   requestTimeoutMs: number;
   completionTimeoutMs: number;
   loopDetectionPreToolUseRelay: boolean;
@@ -808,6 +817,7 @@ function registerCodexSideNativeHookRelay(params: {
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
+    ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents: params.events,
     preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexSideNativeHookRelayTtlMs({
@@ -876,6 +886,7 @@ function buildSideRunAttemptParams(
     ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
     ...(params.currentChannelId ? { currentChannelId: params.currentChannelId } : {}),
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
+    approvalHost: params.approvalHost,
     workspaceDir: options.cwd,
     authProfileId: options.authProfileId,
     authProfileIdSource: options.authProfileId
@@ -939,6 +950,7 @@ async function createCodexSideToolBridge(input: {
           : undefined,
       sessionId: input.params.sessionId,
       runId: input.runId,
+      approvalHost: input.params.approvalHost,
       agentDir:
         input.params.agentDir ?? resolveAgentDir(input.params.cfg ?? {}, input.sessionAgentId),
       workspaceDir: input.cwd,

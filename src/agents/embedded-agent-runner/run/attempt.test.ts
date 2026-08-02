@@ -9,6 +9,7 @@ import type { LlmRuntime } from "@openclaw/ai";
 import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { AgentRunApprovalHost } from "../../agent-run-approval.js";
 import { addSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
@@ -125,16 +126,19 @@ function firstBaseContext(baseFn: ReturnType<typeof vi.fn>): { messages: unknown
 
 describe("buildEmbeddedAttemptToolRunContext", () => {
   it("carries runtime toolsAllow into coding tool construction", () => {
+    const approvalHost = { plugin: { request: vi.fn() } };
     const context = buildEmbeddedAttemptToolRunContext({
       trigger: "manual",
       jobId: "job-1",
       memoryFlushWritePath: "memory/log.md",
       toolsAllow: ["memory_search", "memory_get"],
+      approvalHost,
     });
     expect(context.trigger).toBe("manual");
     expect(context.jobId).toBe("job-1");
     expect(context.memoryFlushWritePath).toBe("memory/log.md");
     expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
+    expect(context.approvalHost).toBe(approvalHost);
   });
 });
 
@@ -3275,6 +3279,29 @@ describe("prependSystemPromptAddition", () => {
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
+  it("preserves the exact approval host for after-turn tools", () => {
+    const approvalHost: AgentRunApprovalHost = {
+      plugin: {
+        request: vi.fn(async () => ({ outcome: "unavailable" as const, reason: "test" })),
+      },
+    };
+
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        approvalHost,
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        provider: "openai",
+        modelId: "gpt-5.4",
+        thinkLevel: "off",
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(runtimeContext.approvalHost).toBe(approvalHost);
+  });
+
   it("preserves sessionId-scoped active process sessions for after-turn context", () => {
     resetProcessRegistryForTests();
     try {

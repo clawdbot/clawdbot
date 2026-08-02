@@ -11,12 +11,15 @@ import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-e
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { AgentRunApprovalHost } from "../agent-run-approval.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
 
 export type CompactEmbeddedAgentSessionParams = {
+  /** Operator approval capabilities retained while compaction rebuilds tool wrappers. */
+  approvalHost?: AgentRunApprovalHost;
   sessionId: string;
   runId?: string;
   sessionKey?: string;

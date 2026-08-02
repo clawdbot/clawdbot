@@ -43,6 +43,7 @@ export type AgentRunRequest = {
   sessionEffects?: "visible" | "internal";
   idempotencyKey: string;
   sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  approvalHostMode?: "none";
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;

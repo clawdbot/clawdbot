@@ -314,6 +314,8 @@ type OpenClawCodingToolsOptions = {
   oneShotCliRun?: boolean;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /** Operator approval capabilities owned by the adapter that launched this run. */
+  approvalHost?: import("./agent-run-approval.js").AgentRunApprovalHost;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Diagnostic trace context for hook/log correlation during this run. */
@@ -990,6 +992,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             agentSessionKey: options?.sessionKey,
             runId: options?.runId,
+            approvalHost: options?.approvalHost,
             runSessionKey: options?.runSessionKey,
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
@@ -1207,7 +1210,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     sessionId: options?.sessionId,
     runId: options?.runId,
     trigger: options?.trigger,
-    approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
+    approvalHost: options?.approvalHost,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
     ...(hasRequester ? { requester } : {}),
     ...(turnSourceChannel ? { turnSourceChannel } : {}),

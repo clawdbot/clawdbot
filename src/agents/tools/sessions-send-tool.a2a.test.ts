@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import type { AgentRunApprovalHost } from "../agent-run-approval.js";
 import { readLatestAssistantReplySnapshot, waitForAgentRun } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
 import type { GatewaySessionListRow } from "./sessions-helpers.js";
@@ -364,6 +365,11 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   });
 
   it("notifies the requester when delayed target delivery fails after acceptance", async () => {
+    const approvalHost: AgentRunApprovalHost = {
+      plugin: {
+        request: vi.fn(),
+      },
+    };
     vi.mocked(waitForAgentRun).mockResolvedValueOnce({
       status: "timeout",
       error:
@@ -385,6 +391,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
         fingerprint: "previous-reply",
       },
       waitRunId: "run-lock-timeout",
+      approvalHost,
     });
 
     expect(readLatestAssistantReplySnapshot).not.toHaveBeenCalled();
@@ -397,7 +404,36 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
     expect(stepInput.message).toContain("sessions_send delivery to");
     expect(stepInput.message).toContain("SessionWriteLockTimeoutError");
+    expect(stepInput.approvalHost).toBe(approvalHost);
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("keeps the exact approval host across ping-pong and announce turns", async () => {
+    const approvalHost: AgentRunApprovalHost = {
+      plugin: {
+        request: vi.fn(),
+      },
+    };
+    vi.mocked(runAgentStep)
+      .mockResolvedValueOnce("Requester follow-up")
+      .mockResolvedValueOnce("ANNOUNCE_SKIP");
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:worker:discord:group:dev",
+      displayKey: "agent:worker:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 1,
+      requesterSessionKey: "agent:main:discord:group:req",
+      requesterChannel: "discord",
+      roundOneReply: "Worker completed successfully",
+      approvalHost,
+    });
+
+    expect(runAgentStep).toHaveBeenCalledTimes(2);
+    for (const [stepInput] of vi.mocked(runAgentStep).mock.calls) {
+      expect(stepInput.approvalHost).toBe(approvalHost);
+    }
   });
 
   it("does not notify the requester for waited sends that already returned the error inline", async () => {

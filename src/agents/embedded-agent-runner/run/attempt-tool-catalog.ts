@@ -66,6 +66,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     sessionKey: input.sandboxSessionKey,
     sessionId: attempt.sessionId,
     runId: attempt.runId,
+    approvalHost: attempt.approvalHost,
     approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
     channelId: attempt.currentChannelId,
     trace: input.runTrace,

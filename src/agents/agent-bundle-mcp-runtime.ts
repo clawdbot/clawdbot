@@ -33,6 +33,7 @@ import {
   rememberAdvertisedScopedMcpCatalog,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
+  retireSessionMcpRuntimeInstance,
 } from "./agent-bundle-mcp-manager-api.js";
 import {
   createSessionMcpRuntimeManager,
@@ -1235,6 +1236,7 @@ export {
   resolveSessionMcpConfigSummary,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
+  retireSessionMcpRuntimeInstance,
 };
 export { createSessionMcpRuntimeManager };
 export { mergeMcpToolCatalogs };

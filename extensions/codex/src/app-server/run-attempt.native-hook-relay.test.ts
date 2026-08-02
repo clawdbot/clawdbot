@@ -284,7 +284,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.trigger = "user";
-    params.approvalReviewerDeviceId = "device-tui-reviewer";
+    const approvalHost = { plugin: { request: vi.fn() } };
+    params.approvalHost = approvalHost;
 
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
@@ -296,7 +297,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
       approvalContext: {
         trigger: "user",
-        approvalReviewerDeviceId: "device-tui-reviewer",
+        approvalHost,
       },
     });
 

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { gatewayAgentRunApprovalHost } from "../agents/agent-run-approval.gateway.js";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
@@ -723,6 +724,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   const compactionCall = embeddedRunMock.compactEmbeddedAgentSession.mock.calls.at(0)?.[0] as
     | {
         agentHarnessId?: string;
+        approvalHost?: unknown;
         allowGatewaySubagentBinding?: boolean;
         bashElevated?: unknown;
         config?: unknown;
@@ -770,6 +772,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   );
   expect(compactionCall.provider).toBe("anthropic");
   expect(compactionCall.model).toBe("claude-opus-4-6");
+  expect(compactionCall.approvalHost).toBe(gatewayAgentRunApprovalHost);
   expect(compactionCall.allowGatewaySubagentBinding).toBe(true);
   expect(compactionCall.agentHarnessId).toBeUndefined();
   expect(compactionCall.thinkLevel).toBe("medium");

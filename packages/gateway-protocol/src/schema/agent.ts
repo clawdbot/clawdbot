@@ -329,6 +329,9 @@ export const AgentParamsSchema = closedObject({
   sourceReplyDeliveryMode: Type.Optional(
     Type.Union([Type.Literal("automatic"), Type.Literal("message_tool_only")]),
   ),
+  // Internal/nested callers may explicitly preserve a fail-closed run across
+  // Gateway transport without serializing a process-local approval host.
+  approvalHostMode: Type.Optional(Type.Literal("none")),
   disableMessageTool: Type.Optional(Type.Boolean()),
   swarmCollector: Type.Optional(Type.Boolean()),
   swarmOutputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),

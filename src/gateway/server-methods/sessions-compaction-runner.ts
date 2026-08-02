@@ -1,5 +1,6 @@
 // Model-backed compaction request construction.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { gatewayAgentRunApprovalHost } from "../../agents/agent-run-approval.gateway.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
@@ -93,6 +94,7 @@ export async function runGatewaySessionCompaction(
     }) ?? resolveAgentWorkspaceDir(params.cfg, params.agentId);
 
   return await compactEmbeddedAgentSession({
+    approvalHost: gatewayAgentRunApprovalHost,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,

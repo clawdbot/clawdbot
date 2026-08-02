@@ -7,11 +7,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import { setEmbeddedMode } from "../infra/embedded-mode.js";
-import {
-  EmbeddedPluginApprovalBroker,
-  setEmbeddedPluginApprovalBroker,
-} from "../infra/embedded-plugin-approval-broker.js";
+import { EmbeddedPluginApprovalBroker } from "../infra/embedded-plugin-approval-broker.js";
 import {
   getGlobalHookRunner,
   initializeGlobalHookRunner,
@@ -25,7 +21,11 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
-import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import {
+  createGatewayAgentRunApprovalHost,
+  gatewayAgentRunApprovalHost,
+} from "./agent-run-approval.gateway.js";
+import { runBeforeToolCallHook as runBeforeToolCallHookRaw } from "./agent-tools.before-tool-call.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
@@ -56,6 +56,14 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
+const runBeforeToolCallHook: typeof runBeforeToolCallHookRaw = (params) =>
+  runBeforeToolCallHookRaw({
+    ...params,
+    ctx: {
+      approvalHost: gatewayAgentRunApprovalHost,
+      ...params.ctx,
+    },
+  });
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -110,14 +118,11 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
-    setEmbeddedPluginApprovalBroker(null);
-    setEmbeddedMode(false);
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetGlobalHookRunner();
   });
 
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
-    setEmbeddedMode(true);
     const onResolution = vi.fn();
 
     runBeforeToolCallMock.mockResolvedValue({
@@ -136,44 +141,24 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       toolName: "exec",
       params: { command: "ls" },
       toolCallId: "call-1",
+      ctx: { approvalHost: {} },
     });
 
     expect(result).toEqual({
       blocked: true,
       kind: "failure",
       disposition: "failed",
-      deniedReason: "plugin-approval",
-      reason: "Plugin approval required (gateway unavailable)",
+      deniedReason: "plugin-approval-unavailable",
+      reason: "Plugin approval unavailable: this run has no approval host.",
       params: { command: "ls" },
     });
-    expect(mockCallGatewayTool).toHaveBeenCalledWith(
-      "plugin.approval.request",
-      {
-        timeoutMs: 130_000,
-      },
-      {
-        agentId: undefined,
-        allowedDecisions: undefined,
-        description: "Test approval request",
-        pluginId: "test-plugin",
-        sessionKey: undefined,
-        severity: "info",
-        timeoutMs: 120_000,
-        title: "Needs approval",
-        toolCallId: "call-1",
-        toolName: "exec",
-        twoPhase: true,
-      },
-      { expectFinal: false },
-    );
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
     expect(onResolution).toHaveBeenCalledTimes(1);
     expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
   });
 
   it("resolves embedded approvals through the in-process TUI broker", async () => {
-    setEmbeddedMode(true);
     const broker = new EmbeddedPluginApprovalBroker();
-    setEmbeddedPluginApprovalBroker(broker);
     runBeforeToolCallMock.mockResolvedValue({
       params: { action: "apply", proposal_id: "weather" },
     });
@@ -183,6 +168,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       params: { action: "apply", proposal_id: "weather" },
       toolCallId: "call-skill-local",
       ctx: {
+        approvalHost: { plugin: broker },
         agentId: "main",
         sessionKey: "agent:main:main",
         config: {
@@ -213,9 +199,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   });
 
   it("does not allow embedded approvals when the broker stops", async () => {
-    setEmbeddedMode(true);
     const broker = new EmbeddedPluginApprovalBroker();
-    setEmbeddedPluginApprovalBroker(broker);
     const onResolution = vi.fn();
     runBeforeToolCallMock.mockResolvedValue({
       requireApproval: {
@@ -233,7 +217,11 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       toolName: "skill_workshop",
       params: { action: "apply", proposal_id: "weather" },
       toolCallId: "call-skill-stop",
-      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+      ctx: {
+        approvalHost: { plugin: broker },
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      },
     });
     await vi.waitFor(() => {
       expect(broker.listPending()).toHaveLength(1);
@@ -249,9 +237,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   });
 
   it("blocks embedded approvals on timeout even when deprecated timeoutBehavior is allow", async () => {
-    setEmbeddedMode(true);
     const broker = new EmbeddedPluginApprovalBroker();
-    setEmbeddedPluginApprovalBroker(broker);
     const onResolution = vi.fn();
     runBeforeToolCallMock.mockResolvedValue({
       requireApproval: {
@@ -269,7 +255,11 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       toolName: "exec",
       params: { command: "ls" },
       toolCallId: "call-skill-timeout",
-      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+      ctx: {
+        approvalHost: { plugin: broker },
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      },
     });
 
     expect(result).toEqual({
@@ -286,9 +276,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
 
   it("warns once per plugin when deprecated timeoutBehavior allow arrives, still failing closed", async () => {
     agentToolsWarnSpy.mockClear();
-    setEmbeddedMode(true);
     const broker = new EmbeddedPluginApprovalBroker();
-    setEmbeddedPluginApprovalBroker(broker);
     runBeforeToolCallMock.mockResolvedValue({
       requireApproval: {
         pluginId: "deprecated-timeout-plugin",
@@ -303,13 +291,21 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       toolName: "exec",
       params: { command: "ls" },
       toolCallId: "call-deprecated-warn-1",
-      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+      ctx: {
+        approvalHost: { plugin: broker },
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      },
     });
     const second = await runBeforeToolCallHook({
       toolName: "exec",
       params: { command: "ls" },
       toolCallId: "call-deprecated-warn-2",
-      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+      ctx: {
+        approvalHost: { plugin: broker },
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      },
     });
 
     expect(first).toMatchObject({ blocked: true, disposition: "timed_out" });
@@ -324,11 +320,9 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   });
 
   it("blocks embedded allow decisions excluded by the request", async () => {
-    setEmbeddedMode(true);
     const broker = new EmbeddedPluginApprovalBroker();
-    setEmbeddedPluginApprovalBroker(broker);
     vi.spyOn(broker, "request").mockResolvedValue({
-      id: "plugin:unexpected-decision",
+      outcome: "resolved",
       decision: PluginApprovalResolutions.ALLOW_ALWAYS,
     });
     const onResolution = vi.fn();
@@ -347,7 +341,11 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       toolName: "exec",
       params: { command: "unsafe-command" },
       toolCallId: "call-restricted-approval",
-      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+      ctx: {
+        approvalHost: { plugin: broker },
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      },
     });
 
     expect(result).toEqual({
@@ -423,8 +421,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   });
 
   it("sends approval to gateway when NOT in embedded mode", async () => {
-    setEmbeddedMode(false);
-
     runBeforeToolCallMock.mockResolvedValue({
       requireApproval: {
         pluginId: "test-plugin",
@@ -441,7 +437,11 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       toolName: "exec",
       params: { command: "ls" },
       toolCallId: "call-2",
-      ctx: { approvalReviewerDeviceId: "device-tui-reviewer" },
+      ctx: {
+        approvalHost: createGatewayAgentRunApprovalHost({
+          approvalReviewerDeviceIds: ["device-tui-reviewer"],
+        }),
+      },
     });
 
     expect(result.blocked).toBe(true);
@@ -460,8 +460,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   });
 
   it("preserves hook params override after an approval allow decision", async () => {
-    setEmbeddedMode(true);
-
     runBeforeToolCallMock.mockResolvedValue({
       requireApproval: {
         pluginId: "test-plugin",
@@ -493,7 +491,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   });
 
   it("routes trusted policy approval through the same approval gate as before_tool_call hooks", async () => {
-    setEmbeddedMode(true);
     const registry = createEmptyPluginRegistry();
     registry.trustedToolPolicies = [
       {
@@ -880,8 +877,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   });
 
   it("keeps original params after an approval allow decision without overrides", async () => {
-    setEmbeddedMode(true);
-
     runBeforeToolCallMock.mockResolvedValue({
       requireApproval: {
         pluginId: "test-plugin",

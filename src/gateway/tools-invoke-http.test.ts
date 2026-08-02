@@ -239,6 +239,7 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js");
+const { gatewayAgentRunApprovalHost } = await import("../agents/agent-run-approval.gateway.js");
 
 let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
 
@@ -1279,6 +1280,23 @@ describe("tools.invoke Gateway RPC", () => {
     const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
     expect(error?.code).toBe("requires_approval");
     expect(error?.message).toBe("Plugin approval required");
+  });
+
+  it("binds the Gateway approval host when confirm requests approval", async () => {
+    setMainAllowedTools({ allow: ["tools_invoke_test"] });
+
+    const call = await invokeToolsRpc({
+      name: "tools_invoke_test",
+      args: { mode: "ok" },
+      sessionKey: "main",
+      confirm: true,
+    });
+
+    expect(call?.[1]?.ok).toBe(true);
+    expect(firstHookCallArg()).toMatchObject({
+      approvalMode: "request",
+      ctx: { approvalHost: gatewayAgentRunApprovalHost },
+    });
   });
 
   it("rejects mismatched session and agent scope", async () => {

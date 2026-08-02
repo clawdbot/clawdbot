@@ -399,6 +399,7 @@ export async function runCliFallbackCandidate(params: {
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
             senderIsOwner: turn.followupRun.run.senderIsOwner,
+            approvalHost: turn.followupRun.run.approvalHost,
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
             disableTools: turn.opts?.disableTools,

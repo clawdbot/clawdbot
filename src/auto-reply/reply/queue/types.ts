@@ -1,4 +1,5 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { AgentRunApprovalHost } from "../../../agents/agent-run-approval.js";
 // Shared queue type contracts for admission, drain, and fallback handling.
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
@@ -149,6 +150,7 @@ export type FollowupRun = {
     senderE164?: string;
     senderIsOwner?: boolean;
     traceAuthorized?: boolean;
+    approvalHost?: AgentRunApprovalHost;
     approvalReviewerDeviceId?: string;
     sessionFile: string;
     workspaceDir: string;

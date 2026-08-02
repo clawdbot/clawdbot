@@ -20,12 +20,14 @@ function createApprovalContext(
   params: {
     broadcast?: ReturnType<typeof vi.fn>;
     hasExecApprovalClients?: GatewayRequestHandlerOptions["context"]["hasExecApprovalClients"];
+    approvalEvents?: GatewayRequestHandlerOptions["context"]["approvalEvents"];
   } = {},
 ): GatewayRequestHandlerOptions["context"] {
   return {
     broadcast: params.broadcast ?? vi.fn(),
     logGateway: createLogGatewayMock(),
     hasExecApprovalClients: params.hasExecApprovalClients ?? (() => true),
+    approvalEvents: params.approvalEvents,
   } as unknown as GatewayRequestHandlerOptions["context"];
 }
 
@@ -266,6 +268,7 @@ describe("createPluginApprovalHandlers", () => {
   it("returns handlers for every plugin approval method", () => {
     const handlers = createPluginApprovalHandlers(manager);
     expect(Object.keys(handlers).toSorted()).toEqual([
+      "plugin.approval.cancel",
       "plugin.approval.list",
       "plugin.approval.request",
       "plugin.approval.resolve",
@@ -616,6 +619,7 @@ describe("createPluginApprovalHandlers", () => {
           description: "Apply the pending proposal",
           twoPhase: true,
           approvalReviewerDeviceIds: ["device-tui-reviewer"],
+          runtimeRequestId: "runtime-request-tui",
         },
         { client: requestClient, context, respond },
       );
@@ -629,6 +633,9 @@ describe("createPluginApprovalHandlers", () => {
       expect(manager.getSnapshot(approvalId)?.approvalReviewerDeviceIds).toEqual([
         "device-tui-reviewer",
       ]);
+      expect(manager.getSnapshot(approvalId)?.requestedByRuntimeRequestId).toBe(
+        "runtime-request-tui",
+      );
       expect(broadcastToConnIds).toHaveBeenCalledWith(
         "plugin.approval.requested",
         expect.objectContaining({ id: approvalId }),
@@ -675,6 +682,7 @@ describe("createPluginApprovalHandlers", () => {
           description: "Apply the pending proposal",
           twoPhase: true,
           approvalReviewerDeviceIds: ["device-tui-reviewer"],
+          runtimeRequestId: "runtime-request-untrusted",
         },
         {
           client: createClient({
@@ -694,6 +702,7 @@ describe("createPluginApprovalHandlers", () => {
       const approvalId = await waitForAcceptedApproval(respond);
 
       expect(manager.getSnapshot(approvalId)?.approvalReviewerDeviceIds).toBeUndefined();
+      expect(manager.getSnapshot(approvalId)?.requestedByRuntimeRequestId).toBeUndefined();
       manager.resolve(approvalId, "deny");
       await requestPromise;
     });

@@ -604,6 +604,22 @@ describe("createCopilotToolBridge", () => {
       expect(opts.messageActionTurnCapability).toBe("turn-capability-1");
     });
 
+    it("forwards the exact approvalHost from attemptParams", async () => {
+      const { createOpenClawCodingTools, getOpts } = captureCall();
+      const approvalHost = { plugin: { request: vi.fn() } } as never;
+
+      await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { approvalHost },
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(getOpts().approvalHost).toBe(approvalHost);
+    });
+
     it("prefers the unscoped toolAuthProfileStore when building OpenClaw tools", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
       const authProfileStore = { kind: "transport-scoped-store" } as never;

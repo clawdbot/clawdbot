@@ -501,6 +501,7 @@ export function resolveAttemptMediaTaskSystemPromptAddition(params: {
 
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
+  | "approvalHost"
   | "sessionTarget"
   | "sessionKey"
   | "sandboxSessionKey"
@@ -573,6 +574,7 @@ export function buildAfterTurnRuntimeContext(params: {
   });
   return {
     ...buildEmbeddedCompactionRuntimeContext({
+      approvalHost: params.attempt.approvalHost,
       sessionKey: params.attempt.sessionKey,
       messageChannel: params.attempt.messageChannel,
       messageProvider: params.attempt.messageProvider,

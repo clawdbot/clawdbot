@@ -1,5 +1,6 @@
 /** Session MCP runtime manager lifecycle: maps, idle sweep, dispose, advertised catalog. */
 import { logWarn } from "../logger.js";
+import { isCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS,
   SESSION_MCP_MAX_IDLE_REQUESTER_RUNTIMES,
@@ -20,6 +21,17 @@ type ManagerCreateInFlight = {
   configFingerprint: string;
 };
 
+type ExactRuntimeRetirementEntry = {
+  runtimeKey: string;
+  runtime: SessionMcpRuntime;
+  disposed: boolean;
+};
+
+type ExactRuntimeRetirement = {
+  entries: ExactRuntimeRetirementEntry[];
+  preserveActiveLeases: boolean;
+};
+
 type AdvertisedScopedCatalogEntry = {
   servers: Map<string, McpServerCatalog>;
   toolsByServer: Map<string, McpCatalogTool[]>;
@@ -31,6 +43,7 @@ type SessionMcpRuntimeManagerStore = {
   sessionIdBySessionKey: Map<string, string>;
   idleTtlMsBySessionId: Map<string, number>;
   deferredRetirementSessionIds: Set<string>;
+  exactRetirementsBySessionId: Map<string, ExactRuntimeRetirement[]>;
   // Reset/delete retirement survives late creation or reuse by the stopping run.
   requiredRetirementSessionIds: Set<string>;
   connectionMetaByRuntimeKey: Map<string, { connectionHash: string; resolvedAt: number }>;
@@ -76,6 +89,7 @@ export function createSessionMcpRuntimeManagerStore(
     sessionIdBySessionKey: new Map<string, string>(),
     idleTtlMsBySessionId: new Map<string, number>(),
     deferredRetirementSessionIds: new Set<string>(),
+    exactRetirementsBySessionId: new Map(),
     requiredRetirementSessionIds: new Set<string>(),
     // Manager-side only: connection hash + resolve time. Never stores raw url/headers.
     connectionMetaByRuntimeKey: new Map(),
@@ -115,6 +129,21 @@ export type SessionMcpRuntimeManagerLifecycle = {
   ensureIdleSweepTimer: () => void;
   clearIdleSweepTimer: () => void;
   disposeRuntimeKeyNow: (runtimeKey: string) => Promise<void>;
+  isRuntimeRetiring: (runtime: SessionMcpRuntime) => boolean;
+  retireRuntimeParts: (
+    runtime: SessionMcpRuntime,
+    runtimes: readonly SessionMcpRuntime[],
+    opts?: { preserveActiveLeases?: boolean; alreadyExclusiveRuntimeKey?: string },
+  ) => Promise<boolean>;
+  retireRuntimeForReplacement: (
+    runtimeKey: string,
+    runtime: SessionMcpRuntime,
+    opts?: { preserveActiveLeases?: boolean; alreadyExclusiveRuntimeKey?: string },
+  ) => Promise<void>;
+  completeExactRuntimeRetirement: (
+    runtime: SessionMcpRuntime,
+    runtimes: readonly SessionMcpRuntime[],
+  ) => Promise<boolean>;
   disposeManagedSession: (
     sessionId: string,
     opts?: { preserveRequiredRetirement?: boolean },
@@ -187,7 +216,15 @@ export function createSessionMcpRuntimeManagerLifecycle(
   const sweepIdleRuntimes = async (): Promise<number> => {
     const nowMs = store.now();
     const expired: SessionMcpRuntime[] = [];
+    const exactRetirementRuntimes = new Set(
+      Array.from(store.exactRetirementsBySessionId.values()).flatMap((retirements) =>
+        retirements.flatMap((retirement) => retirement.entries.map((entry) => entry.runtime)),
+      ),
+    );
     for (const [runtimeKey, runtime] of store.runtimesBySessionId.entries()) {
+      if (exactRetirementRuntimes.has(runtime)) {
+        continue;
+      }
       const idleTtlMs =
         store.idleTtlMsBySessionId.get(runtimeKey) ??
         store.idleTtlMsBySessionId.get(runtime.sessionId) ??
@@ -303,6 +340,224 @@ export function createSessionMcpRuntimeManagerLifecycle(
     }
   };
 
+  const sameRuntimeParts = (
+    retirement: ExactRuntimeRetirement,
+    runtimes: readonly SessionMcpRuntime[],
+  ) => {
+    const expected = new Set(runtimes);
+    return (
+      retirement.entries.length === expected.size &&
+      retirement.entries.every((entry) => expected.has(entry.runtime))
+    );
+  };
+
+  const isRuntimeRetiring = (runtime: SessionMcpRuntime): boolean =>
+    Array.from(store.exactRetirementsBySessionId.values()).some((retirements) =>
+      retirements.some((retirement) =>
+        retirement.entries.some((entry) => !entry.disposed && entry.runtime === runtime),
+      ),
+    );
+
+  const markExactRuntimeDisposed = (sessionId: string, runtime: SessionMcpRuntime): void => {
+    for (const retirement of store.exactRetirementsBySessionId.get(sessionId) ?? []) {
+      for (const entry of retirement.entries) {
+        if (entry.runtime === runtime) {
+          entry.disposed = true;
+        }
+      }
+    }
+  };
+
+  const pruneCompletedExactRetirements = (sessionId: string): void => {
+    const retirements = store.exactRetirementsBySessionId.get(sessionId) ?? [];
+    const remaining = retirements.filter((retirement) =>
+      retirement.entries.some((entry) => !entry.disposed),
+    );
+    if (remaining.length > 0) {
+      store.exactRetirementsBySessionId.set(sessionId, remaining);
+    } else {
+      store.exactRetirementsBySessionId.delete(sessionId);
+    }
+    if (remaining.length === 0 && runtimeKeysForSessionId(sessionId).length === 0) {
+      store.deferredRetirementSessionIds.delete(sessionId);
+      store.advertisedScopedCatalogBySessionId.delete(sessionId);
+      forgetSessionKeysForSessionId(sessionId);
+    }
+  };
+
+  const completeExactRetirement = async (
+    sessionId: string,
+    retirement: ExactRuntimeRetirement,
+    opts?: { ignoreActiveLeases?: boolean; alreadyExclusiveRuntimeKey?: string },
+  ): Promise<boolean> => {
+    const pending = retirement.entries.filter((entry) => !entry.disposed);
+    if (pending.length === 0) {
+      pruneCompletedExactRetirements(sessionId);
+      return false;
+    }
+    if (
+      retirement.preserveActiveLeases &&
+      opts?.ignoreActiveLeases !== true &&
+      pending.some((entry) => (entry.runtime.activeLeases ?? 0) > 0)
+    ) {
+      return false;
+    }
+
+    const errors: unknown[] = [];
+    for (const entry of pending) {
+      const retireEntry = async () => {
+        if (entry.disposed) {
+          return;
+        }
+        const current = store.runtimesBySessionId.get(entry.runtimeKey);
+        if (current === entry.runtime) {
+          store.runtimesBySessionId.delete(entry.runtimeKey);
+          store.idleTtlMsBySessionId.delete(entry.runtimeKey);
+          store.connectionMetaByRuntimeKey.delete(entry.runtimeKey);
+        }
+        try {
+          await entry.runtime.dispose();
+          // Combined run records can share one static runtime. A successful
+          // disposal satisfies every record that references the same object.
+          markExactRuntimeDisposed(sessionId, entry.runtime);
+        } catch (error) {
+          // The retirement record keeps the exact object retryable without
+          // exposing a partially disposed runtime or replacing a newer one.
+          errors.push(error);
+        }
+      };
+      if (entry.runtimeKey === opts?.alreadyExclusiveRuntimeKey) {
+        await retireEntry();
+      } else {
+        await runExclusiveOnRuntimeKey(entry.runtimeKey, retireEntry);
+      }
+    }
+
+    pruneCompletedExactRetirements(sessionId);
+    if (errors.length > 0) {
+      throw new AggregateError(errors, `Failed to retire exact MCP runtime for ${sessionId}`);
+    }
+    return true;
+  };
+
+  const completeReadyExactRetirements = async (
+    sessionId: string,
+    skip?: ExactRuntimeRetirement,
+  ): Promise<boolean> => {
+    let completed = false;
+    for (const retirement of store.exactRetirementsBySessionId.get(sessionId) ?? []) {
+      if (
+        retirement === skip ||
+        (retirement.preserveActiveLeases &&
+          retirement.entries.some(
+            (entry) => !entry.disposed && (entry.runtime.activeLeases ?? 0) > 0,
+          ))
+      ) {
+        continue;
+      }
+      completed = (await completeExactRetirement(sessionId, retirement)) || completed;
+    }
+    return completed;
+  };
+
+  const retireRuntimeParts = async (
+    runtime: SessionMcpRuntime,
+    runtimes: readonly SessionMcpRuntime[],
+    opts?: { preserveActiveLeases?: boolean; alreadyExclusiveRuntimeKey?: string },
+  ): Promise<boolean> => {
+    const expected = [...new Set(runtimes)];
+    const sessionId = expected[0]?.sessionId;
+    if (!sessionId || expected.some((part) => part.sessionId !== sessionId)) {
+      return false;
+    }
+    const retirements = store.exactRetirementsBySessionId.get(sessionId) ?? [];
+    let retirement = retirements.find((candidate) => sameRuntimeParts(candidate, expected));
+    if (!retirement) {
+      const expectedSet = new Set(expected);
+      const entriesByRuntime = new Map<SessionMcpRuntime, ExactRuntimeRetirementEntry>();
+      for (const existingRetirement of retirements) {
+        for (const entry of existingRetirement.entries) {
+          if (expectedSet.has(entry.runtime)) {
+            entriesByRuntime.set(entry.runtime, entry);
+          }
+        }
+      }
+      for (const [runtimeKey, part] of store.runtimesBySessionId) {
+        if (expectedSet.has(part) && !entriesByRuntime.has(part)) {
+          entriesByRuntime.set(part, { runtimeKey, runtime: part, disposed: false });
+        }
+      }
+      const hasLiveOwnedEntry = Array.from(entriesByRuntime.values()).some(
+        (entry) => !entry.disposed,
+      );
+      if (
+        !hasLiveOwnedEntry ||
+        (entriesByRuntime.size < expected.length && !isCombinedSessionMcpRuntime(runtime))
+      ) {
+        return false;
+      }
+      retirement = {
+        // A captured combined facade can outlive one part after replacement.
+        // Keep that identity disposed so its remaining manager-owned parts still retire.
+        entries: expected.map(
+          (part) =>
+            entriesByRuntime.get(part) ?? {
+              runtimeKey: "",
+              runtime: part,
+              disposed: true,
+            },
+        ),
+        preserveActiveLeases: opts?.preserveActiveLeases === true,
+      };
+      retirements.push(retirement);
+      store.exactRetirementsBySessionId.set(sessionId, retirements);
+    } else if (opts?.preserveActiveLeases === true) {
+      retirement.preserveActiveLeases = true;
+    }
+    if (
+      opts?.preserveActiveLeases === true &&
+      retirement.entries.some((entry) => (entry.runtime.activeLeases ?? 0) > 0)
+    ) {
+      return true;
+    }
+    return await completeExactRetirement(sessionId, retirement, {
+      ignoreActiveLeases: opts?.preserveActiveLeases !== true,
+      alreadyExclusiveRuntimeKey: opts?.alreadyExclusiveRuntimeKey,
+    });
+  };
+
+  const retireRuntimeForReplacement = async (
+    runtimeKey: string,
+    runtime: SessionMcpRuntime,
+    opts?: { preserveActiveLeases?: boolean; alreadyExclusiveRuntimeKey?: string },
+  ): Promise<void> => {
+    const retired = await retireRuntimeParts(runtime, [runtime], {
+      preserveActiveLeases: opts?.preserveActiveLeases !== false,
+      alreadyExclusiveRuntimeKey: opts?.alreadyExclusiveRuntimeKey,
+    });
+    if (!retired) {
+      throw new Error(`Cannot retire unmanaged MCP runtime replacement for ${runtime.sessionId}`);
+    }
+    if (store.runtimesBySessionId.get(runtimeKey) === runtime) {
+      store.runtimesBySessionId.delete(runtimeKey);
+      store.idleTtlMsBySessionId.delete(runtimeKey);
+      store.connectionMetaByRuntimeKey.delete(runtimeKey);
+    }
+  };
+
+  const completeExactRuntimeRetirement = async (
+    runtime: SessionMcpRuntime,
+    runtimes: readonly SessionMcpRuntime[],
+  ): Promise<boolean> => {
+    const retirements = store.exactRetirementsBySessionId.get(runtime.sessionId) ?? [];
+    const retirement = retirements.find((candidate) => sameRuntimeParts(candidate, runtimes));
+    const completed = retirement
+      ? await completeExactRetirement(runtime.sessionId, retirement)
+      : false;
+    await completeReadyExactRetirements(runtime.sessionId, retirement);
+    return completed;
+  };
+
   const disposeManagedSession = async (
     sessionId: string,
     opts?: { preserveRequiredRetirement?: boolean },
@@ -312,6 +567,15 @@ export function createSessionMcpRuntimeManagerLifecycle(
       store.requiredRetirementSessionIds.delete(sessionId);
     }
     store.advertisedScopedCatalogBySessionId.delete(sessionId);
+    const exactRetirements = [...(store.exactRetirementsBySessionId.get(sessionId) ?? [])];
+    const exactErrors: unknown[] = [];
+    for (const retirement of exactRetirements) {
+      try {
+        await completeExactRetirement(sessionId, retirement, { ignoreActiveLeases: true });
+      } catch (error) {
+        exactErrors.push(error);
+      }
+    }
     const runtimeKeys = new Set(runtimeKeysForSessionId(sessionId));
     for (const runtimeKey of store.createInFlight.keys()) {
       if (parseRuntimeCacheSessionId(runtimeKey) === sessionId) {
@@ -331,7 +595,15 @@ export function createSessionMcpRuntimeManagerLifecycle(
           : disposeRuntimeKeyNow(runtimeKey),
       ),
     );
-    forgetSessionKeysForSessionId(sessionId);
+    if (!store.exactRetirementsBySessionId.has(sessionId)) {
+      forgetSessionKeysForSessionId(sessionId);
+    }
+    if (exactErrors.length > 0) {
+      throw new AggregateError(
+        exactErrors,
+        `Failed to dispose exact MCP runtimes for ${sessionId}`,
+      );
+    }
   };
 
   const rememberAdvertisedScopedCatalog = (sessionId: string, catalog: McpToolCatalog): void => {
@@ -402,6 +674,10 @@ export function createSessionMcpRuntimeManagerLifecycle(
     ensureIdleSweepTimer,
     clearIdleSweepTimer,
     disposeRuntimeKeyNow,
+    isRuntimeRetiring,
+    retireRuntimeParts,
+    retireRuntimeForReplacement,
+    completeExactRuntimeRetirement,
     disposeManagedSession,
     rememberAdvertisedScopedCatalog,
     getAdvertisedScopedCatalog,

@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type { AgentRunApprovalHost } from "../agents/agent-run-approval.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -15,6 +16,7 @@ import type { TrustedSessionCreation } from "./server-methods/session-creation-p
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
 export function createSyntheticPluginRuntimeClient(params?: {
+  agentRunApprovalHost?: AgentRunApprovalHost;
   allowModelOverride?: boolean;
   agentRunTracking?: "plugin_subagent";
   cronRunContinuation?: boolean;
@@ -46,6 +48,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
     },
     internal: {
       syntheticClient: true,
+      ...(params?.agentRunApprovalHost
+        ? { agentRunApprovalHost: params.agentRunApprovalHost }
+        : {}),
       ...(params?.sessionCreation ? { sessionCreation: params.sessionCreation } : {}),
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),

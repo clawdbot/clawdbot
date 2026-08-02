@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  captureSessionMcpRuntime,
+  withSessionMcpRuntimeCapture,
+} from "../../agent-bundle-mcp-runtime-capture.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleLspToolRuntime: vi.fn(),
   getOrCreateSessionMcpRuntime: vi.fn(),
   materializeBundleMcpToolsForRun: vi.fn(),
+  retireSessionMcpRuntimeInstance: vi.fn(),
   applyFinalEffectiveToolPolicy: vi.fn(),
 }));
 
@@ -15,6 +20,7 @@ vi.mock("../../agent-bundle-lsp-runtime.js", () => ({
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   getOrCreateSessionMcpRuntime: mocks.getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun: mocks.materializeBundleMcpToolsForRun,
+  retireSessionMcpRuntimeInstance: mocks.retireSessionMcpRuntimeInstance,
 }));
 
 vi.mock("../../runtime-plan/tools.js", () => ({
@@ -41,6 +47,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     mocks.createBundleLspToolRuntime.mockReset().mockResolvedValue(undefined);
     mocks.getOrCreateSessionMcpRuntime.mockReset().mockResolvedValue(undefined);
     mocks.materializeBundleMcpToolsForRun.mockReset().mockResolvedValue(undefined);
+    mocks.retireSessionMcpRuntimeInstance.mockReset().mockResolvedValue(true);
     mocks.applyFinalEffectiveToolPolicy
       .mockReset()
       .mockImplementation(({ bundledTools }: { bundledTools: unknown[] }) => bundledTools);
@@ -210,6 +217,45 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     expect(inheritedToolAllowlist).toEqual(["sessions_spawn", "server__read"]);
     expect(inheritedToolAllowlist).not.toContain("server__delete");
+  });
+
+  it("binds one-shot retirement to the exact runtime instance", async () => {
+    const runtime = { sessionId: "session" };
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    mocks.materializeBundleMcpToolsForRun.mockImplementation(async (params) => ({
+      tools: [],
+      dispose: params.disposeRuntime,
+    }));
+    const input = createInput([], []);
+    input.attempt.cleanupBundleMcpOnRunEnd = true;
+
+    const prepared = await prepareEmbeddedAttemptBundleTools(input);
+    await prepared.bundleMcpRuntime?.dispose();
+
+    expect(mocks.retireSessionMcpRuntimeInstance).toHaveBeenCalledWith({
+      runtime,
+      reason: "embedded-run-end",
+      preserveActiveLeases: true,
+      onError: expect.any(Function),
+    });
+  });
+
+  it("does not assign a cleanup-owned runtime to an inherited collector", async () => {
+    const runtime = { sessionId: "owned-session" };
+    const inheritedCapture = vi.fn();
+    mocks.getOrCreateSessionMcpRuntime.mockImplementation(async () => {
+      captureSessionMcpRuntime(runtime as never);
+      return runtime;
+    });
+    const input = createInput([], []);
+    input.attempt.cleanupBundleMcpOnRunEnd = true;
+
+    await withSessionMcpRuntimeCapture(
+      inheritedCapture,
+      async () => await prepareEmbeddedAttemptBundleTools(input),
+    );
+
+    expect(inheritedCapture).not.toHaveBeenCalled();
   });
 
   it("disposes prepared bundle runtimes when later policy setup fails", async () => {

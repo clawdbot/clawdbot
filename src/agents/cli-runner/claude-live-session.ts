@@ -75,6 +75,7 @@ type ManagedRun = Awaited<ReturnType<ProcessSupervisor["spawn"]>>;
 type ClaudeLiveTurn = {
   backend: CliBackendConfig;
   diagnosticRefs: ClaudeLiveDiagnosticRefs;
+  approvalHost: PreparedCliRunContext["params"]["approvalHost"];
   /** Enclosing run abort signal; authoritative for tool terminal reason on turn failure. */
   abortSignal?: AbortSignal;
   outputLimits: ClaudeLiveOutputLimits;
@@ -1334,6 +1335,7 @@ function handleClaudeLiveControlRequest(
       sessionKey: turn.diagnosticRefs.sessionKey,
       agentId: turn.diagnosticRefs.agentId,
       toolCallId: toolUseId,
+      approvalHost: turn.approvalHost,
       abortSignal: turn.abortSignal,
       ask: turn.execPermission.ask,
     });
@@ -1731,6 +1733,7 @@ function createTurn(params: {
       ...(params.context.params.sessionKey ? { sessionKey: params.context.params.sessionKey } : {}),
       ...(params.context.params.agentId ? { agentId: params.context.params.agentId } : {}),
     },
+    approvalHost: params.context.params.approvalHost,
     abortSignal: params.context.params.abortSignal,
     outputLimits: resolveCliStreamJsonOutputLimits(params.context.preparedBackend.backend),
     startedAtMs: Date.now(),

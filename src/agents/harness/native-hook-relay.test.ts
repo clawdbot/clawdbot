@@ -370,6 +370,9 @@ describe("native hook relay registry", () => {
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
     expect(approvalRequester).toHaveBeenCalledTimes(1);
+
+    relay.unregister();
+    expect(state.permissionAllowAlwaysApprovals.size).toBe(0);
   });
 
   it("does not remember allow-always approvals when expiry would exceed Date range", async () => {
@@ -3095,7 +3098,7 @@ describe("native hook relay registry", () => {
     });
   });
 
-  it("reuses allow-always PermissionRequest approvals for identical relay content", async () => {
+  it("reuses allow-always PermissionRequest approvals while the relay is live", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
       relayId: "codex-stable-permission-cache",
@@ -3116,13 +3119,6 @@ describe("native hook relay registry", () => {
         tool_use_id: "native-call-1",
         tool_input: { command: "browserforce tabs" },
       },
-    });
-    relay.unregister();
-    registerNativeHookRelay({
-      provider: "codex",
-      relayId: "codex-stable-permission-cache",
-      sessionId: "session-1",
-      runId: "run-2",
     });
     const second = await invokeNativeHookRelay({
       provider: "codex",

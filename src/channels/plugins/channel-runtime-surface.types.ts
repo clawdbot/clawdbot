@@ -43,6 +43,9 @@ export type ChannelRuntimeContextRegistry = {
  * may still type context-only helpers against this compatibility surface.
  */
 export type ChannelRuntimeSurface = {
+  agent?: {
+    runIngress: typeof import("../../agents/agent-command.js").agentCommandFromIngress;
+  };
   runtimeContexts: ChannelRuntimeContextRegistry;
   [key: string]: unknown;
 };

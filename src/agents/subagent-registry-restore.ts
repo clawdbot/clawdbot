@@ -145,6 +145,15 @@ export function createSubagentRegistryRestorer(config: {
             );
             continue;
           }
+          if (launch.requiresProcessLocalApprovalHost) {
+            void failAndCleanupRestoredQueuedRun(
+              runId,
+              entry,
+              "queued collector approval host was unavailable after restart",
+              false,
+            );
+            continue;
+          }
           const groupRuns = listSwarmRunsForGroup(
             entry.groupId ?? "",
             entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,

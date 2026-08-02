@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
+import { captureSessionMcpRuntime } from "./agent-bundle-mcp-runtime-capture.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpToolCatalog,
@@ -35,7 +36,9 @@ export async function getOrCreateSessionMcpRuntime(params: {
   messageChannel?: string | null;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): Promise<SessionMcpRuntime> {
-  return await getSessionMcpRuntimeManager().getOrCreate(params);
+  const runtime = await getSessionMcpRuntimeManager().getOrCreate(params);
+  captureSessionMcpRuntime(runtime);
+  return runtime;
 }
 
 /**
@@ -54,7 +57,11 @@ export async function getOrCreateRequesterScopedMcpRuntime(params: {
   messageChannel?: string | null;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): Promise<SessionMcpRuntime | undefined> {
-  return await getSessionMcpRuntimeManager().getOrCreateRequesterScoped(params);
+  const runtime = await getSessionMcpRuntimeManager().getOrCreateRequesterScoped(params);
+  if (runtime) {
+    captureSessionMcpRuntime(runtime);
+  }
+  return runtime;
 }
 
 export function rememberAdvertisedScopedMcpCatalog(
@@ -118,6 +125,23 @@ export async function retireSessionMcpRuntime(params: {
     return true;
   } catch (error) {
     params.onError?.(error, sessionId, params.reason);
+    return false;
+  }
+}
+
+/** Retires only the exact runtime instances captured by one run. */
+export async function retireSessionMcpRuntimeInstance(params: {
+  runtime: SessionMcpRuntime;
+  reason: string;
+  preserveActiveLeases?: boolean;
+  onError?: (error: unknown, sessionId: string, reason: string) => void;
+}): Promise<boolean> {
+  try {
+    return await getSessionMcpRuntimeManager().retireRuntimeInstance(params.runtime, {
+      preserveActiveLeases: params.preserveActiveLeases,
+    });
+  } catch (error) {
+    params.onError?.(error, params.runtime.sessionId, params.reason);
     return false;
   }
 }

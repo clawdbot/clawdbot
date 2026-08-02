@@ -172,6 +172,7 @@ export type AgentHarnessSideQuestionParams = {
   blockReplyChunking?: import("../embedded-agent-block-chunker.js").BlockReplyChunking;
   resolvedBlockStreamingBreak?: "text_end" | "message_end";
   opts?: import("../../auto-reply/get-reply-options.types.js").GetReplyOptions;
+  approvalHost?: import("../agent-run-approval.js").AgentRunApprovalHost;
   isNewSession: boolean;
   sessionId: string;
   sessionFile: string;

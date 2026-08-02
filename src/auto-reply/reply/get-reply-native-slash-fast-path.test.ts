@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { AgentRunApprovalHost } from "../../agents/agent-run-approval.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadExactSessionEntry,
@@ -167,6 +168,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
   });
 
   it("marks native /compact terminal replies for delivery under message_tool_only (#90185)", async () => {
+    const approvalHost: AgentRunApprovalHost = {};
     handleCommandsMock.mockResolvedValueOnce({
       shouldContinue: false,
       reply: { text: "⚙️ Compaction skipped: no real conversation messages yet • Context 12.1k" },
@@ -190,6 +192,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     });
 
     const result = await maybeResolveNativeSlashCommandFastReply({
+      approvalHost,
       ctx,
       cfg: markCompleteReplyConfig({
         session: {
@@ -210,6 +213,9 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     });
 
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+    expect(handleCommandsMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ approvalHost }),
+    );
     expect(result).toEqual({
       handled: true,
       reply: expect.objectContaining({

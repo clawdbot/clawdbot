@@ -93,6 +93,11 @@ export type SwarmQueuedLaunch = {
   request: Record<string, unknown>;
   /** Exact trusted launch capability, persisted so restart replay cannot lose it. */
   authorization?: SubagentLaunchAuthorization;
+  /**
+   * The live launch also carries a process-local approval capability.
+   * Restart replay must fail closed because that capability cannot be persisted.
+   */
+  requiresProcessLocalApprovalHost?: true;
   timeoutMs: number;
   schedulerGroupKey: string;
   maxConcurrent: number;

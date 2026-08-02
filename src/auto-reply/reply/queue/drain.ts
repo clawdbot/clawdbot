@@ -256,18 +256,27 @@ function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[]
   const groups: FollowupRun[][] = [];
   let currentGroup: FollowupRun[] = [];
   let currentKey: string | undefined;
+  let currentApprovalHost: FollowupRun["run"]["approvalHost"];
 
   for (const item of items) {
     const itemKey = resolveFollowupDeliveryContextKey(item);
-    if (currentGroup.length === 0 || itemKey === currentKey) {
+    const approvalHost = item.run.approvalHost;
+    // Approval hosts are run-scoped capabilities. Never let collect mode
+    // adopt one host for messages that arrived under another host instance.
+    if (
+      currentGroup.length === 0 ||
+      (itemKey === currentKey && approvalHost === currentApprovalHost)
+    ) {
       currentGroup.push(item);
       currentKey = itemKey;
+      currentApprovalHost = approvalHost;
       continue;
     }
 
     groups.push(currentGroup);
     currentGroup = [item];
     currentKey = itemKey;
+    currentApprovalHost = approvalHost;
   }
 
   if (currentGroup.length > 0) {

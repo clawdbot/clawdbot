@@ -15,6 +15,7 @@ import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import type { AgentRunApprovalHost } from "../agent-run-approval.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -264,6 +265,7 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 
 export function createSessionsSpawnTool(
   opts?: {
+    approvalHost?: AgentRunApprovalHost;
     agentSessionKey?: string;
     requesterTurnRunId?: string;
     /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
@@ -555,6 +557,7 @@ export function createSessionsSpawnTool(
               : undefined,
         },
         {
+          approvalHost: opts?.approvalHost,
           agentSessionKey: opts?.agentSessionKey,
           requesterTurnRunId: opts?.requesterTurnRunId,
           completionOwnerKey: opts?.completionOwnerKey,

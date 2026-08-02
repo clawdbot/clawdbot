@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isCodexAppServerStartupError,
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
-  resolveCodexGatewayTimeoutWithGraceMs,
   resolveCodexStartupTimeoutMs,
   resolveCodexTurnAssistantCompletionIdleTimeoutMs,
   resolveCodexTurnCompletionIdleTimeoutMs,
@@ -131,17 +130,6 @@ describe("Codex app-server attempt timeouts", () => {
     );
     // An explicit override still wins even when a run budget is present.
     expect(resolveCodexTurnTerminalIdleTimeoutMs(5 * 60_000, overFloor)).toBe(5 * 60_000);
-  });
-
-  it("caps gateway timeout grace", () => {
-    expect(resolveCodexGatewayTimeoutWithGraceMs(120_000)).toBe(130_000);
-    expect(resolveCodexGatewayTimeoutWithGraceMs(120_000, 500)).toBe(120_500);
-    expect(resolveCodexGatewayTimeoutWithGraceMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
-    expect(resolveCodexGatewayTimeoutWithGraceMs(MAX_TIMER_TIMEOUT_MS - 100, 500)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
   });
 
   it("returns the startup operation result before timeout", async () => {

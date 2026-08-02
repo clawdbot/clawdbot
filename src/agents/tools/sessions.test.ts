@@ -8,11 +8,29 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import type { AgentRunApprovalHost } from "../agent-run-approval.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
 const inProcessCreationMock = vi.fn(
   async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
+);
+const agentGatewayWithApprovalHostMock = vi.fn(
+  async (params: {
+    approvalHost?: AgentRunApprovalHost;
+    callGateway: (request: unknown) => Promise<unknown>;
+    request: { params: Record<string, unknown> };
+  }): Promise<unknown> => {
+    const carriesNoApprovalHost =
+      params.approvalHost === undefined || params.approvalHost.mode === "none";
+    return await params.callGateway({
+      ...params.request,
+      params: {
+        ...params.request.params,
+        ...(carriesNoApprovalHost ? { approvalHostMode: "none" } : {}),
+      },
+    });
+  },
 );
 // Default false mirrors running outside a gateway process; the trusted-creation
 // regression test flips it on and restores it.
@@ -33,6 +51,8 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 vi.mock("./in-process-gateway.js", () => ({
+  callAgentGatewayWithApprovalHost: (params: unknown) =>
+    agentGatewayWithApprovalHostMock(params as never),
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),
   hasInProcessGatewayToolContext: () => inProcessGatewayContextAvailable,
@@ -777,6 +797,7 @@ describe("sessions_list channel derivation", () => {
 describe("sessions_send gating", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
+    agentGatewayWithApprovalHostMock.mockClear();
   });
 
   it("returns an error when neither sessionKey nor label is provided", async () => {
@@ -1132,6 +1153,57 @@ describe("sessions_send gating", () => {
     expect(details.status).toBe("ok");
     expect(details.reply).toBeUndefined();
     expect(details.sessionKey).toBe(targetSessionKey);
+    const agentRequest = callGatewayMock.mock.calls.find(
+      ([request]) => (request as { method?: string }).method === "agent",
+    )?.[0] as { params?: Record<string, unknown> } | undefined;
+    expect(agentRequest?.params?.approvalHostMode).toBe("none");
+  });
+
+  it("passes the exact approval host into the initial target turn", async () => {
+    const targetSessionKey = "agent:main:other";
+    const approvalHost: AgentRunApprovalHost = {
+      plugin: {
+        request: vi.fn(),
+      },
+    };
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: targetSessionKey, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-host-owned", acceptedAt: 123 };
+      }
+      return {};
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      approvalHost,
+      config: {
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" },
+        },
+      } as never,
+    });
+
+    const result = await tool.execute("call-host-owned-send", {
+      sessionKey: targetSessionKey,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result).status).toBe("accepted");
+    expect(agentGatewayWithApprovalHostMock).toHaveBeenCalledOnce();
+    expect(agentGatewayWithApprovalHostMock.mock.calls[0]?.[0].approvalHost).toBe(approvalHost);
   });
 
   it("passes a baseline into fire-and-forget same-session A2A delivery", async () => {

@@ -47,6 +47,7 @@ import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { createSessionMcpRuntimeCollector } from "../agent-bundle-mcp-runtime-capture.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
@@ -1049,6 +1050,8 @@ export async function prepareCliRunContext(
     bootstrapMode === "none"
       ? toolBoundExtraSystemPromptHash
       : hashCliSessionText(JSON.stringify([toolBoundExtraSystemPromptHash ?? null, bootstrapMode]));
+  const bundleMcpRuntimeCollector =
+    params.cleanupBundleMcpOnRunEnd === true ? createSessionMcpRuntimeCollector() : undefined;
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
   let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
   try {
@@ -1057,6 +1060,8 @@ export async function prepareCliRunContext(
         ? prepareDeps.mintMcpLoopbackClientGrant({
             context: mcpGrantContext,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+            approvalHost: params.approvalHost,
+            captureSessionMcpRuntime: bundleMcpRuntimeCollector?.capture,
           })
         : undefined;
     const mcpClientGrantCapture =
@@ -1692,6 +1697,7 @@ export async function prepareCliRunContext(
       ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
       cwdHash,
       ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
+      ...(bundleMcpRuntimeCollector ? { bundleMcpRuntimeCollector } : {}),
     };
   } catch (err) {
     try {

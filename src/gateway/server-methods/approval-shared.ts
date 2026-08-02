@@ -211,6 +211,7 @@ export function bindApprovalRequesterMetadata<TPayload>(params: {
   params.record.requestedByConnId = params.client?.connId ?? null;
   params.record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;
   params.record.requestedByClientId = params.client?.connect?.client?.id ?? null;
+  params.record.requestedByInstanceId = params.client?.connect?.client?.instanceId ?? null;
   params.record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
 }
 

@@ -1,5 +1,6 @@
 // Handles native slash commands before full get-reply pipeline execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentRunApprovalHost } from "../../agents/agent-run-approval.js";
 import {
   resolveThinkingDefaultWithRuntimeCatalog,
   type ModelAliasIndex,
@@ -118,6 +119,7 @@ async function resolveNativeSlashDefaultThinkingLevel(params: {
 }
 
 export async function maybeResolveNativeSlashCommandFastReply(params: {
+  approvalHost?: AgentRunApprovalHost;
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentId: string;
@@ -279,6 +281,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     storePath: sessionState.storePath,
     sessionScope: sessionState.sessionScope,
     workspaceDir: params.workspaceDir,
+    approvalHost: params.approvalHost,
     opts: params.opts,
     defaultGroupActivation: () => "always",
     resolvedThinkLevel: undefined,
@@ -352,6 +355,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     : undefined;
 
   const inlineActionResult = await handleInlineActions({
+    approvalHost: params.approvalHost,
     ctx: params.ctx,
     sessionCtx: sessionState.sessionCtx,
     cfg: params.cfg,

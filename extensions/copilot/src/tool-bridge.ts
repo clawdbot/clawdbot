@@ -401,6 +401,7 @@ function buildOpenClawCodingToolsOptions(
     runSessionKey,
     sessionId: input.sessionId,
     runId: a.runId,
+    approvalHost: a.approvalHost,
     agentDir,
     workspaceDir,
     cwd,

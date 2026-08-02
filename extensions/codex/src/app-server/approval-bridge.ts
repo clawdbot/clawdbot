@@ -21,11 +21,9 @@ import { formatCodexDisplayText } from "../command-formatters.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import {
-  approvalRequestExplicitlyUnavailable,
-  mapExecDecisionToOutcome,
+  mapPluginApprovalResultToOutcome,
   requestPluginApproval,
   type AppServerApprovalOutcome,
-  waitForPluginApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
@@ -99,6 +97,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
     requestParams,
     paramsForRun: params.paramsForRun,
   });
+  let approvalId: string | undefined;
 
   try {
     const policyOutcome = await runOpenClawToolPolicyForApprovalRequest({
@@ -176,40 +175,26 @@ export async function handleCodexAppServerApprovalRequest(params: {
       severity: context.severity,
       toolName: context.toolName,
       toolCallId: context.approvalId,
+      signal: params.signal,
+      onRegistered: (registration) => {
+        approvalId = registration.id;
+        emitApprovalEvent(params.paramsForRun, {
+          phase: "requested",
+          kind: context.kind,
+          status: "pending",
+          title: context.title,
+          approvalId,
+          approvalSlug: approvalId,
+          ...context.eventDetails,
+          message: "Codex app-server approval requested.",
+        });
+      },
     });
 
-    const approvalId = requestResult?.id;
-    if (!approvalId) {
-      recordNativeToolFailureDisposition(params, context, "failed");
-      emitApprovalEvent(params.paramsForRun, {
-        phase: "resolved",
-        kind: context.kind,
-        status: "unavailable",
-        title: context.title,
-        ...context.eventDetails,
-        ...approvalEventScope(params.method, "denied"),
-        message: "Codex app-server approval route unavailable.",
-      });
-      return buildApprovalResponse(params.method, context.requestParams, "denied");
-    }
-
-    emitApprovalEvent(params.paramsForRun, {
-      phase: "requested",
-      kind: context.kind,
-      status: "pending",
-      title: context.title,
-      approvalId,
-      approvalSlug: approvalId,
-      ...context.eventDetails,
-      message: "Codex app-server approval requested.",
-    });
-
-    const requestUnavailable = approvalRequestExplicitlyUnavailable(requestResult);
-    const decision = requestUnavailable
-      ? null
-      : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
-    const approvalExpired = !requestUnavailable && decision === null;
-    const outcome = params.signal?.aborted ? "cancelled" : mapExecDecisionToOutcome(decision);
+    const outcome =
+      params.signal?.aborted === true
+        ? "cancelled"
+        : mapPluginApprovalResultToOutcome(requestResult);
     if (outcome === "cancelled") {
       recordNativeToolFailureDisposition(
         params,
@@ -217,7 +202,11 @@ export async function handleCodexAppServerApprovalRequest(params: {
         params.signal?.aborted ? resolveCodexToolAbortTerminalReason(params.signal) : "cancelled",
       );
     } else if (outcome === "unavailable") {
-      recordNativeToolFailureDisposition(params, context, approvalExpired ? "timed_out" : "failed");
+      recordNativeToolFailureDisposition(
+        params,
+        context,
+        requestResult.outcome === "timed-out" ? "timed_out" : "failed",
+      );
     }
 
     emitApprovalEvent(params.paramsForRun, {
@@ -232,8 +221,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
               ? "failed"
               : "approved",
       title: context.title,
-      approvalId,
-      approvalSlug: approvalId,
+      ...(approvalId ? { approvalId, approvalSlug: approvalId } : {}),
       ...context.eventDetails,
       ...approvalEventScope(params.method, outcome),
       message: approvalResolutionMessage(outcome),
@@ -251,6 +239,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
       kind: context.kind,
       status: cancelled ? "failed" : "unavailable",
       title: context.title,
+      ...(approvalId ? { approvalId, approvalSlug: approvalId } : {}),
       ...context.eventDetails,
       ...approvalEventScope(params.method, cancelled ? "cancelled" : "denied"),
       message: cancelled
@@ -491,12 +480,12 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
       // its host-proven actor so sender-aware policy cannot authorize two identities.
       ...(requester ? { requester } : {}),
       trigger: params.paramsForRun.trigger,
-      approvalReviewerDeviceId: params.paramsForRun.approvalReviewerDeviceId,
       turnSourceChannel: params.paramsForRun.messageChannel ?? params.paramsForRun.messageProvider,
       turnSourceTo:
         params.paramsForRun.currentMessagingTarget ?? params.paramsForRun.currentChannelId,
       turnSourceAccountId: params.paramsForRun.agentAccountId,
       turnSourceThreadId: params.paramsForRun.currentThreadTs,
+      approvalHost: params.paramsForRun.approvalHost,
     },
   });
   if (outcome.blocked) {

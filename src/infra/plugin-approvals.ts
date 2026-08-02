@@ -44,6 +44,8 @@ export type PluginApprovalRequest = {
 export type PluginApprovalResolved = {
   id: string;
   decision: ExecApprovalDecision;
+  status?: "cancelled";
+  terminalReason?: "run-aborted" | "gateway-restart";
   resolvedBy?: string | null;
   ts: number;
   request?: PluginApprovalRequestPayload;
@@ -151,6 +153,10 @@ export function buildPluginApprovalRequestMessage(
 
 /** Build the plugin approval resolution message. */
 export function buildPluginApprovalResolvedMessage(resolved: PluginApprovalResolved): string {
+  if (resolved.status === "cancelled") {
+    const by = resolved.resolvedBy ? ` Cancelled by ${resolved.resolvedBy}.` : "";
+    return `🛑 Plugin approval cancelled.${by} ID: ${resolved.id}`;
+  }
   const base = `✅ Plugin approval ${approvalDecisionLabel(resolved.decision)}.`;
   const by = resolved.resolvedBy ? ` Resolved by ${resolved.resolvedBy}.` : "";
   return `${base}${by} ID: ${resolved.id}`;

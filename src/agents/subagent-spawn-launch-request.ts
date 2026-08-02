@@ -1,4 +1,5 @@
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
+import { isNoAgentRunApprovalHost, type AgentRunApprovalHost } from "./agent-run-approval.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
@@ -8,6 +9,7 @@ import { AGENT_LANE_SUBAGENT } from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export function buildSubagentLaunchRequest(params: {
+  approvalHost?: AgentRunApprovalHost;
   childDepth: number;
   maxSpawnDepth: number;
   spawnMode: SpawnSubagentMode;
@@ -46,6 +48,7 @@ export function buildSubagentLaunchRequest(params: {
   swarmMaxConcurrent: number;
 }): {
   childLaunch: {
+    approvalHost?: AgentRunApprovalHost;
     request: Record<string, unknown>;
     authorization?: SubagentLaunchAuthorization;
     timeoutMs: number;
@@ -53,6 +56,7 @@ export function buildSubagentLaunchRequest(params: {
   queuedLaunch?: {
     request: Record<string, unknown>;
     authorization?: SubagentLaunchAuthorization;
+    requiresProcessLocalApprovalHost?: true;
     timeoutMs: number;
     schedulerGroupKey: string;
     maxConcurrent: number;
@@ -87,6 +91,8 @@ export function buildSubagentLaunchRequest(params: {
     workspaceDir: _workspaceDir,
     ...publicSpawnedMetadata
   } = spawnedMetadata;
+  const carriesNoApprovalHost =
+    params.approvalHost === undefined || isNoAgentRunApprovalHost(params.approvalHost);
   const request: Record<string, unknown> = {
     message: childTaskMessage,
     sessionKey: params.childSessionKey,
@@ -112,6 +118,7 @@ export function buildSubagentLaunchRequest(params: {
     thinking: params.thinkingOverride,
     timeout: params.runTimeoutSeconds,
     label: params.label,
+    ...(carriesNoApprovalHost ? { approvalHostMode: "none" as const } : {}),
     ...(bootstrapContextMode
       ? {
           bootstrapContextMode,
@@ -121,6 +128,7 @@ export function buildSubagentLaunchRequest(params: {
     ...publicSpawnedMetadata,
   };
   const childLaunch = {
+    ...(params.approvalHost && !carriesNoApprovalHost ? { approvalHost: params.approvalHost } : {}),
     request,
     ...(params.launchAuthorization ? { authorization: params.launchAuthorization } : {}),
     timeoutMs: resolveSubagentAgentGatewayTimeoutMs(params.runTimeoutSeconds),
@@ -128,7 +136,11 @@ export function buildSubagentLaunchRequest(params: {
   const queuedLaunch =
     params.collect && params.swarmSchedulerGroupKey
       ? {
-          ...childLaunch,
+          // Approval hosts are process capabilities and must never enter durable replay state.
+          request: childLaunch.request,
+          ...(childLaunch.authorization ? { authorization: childLaunch.authorization } : {}),
+          ...(childLaunch.approvalHost ? { requiresProcessLocalApprovalHost: true as const } : {}),
+          timeoutMs: childLaunch.timeoutMs,
           schedulerGroupKey: params.swarmSchedulerGroupKey,
           maxConcurrent: params.swarmMaxConcurrent,
         }

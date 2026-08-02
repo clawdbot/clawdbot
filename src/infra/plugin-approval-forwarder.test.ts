@@ -433,6 +433,25 @@ describe("plugin approval forwarding", () => {
       expect(text).toContain("allowed once");
     });
 
+    it("renders run cancellation distinctly from a user denial", async () => {
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+
+      await registerPendingApproval(forwarder, deliver);
+
+      await forwarder.handlePluginApprovalResolved!(
+        makePluginResolved({
+          decision: "deny",
+          status: "cancelled",
+          terminalReason: "run-aborted",
+        }),
+      );
+
+      const text = firstDeliveredPayload(deliver)?.text ?? "";
+      expect(text).toContain("Plugin approval cancelled");
+      expect(text).not.toContain("Plugin approval denied");
+    });
+
     it("reconstructs targets from resolved request snapshot when pending cache is missing", async () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });

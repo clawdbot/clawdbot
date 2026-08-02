@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { AgentRunApprovalHost } from "../../agents/agent-run-approval.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
@@ -203,6 +204,7 @@ function extractBlockedToolReason(result: unknown): string | null {
 
 /** Handles inline actions or returns continue when the message should become a model turn. */
 export async function handleInlineActions(params: {
+  approvalHost?: AgentRunApprovalHost;
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   cfg: OpenClawConfig;
@@ -612,6 +614,7 @@ export async function handleInlineActions(params: {
       storePath,
       sessionScope,
       workspaceDir,
+      approvalHost: params.approvalHost,
       opts,
       defaultGroupActivation: defaultActivation,
       thinkingCatalog,

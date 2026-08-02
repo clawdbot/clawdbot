@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { AgentRunApprovalHost } from "../agents/agent-run-approval.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
@@ -173,6 +174,7 @@ export async function invokeGatewayTool(params: {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
+  approvalHost?: AgentRunApprovalHost;
   signal?: AbortSignal;
 }): Promise<ToolsInvokeOutcome> {
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
@@ -303,6 +305,7 @@ export async function invokeGatewayTool(params: {
         config: params.cfg,
         sessionKey,
         workspaceDir,
+        approvalHost: params.approvalHost,
         loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },
       signal: params.signal,

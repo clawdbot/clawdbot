@@ -3,6 +3,7 @@
 import os from "node:os";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { noAgentRunApprovalHost } from "./agent-run-approval.js";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
@@ -1065,6 +1066,7 @@ describe("spawnSubagentDirect seam flow", () => {
       },
       {
         agentSessionKey: "agent:main:main",
+        approvalHost: noAgentRunApprovalHost,
       },
     );
 
@@ -1088,7 +1090,115 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentOptions = requireRecord(agentDispatch?.[2]);
     expect(agentParams.provider).toBeUndefined();
     expect(agentParams.model).toBeUndefined();
+    expect(agentParams.approvalHostMode).toBe("none");
     expect(agentOptions.allowSyntheticModelOverride).toBeUndefined();
+    expect(agentOptions.agentRunApprovalHost).toBeUndefined();
+  });
+
+  it("keeps an omitted approval host fail-closed over Gateway transport", async () => {
+    const result = await spawnSubagentDirect(
+      { task: "keep approvals unavailable" },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentRequest = gatewayRequest("agent");
+    expect(requireRecord(agentRequest.params)).toMatchObject({
+      sessionKey: result.childSessionKey,
+      approvalHostMode: "none",
+    });
+  });
+
+  it("preserves approval host identity across an in-process child launch", async () => {
+    const approvalHost = { plugin: { request: vi.fn() } } as never;
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) =>
+      method === "agent" ? { runId: "run-with-parent-host" } : { ok: true },
+    );
+
+    const result = await spawnSubagentDirect(
+      { task: "inherit the parent approval host" },
+      { agentSessionKey: "agent:main:main", approvalHost },
+    );
+
+    expect(result).toMatchObject({ status: "accepted", runId: "run-with-parent-host" });
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    const agentDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
+      ([method]) => method === "agent",
+    );
+    const agentOptions = requireRecord(agentDispatch?.[2]);
+    expect(agentOptions).toMatchObject({ forceSyntheticClient: true });
+    expect(agentOptions.agentRunApprovalHost).toBe(approvalHost);
+  });
+
+  it("marks queued collector replay as requiring its process-local approval host", async () => {
+    const approvalHost = { plugin: { request: vi.fn() } } as never;
+    hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) =>
+      method === "agent" ? { runId: "collector-with-parent-host" } : { ok: true },
+    );
+
+    const result = await spawnSubagentDirect(
+      { task: "collect with inherited approvals", collect: true },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run", approvalHost },
+    );
+
+    expect(result).toMatchObject({ status: "accepted" });
+    expect(firstRegisteredSubagentRun().queuedLaunch).toMatchObject({
+      requiresProcessLocalApprovalHost: true,
+    });
+    await vi.waitFor(() => {
+      const agentDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
+        ([method]) => method === "agent",
+      );
+      expect(requireRecord(agentDispatch?.[2]).agentRunApprovalHost).toBe(approvalHost);
+    });
+  });
+
+  it("keeps hostless queued collectors replayable with explicit no-host state", async () => {
+    hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) =>
+      method === "agent" ? { runId: "collector-without-approval-host" } : { ok: true },
+    );
+
+    const result = await spawnSubagentDirect(
+      { task: "collect without approvals", collect: true },
+      {
+        agentSessionKey: "agent:main:main",
+        requesterRunId: "parent-run",
+        approvalHost: noAgentRunApprovalHost,
+      },
+    );
+
+    expect(result).toMatchObject({ status: "accepted" });
+    expect(firstRegisteredSubagentRun().queuedLaunch).toMatchObject({
+      request: { approvalHostMode: "none" },
+    });
+    expect(firstRegisteredSubagentRun().queuedLaunch).not.toHaveProperty(
+      "requiresProcessLocalApprovalHost",
+    );
+  });
+
+  it("fails closed instead of sending a process-local approval host over WebSocket", async () => {
+    const approvalHost = { plugin: { request: vi.fn() } } as never;
+
+    const result = await spawnSubagentDirect(
+      { task: "do not cross process boundaries" },
+      { agentSessionKey: "agent:main:main", approvalHost },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: "Process-local approval hosts cannot cross the Gateway transport.",
+    });
+    expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
   });
 
   it("authorizes explicit model overrides for in-process child launches", async () => {
