@@ -9,15 +9,21 @@ const BOUNDARY_ACTION =
 const LIMITED_CONFIRMATION =
   /\b(?:only|just)\b[^.!?]{0,80}\b(?:confirm|verify|say|acknowledge)\b|\b(?:confirm|verify|say|acknowledge)\b[^.!?]{0,80}\b(?:only|just)\b/iu;
 const EXISTENCE_CLAIM = /\b(?:exists?|present)\b/iu;
-const EXPLICIT_MEMORY_AVAILABILITY =
-  /\b(?:memory(?:\s+access)?|hidden(?:\s+(?:fact|information|value))?)\b[^.!?\n]{0,40}\b(?:is|are|remains?)\s+(?:available|accessible|enabled|working)\b/iu;
+const AFFIRMATIVE_MEMORY_STATE =
+  /\b(?:memory(?:\s+access)?|hidden(?:\s+(?:fact|information|value))?)\b[^.!?\n]{0,40}\b(?:is|are|remains?)\s+(?:available|accessible|enabled|known|working)\b/iu;
+const AFFIRMATIVE_MEMORY_POSSESSION =
+  /\b(?:i|we)\s+(?:do\s+)?(?:have|retain)\s+(?:(?:current|direct|full|limited|some)\s+)?(?:access\s+to\s+)?(?:the\s+)?(?:memory(?:-backed\s+(?:notes?|information))?|hidden(?:\s+(?:fact|information|value))?)\b/iu;
+const AFFIRMATIVE_MEMORY_ACTION =
+  /\b(?:i|we)\s+(?:can|am\s+able\s+to)\s+(?:access|know|read|remember|retrieve)\b[^.!?\n]{0,40}\b(?:memory(?:-backed\s+(?:notes?|information))?|hidden(?:\s+(?:fact|information|value))?)\b/iu;
 
 export function hasUnavailableMemoryBoundary(text: string): boolean {
   const trimmed = text.trim();
   if (
     !trimmed ||
     !MEMORY_BOUNDARY_SUBJECT.test(trimmed) ||
-    EXPLICIT_MEMORY_AVAILABILITY.test(trimmed)
+    AFFIRMATIVE_MEMORY_STATE.test(trimmed) ||
+    AFFIRMATIVE_MEMORY_POSSESSION.test(trimmed) ||
+    AFFIRMATIVE_MEMORY_ACTION.test(trimmed)
   ) {
     return false;
   }

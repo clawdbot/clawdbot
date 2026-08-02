@@ -17,6 +17,9 @@ describe("hasUnavailableMemoryBoundary", () => {
     "A hidden fact exists.",
     "Memory is working and the hidden fact is accessible.",
     "Memory is available, but I can't provide anything else.",
+    "I have access to memory, but I cannot provide anything else.",
+    "I retain direct access to the memory-backed note, but I refuse to quote it.",
+    "I can retrieve the hidden information, although I won't reveal it.",
     "The answer is ORBIT-9.",
     "",
   ])("rejects a reply without the required memory boundary: %s", (reply) => {
