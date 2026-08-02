@@ -5,9 +5,9 @@ scenario:
   surface: media-understanding
   coverage:
     primary:
-      - media.audio-transcription
+      - media.inbound-media-store
     secondary:
-      - channels.qa-channel-media
+      - channels.inbound-media-normalization
   objective: Verify a stored inbound audio attachment carried only by media:// reaches transcription and produces one visible reply.
   gatewayConfigPatch:
     tools:
