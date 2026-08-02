@@ -1,5 +1,4 @@
-// Whatsapp plugin module implements monitor inbox.blocks messages from unauthorized senders not allowfrom support behavior.
-import "./monitor-inbox.test-harness.js";
+// WhatsApp monitor inbox policy behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { WebInboundMessage } from "./inbound/types.js";
 import {
@@ -252,179 +251,133 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("lets group messages through even when sender not in allowFrom", async () => {
-    const { onMessage, listener, sock } = await startWebInboxMonitor({
-      config: {
-        channels: { whatsapp: { allowFrom: ["+1234"], groupPolicy: "open" } },
-        messages: DEFAULT_MESSAGES_CFG,
-      },
-    });
-    sock.ev.emit(
-      "messages.upsert",
-      createNotifyUpsert(
-        createGroupMessage({
-          id: "grp3",
-          participant: "999@s.whatsapp.net",
-          conversation: "unauthorized group message",
-        }),
-      ),
-    );
-    await settleInboundWork();
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    const payload = firstInboundPayload(onMessage);
-    expect(payload.admission?.conversation.kind).toBe("group");
-    expect(payload.platform.senderE164).toBe("+999");
-
-    await listener.close();
-  });
-
-  it("blocks all group messages when groupPolicy is 'disabled'", async () => {
-    const { onMessage, listener, sock } = await startWebInboxMonitor({
-      config: {
-        channels: { whatsapp: { allowFrom: ["+1234"], groupPolicy: "disabled" } },
-        messages: TIMESTAMP_OFF_MESSAGES_CFG,
-      },
-    });
-    sock.ev.emit(
-      "messages.upsert",
-      createNotifyUpsert(
-        createGroupMessage({
-          id: "grp-disabled",
-          participant: "999@s.whatsapp.net",
-          conversation: "group message should be blocked",
-        }),
-      ),
-    );
-    await settleInboundWork();
-
-    // Should NOT call onMessage because groupPolicy is disabled
-    expect(onMessage).not.toHaveBeenCalled();
-
-    await listener.close();
-  });
-
-  it("blocks group messages from senders not in groupAllowFrom when groupPolicy is 'allowlist'", async () => {
-    const { onMessage, listener, sock } = await startWebInboxMonitor({
-      config: {
-        channels: {
-          whatsapp: {
-            groupAllowFrom: ["+1234"], // Does not include +999
-            groupPolicy: "allowlist",
+  it.each([
+    {
+      name: "lets group messages through even when sender not in allowFrom",
+      id: "grp3",
+      groupPolicy: "open",
+      messages: DEFAULT_MESSAGES_CFG,
+      allowFrom: ["+1234"],
+      groupAllowFrom: undefined,
+      participant: "999@s.whatsapp.net",
+      remoteJid: undefined,
+      conversation: "unauthorized group message",
+      expectedCalls: 1,
+      expectedSender: "+999",
+    },
+    {
+      name: "blocks all group messages when groupPolicy is 'disabled'",
+      id: "grp-disabled",
+      groupPolicy: "disabled",
+      messages: TIMESTAMP_OFF_MESSAGES_CFG,
+      allowFrom: ["+1234"],
+      groupAllowFrom: undefined,
+      participant: "999@s.whatsapp.net",
+      remoteJid: undefined,
+      conversation: "group message should be blocked",
+      expectedCalls: 0,
+      expectedSender: undefined,
+    },
+    {
+      name: "blocks group messages from senders not in groupAllowFrom when groupPolicy is 'allowlist'",
+      id: "grp-allowlist-blocked",
+      groupPolicy: "allowlist",
+      messages: TIMESTAMP_OFF_MESSAGES_CFG,
+      allowFrom: undefined,
+      groupAllowFrom: ["+1234"],
+      participant: "999@s.whatsapp.net",
+      remoteJid: undefined,
+      conversation: "unauthorized group sender",
+      expectedCalls: 0,
+      expectedSender: undefined,
+    },
+    {
+      name: "allows group messages from senders in groupAllowFrom when groupPolicy is 'allowlist'",
+      id: "grp-allowlist-allowed",
+      groupPolicy: "allowlist",
+      messages: TIMESTAMP_OFF_MESSAGES_CFG,
+      allowFrom: undefined,
+      groupAllowFrom: ["+15551234567"],
+      participant: "15551234567@s.whatsapp.net",
+      remoteJid: undefined,
+      conversation: "authorized group sender",
+      expectedCalls: 1,
+      expectedSender: "+15551234567",
+    },
+    {
+      name: "allows all group senders with wildcard in groupPolicy allowlist",
+      id: "grp-wildcard-test",
+      groupPolicy: "allowlist",
+      messages: TIMESTAMP_OFF_MESSAGES_CFG,
+      allowFrom: undefined,
+      groupAllowFrom: ["*"],
+      participant: "9999999999@s.whatsapp.net",
+      remoteJid: "22222@g.us",
+      conversation: "wildcard group sender",
+      expectedCalls: 1,
+      expectedSender: undefined,
+    },
+    {
+      name: "blocks group messages when groupPolicy allowlist has no groupAllowFrom",
+      id: "grp-allowlist-empty",
+      groupPolicy: "allowlist",
+      messages: TIMESTAMP_OFF_MESSAGES_CFG,
+      allowFrom: undefined,
+      groupAllowFrom: undefined,
+      participant: "999@s.whatsapp.net",
+      remoteJid: undefined,
+      conversation: "blocked by empty allowlist",
+      expectedCalls: 0,
+      expectedSender: undefined,
+    },
+  ] as const)(
+    "$name",
+    async ({
+      id,
+      groupPolicy,
+      messages,
+      allowFrom,
+      groupAllowFrom,
+      participant,
+      remoteJid,
+      conversation,
+      expectedCalls,
+      expectedSender,
+    }) => {
+      const { onMessage, listener, sock } = await startWebInboxMonitor({
+        config: {
+          channels: {
+            whatsapp: {
+              groupPolicy,
+              ...(allowFrom ? { allowFrom: [...allowFrom] } : {}),
+              ...(groupAllowFrom ? { groupAllowFrom: [...groupAllowFrom] } : {}),
+            },
           },
+          messages,
         },
-        messages: TIMESTAMP_OFF_MESSAGES_CFG,
-      },
-    });
-    sock.ev.emit(
-      "messages.upsert",
-      createNotifyUpsert(
-        createGroupMessage({
-          id: "grp-allowlist-blocked",
-          participant: "999@s.whatsapp.net",
-          conversation: "unauthorized group sender",
-        }),
-      ),
-    );
-    await settleInboundWork();
+      });
+      sock.ev.emit(
+        "messages.upsert",
+        createNotifyUpsert(
+          createGroupMessage({
+            id,
+            ...(remoteJid ? { remoteJid } : {}),
+            participant,
+            conversation,
+          }),
+        ),
+      );
+      await settleInboundWork();
 
-    // Should NOT call onMessage because sender +999 not in groupAllowFrom
-    expect(onMessage).not.toHaveBeenCalled();
-
-    await listener.close();
-  });
-
-  it("allows group messages from senders in groupAllowFrom when groupPolicy is 'allowlist'", async () => {
-    const { onMessage, listener, sock } = await startWebInboxMonitor({
-      config: {
-        channels: {
-          whatsapp: {
-            groupAllowFrom: ["+15551234567"], // Includes the sender
-            groupPolicy: "allowlist",
-          },
-        },
-        messages: TIMESTAMP_OFF_MESSAGES_CFG,
-      },
-    });
-    sock.ev.emit(
-      "messages.upsert",
-      createNotifyUpsert(
-        createGroupMessage({
-          id: "grp-allowlist-allowed",
-          participant: "15551234567@s.whatsapp.net",
-          conversation: "authorized group sender",
-        }),
-      ),
-    );
-    await settleInboundWork();
-
-    // Should call onMessage because sender is in groupAllowFrom
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    const payload = firstInboundPayload(onMessage);
-    expect(payload.admission?.conversation.kind).toBe("group");
-    expect(payload.platform.senderE164).toBe("+15551234567");
-
-    await listener.close();
-  });
-
-  it("allows all group senders with wildcard in groupPolicy allowlist", async () => {
-    const { onMessage, listener, sock } = await startWebInboxMonitor({
-      config: {
-        channels: {
-          whatsapp: {
-            groupAllowFrom: ["*"], // Wildcard allows everyone
-            groupPolicy: "allowlist",
-          },
-        },
-        messages: TIMESTAMP_OFF_MESSAGES_CFG,
-      },
-    });
-    sock.ev.emit(
-      "messages.upsert",
-      createNotifyUpsert(
-        createGroupMessage({
-          id: "grp-wildcard-test",
-          remoteJid: "22222@g.us",
-          participant: "9999999999@s.whatsapp.net",
-          conversation: "wildcard group sender",
-        }),
-      ),
-    );
-    await settleInboundWork();
-
-    // Should call onMessage because wildcard allows all senders
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    const payload = firstInboundPayload(onMessage);
-    expect(payload.admission?.conversation.kind).toBe("group");
-
-    await listener.close();
-  });
-
-  it("blocks group messages when groupPolicy allowlist has no groupAllowFrom", async () => {
-    const { onMessage, listener, sock } = await startWebInboxMonitor({
-      config: {
-        channels: {
-          whatsapp: {
-            groupPolicy: "allowlist",
-          },
-        },
-        messages: TIMESTAMP_OFF_MESSAGES_CFG,
-      },
-    });
-    sock.ev.emit(
-      "messages.upsert",
-      createNotifyUpsert(
-        createGroupMessage({
-          id: "grp-allowlist-empty",
-          participant: "999@s.whatsapp.net",
-          conversation: "blocked by empty allowlist",
-        }),
-      ),
-    );
-    await settleInboundWork();
-
-    expect(onMessage).not.toHaveBeenCalled();
-
-    await listener.close();
-  });
+      expect(onMessage).toHaveBeenCalledTimes(expectedCalls);
+      if (expectedCalls === 1) {
+        const payload = firstInboundPayload(onMessage);
+        expect(payload.admission?.conversation.kind).toBe("group");
+        if (expectedSender) {
+          expect(payload.platform.senderE164).toBe(expectedSender);
+        }
+      }
+      await listener.close();
+    },
+  );
 });

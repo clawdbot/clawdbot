@@ -1,4 +1,4 @@
-// Whatsapp tests cover auto reply.web auto reply.compresses common formats jpeg cap plugin behavior.
+// WhatsApp web auto-reply media delivery behavior.
 import fs from "node:fs/promises";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,7 @@ installWebAutoReplyTestHomeHooks();
 
 let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
 
-describe("web auto-reply", () => {
+describe("web auto-reply media delivery", () => {
   installWebAutoReplyUnitTestHooks({ pinDns: true });
   type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
   type WebInboundPlatform = WebInboundCallbackMessage["platform"];

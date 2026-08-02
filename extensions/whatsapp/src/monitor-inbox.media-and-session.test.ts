@@ -1,5 +1,4 @@
-// Whatsapp plugin module implements monitor inbox.captures media path image messages support behavior.
-import "./monitor-inbox.test-harness.js";
+// WhatsApp monitor inbox media and session behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_ACCOUNT_ID,
