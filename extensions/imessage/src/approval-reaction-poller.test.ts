@@ -247,7 +247,7 @@ describe("iMessage approval reaction poller", () => {
     expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(2);
   });
 
-  it.each([
+  [
     {
       title: "retries no-target recent-chat discovery after the first chat list fails",
       failingMethod: "chats.list",
@@ -266,41 +266,43 @@ describe("iMessage approval reaction poller", () => {
       expectedChatLists: 2,
       expectedHistories: 2,
     },
-  ])("$title", async (testCase) => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "chats.list") {
-        if (testCase.failingMethod !== method) {
-          return { chats: [{ id: 42 }] };
+  ].forEach((testCase) => {
+    it(testCase.title, async () => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "chats.list") {
+          if (testCase.failingMethod !== method) {
+            return { chats: [{ id: 42 }] };
+          }
         }
+        if (method !== "chats.list" && method !== "messages.history") {
+          throw new Error(`unexpected method ${method}`);
+        }
+        const methodCalls = request.mock.calls.filter(([calledMethod]) => calledMethod === method);
+        if (testCase.failingMethod === method && methodCalls.length === 1) {
+          throw new Error(testCase.errorMessage);
+        }
+        return method === "chats.list" ? { chats: [{ id: 42 }] } : { messages: [] };
+      });
+
+      const pollParams = buildPollParams(request, { allowRecentChatDiscovery: true });
+      const poll = () => pollPendingIMessageApprovalReactions(pollParams);
+
+      if (testCase.expectFirstPollToReject) {
+        await expect(poll()).rejects.toThrow(testCase.errorMessage);
+      } else {
+        await poll();
       }
-      if (method !== "chats.list" && method !== "messages.history") {
-        throw new Error(`unexpected method ${method}`);
+      for (let index = 1; index < testCase.pollCount; index += 1) {
+        await poll();
       }
-      const methodCalls = request.mock.calls.filter(([calledMethod]) => calledMethod === method);
-      if (testCase.failingMethod === method && methodCalls.length === 1) {
-        throw new Error(testCase.errorMessage);
-      }
-      return method === "chats.list" ? { chats: [{ id: 42 }] } : { messages: [] };
+
+      expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(
+        testCase.expectedChatLists,
+      );
+      expect(request.mock.calls.filter(([method]) => method === "messages.history")).toHaveLength(
+        testCase.expectedHistories,
+      );
     });
-
-    const pollParams = buildPollParams(request, { allowRecentChatDiscovery: true });
-    const poll = () => pollPendingIMessageApprovalReactions(pollParams);
-
-    if (testCase.expectFirstPollToReject) {
-      await expect(poll()).rejects.toThrow(testCase.errorMessage);
-    } else {
-      await poll();
-    }
-    for (let index = 1; index < testCase.pollCount; index += 1) {
-      await poll();
-    }
-
-    expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(
-      testCase.expectedChatLists,
-    );
-    expect(request.mock.calls.filter(([method]) => method === "messages.history")).toHaveLength(
-      testCase.expectedHistories,
-    );
   });
 
   it("does not bind observed approval prompts when the process clock is invalid", async () => {

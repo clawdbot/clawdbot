@@ -281,7 +281,7 @@ describe("imessageApprovalNativeRuntime", () => {
 
     // Inbound `reacted_to_guid` is always a GUID, never the numeric ROWID.
     // Placeholder and ROWID-only bridge receipts therefore cannot bind reactions.
-    it.each([
+    [
       {
         title: "refuses to bind when the bridge returns only a numeric ROWID",
         sendResult: sendResult("12345", { sentText: POLL_TEXT }),
@@ -302,10 +302,12 @@ describe("imessageApprovalNativeRuntime", () => {
         sendResult: sendResult("ok", { sentText: POLL_TEXT }),
         expected: null,
       },
-    ])("$title", async ({ sendResult: result, expected }) => {
-      sendMock.sendMessageIMessage.mockResolvedValue(result);
+    ].forEach(({ title, sendResult: result, expected }) => {
+      it(title, async () => {
+        sendMock.sendMessageIMessage.mockResolvedValue(result);
 
-      await expect(deliverBase()).resolves.toEqual(expected);
+        await expect(deliverBase()).resolves.toEqual(expected);
+      });
     });
   });
 
@@ -595,7 +597,7 @@ describe("imessageApprovalNativeRuntime", () => {
       expect(approvalResolverMock.resolveIMessageApproval).toHaveBeenCalledTimes(1);
     });
 
-    it.each([
+    [
       {
         title: "keeps the tapback hint when the bridge has no poll selector",
         status: NO_POLL_SELECTOR_STATUS,
@@ -637,21 +639,23 @@ describe("imessageApprovalNativeRuntime", () => {
           plannedTarget: { ...pollDeliverArgs.plannedTarget, target: { to } },
         },
       })),
-    ])("$title", async (testCase) => {
-      if ("status" in testCase && testCase.status) {
-        probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(testCase.status);
-      }
+    ].forEach((testCase) => {
+      it(testCase.title, async () => {
+        if ("status" in testCase && testCase.status) {
+          probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(testCase.status);
+        }
 
-      const entry = await deliverPoll("overrides" in testCase ? testCase.overrides : undefined);
-      const to = "to" in testCase ? testCase.to : HANDLE;
+        const entry = await deliverPoll("overrides" in testCase ? testCase.overrides : undefined);
+        const to = "to" in testCase ? testCase.to : HANDLE;
 
-      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
-        to,
-        pollDeliverArgs.pendingPayload.text,
-        expect.anything(),
-      );
-      expect(actionsMock.sendPoll).not.toHaveBeenCalled();
-      expect(entry?.poll).toBeUndefined();
+        expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
+          to,
+          pollDeliverArgs.pendingPayload.text,
+          expect.anything(),
+        );
+        expect(actionsMock.sendPoll).not.toHaveBeenCalled();
+        expect(entry?.poll).toBeUndefined();
+      });
     });
 
     it("uses polls for an auto handle when the account does not force SMS", async () => {
