@@ -375,7 +375,13 @@ describeControlUiE2e("Control UI chat message actions", () => {
 
       await expandableBubble.getByRole("button", { name: "Show less" }).click();
       await expect
-        .poll(() => expandableBubble.locator(".chat-message-disclosure__content").innerText())
+        .poll(async () =>
+          (await expandableBubble.locator(".chat-message-disclosure__content").textContent())
+            ?.split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .join("\n"),
+        )
         .toBe(truncatedPreview);
       await expandableBubble.getByRole("button", { name: "Show more" }).click();
       await expandableBubble.getByText(fullAssistantContent, { exact: true }).waitFor({

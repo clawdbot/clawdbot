@@ -29,13 +29,13 @@ import type { FileEditorViewHandle } from "./file-editor-view.ts";
 import type { SessionDiffLoader } from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
-export type DetailFullMessageResult = {
+type DetailFullMessageResult = {
   ok?: boolean;
   message?: unknown;
   unavailableReason?: DetailUnavailableReason;
 };
 
-export type SidebarFullMessageRequest = {
+type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
   messageId: string;
