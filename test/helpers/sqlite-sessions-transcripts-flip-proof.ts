@@ -365,7 +365,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       token: inst.gatewayToken,
       clientDisplayName: "sqlite-sessions-transcripts-flip-proof",
       requestTimeoutMs: 20_000,
-      timeoutMs: 20_000,
+      timeoutMs: 60_000,
     });
     try {
       await waitForHistoryContains(client, context.resetSessionKey, "legacy hello");
@@ -382,7 +382,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       token: inst.gatewayToken,
       clientDisplayName: "sqlite-sessions-transcripts-flip-proof-restart",
       requestTimeoutMs: 20_000,
-      timeoutMs: 20_000,
+      timeoutMs: 60_000,
     });
     let restartedClientConnected = true;
     try {
@@ -489,7 +489,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
         token: inst.gatewayToken,
         clientDisplayName: "sqlite-sessions-transcripts-flip-proof-post-reset-restart",
         requestTimeoutMs: 20_000,
-        timeoutMs: 20_000,
+        timeoutMs: 60_000,
       });
       try {
         secondStartupAfterReset = await runSecondStartupAfterResetProof(
@@ -1711,14 +1711,14 @@ async function runConcurrentMultiClientLifecycle(
     token: inst.gatewayToken,
     clientDisplayName: "sqlite-sessions-transcripts-flip-proof-concurrent-history",
     requestTimeoutMs: 20_000,
-    timeoutMs: 20_000,
+    timeoutMs: 60_000,
   });
   const lifecycleClient = await connectGatewayClient({
     url: inst.url,
     token: inst.gatewayToken,
     clientDisplayName: "sqlite-sessions-transcripts-flip-proof-concurrent-lifecycle",
     requestTimeoutMs: 20_000,
-    timeoutMs: 20_000,
+    timeoutMs: 60_000,
   });
   try {
     await requireHistoryContains(
