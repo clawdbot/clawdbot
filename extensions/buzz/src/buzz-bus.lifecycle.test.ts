@@ -562,6 +562,7 @@ describe("Buzz bus lifecycle", () => {
 
   it("refreshes relay-signed room metadata after a live edit", async () => {
     relayMocks.auth.mockResolvedValue("ok");
+    const onRoomDirectoryChanged = vi.fn();
     relayMocks.roomMetadataEvents = [
       {
         id: "room-metadata-1",
@@ -582,6 +583,7 @@ describe("Buzz bus lifecycle", () => {
       privateKey: PRIVATE_KEY,
       channelIds: [CHANNEL_ID],
       onMessage: async () => {},
+      onRoomDirectoryChanged,
     });
     await vi.waitFor(() => expect(bus.directory.listGroups({})[0]?.name).toBe("Engineering"));
 
@@ -612,6 +614,7 @@ describe("Buzz bus lifecycle", () => {
       });
 
     await vi.waitFor(() => expect(bus.directory.listGroups({})[0]?.name).toBe("Platform"));
+    expect(onRoomDirectoryChanged).toHaveBeenCalledOnce();
     await bus.close();
   });
 

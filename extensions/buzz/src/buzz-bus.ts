@@ -1,7 +1,12 @@
 import { type Relay, finalizeEvent, type Event } from "nostr-tools";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
-import { queryBuzzDirectoryRooms, startBuzzDirectoryRelay } from "./directory-relay.js";
+import {
+  queryBuzzDirectoryProfiles,
+  queryBuzzDirectoryRooms,
+  startBuzzDirectoryRelay,
+} from "./directory-relay.js";
 import { BuzzDirectoryState } from "./directory-state.js";
+import { inspectBuzzMentionSyntax, resolveBuzzMessageMentions } from "./mentions.js";
 import {
   BUZZ_NORMAL_MESSAGE_KIND,
   BUZZ_TYPING_INDICATOR_KIND,
@@ -21,6 +26,7 @@ import {
   resolveBuzzRoomHistoryLimit,
 } from "./replay-dispatch.js";
 import { startBuzzRoomMembershipNotifications } from "./room-membership-notification.js";
+import { queryBuzzRoomMemberships } from "./room-membership-query.js";
 import { createBuzzRoomMembershipTracker } from "./room-membership-tracker.js";
 import { resolveBuzzSubscriptionBudget } from "./subscription-budget.js";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
@@ -56,6 +62,7 @@ function buildBuzzTextEvent(params: {
   text: string;
   threadId?: string;
   replyToId?: string;
+  mentionedPubkeys?: string[];
 }): Event {
   return finalizeEvent(
     {
@@ -150,6 +157,50 @@ export async function sendBuzzTextOneShot(params: {
   replyToId?: string;
 }): Promise<string> {
   const secretKey = decodeBuzzPrivateKey(params.privateKey);
+  const mentionSyntax = inspectBuzzMentionSyntax(params.text);
+  if (mentionSyntax.hasAtMention || mentionSyntax.hasExplicitIdentity) {
+    const signal = AbortSignal.timeout(30_000);
+    const publicKey = resolveBuzzPublicKey(params.privateKey);
+    const { relay, relayPublicKey } = await connectAuthenticatedBuzzRelaySession({
+      relayUrl: params.relayUrl,
+      secretKey,
+      authTag: parseBuzzAuthTag(params.authTag ?? ""),
+      signal,
+    });
+    try {
+      const directory = new BuzzDirectoryState({
+        publicKey,
+        fallbackProfileName: "OpenClaw",
+        channelIds: [params.channelId],
+      });
+      directory.replaceMemberships(
+        await queryBuzzRoomMemberships({
+          relay,
+          relayPublicKey,
+          channelIds: [params.channelId],
+          signal,
+        }),
+      );
+      if (mentionSyntax.hasAtMention) {
+        await queryBuzzDirectoryProfiles({
+          relay,
+          state: directory,
+          publicKeys: directory.profilePublicKeys(),
+          signal,
+        });
+      }
+      const mentionedPubkeys = resolveBuzzMessageMentions({
+        text: params.text,
+        members: directory.mentionMembers(params.channelId),
+        senderPublicKey: publicKey,
+      });
+      const event = buildBuzzTextEvent({ ...params, secretKey, mentionedPubkeys });
+      await relay.publish(event);
+      return event.id;
+    } finally {
+      relay.close();
+    }
+  }
   const relay = await connectAuthenticatedBuzzRelay({
     relayUrl: params.relayUrl,
     secretKey,
@@ -181,6 +232,7 @@ export async function startBuzzBus(options: {
   onProfilePublished?: (eventId: string) => void;
   onProfileError?: (error: Error) => void;
   onDirectoryError?: (error: Error) => void;
+  onRoomDirectoryChanged?: () => void;
   signal?: AbortSignal;
 }): Promise<BuzzBus> {
   const subscriptionBudget = resolveBuzzSubscriptionBudget(options.channelIds.length);
@@ -239,7 +291,23 @@ export async function startBuzzBus(options: {
     refreshDirectory: async () => await directoryRelay?.refreshRooms(options.channelIds),
     sendText: async ({ channelId, text, threadId, replyToId }) => {
       signal.throwIfAborted();
-      const event = buildBuzzTextEvent({ secretKey, channelId, text, threadId, replyToId });
+      const mentionSyntax = inspectBuzzMentionSyntax(text);
+      const mentionedPubkeys =
+        mentionSyntax.hasAtMention || mentionSyntax.hasExplicitIdentity
+          ? resolveBuzzMessageMentions({
+              text,
+              members: directory.mentionMembers(channelId),
+              senderPublicKey: publicKey,
+            })
+          : [];
+      const event = buildBuzzTextEvent({
+        secretKey,
+        channelId,
+        text,
+        threadId,
+        replyToId,
+        mentionedPubkeys,
+      });
       await relay.publish(event);
       return event.id;
     },
@@ -283,6 +351,7 @@ export async function startBuzzBus(options: {
       signal,
       onError: options.onDirectoryError,
       onFatalError: reportFatalError,
+      onRoomChanged: options.onRoomDirectoryChanged,
     });
     startBuzzRoomMembershipNotifications({
       relay,
