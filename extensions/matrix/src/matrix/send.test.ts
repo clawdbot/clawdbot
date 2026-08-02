@@ -465,6 +465,26 @@ describe("sendMessageMatrix durable delivery", () => {
     expect(
       astral.sendMessage.mock.calls.map((call) => requireRecord(call[1], "astral content").body),
     ).toEqual(["😀", "😀"]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1.5);
+    const mixed = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀AB", {
+      client: mixed.client,
+      cfg: {} as never,
+    });
+    expect(
+      mixed.sendMessage.mock.calls.map((call) => requireRecord(call[1], "mixed content").body),
+    ).toEqual(["😀", "A", "B"]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1);
+    const integer = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀AB", {
+      client: integer.client,
+      cfg: {} as never,
+    });
+    expect(
+      integer.sendMessage.mock.calls.map((call) => requireRecord(call[1], "integer content").body),
+    ).toEqual(["😀", "A", "B"]);
   });
 
   it("persists the complete event plan before the first provider dispatch", async () => {

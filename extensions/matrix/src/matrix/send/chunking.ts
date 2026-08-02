@@ -37,14 +37,21 @@ type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
 
 const getCore = () => getMatrixRuntime();
 
-function normalizeMatrixEventLimit(limit: number, text: string): number {
+function normalizeMatrixEventLimit(limit: number): number {
   if (!Number.isFinite(limit) || limit <= 0) {
     return limit;
   }
-  const normalized = Math.max(1, Math.floor(limit));
-  // A UTF-16 limit of one cannot contain an astral code point without splitting its surrogate
-  // pair. Treat that single code point as the smallest valid Matrix event instead.
-  return normalized === 1 && /[\u{10000}-\u{10ffff}]/u.test(text) ? 2 : normalized;
+  return Math.max(1, Math.floor(limit));
+}
+
+function resolveMatrixChunkOverflow(chunk: string, limit: number): number {
+  const body = markdownToMatrixBody(chunk);
+  const renderedLength = Math.max(chunk.length, body.length);
+  if (limit === 1 && Array.from(chunk).length === 1 && Array.from(body).length === 1) {
+    // One astral code point occupies two UTF-16 units but cannot be split into a valid event.
+    return 0;
+  }
+  return Math.max(0, renderedLength - limit);
 }
 
 function protectMatrixUnderlineTags(markdown: string): MatrixSpoilerProtection {
@@ -186,7 +193,6 @@ export function prepareMatrixSingleText(
       getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
       MATRIX_FORMAT_PROFILE.chunk.limit,
     ),
-    convertedText,
   );
   const eventTextLength = Math.max(
     convertedText.length,
@@ -254,10 +260,8 @@ export function chunkMatrixText(
       });
       const overflow = Math.max(
         0,
-        ...restored.map(
-          (chunk) =>
-            Math.max(chunk.length, markdownToMatrixBody(chunk).length) -
-            preparedText.singleEventLimit,
+        ...restored.map((chunk) =>
+          resolveMatrixChunkOverflow(chunk, preparedText.singleEventLimit),
         ),
       );
       if (overflow === 0) {
