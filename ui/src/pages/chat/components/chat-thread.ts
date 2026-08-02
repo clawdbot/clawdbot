@@ -53,12 +53,14 @@ import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
+  assistantMessageExpansionSignature,
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   deletedChatItemsSignature,
   getExpansionStateVersion,
   getExpandedToolCards,
+  getExpandedAssistantMessages,
   getExpandedUserMessages,
   persistedMessageEntryId,
   resetChatThreadState,
@@ -94,7 +96,7 @@ import {
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
@@ -152,6 +154,7 @@ type ChatThreadProps = {
   userAvatar?: string | null;
   basePath?: string;
   fullMessageAgentId?: string;
+  loadFullAssistantMessage?: SidebarFullMessageLoader | null;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
@@ -1130,19 +1133,17 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const groupKey = (group as HTMLElement).dataset.chatRowKey?.trim() ?? "";
   const isUserMessage = group.classList.contains("user") && Boolean(entryId);
   // Grouped rows can contain several bubbles. Match the clicked bubble to its
-  // own action owner so canvas/copy never targets a sibling message.
+  // own action owner so copy never targets a sibling message.
   const actionOwner = [...group.querySelectorAll<HTMLElement>("[data-message-actions-for]")].find(
     (element) => element.dataset.messageActionsFor === messageId,
   );
-  const expandButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-expand-btn");
   const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
   const canReply = Boolean(text && props.onSetReply);
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
   const canHide = Boolean(groupKey);
-  const canOpenInCanvas = Boolean(expandButton);
   const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";
-  if (!canReply && !canRewind && !canHide && !canOpenInCanvas && !canCopy && !canFork) {
+  if (!canReply && !canRewind && !canHide && !canCopy && !canFork) {
     return;
   }
 
@@ -1222,19 +1223,6 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
       },
     });
     action.element.classList.add("chat-delete-wrap");
-    menu.append(action.element);
-    focusCandidates.push(action.button);
-  }
-  if (canOpenInCanvas) {
-    const action = createMessageActionContextButton({
-      label: t("chat.messages.openInCanvas"),
-      disabled: false,
-      tooltip: t("chat.messages.openInCanvas"),
-      onClick: () => {
-        removeReplyContextMenu();
-        expandButton?.click();
-      },
-    });
     menu.append(action.element);
     focusCandidates.push(action.button);
   }
@@ -1499,12 +1487,64 @@ function renderChatThreadContents(
   );
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
   const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
+  const expandedAssistantMessages = getExpandedAssistantMessages(props.sessionKey);
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
   const toggleToolCardExpanded = (toolCardId: string) => {
     setExpansionState(expandedToolCards, toolCardId, !expandedToolCards.get(toolCardId));
     requestUpdate();
+  };
+  const toggleAssistantMessageExpanded = (messageId: string) => {
+    const current = expandedAssistantMessages.get(messageId);
+    if (current?.status === "loaded") {
+      expandedAssistantMessages.set(messageId, {
+        ...current,
+        expanded: !current.expanded,
+        revision: current.revision + 1,
+      });
+      requestUpdate();
+      return;
+    }
+    const loader = props.loadFullAssistantMessage;
+    if (!loader || current?.status === "loading") {
+      return;
+    }
+    const revision = (current?.revision ?? 0) + 1;
+    expandedAssistantMessages.set(messageId, { status: "loading", revision });
+    requestUpdate();
+    void loader({
+      sessionKey: props.sessionKey,
+      ...(props.fullMessageAgentId ? { agentId: props.fullMessageAgentId } : {}),
+      messageId,
+      kind: "assistant_message",
+    }).then(
+      (result) => {
+        const pending = expandedAssistantMessages.get(messageId);
+        if (pending?.status !== "loading" || pending.revision !== revision) {
+          return;
+        }
+        const markdown =
+          result?.ok && result.message && typeof result.message === "object"
+            ? extractTextCached(result.message)
+            : null;
+        expandedAssistantMessages.set(
+          messageId,
+          markdown === null
+            ? { status: "error", revision: revision + 1 }
+            : { status: "loaded", expanded: true, markdown, revision: revision + 1 },
+        );
+        requestUpdate();
+      },
+      () => {
+        const pending = expandedAssistantMessages.get(messageId);
+        if (pending?.status !== "loading" || pending.revision !== revision) {
+          return;
+        }
+        expandedAssistantMessages.set(messageId, { status: "error", revision: revision + 1 });
+        requestUpdate();
+      },
+    );
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
@@ -1571,6 +1611,9 @@ function renderChatThreadContents(
         setExpansionState(expandedUserMessages, messageId, !expandedUserMessages.get(messageId));
         requestUpdate();
       },
+      loadFullAssistantMessage: props.loadFullAssistantMessage ?? undefined,
+      getAssistantMessageExpansion: (messageId: string) => expandedAssistantMessages.get(messageId),
+      onToggleAssistantMessageExpanded: toggleAssistantMessageExpanded,
       isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
       onToggleToolExpanded: toggleToolCardExpanded,
       onRequestUpdate: requestUpdate,
@@ -1767,6 +1810,7 @@ function renderChatThreadContents(
     getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,
     getExpansionStateVersion(expandedUserMessages),
+    assistantMessageExpansionSignature(expandedAssistantMessages),
     getAssistantAttachmentAvailabilityRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
@@ -1778,6 +1822,7 @@ function renderChatThreadContents(
     props.boardProvider?.canPinMcpApps,
     props.boardProvider?.snapshot$.value.revision,
     props.fullMessageAgentId,
+    Boolean(props.loadFullAssistantMessage),
     showReasoning,
     props.showToolCalls,
     Boolean(props.runActive),

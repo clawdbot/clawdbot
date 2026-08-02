@@ -13,7 +13,11 @@ import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { TurnRecap } from "../chat-progress.ts";
-import { isPendingSendMessage, persistedMessageEntryId } from "../chat-thread.ts";
+import {
+  isPendingSendMessage,
+  persistedMessageEntryId,
+  type AssistantMessageExpansionState,
+} from "../chat-thread.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
@@ -22,6 +26,8 @@ import {
   renderMessageActionButtons,
   renderReplyButton,
   resolveMessageActionDetails,
+  type AssistantMessageDisclosure,
+  type MessageActionDetails,
   type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
@@ -35,7 +41,7 @@ import {
   renderChatTimestamp,
   renderMessageMeta,
 } from "./chat-message-timestamp.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
   resolveToolRowText,
@@ -62,6 +68,9 @@ type RenderMessageGroupOptions = {
   onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
   isUserMessageExpanded?: (messageId: string) => boolean;
   onToggleUserMessageExpanded?: (messageId: string) => void;
+  loadFullAssistantMessage?: SidebarFullMessageLoader;
+  getAssistantMessageExpansion?: (messageId: string) => AssistantMessageExpansionState | undefined;
+  onToggleAssistantMessageExpanded?: (messageId: string) => void;
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string) => void;
   onRequestUpdate?: () => void;
@@ -97,7 +106,25 @@ function buildGroupedMessageRenderOptions(
   item: MessageGroup["messages"][number],
   index: number,
   opts: RenderMessageGroupOptions,
+  actionDetails?: MessageActionDetails | null,
 ): GroupedMessageRenderOptions {
+  let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
+  if (
+    actionDetails?.shouldFetchFullMessage &&
+    actionDetails.messageId &&
+    opts.loadFullAssistantMessage &&
+    opts.onToggleAssistantMessageExpanded
+  ) {
+    const messageId = actionDetails.messageId;
+    const expansion = opts.getAssistantMessageExpansion?.(messageId);
+    assistantMessageDisclosure = {
+      expanded: expansion?.status === "loaded" && expansion.expanded,
+      ...(expansion?.status === "loaded" ? { markdown: expansion.markdown } : {}),
+      loading: expansion?.status === "loading",
+      error: expansion?.status === "error",
+      onToggle: () => opts.onToggleAssistantMessageExpanded?.(messageId),
+    };
+  }
   return {
     isStreaming: group.isStreaming && index === group.messages.length - 1,
     sessionKey: opts.sessionKey,
@@ -118,6 +145,7 @@ function buildGroupedMessageRenderOptions(
     onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
     isUserMessageExpanded: opts.isUserMessageExpanded,
     onToggleUserMessageExpanded: opts.onToggleUserMessageExpanded,
+    assistantMessageDisclosure,
     isToolExpanded: opts.isToolExpanded,
     onToggleToolExpanded: opts.onToggleToolExpanded,
     onRequestUpdate: opts.onRequestUpdate,
@@ -332,7 +360,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     resolveMessageActionDetails({
       message: item.message,
       messageId: item.key,
-      onOpenSidebar: opts.onOpenSidebar,
+      canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
       onReply: opts.onReply,
       senderLabel: who,
     }),
@@ -394,13 +422,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             ${renderGroupedMessage(
               item.message,
               item.key,
-              buildGroupedMessageRenderOptions(group, item, index, opts),
+              buildGroupedMessageRenderOptions(group, item, index, opts, actionDetails),
               opts.onOpenSidebar,
             )}
             ${actionDetails && index < lastMessageIndex
               ? html`
                   <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
-                    ${renderMessageActionButtons(actionDetails, opts, opts.onOpenSidebar)}
+                    ${renderMessageActionButtons(actionDetails, opts)}
                   </div>
                 `
               : nothing}
@@ -454,7 +482,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   ? renderMessageActionButtons(
                       footerActionDetails,
                       opts,
-                      opts.onOpenSidebar,
                       normalizedRole !== "user" ? opts.onDelete : undefined,
                     )
                   : opts.onDelete

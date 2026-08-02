@@ -42,6 +42,10 @@ export type SidebarFullMessageRequest = {
   kind: "assistant_message" | "tool_output";
 };
 
+export type SidebarFullMessageLoader = (
+  request: SidebarFullMessageRequest,
+) => Promise<DetailFullMessageResult | null | undefined>;
+
 type MarkdownSidebarContent = {
   kind: "markdown";
   content: string;
@@ -675,9 +679,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: SidebarContent | null = null;
-  @property({ attribute: false }) loadFullMessage?:
-    | ((request: SidebarFullMessageRequest) => Promise<DetailFullMessageResult | null | undefined>)
-    | null = null;
+  @property({ attribute: false }) loadFullMessage?: SidebarFullMessageLoader | null = null;
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;

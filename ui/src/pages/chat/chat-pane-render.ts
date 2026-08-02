@@ -123,6 +123,7 @@ export class ChatPane extends ChatPaneHeader {
     );
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
+    const fullMessageLoader = createSidebarFullMessageLoader(state, Boolean(catalogKey));
     const overlays = this.context?.overlays;
     const approvalSnapshot = overlays?.snapshot;
     const inlineApproval = this.active
@@ -543,6 +544,7 @@ export class ChatPane extends ChatPaneHeader {
       agentsList: state.agentsList,
       currentAgentId,
       fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
+      loadFullAssistantMessage: fullMessageLoader,
       onAgentChange: (agentId) => {
         const nextSessionKey = buildAgentMainSessionKey({ agentId });
         this.onPaneSessionChange?.(this.paneId, nextSessionKey);
@@ -615,7 +617,7 @@ export class ChatPane extends ChatPaneHeader {
             detail: html`<openclaw-chat-detail-panel
               class="chat-sidebar"
               .content=${state.sidebarContent}
-              .loadFullMessage=${createSidebarFullMessageLoader(state, Boolean(catalogKey))}
+              .loadFullMessage=${fullMessageLoader}
               .canvasPluginSurfaceUrl=${state.canvasPluginSurfaceUrl}
               .embedSandboxMode=${state.embedSandboxMode}
               .allowExternalEmbedUrls=${state.allowExternalEmbedUrls}
