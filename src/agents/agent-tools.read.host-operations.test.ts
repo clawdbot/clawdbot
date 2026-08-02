@@ -13,6 +13,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 type CapturedEditOperations = {
   readFile: (absolutePath: string) => Promise<Buffer>;
   writeFile: (absolutePath: string, content: string) => Promise<void>;
+  statFile: (absolutePath: string) => Promise<unknown>;
   access: (absolutePath: string) => Promise<void>;
 };
 
@@ -53,8 +54,12 @@ vi.mock("./sessions/index.js", async () => {
   };
 });
 
-const { createHostWorkspaceEditTool, createHostWorkspaceWriteTool, createSandboxedWriteTool } =
-  await import("./agent-tools.read.js");
+const {
+  createHostWorkspaceEditTool,
+  createHostWorkspaceWriteTool,
+  createSandboxedEditTool,
+  createSandboxedWriteTool,
+} = await import("./agent-tools.read.js");
 
 const osHome = () => process.env.HOME ?? os.homedir();
 const toTildePath = (absolutePath: string) => absolutePath.replace(osHome(), "~");
@@ -232,21 +237,32 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
   );
 });
 
-describe("write tool verification operations", () => {
-  it("provides readback and stat operations to host writes", () => {
+describe("file mutation verification operations", () => {
+  it("provides readback and stat operations to host writes and edits", () => {
     createHostWorkspaceWriteTool("/workspace", { workspaceOnly: false });
 
     expect(readWriteOps().readFile).toBeTypeOf("function");
     expect(readWriteOps().statFile).toBeTypeOf("function");
+
+    createHostWorkspaceEditTool("/workspace", { workspaceOnly: false });
+
+    expect(readEditOps().readFile).toBeTypeOf("function");
+    expect(readEditOps().statFile).toBeTypeOf("function");
   });
 
-  it("provides readback and stat operations to sandbox writes", () => {
-    createSandboxedWriteTool({
+  it("provides readback and stat operations to sandbox writes and edits", () => {
+    const params = {
       root: "/workspace",
       bridge: {} as SandboxFsBridge,
-    });
+    };
+    createSandboxedWriteTool(params);
 
     expect(readWriteOps().readFile).toBeTypeOf("function");
     expect(readWriteOps().statFile).toBeTypeOf("function");
+
+    createSandboxedEditTool(params);
+
+    expect(readEditOps().readFile).toBeTypeOf("function");
+    expect(readEditOps().statFile).toBeTypeOf("function");
   });
 });
