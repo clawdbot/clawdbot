@@ -60,7 +60,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Gateway token recovery:** add an explicit interactive command that resolves configured, environment, and SecretRef-backed shared tokens, and replace macOS onboarding, Control UI, CLI, and docs guidance that incorrectly asked users to paste redacted config output. Fixes #117942 and #93043. Thanks @849261680 for the earlier recovery-command design.
 - **Control UI archived session deletion:** send archive-gated delete requests from Sessions-page row and mixed-selection actions so write-scoped operators can remove archived threads while active-session deletion remains admin-only. Thanks @shakkernerd.
 - **Control UI command recovery:** keep delayed detached and immediate command failures scoped to their submitting session, preserving failed drafts and attachments for that pane without overwriting the active session. Fixes #116846. Thanks @shakkernerd.
 - **Microsoft Teams message-tool replies:** keep automatic live previews from duplicating a message already delivered to the current Teams conversation, while preserving distinct follow-up text and cross-conversation sends. Fixes #116397. (#116398) Thanks @a-tokyo.
