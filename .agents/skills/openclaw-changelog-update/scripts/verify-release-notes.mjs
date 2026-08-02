@@ -67,6 +67,7 @@ const genericDirectCommitTerms = new Set([
   "restore",
   "update",
 ]);
+const ansiEscapePattern = new RegExp(String.raw`\u001B\[[0-?]*[ -/]*[@-~]`, "g");
 let githubSnapshotState;
 
 function fail(message) {
@@ -260,14 +261,11 @@ function gitCommit(ref, required = false) {
 function fetchGithubApi(args) {
   try {
     return JSON.parse(
-      run("ghx", ["api", ...args], { env: { GHX_NO_CACHE: "1" } }).replace(
-        /\u001B\[[0-?]*[ -/]*[@-~]/g,
-        "",
-      ),
+      run("ghx", ["api", ...args], { env: { GHX_NO_CACHE: "1" } }).replace(ansiEscapePattern, ""),
     );
   } catch (error) {
     if (typeof error.stdout === "string" && error.stdout.trim() !== "") {
-      return JSON.parse(error.stdout.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, ""));
+      return JSON.parse(error.stdout.replace(ansiEscapePattern, ""));
     }
     throw error;
   }
@@ -1272,10 +1270,11 @@ function sourceCommits(base, target, mainRef) {
   for (const { candidates, commit, pullRequestOrigins } of pendingCanonicalMatches) {
     const matches = canonicalMainCommitMatches(
       commit,
-      [...candidates.values()].map((candidate) => ({
-        ...withChangedPaths(candidate),
-        pullRequests: candidateMainPullRequests.get(candidate.hash) ?? [],
-      })),
+      [...candidates.values()].map((candidate) =>
+        Object.assign({}, withChangedPaths(candidate), {
+          pullRequests: candidateMainPullRequests.get(candidate.hash) ?? [],
+        }),
+      ),
     );
     canonicalMainCommitsByReleaseCommit.set(commit.hash, matches);
     if (pullRequestOrigins.length > 0 && matches.length === 1) {
@@ -2091,14 +2090,12 @@ export function ledgerFor(
     for (const issue of linkedIssues) {
       addHandles(thanks, issue.thanks);
     }
-    return {
-      ...entry,
-      ...editorialClassification(entry.title),
+    return Object.assign({}, entry, editorialClassification(entry.title), {
       externalReferences: priorEntry?.externalReferences ?? [],
       linkedIssues,
       priorReferences,
       thanks,
-    };
+    });
   });
   const shippedBaselineLine = formatShippedBaselineExclusions(shippedBaselines);
   const ledger = [

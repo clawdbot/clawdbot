@@ -66,7 +66,7 @@ describe("gateway concurrency benchmark script", () => {
 
     const wait = calls.find((call) => call.method === "agent.wait");
     expect(wait?.params).toMatchObject({ runId: "run-1" });
-    const serverTimeoutMs = (wait?.params as { timeoutMs?: unknown }).timeoutMs;
+    const serverTimeoutMs = (wait?.params as { timeoutMs?: unknown } | undefined)?.timeoutMs;
     expect(serverTimeoutMs).toBe(0);
     expect(wait?.timeoutMs).toEqual(expect.any(Number));
     expect(Number.isInteger(wait?.timeoutMs)).toBe(true);
