@@ -6,7 +6,7 @@ import { parseStrictIntegerOption } from "./dev-tooling-safety.ts";
 import { delay } from "./gateway-bench-child.ts";
 import { requestProbeStatus } from "./gateway-bench-probes.ts";
 
-export type GatewayBenchCase = {
+type GatewayBenchCase = {
   config: Record<string, unknown>;
   env?: Record<string, string>;
   id: string;
@@ -29,7 +29,7 @@ export type InitialProbeResult = {
   transitions: Array<{ errorKind?: string; ms: number; status: number | null }>;
 };
 
-export type PluginFixtureResult = {
+type PluginFixtureResult = {
   pluginIds: string[];
   pluginsDir: string;
 };
