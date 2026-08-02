@@ -1662,7 +1662,7 @@ describe("killControlledSubagentRun", () => {
     const childSessionKey = `${parentSessionKey}:subagent:child`;
     const leafSessionKey = `${childSessionKey}:subagent:leaf`;
 
-    addSubagentRunForTests({
+    const parentRun = createSubagentRunRecord({
       runId: "run-parent-current",
       childSessionKey: parentSessionKey,
       controllerSessionKey: "agent:main:main",
@@ -1675,6 +1675,7 @@ describe("killControlledSubagentRun", () => {
       endedAt: Date.now() - 6_000,
       outcome: { status: "ok" },
     });
+    addSubagentRunForTests(parentRun);
     addSubagentRunForTests({
       runId: "run-child-stale",
       childSessionKey,
@@ -1721,19 +1722,7 @@ describe("killControlledSubagentRun", () => {
         callerIsSubagent: false,
         controlScope: "children",
       },
-      entry: createSubagentRunRecord({
-        runId: "run-parent-current",
-        childSessionKey: parentSessionKey,
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        controllerSessionKey: "agent:main:main",
-        task: "current parent task",
-        cleanup: "keep",
-        createdAt: Date.now() - 8_000,
-        startedAt: Date.now() - 7_000,
-        endedAt: Date.now() - 6_000,
-        outcome: { status: "ok" },
-      }),
+      entry: parentRun,
     });
 
     expect(result).toEqual({
@@ -1754,7 +1743,7 @@ describe("killControlledSubagentRun", () => {
     const childSessionKey = "agent:main:subagent:shared-child";
     const leafSessionKey = `${childSessionKey}:subagent:leaf`;
 
-    addSubagentRunForTests({
+    const oldParentRun = createSubagentRunRecord({
       runId: "run-old-parent-current",
       childSessionKey: oldParentSessionKey,
       controllerSessionKey: "agent:main:main",
@@ -1767,6 +1756,7 @@ describe("killControlledSubagentRun", () => {
       endedAt: Date.now() - 6_000,
       outcome: { status: "ok" },
     });
+    addSubagentRunForTests(oldParentRun);
     addSubagentRunForTests({
       runId: "run-new-parent-current",
       childSessionKey: newParentSessionKey,
@@ -1822,19 +1812,7 @@ describe("killControlledSubagentRun", () => {
         callerIsSubagent: false,
         controlScope: "children",
       },
-      entry: createSubagentRunRecord({
-        runId: "run-old-parent-current",
-        childSessionKey: oldParentSessionKey,
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        controllerSessionKey: "agent:main:main",
-        task: "old parent task",
-        cleanup: "keep",
-        createdAt: Date.now() - 8_000,
-        startedAt: Date.now() - 7_000,
-        endedAt: Date.now() - 6_000,
-        outcome: { status: "ok" },
-      }),
+      entry: oldParentRun,
     });
 
     expect(result).toEqual({
@@ -2293,7 +2271,7 @@ describe("killAllControlledSubagentRuns", () => {
       },
     });
 
-    addSubagentRunForTests({
+    const currentShadowRun = createSubagentRunRecord({
       runId: "run-current-shadow",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
@@ -2306,6 +2284,7 @@ describe("killAllControlledSubagentRuns", () => {
       endedAt: Date.now() - 2_000,
       pauseReason: "sessions_yield",
     });
+    addSubagentRunForTests(currentShadowRun);
 
     const result = await killAllControlledSubagentRuns({
       cfg: cfgWithSessionStore(storePath),
@@ -2327,19 +2306,7 @@ describe("killAllControlledSubagentRuns", () => {
           createdAt: Date.now() - 9_000,
           startedAt: Date.now() - 8_000,
         }),
-        createSubagentRunRecord({
-          runId: "run-current-shadow",
-          childSessionKey,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          controllerSessionKey: "agent:main:main",
-          task: "current shadow task",
-          cleanup: "keep",
-          createdAt: Date.now() - 4_000,
-          startedAt: Date.now() - 3_000,
-          endedAt: Date.now() - 2_000,
-          pauseReason: "sessions_yield",
-        }),
+        currentShadowRun,
       ],
     });
 
@@ -2367,7 +2334,7 @@ describe("killAllControlledSubagentRuns", () => {
       createdAt: Date.now() - 9_000,
       startedAt: Date.now() - 8_000,
     });
-    addSubagentRunForTests({
+    const currentBulkFinishedRun = createSubagentRunRecord({
       runId: "run-current-bulk-finished",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
@@ -2380,6 +2347,7 @@ describe("killAllControlledSubagentRuns", () => {
       endedAt: Date.now() - 1_000,
       outcome: { status: "ok" },
     });
+    addSubagentRunForTests(currentBulkFinishedRun);
 
     const result = await killAllControlledSubagentRuns({
       cfg: cfgWithSessionStore(),
@@ -2389,21 +2357,7 @@ describe("killAllControlledSubagentRuns", () => {
         callerIsSubagent: false,
         controlScope: "children",
       },
-      runs: [
-        createSubagentRunRecord({
-          runId: "run-current-bulk-finished",
-          childSessionKey,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          controllerSessionKey: "agent:main:main",
-          task: "current bulk finished task",
-          cleanup: "keep",
-          createdAt: Date.now() - 5_000,
-          startedAt: Date.now() - 4_000,
-          endedAt: Date.now() - 1_000,
-          outcome: { status: "ok" },
-        }),
-      ],
+      runs: [currentBulkFinishedRun],
     });
 
     expect(result).toEqual({
@@ -2428,7 +2382,7 @@ describe("killAllControlledSubagentRuns", () => {
       createdAt: Date.now() - 9_000,
       startedAt: Date.now() - 8_000,
     });
-    addSubagentRunForTests({
+    const currentBulkParentRun = createSubagentRunRecord({
       runId: "run-current-bulk-desc-parent",
       childSessionKey: parentSessionKey,
       controllerSessionKey: "agent:main:main",
@@ -2441,6 +2395,7 @@ describe("killAllControlledSubagentRuns", () => {
       endedAt: Date.now() - 1_000,
       outcome: { status: "ok" },
     });
+    addSubagentRunForTests(currentBulkParentRun);
     addSubagentRunForTests({
       runId: "run-active-bulk-desc-child",
       childSessionKey,
@@ -2461,21 +2416,7 @@ describe("killAllControlledSubagentRuns", () => {
         callerIsSubagent: false,
         controlScope: "children",
       },
-      runs: [
-        createSubagentRunRecord({
-          runId: "run-current-bulk-desc-parent",
-          childSessionKey: parentSessionKey,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          controllerSessionKey: "agent:main:main",
-          task: "current bulk parent task",
-          cleanup: "keep",
-          createdAt: Date.now() - 5_000,
-          startedAt: Date.now() - 4_000,
-          endedAt: Date.now() - 1_000,
-          outcome: { status: "ok" },
-        }),
-      ],
+      runs: [currentBulkParentRun],
     });
 
     expect(result).toEqual({
@@ -2994,7 +2935,7 @@ describe("steerControlledSubagentRun", () => {
       },
     );
     const agentCalls: CallGatewayOptions[] = [];
-    addSubagentRunForTests({
+    const entry = createSubagentRunRecord({
       runId: "run-active-steer",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
@@ -3005,6 +2946,7 @@ describe("steerControlledSubagentRun", () => {
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     });
+    addSubagentRunForTests(entry);
 
     setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
@@ -3027,17 +2969,7 @@ describe("steerControlledSubagentRun", () => {
         callerIsSubagent: false,
         controlScope: "children",
       },
-      entry: createSubagentRunRecord({
-        runId: "run-active-steer",
-        childSessionKey,
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        controllerSessionKey: "agent:main:main",
-        task: "active steer task",
-        cleanup: "keep",
-        createdAt: Date.now() - 5_000,
-        startedAt: Date.now() - 4_000,
-      }),
+      entry,
       message: "updated direction",
     });
 
