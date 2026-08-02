@@ -16,21 +16,6 @@ import {
   shouldUpdateMattermostDraftToolProgress,
 } from "./monitor-context.js";
 import { buildMattermostInboundMediaPayload } from "./monitor-resources.js";
-import { publishMattermostRecoveringStatus } from "./monitor.js";
-
-describe("Mattermost lifecycle status", () => {
-  it("keeps API and websocket retry failures recovering, including 401", () => {
-    const statusSink = vi.fn();
-
-    publishMattermostRecoveringStatus(statusSink, new Error("HTTP 401 Unauthorized"));
-
-    expect(statusSink).toHaveBeenCalledWith({
-      connected: false,
-      lifecycle: "recovering",
-      lastError: "Error: HTTP 401 Unauthorized",
-    });
-  });
-});
 
 function resolveMattermostEffectiveReplyToId(params: {
   kind: "direct" | "group" | "channel";

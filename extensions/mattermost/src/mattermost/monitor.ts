@@ -60,7 +60,7 @@ type MonitorMattermostOpts = {
   webSocketFactory?: MattermostWebSocketFactory;
 };
 
-export function publishMattermostRecoveringStatus(
+function publishMattermostRecoveringStatus(
   statusSink: MonitorMattermostOpts["statusSink"],
   error: unknown,
 ): void {
