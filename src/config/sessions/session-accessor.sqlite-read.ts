@@ -152,7 +152,7 @@ export function loadSqliteTranscriptTailEventsByJsonlBytesSync(
   // migration and branch selection never reinterpret a bounded tail as v1. Its
   // serialized line shares the same hard cap, so trim oldest selected rows
   // until the complete returned JSONL remains bounded.
-  let prependedEvent: TranscriptEvent | undefined;
+  let prependedEvent: TranscriptEvent;
   if (truncated) {
     const firstRow = executeSqliteQueryTakeFirstSync(
       database.db,
