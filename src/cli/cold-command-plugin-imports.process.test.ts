@@ -21,7 +21,9 @@ beforeAll(async () => {
     response.writeHead(200, { "content-type": "application/json" });
     response.end('{"results":[]}');
   });
-  await new Promise<void>((resolve) => clawHubServer.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    clawHubServer.listen(0, "127.0.0.1", resolve);
+  });
   const address = clawHubServer.address();
   if (!address || typeof address === "string") {
     throw new Error("failed to bind the ClawHub fixture server");
@@ -30,9 +32,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await new Promise<void>((resolve, reject) =>
-    clawHubServer.close((error) => (error ? reject(error) : resolve())),
-  );
+  await new Promise<void>((resolve, reject) => {
+    clawHubServer.close((error) => (error ? reject(error) : resolve()));
+  });
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 

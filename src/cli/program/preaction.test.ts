@@ -7,6 +7,10 @@ import { shouldMigrateStateFromPath } from "../argv.js";
 import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
 import { setCommandJsonMode } from "./json-mode.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
+import {
+  COLD_READ_COMMAND_PATHS,
+  registerColdReadCommandFixtures,
+} from "./preaction.test-helpers.js";
 
 const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 
@@ -222,31 +226,13 @@ describe("registerPreActionHooks", () => {
     programLocal.command("secrets").action(() => {});
     const skills = programLocal.command("skills");
     skills.option("--json").action(() => {});
-    for (const skillCommand of ["list", "check", "info", "search"]) {
+    for (const skillCommand of ["list", "check"]) {
       skills
         .command(skillCommand)
-        .argument("[value]")
         .option("--json")
         .action(() => {});
     }
-    programLocal
-      .command("hooks")
-      .option("--json")
-      .action(() => {});
-    const memory = programLocal.command("memory");
-    memory
-      .command("status")
-      .option("--agent <id>")
-      .option("--index")
-      .option("--fix")
-      .option("--json")
-      .action(() => {});
-    memory
-      .command("search")
-      .argument("[query]")
-      .option("--agent <id>")
-      .option("--json")
-      .action(() => {});
+    registerColdReadCommandFixtures(programLocal, skills);
     for (const skillCommand of ["install", "verify"]) {
       skills
         .command(skillCommand)
@@ -381,11 +367,7 @@ describe("registerPreActionHooks", () => {
     ["skills"],
     ["skills", "list"],
     ["skills", "check"],
-    ["skills", "info"],
-    ["skills", "search"],
-    ["hooks"],
-    ["memory", "status"],
-    ["memory", "search"],
+    ...COLD_READ_COMMAND_PATHS,
     ["agents", "bindings"],
     ["gateway", "stability"],
     ["gateway", "usage-cost"],
