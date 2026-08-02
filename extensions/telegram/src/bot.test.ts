@@ -5571,13 +5571,15 @@ describe("createTelegramBot", () => {
       token: "tok",
       config: startupConfig,
     });
-    mockTelegramConfig(
-      {
-        dmPolicy: "pairing",
-        botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+    loadConfig.mockReturnValue({
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
       },
-      { commands: { native: true } },
-    );
+    });
     readChannelAllowFromStore.mockResolvedValueOnce(["12345"]);
 
     const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
