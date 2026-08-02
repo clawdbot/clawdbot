@@ -100,6 +100,19 @@ describe("buildSlackNativeDataDeliveryPlan", () => {
     expect(chunkSlackTextAtHardLimit(`A${"😀".repeat(3)}Z`, 3)).toEqual(["A😀", "😀", "😀Z"]);
   });
 
+  it("honors a one-character fallback limit while preserving Unicode scalars", () => {
+    expect(chunkSlackTextAtHardLimit("ab😀", 1)).toEqual(["a", "b", "😀"]);
+
+    const plan = buildSlackNativeDataDeliveryPlan({
+      blocks: [tableBlock("ab")],
+      textLimit: 1,
+    });
+    expect(plan.fallbackMessages.every((message) => message.text.length === 1)).toBe(true);
+    expect(plan.fallbackMessages.map((message) => message.text).join("")).toBe(
+      "ab (table)\nAccount\nAcme",
+    );
+  });
+
   it("keeps a visible failure marker for malformed native-only data with base text", () => {
     const plan = buildSlackNativeDataDeliveryPlan({
       baseText: "Overview",

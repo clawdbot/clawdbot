@@ -33,15 +33,23 @@ type OrderedFallbackBlock = {
   continuesText?: boolean;
 };
 
+function sliceSlackTextChunk(text: string, start: number, limit: number): string {
+  return (
+    sliceUtf16Safe(text, start, Math.min(text.length, start + limit)) ||
+    Array.from(text.slice(start))[0] ||
+    ""
+  );
+}
+
 export function chunkSlackTextAtHardLimit(
   text: string,
   limit = SLACK_MESSAGE_TEXT_HARD_LIMIT,
 ): string[] {
-  const effectiveLimit = Math.max(2, Math.floor(limit));
+  const effectiveLimit = Math.max(1, Math.floor(limit));
   const chunks: string[] = [];
   let offset = 0;
   while (offset < text.length) {
-    const chunk = sliceUtf16Safe(text, offset, Math.min(text.length, offset + effectiveLimit));
+    const chunk = sliceSlackTextChunk(text, offset, effectiveLimit);
     if (!chunk) {
       throw new Error("Slack plain-text fallback chunking made no progress.");
     }
@@ -49,6 +57,13 @@ export function chunkSlackTextAtHardLimit(
     offset += chunk.length;
   }
   return chunks;
+}
+
+function fitsSlackTextLimit(text: string, limit: number): boolean {
+  if (text.length <= limit) {
+    return true;
+  }
+  return sliceSlackTextChunk(text, 0, limit).length === text.length;
 }
 
 function buildPlainTextBlocks(text: string, textLimit: number): OrderedFallbackBlock[] {
@@ -121,12 +136,12 @@ function buildOrderedBlockMessages(entries: readonly OrderedFallbackBlock[], tex
   for (const entry of entries) {
     const separator = text && entry.text && !entry.continuesText ? "\n\n" : "";
     const nextText = entry.text ? `${text}${separator}${entry.text}` : text;
-    if (blocks.length >= SLACK_MAX_BLOCKS || nextText.length > textLimit) {
+    if (blocks.length >= SLACK_MAX_BLOCKS || !fitsSlackTextLimit(nextText, textLimit)) {
       flush();
     }
     const freshSeparator = text && entry.text && !entry.continuesText ? "\n\n" : "";
     const freshText = entry.text ? `${text}${freshSeparator}${entry.text}` : text;
-    if (freshText.length > textLimit) {
+    if (!fitsSlackTextLimit(freshText, textLimit)) {
       throw new Error("One Slack fallback block exceeds the resolved message text limit.");
     }
     blocks.push(entry.block);
@@ -145,7 +160,7 @@ export function buildSlackNativeDataDeliveryPlan(params: {
   const baseText = params.baseText?.trim() ?? "";
   const textLimit = Math.min(
     SLACK_MESSAGE_TEXT_HARD_LIMIT,
-    Math.max(2, Math.floor(params.textLimit ?? SLACK_MESSAGE_TEXT_HARD_LIMIT)),
+    Math.max(1, Math.floor(params.textLimit ?? SLACK_MESSAGE_TEXT_HARD_LIMIT)),
   );
   const hasNativeData = hasSlackNativeDataBlock(params.blocks);
   const accessibilityText =
