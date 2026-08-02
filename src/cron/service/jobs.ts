@@ -417,6 +417,10 @@ export function applyJobPatch(
   assertScriptPayloadSupport(job, {
     cronConfig: opts?.cronConfig,
     requireEnabled: patch.payload?.kind === "script",
+    // Enabled-only/rename patches must keep working on jobs stored with a
+    // malformed script (pre-validation persistence); re-check syntax only
+    // when this patch rewrites the payload, or disable becomes a dead end.
+    validateSyntax: patch.payload !== undefined,
   });
   assertStreamScheduleSupport(job, {
     cronConfig: opts?.cronConfig,

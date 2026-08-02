@@ -741,6 +741,17 @@ describe("script payload validation", () => {
     ).toThrow("cron script payload has a syntax error");
   });
 
+  it("still allows disabling a job stored with a malformed script", () => {
+    const job = createJob(createMockState(now, { scriptPayloadsEnabled: true }), input());
+    // Simulate a job persisted before syntax validation shipped.
+    job.payload = { ...job.payload, kind: "script", script: "const x = ;" };
+
+    expect(() =>
+      applyJobPatch(job, { enabled: false }, { cronConfig: { triggers: { enabled: true } } }),
+    ).not.toThrow();
+    expect(job.enabled).toBe(false);
+  });
+
   it.each([
     ["top-level await", "await tools.wait(1); return 1"],
     ["top-level return", "return 1"],

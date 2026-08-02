@@ -54,7 +54,7 @@ export function assertSupportedJobSpec(
 
 export function assertScriptPayloadSupport(
   job: Pick<CronJob, "payload" | "trigger">,
-  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
+  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean; validateSyntax?: boolean },
 ) {
   if (job.payload.kind !== "script") {
     return;
@@ -62,11 +62,13 @@ export function assertScriptPayloadSupport(
   if (!job.payload.script.trim()) {
     throw new Error("cron script payload must not be empty");
   }
-  const parsed = parseCodeModeScriptSyntax(job.payload.script);
-  if (!parsed.ok) {
-    throw new Error(
-      `cron script payload has a syntax error: ${parsed.message} (line ${parsed.line}, column ${parsed.column})`,
-    );
+  if (opts?.validateSyntax !== false) {
+    const parsed = parseCodeModeScriptSyntax(job.payload.script);
+    if (!parsed.ok) {
+      throw new Error(
+        `cron script payload has a syntax error: ${parsed.message} (line ${parsed.line}, column ${parsed.column})`,
+      );
+    }
   }
   if (job.trigger) {
     // Both script kinds expose trigger.state, so composing them would give one
