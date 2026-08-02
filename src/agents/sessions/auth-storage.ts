@@ -17,7 +17,6 @@ import type {
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import { loginProviderOAuthWithPlugin } from "../../plugins/provider-runtime.runtime.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
 import {
@@ -43,6 +42,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
 import {
   getAuthStorageOAuthProviderRegistry,
+  loginAuthStorageOAuthProvider,
   resolveAuthStoragePluginOAuthCredential,
 } from "./auth-storage-oauth-registry.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
@@ -680,23 +680,8 @@ export class AuthStorage {
    * Login to an OAuth provider.
    */
   async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
-    const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-    if (provider) {
-      const credentials = await provider.login(callbacks);
-      this.set(providerId, { type: "oauth", ...credentials });
-      return;
-    }
-    const resolved = await loginProviderOAuthWithPlugin({
-      provider: providerId,
-      context: callbacks,
-    });
-    if (resolved.status === "unowned") {
-      throw new Error(`Unknown OAuth provider: ${providerId}`);
-    }
-    if (resolved.status !== "available") {
-      throw new OAuthProviderConfiguredUnavailableError(providerId);
-    }
-    this.set(providerId, { type: "oauth", ...resolved.credentials });
+    const credentials = await loginAuthStorageOAuthProvider(this, providerId, callbacks);
+    this.set(providerId, { type: "oauth", ...credentials });
   }
 
   /**
