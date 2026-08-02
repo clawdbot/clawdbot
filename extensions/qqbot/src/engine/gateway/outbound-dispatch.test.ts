@@ -447,7 +447,7 @@ describe("dispatchOutbound", () => {
   ] as const;
 
   async function deliverWorkspaceMedia(
-    mode: (typeof workspaceMediaCases)[number][3],
+    mode: (typeof workspaceMediaCases)[number][2],
     deliver: DeliverReply,
     filePath: string,
   ): Promise<void> {
