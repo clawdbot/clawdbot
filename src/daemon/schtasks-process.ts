@@ -67,6 +67,7 @@ export function findInstalledProcessPid(
   port: number,
   installedArguments: string[],
   matchesProcess: (argv: string[]) => boolean,
+  excludedPids?: ReadonlySet<number>,
 ): number | null {
   for (const entry of entries) {
     const commandLine = normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "");
@@ -82,7 +83,7 @@ export function findInstalledProcessPid(
       continue;
     }
     const pid = getSnapshotProcessId(entry);
-    if (pid) {
+    if (pid && !excludedPids?.has(pid)) {
       return pid;
     }
   }
@@ -153,6 +154,7 @@ export async function resolveScheduledTaskOwnedGatewayPids(
   env: GatewayServiceEnv,
   context?: { port: number | null; probeHosts: readonly string[] },
   installedCommand?: GatewayServiceCommandConfig | null,
+  excludedPids?: ReadonlySet<number>,
 ): Promise<number[]> {
   const command =
     installedCommand === undefined
@@ -177,7 +179,13 @@ export async function resolveScheduledTaskOwnedGatewayPids(
     if (!snapshot) {
       return [];
     }
-    const pid = findInstalledProcessPid(snapshot, port, installedArguments, () => true);
+    const pid = findInstalledProcessPid(
+      snapshot,
+      port,
+      installedArguments,
+      () => true,
+      excludedPids,
+    );
     if (pid) {
       // The task is single-instance; persisted argv identifies its process before it starts listening.
       return [pid];
@@ -191,7 +199,11 @@ export async function resolveScheduledTaskOwnedGatewayPids(
   }).catch(() => null);
   if (diagnostics?.status === "busy") {
     for (const listener of diagnostics.listeners) {
-      if (typeof listener.pid !== "number" || !listener.commandLine) {
+      if (
+        typeof listener.pid !== "number" ||
+        excludedPids?.has(listener.pid) ||
+        !listener.commandLine
+      ) {
         continue;
       }
       const argv = parseCmdScriptCommandLine(listener.commandLine);

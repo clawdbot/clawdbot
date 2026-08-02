@@ -94,6 +94,7 @@ const {
   uninstallScheduledTask,
 } = await import("./schtasks.js");
 const { removeStartupEntries } = await import("./schtasks-runtime.js");
+const { resolveScheduledTaskOwnedGatewayPids } = await import("./schtasks-process.js");
 
 function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd") {
   const taskName = env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway";
@@ -912,7 +913,7 @@ describe("Windows startup fallback", () => {
 
       await installGatewayScheduledTask(env, new PassThrough(), "19433");
 
-      expect(processQueries).toBe(5);
+      expect(processQueries).toBe(7);
       await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
   });
@@ -1437,7 +1438,6 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();
       addAcceptedRunCleanExitResponses();
-
       await installGatewayScheduledTask(env);
 
       expectStartupFallbackSpawn();
@@ -1701,6 +1701,42 @@ describe("Windows startup fallback", () => {
       expect(runtime.detail).toContain("Gateway process detected");
       expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
       expect(inspectPortUsage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("excludes a pre-existing gateway process from task ownership", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      spawnSync.mockImplementation((command, args) =>
+        command === getWindowsPowerShellExePath() &&
+        Array.isArray(args) &&
+        args.includes(NODE_PROCESS_QUERY)
+          ? makeSpawnSyncResult({
+              stdout: JSON.stringify([
+                {
+                  ProcessId: 4242,
+                  CommandLine: "node gateway.js --port 18789",
+                },
+              ]),
+            })
+          : makeSpawnSyncResult(),
+      );
+      const command = {
+        programArguments: ["node", "gateway.js", "--port", "18789"],
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      };
+
+      await expect(
+        resolveScheduledTaskOwnedGatewayPids(env, { port: 18789, probeHosts: [] }, command),
+      ).resolves.toEqual([4242]);
+      await expect(
+        resolveScheduledTaskOwnedGatewayPids(
+          env,
+          { port: 18789, probeHosts: [] },
+          command,
+          new Set([4242]),
+        ),
+      ).resolves.toEqual([]);
     });
   });
 

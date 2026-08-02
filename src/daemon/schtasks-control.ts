@@ -58,9 +58,24 @@ function runtimeSignature(runtime: Awaited<ReturnType<typeof readScheduledTaskRu
     .join("|");
 }
 
+function readExistingProcessIds(): ReadonlySet<number> | undefined {
+  const snapshot = readWindowsProcessSnapshot();
+  if (!snapshot) {
+    return undefined;
+  }
+  return new Set(
+    snapshot.flatMap((entry) =>
+      typeof entry.ProcessId === "number" && Number.isFinite(entry.ProcessId) && entry.ProcessId > 0
+        ? [entry.ProcessId]
+        : [],
+    ),
+  );
+}
+
 async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
+  excludedPids?: ReadonlySet<number>;
 }): Promise<boolean> {
   const readLaunchObservation = async (): Promise<{
     state: "running" | "not-yet-run" | "stopped-success" | "other";
@@ -90,6 +105,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
         params.env,
         { port: taskPort, probeHosts },
         command,
+        params.excludedPids,
       );
       if (ownedPids.length > 0) {
         return true;
@@ -129,6 +145,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
         manageGatewayPort
           ? (argv) => isGatewayArgv(argv, { allowGatewayBinary: true })
           : isNodeHostArgv,
+        params.excludedPids,
       ) != null
     );
   };
@@ -169,13 +186,18 @@ export async function runScheduledTaskOrThrow(params: {
   scriptPath: string;
   onMutation?: () => void;
 }): Promise<ScheduledTaskActivation> {
+  const existingProcessIds = readExistingProcessIds();
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
   params.onMutation?.();
   if (
-    !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
+    !(await shouldFallbackScheduledTaskLaunch({
+      env: params.env,
+      scriptPath: params.scriptPath,
+      excludedPids: existingProcessIds,
+    }))
   ) {
     return "scheduled-task";
   }
