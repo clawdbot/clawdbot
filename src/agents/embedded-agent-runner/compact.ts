@@ -259,7 +259,7 @@ export async function compactEmbeddedAgentSessionDirect(
       });
       const primaryProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
       const primaryModel = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
-      const requestedPrimaryProvider = params.provider?.trim() || undefined;
+      const requestedPrimaryProvider = params.provider?.trim() || DEFAULT_PROVIDER;
       const fallbacksOverride = resolveCompactionFallbacksOverride(params);
       const resolvedPrimaryCandidate = resolveModelCandidateChain({
         cfg: params.config,
