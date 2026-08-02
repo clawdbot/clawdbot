@@ -42,6 +42,7 @@ type ReservedSubagentCleanupHolder = {
 };
 
 export const RESERVED_SUBAGENT_TASK_MAX_BYTES = 4 * 1024;
+export const RESERVED_SUBAGENT_IDENTITY_MAX_BYTES = 1024;
 export const RESERVED_SUBAGENT_LABEL_MAX_BYTES = 1024;
 
 const RESERVED_SUBAGENT_IDENTITY_CLAIMS_KEY: unique symbol = Symbol.for(
@@ -136,7 +137,7 @@ function hasIndeterminateReservedCleanup(result: SpawnSubagentResult): boolean {
 }
 
 function assertReservedSubagentTextWithinLimit(
-  fieldName: "label" | "task",
+  fieldName: "childSessionKey" | "label" | "runId" | "task",
   value: string,
   maxBytes: number,
 ): void {
@@ -155,6 +156,22 @@ function assertReservedSubagentLabelWithinLimit(label: string | undefined): void
     return;
   }
   assertReservedSubagentTextWithinLimit("label", label, RESERVED_SUBAGENT_LABEL_MAX_BYTES);
+}
+
+function assertReservedSubagentIdentitiesWithinLimit(params: {
+  childSessionKey: string;
+  runId: string;
+}): void {
+  assertReservedSubagentTextWithinLimit(
+    "childSessionKey",
+    params.childSessionKey,
+    RESERVED_SUBAGENT_IDENTITY_MAX_BYTES,
+  );
+  assertReservedSubagentTextWithinLimit(
+    "runId",
+    params.runId,
+    RESERVED_SUBAGENT_IDENTITY_MAX_BYTES,
+  );
 }
 
 function buildReservedSubagentClaimToken(params: {
@@ -355,6 +372,10 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
   const childSessionKey = params.childSessionKey.trim();
   const runId = params.runId.trim();
   const task = params.task.trim();
+  assertReservedSubagentIdentitiesWithinLimit({
+    childSessionKey: params.childSessionKey,
+    runId: params.runId,
+  });
   if (
     requesterSessionKey !== params.requesterSessionKey ||
     normalizeSessionKeyPreservingOpaquePeerIds(requesterSessionKey) !== requesterSessionKey ||

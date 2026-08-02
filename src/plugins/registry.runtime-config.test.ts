@@ -615,6 +615,31 @@ describe("plugin registry runtime config scope", () => {
         update: () => ({ archivedAt: undefined }),
       }),
     ).resolves.toMatchObject(reservedEntry);
+    await expect(
+      ownerApi.runtime.agent.session.patchSessionEntry({
+        sessionKey: ordinaryKey,
+        update: () => ({ pluginOwnerId: "codex-owner" }),
+      }),
+    ).rejects.toThrow("pluginOwnerId is immutable");
+    await expect(
+      ownerApi.runtime.agent.session.patchSessionEntry({
+        sessionKey: ordinaryKey,
+        replaceEntry: true,
+        update: (entry) => ({ ...entry, pluginOwnerId: "codex-owner" }),
+      }),
+    ).rejects.toThrow("pluginOwnerId is immutable");
+    await expect(
+      ownerApi.runtime.agent.session.upsertSessionEntry({
+        sessionKey: ordinaryKey,
+        entry: { ...ordinaryEntry, pluginOwnerId: "codex-owner" },
+      }),
+    ).rejects.toThrow("pluginOwnerId is immutable");
+    await expect(
+      ownerApi.runtime.agent.session.upsertSessionEntry({
+        sessionKey: "agent:main:plugin-owned-through-upsert",
+        entry: { sessionId: "plugin-owned-through-upsert", pluginOwnerId: "codex-owner" },
+      }),
+    ).rejects.toThrow("pluginOwnerId is immutable");
     await expect(ownerApi.runtime.agent.runEmbeddedAgent(runParams)).resolves.toEqual({ ok: true });
     await expect(
       ownerApi.runtime.gateway.request("agent", {

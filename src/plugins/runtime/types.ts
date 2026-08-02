@@ -49,9 +49,9 @@ type SubagentSpawnReservedParams = {
   requesterSessionKey: string;
   /** Configured target agent authorized by the plugin-owned lease. */
   targetAgentId: string;
-  /** Child identity reserved by the plugin before calling core. */
+  /** Child identity reserved by the plugin before calling core. Raw UTF-8 must fit within 1024 bytes. */
   childSessionKey: string;
-  /** Run identity reserved by the plugin before calling core. */
+  /** Run identity reserved by the plugin before calling core. Raw UTF-8 must fit within 1024 bytes. */
   runId: string;
   task: string;
   taskName?: string;

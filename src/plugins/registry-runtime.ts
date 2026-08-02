@@ -450,6 +450,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       entry: SessionEntry;
       sessionKey: string;
     }): void => {
+      const beforePluginOwnerId = normalizeOptionalString(params.before?.pluginOwnerId);
+      const nextPluginOwnerId = normalizeOptionalString(params.entry.pluginOwnerId);
+      if (beforePluginOwnerId !== nextPluginOwnerId) {
+        throw new Error(
+          `Plugin "${pluginId}" cannot ${params.action} session "${params.sessionKey}" because pluginOwnerId is immutable through runtime session mutations.`,
+        );
+      }
       if (params.entry.modelSelectionLocked === true) {
         assertLockedSessionEntryOwned(params.sessionKey, params.entry, params.action);
         return;
