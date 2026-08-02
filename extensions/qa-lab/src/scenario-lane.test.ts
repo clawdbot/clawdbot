@@ -105,6 +105,7 @@ describe("QA scenario lane matching", () => {
         primaryModel: "openai/gpt-5.6-luna",
         channelDriver: "live" as const,
         channel: "matrix",
+        supportsModuleFlows: true,
       };
 
       expect(scenarioMatchesQaProviderLane(liveLane)).toBe(false);
@@ -122,6 +123,7 @@ describe("QA scenario lane matching", () => {
         primaryModel: "openai/gpt-5.6-luna",
         channelDriver: "live",
         channel: "matrix",
+        resolveModuleFlowSupport: () => true,
       }),
     ).toEqual({
       selectedScenarios: [],
@@ -282,6 +284,38 @@ describe("QA scenario lane matching", () => {
         channel: "matrix",
       }),
     ).toBe(true);
+  });
+
+  it("keeps module-flow support independent from driver and channel constraints", () => {
+    const scenario = makeQaSuiteTestScenario("matrix-module", {
+      channel: "matrix",
+      flowKind: "module",
+      config: { requiredChannelDriver: "live" },
+    });
+
+    expect(
+      describeQaProviderLaneMismatches({
+        scenario,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "crabline",
+        channel: "telegram",
+      }),
+    ).toEqual([
+      "channelDriver=live",
+      "channel=matrix",
+      "module flow unsupported by implementation=crabline:telegram",
+    ]);
+    expect(
+      describeQaProviderLaneMismatches({
+        scenario,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "live",
+        channel: "matrix",
+        supportsModuleFlows: true,
+      }),
+    ).toEqual([]);
   });
 
   it("keeps the built-in driver bound to the qa-channel channel", () => {
