@@ -544,17 +544,28 @@ export function requeuePendingWork(
   return updated.applied;
 }
 
-export function markPendingWorkFailed(work: PendingContinuationWork, summary: string): void {
+/**
+ * Terminalize a continuation-work flow as failed.
+ *
+ * Returns whether THIS caller committed the terminal transition, mirroring the
+ * sibling terminalizers ({@link markPendingWorkSuperseded},
+ * {@link markPendingWorkReaped}). The expected-revision CAS is the durable
+ * once-only fact: a re-entrant or recovered caller holding a stale claim loses
+ * the race and gets `false`, so terminal side effects that must happen exactly
+ * once (operator log, agent-visible outcome) can key off the return value
+ * instead of a separate dedupe path.
+ */
+export function markPendingWorkFailed(work: PendingContinuationWork, summary: string): boolean {
   if (!work.flowId || work.expectedRevision === undefined) {
-    return;
+    return false;
   }
-  failFlow({
+  return failFlow({
     flowId: work.flowId,
     expectedRevision: work.expectedRevision,
     currentStep: "Continuation work wake failed",
     blockedSummary: summary,
     updatedAt: Date.now(),
-  });
+  }).applied;
 }
 
 /**

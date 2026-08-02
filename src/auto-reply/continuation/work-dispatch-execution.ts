@@ -591,7 +591,24 @@ export async function executePendingContinuationWork(
         ? { kind: "requeued", sessionKey: work.sessionKey, dueAt: retryDueAt }
         : { kind: "unchanged" };
     }
-    markPendingWorkFailed(work, message);
+    // Retries are exhausted: this wake will never run. The row terminalizes
+    // either way, but the operator log and the agent-visible outcome are keyed
+    // off the CAS result so a re-entrant or recovered caller holding a stale
+    // claim cannot report the same terminal outcome twice.
+    const terminalized = markPendingWorkFailed(work, message);
+    if (terminalized) {
+      log.error(
+        `[continuation:work-drive-error-exhausted] flowId=${work.flowId ?? "none"} session=${work.sessionKey} hop=${work.hop} attempts=${retryCount} maxRetries=${MAX_TRANSIENT_ERROR_RETRY_COUNT} error=${message}`,
+      );
+      // Reason text is deliberately withheld: the raw driver error can carry
+      // provider payloads, URLs, or credentials, and this string is injected
+      // into the model's context. The durable row keeps the detail for
+      // operators.
+      enqueueSystemEvent(
+        `[system:continuation-warning] continue_work permanently failed after exhausting ${MAX_TRANSIENT_ERROR_RETRY_COUNT} retries; the scheduled follow-up turn will not run. Reissue continue_work if the work is still needed.`,
+        { sessionKey: work.sessionKey, trusted: true },
+      );
+    }
     return { kind: "failed" };
   }
 }
