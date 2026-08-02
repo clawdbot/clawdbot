@@ -359,27 +359,26 @@ describeControlUiE2e("Control UI chat message actions", () => {
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toBe(messageText);
 
-      const truncatedGroup = page
-        .locator(".chat-group.assistant")
-        .filter({ hasText: "Truncated assistant preview" });
-      const truncatedBubble = truncatedGroup.locator(".chat-bubble");
-      await truncatedBubble.getByRole("button", { name: "Show more" }).click();
+      const expandableBubble = page.locator(
+        '.chat-bubble[data-entry-id="assistant-truncated-proof"]',
+      );
+      await expandableBubble.getByRole("button", { name: "Show more" }).click();
       const fullMessageRequest = await gateway.waitForRequest("chat.message.get");
       expect(fullMessageRequest.params).toMatchObject({
         sessionKey: "main",
         messageId: "assistant-truncated-proof",
         maxChars: 500_000,
       });
-      await truncatedBubble.getByText(fullAssistantContent, { exact: true }).waitFor({
+      await expandableBubble.getByText(fullAssistantContent, { exact: true }).waitFor({
         state: "visible",
       });
 
-      await truncatedBubble.getByRole("button", { name: "Show less" }).click();
-      await truncatedBubble.getByText("Truncated assistant preview", { exact: true }).waitFor({
-        state: "visible",
-      });
-      await truncatedBubble.getByRole("button", { name: "Show more" }).click();
-      await truncatedBubble.getByText(fullAssistantContent, { exact: true }).waitFor({
+      await expandableBubble.getByRole("button", { name: "Show less" }).click();
+      await expect
+        .poll(() => expandableBubble.locator(".chat-message-disclosure__content").innerText())
+        .toBe(truncatedPreview);
+      await expandableBubble.getByRole("button", { name: "Show more" }).click();
+      await expandableBubble.getByText(fullAssistantContent, { exact: true }).waitFor({
         state: "visible",
       });
       expect(await gateway.getRequests("chat.message.get")).toHaveLength(1);
