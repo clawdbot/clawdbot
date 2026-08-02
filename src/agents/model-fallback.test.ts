@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -1925,6 +1926,38 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toBe(lockError);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the fallback chain on stale gateway lifecycle errors (#116418)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "ollama/qwen3:0.6b",
+            fallbacks: ["minimax/MiniMax-M3"],
+          },
+        },
+      },
+    });
+    const lifecycleError = createAgentRunStaleLifecycleError();
+    const wrappedLifecycleError = new Error("request was aborted", { cause: lifecycleError });
+    wrappedLifecycleError.name = "AbortError";
+    const run = vi.fn().mockRejectedValue(wrappedLifecycleError);
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "ollama",
+        model: "qwen3:0.6b",
+        run,
+        onFallbackStep,
+      }),
+    ).rejects.toBe(wrappedLifecycleError);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onFallbackStep).not.toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "candidate_failed" }),
+    );
   });
 
   it("aborts the fallback chain on transcript continuation failures without candidate_failed attribution", async () => {

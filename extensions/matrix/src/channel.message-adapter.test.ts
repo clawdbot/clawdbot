@@ -21,6 +21,7 @@ vi.mock("./matrix/send.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  getOptionalMatrixRuntime: () => undefined,
   getMatrixRuntime: () => ({
     channel: {
       text: {
@@ -35,6 +36,8 @@ import { matrixPlugin } from "./channel.js";
 const cfg = {
   channels: {
     matrix: {
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
       accessToken: "resolved-token",
     },
   },
@@ -66,6 +69,58 @@ describe("matrix channel message adapter", () => {
 
   it("declares Matrix markdown rendering support for shared reply payloads", () => {
     expect(matrixPlugin.meta.markdownCapable).toBe(true);
+  });
+
+  it("opts ordinary durable text and media sends into Matrix reconciliation", () => {
+    expect(matrixPlugin.message?.durableFinal).toMatchObject({
+      automaticUnknownSendReconciliation: true,
+      capabilities: {
+        text: true,
+        media: true,
+        afterCommit: true,
+        reconcileUnknownSend: true,
+      },
+      reconcileUnknownSendKinds: { text: true, media: true },
+    });
+    expect(matrixPlugin.message?.durableFinal?.capabilities?.payload).not.toBe(true);
+    expect(matrixPlugin.message?.durableFinal?.capabilities?.batch).not.toBe(true);
+  });
+
+  it("forwards the exact durable part topology into Matrix sends", async () => {
+    const sendText = matrixPlugin.message?.send?.text;
+    if (!sendText) {
+      throw new Error("Expected Matrix message adapter text sender");
+    }
+    await sendText({
+      cfg,
+      to: "room:!room:example",
+      text: "durable",
+      accountId: "default",
+      deliveryQueueId: "queue-1",
+      deliveryPartIndex: 2,
+      deliveryPartCount: 3,
+    });
+
+    expect(lastMatrixSendOptions()).toMatchObject({
+      deliveryQueueId: "queue-1",
+      deliveryPartIndex: 2,
+      deliveryPartCount: 3,
+    });
+  });
+
+  it("routes the standard Matrix send action through canonical durable delivery", async () => {
+    const prepareSendPayload = matrixPlugin.actions?.prepareSendPayload;
+    if (!prepareSendPayload) {
+      throw new Error("Expected Matrix prepared-send adapter");
+    }
+    const payload = { text: "durable tool send" };
+
+    expect(prepareSendPayload({ ctx: { action: "send", cfg } as never, payload } as never)).toBe(
+      payload,
+    );
+    expect(
+      prepareSendPayload({ ctx: { action: "edit", cfg } as never, payload } as never),
+    ).toBeNull();
   });
 
   it.each([
@@ -223,6 +278,13 @@ describe("matrix channel message adapter", () => {
         thread: proveReplyThread,
         messageSendingHooks: () => {
           expect(adapter.send?.text).toBeTypeOf("function");
+        },
+        afterCommit: () => {
+          expect(adapter.send?.lifecycle?.afterCommit).toBeTypeOf("function");
+        },
+        reconcileUnknownSend: () => {
+          expect(adapter.durableFinal?.reconcileUnknownSend).toBeTypeOf("function");
+          expect(adapter.durableFinal?.afterUnknownSendTerminal).toBeTypeOf("function");
         },
       },
     });

@@ -9,6 +9,7 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "scripts/generate-npm-package-lock.mjs"
       - "scripts/lib/npm-publish-plan.mjs"
       - "scripts/lib/release-version.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mjs"
@@ -327,6 +328,28 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           fetch-depth: 1
+
+      - name: Checkout trusted packaging helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/generate-npm-package-lock.mjs
+            scripts/lib/plugin-npm-package-manifest.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Overlay trusted packaging helper
+        run: |
+          set -euo pipefail
+          cp \
+            .release-tooling/scripts/generate-npm-package-lock.mjs \
+            scripts/generate-npm-package-lock.mjs
+          cp \
+            .release-tooling/scripts/lib/plugin-npm-package-manifest.mjs \
+            scripts/lib/plugin-npm-package-manifest.mjs
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1205,7 +1228,19 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          path: .publication-target
           fetch-depth: 1
+
+      - name: Overlay trusted OIDC packaging helper
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
+        run: |
+          set -euo pipefail
+          cp \
+            scripts/generate-npm-package-lock.mjs \
+            .publication-target/scripts/generate-npm-package-lock.mjs
+          cp \
+            scripts/lib/plugin-npm-package-manifest.mjs \
+            .publication-target/scripts/lib/plugin-npm-package-manifest.mjs
 
       - name: Setup OIDC publication target
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
@@ -1231,6 +1266,7 @@ jobs:
 
       - name: Publish with trusted publisher
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
+        working-directory: .publication-target
         env:
           OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}

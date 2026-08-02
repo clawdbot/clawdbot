@@ -18,6 +18,7 @@ import {
   timeoutErrorMessage,
 } from "./execution-errors.js";
 import type { CronServiceState } from "./state.js";
+import { tryUpdateCronTaskRunSession } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
   type IsolatedAgentSetupTimeoutSignal,
@@ -95,6 +96,9 @@ export async function executeJobCoreWithTimeout(
         onCancel: () => resolveOperatorCancellation?.(operatorCancellationMarker),
       })
     : undefined;
+  const recordTaskExecutionStart = (info?: CronAgentExecutionStarted) => {
+    tryUpdateCronTaskRunSession(state, opts?.runId, info?.sessionKey);
+  };
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
     if (typeof jobTimeoutMs !== "number") {
@@ -108,13 +112,17 @@ export async function executeJobCoreWithTimeout(
           activeExecution = { ...activeExecution, ...info };
         }
       };
+      const noteExecutionStarted = (info?: CronAgentExecutionStarted) => {
+        accumulateExecution(info);
+        recordTaskExecutionStart(info);
+      };
       const corePromise = executeJobCore(state, job, runAbortController.signal, {
         activeJobMarker: opts?.activeJobMarker,
         owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         streamBatch: opts?.streamBatch,
         streamScheduleKey: opts?.streamScheduleKey,
         streamSourceIdentity: opts?.streamSourceIdentity,
-        onExecutionStarted: accumulateExecution,
+        onExecutionStarted: noteExecutionStarted,
         onExecutionPhase: accumulateExecution,
       });
       trackActiveCronTaskRunSettlement(corePromise);
@@ -166,13 +174,17 @@ export async function executeJobCoreWithTimeout(
       }
       watchdog.noteLaneWait();
     };
+    const noteRunnerStarted = (info?: CronAgentExecutionStarted) => {
+      watchdog.noteRunnerStarted(info);
+      recordTaskExecutionStart(info);
+    };
     const corePromise = executeJobCore(state, job, runAbortController.signal, {
       activeJobMarker: opts?.activeJobMarker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,
       streamScheduleKey: opts?.streamScheduleKey,
       streamSourceIdentity: opts?.streamSourceIdentity,
-      onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
+      onExecutionStarted: deferTimeoutUntilExecutionStart ? noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
     });

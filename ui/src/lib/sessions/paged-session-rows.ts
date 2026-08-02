@@ -9,16 +9,17 @@ export async function fetchPagedSessionRows(params: {
   mapPageRows?: (rows: GatewaySessionRow[]) => GatewaySessionRow[];
   missingResultError: string;
   stalledPaginationError?: string;
+  incompletePaginationError?: string;
 }): Promise<GatewaySessionRow[] | null> {
   if (params.initialResult === null) {
     return [];
   }
   const rowsByKey = new Map<string, GatewaySessionRow>();
+  let expectedTotal: number | undefined;
   for (let pass = 0; pass < MAX_SESSION_LIST_PASSES; pass += 1) {
     // Include prefetched rows in first-pass progress so a moving row triggers a retry.
     const rowsBeforePass = rowsByKey.size;
     const seenOffsets = new Set<number>();
-    let expectedTotal: number | undefined;
     let offset = 0;
     let prefetched = pass === 0 ? params.initialResult : undefined;
     while (!seenOffsets.has(offset)) {
@@ -31,7 +32,10 @@ export async function fetchPagedSessionRows(params: {
       if (!result) {
         throw new Error(params.missingResultError);
       }
-      expectedTotal = result.totalCount;
+      // Optional later-page counts must never erase a known larger roster.
+      if (typeof result.totalCount === "number") {
+        expectedTotal = Math.max(expectedTotal ?? 0, result.totalCount);
+      }
       const rows = params.mapPageRows?.(result.sessions) ?? result.sessions;
       for (const row of rows) {
         rowsByKey.set(row.key, row);
@@ -60,6 +64,13 @@ export async function fetchPagedSessionRows(params: {
       break;
     }
     // Gateway updatedAt sorting can move rows across offset windows between RPCs.
+  }
+  if (
+    params.incompletePaginationError &&
+    expectedTotal !== undefined &&
+    rowsByKey.size < expectedTotal
+  ) {
+    throw new Error(params.incompletePaginationError);
   }
   return [...rowsByKey.values()];
 }

@@ -97,7 +97,6 @@ extensions/discord/src/send.sends-basic-channel-messages.test.ts
 extensions/discord/src/voice/manager.e2e.test.ts
 extensions/discord/src/voice/manager.ts
 extensions/discord/src/voice/realtime.ts
-extensions/fal/image-generation-provider.test.ts
 extensions/fal/image-generation-provider.ts
 extensions/feishu/src/bot.test.ts
 extensions/feishu/src/bot.ts
@@ -105,7 +104,6 @@ extensions/feishu/src/channel.test.ts
 extensions/feishu/src/channel.ts
 extensions/feishu/src/doctor.ts
 extensions/feishu/src/docx.ts
-extensions/feishu/src/drive.test.ts
 extensions/feishu/src/drive.ts
 extensions/feishu/src/media.ts
 extensions/feishu/src/monitor.comment.ts
@@ -118,7 +116,6 @@ extensions/file-transfer/src/shared/node-invoke-policy.ts
 extensions/firecrawl/src/firecrawl-tools.test.ts
 extensions/github-copilot/index.test.ts
 extensions/google-meet/index.test.ts
-extensions/google/oauth.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
 extensions/google/transport-stream.test.ts
@@ -136,7 +133,6 @@ extensions/lmstudio/src/setup.test.ts
 extensions/lmstudio/src/setup.ts
 extensions/matrix/src/cli.test.ts
 extensions/matrix/src/matrix/actions/verification.test.ts
-extensions/matrix/src/matrix/client/config.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
@@ -460,8 +456,6 @@ src/agents/runtime-plan/prepare-auth.test.ts
 src/agents/sandbox/ssh.ts
 src/agents/session-tool-result-guard.ts
 src/agents/session-transcript-repair.test.ts
-src/agents/session-write-lock.test.ts
-src/agents/session-write-lock.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
@@ -829,7 +823,6 @@ src/infra/update-managed-service-handoff.ts
 src/infra/update-runner.test.ts
 src/infra/update-startup.test.ts
 src/infra/update-startup.ts
-src/infra/windows-gateway-firewall-diagnostics.ts
 src/interactive/payload.ts
 src/llm/providers/stream-wrappers/openai.ts
 src/logging/diagnostic-stability-bundle.ts
@@ -978,7 +971,6 @@ ui/src/lib/skills/index.test.ts
 ui/src/lib/workboard/index.test.ts
 ui/src/pages/agents/agents-page.ts
 ui/src/pages/agents/memory/dreaming.test.ts
-ui/src/pages/agents/memory/dreaming.ts
 ui/src/pages/agents/memory/view.ts
 ui/src/pages/agents/panels-tools-skills.ts
 ui/src/pages/chat/chat-command-executor.test.ts

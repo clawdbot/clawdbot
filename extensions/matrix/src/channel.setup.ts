@@ -10,7 +10,7 @@ const matrixSetupWizard = createMatrixSetupWizardProxy(async () => ({
   matrixSetupWizard: (await import("./setup-surface.js")).matrixSetupWizard,
 }));
 
-export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
+export const matrixPluginBase = {
   id: "matrix",
   meta: {
     id: "matrix",
@@ -44,6 +44,13 @@ export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
           baseUrl: account.homeserver,
         },
       }),
+  },
+} satisfies ChannelPlugin<ResolvedMatrixAccount>;
+
+export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
+  ...matrixPluginBase,
+  config: {
+    ...matrixPluginBase.config,
     hasConfiguredState: ({ cfg }) => resolveMatrixAccount({ cfg }).configured,
   },
 };

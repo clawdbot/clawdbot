@@ -1,5 +1,5 @@
 // Google shared provider tests cover response conversion and finish reasons.
-import { FinishReason, GoogleGenAI, type GenerateContentResponse } from "@google/genai";
+import { ApiError, FinishReason, GoogleGenAI, type GenerateContentResponse } from "@google/genai";
 import { describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -7,6 +7,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
+  convertMessages,
   consumeGoogleGenerateContentStream,
   runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
@@ -446,6 +447,283 @@ describe("consumeGoogleGenerateContentStream", () => {
       },
     ]);
   });
+
+  it.each([
+    {
+      label: "the first thinking delta",
+      parts: [
+        { thoughtSignature: "c2lnXzE=" },
+        { thought: true, text: "draft" },
+        { text: "answer" },
+      ],
+      content: [
+        { type: "text", text: "", textSignature: "c2lnXzE=" },
+        { type: "thinking", thinking: "draft", thinkingSignature: undefined },
+        { type: "text", text: "answer", textSignature: undefined },
+      ],
+    },
+    {
+      label: "a later thinking delta",
+      parts: [
+        { thought: true, text: "draft", thoughtSignature: "c2lnXzE=" },
+        { thoughtSignature: "c2lnXzI=" },
+        { text: "answer" },
+      ],
+      content: [
+        { type: "thinking", thinking: "draft", thinkingSignature: "c2lnXzE=" },
+        { type: "text", text: "", textSignature: "c2lnXzI=" },
+        { type: "text", text: "answer", textSignature: undefined },
+      ],
+    },
+  ])("retains a standalone thought signature beside $label", async ({ parts, content }) => {
+    const output = createOutput();
+    const stream = new AssistantMessageEventStream();
+    const events: Array<{ type: string; delta?: string }> = [];
+    const collect = (async () => {
+      for await (const event of stream) {
+        events.push(event);
+      }
+    })();
+
+    await consumeGoogleGenerateContentStream({
+      chunks: chunks([
+        {
+          candidates: [{ content: { parts }, finishReason: FinishReason.STOP }],
+        } as GenerateContentResponse,
+      ]),
+      model,
+      output,
+      stream,
+      nextToolCallId: () => "generated-lookup",
+    });
+    await collect;
+
+    expect(output.content).toEqual(content);
+    expect(events).toContainEqual(expect.objectContaining({ type: "text_delta", delta: "" }));
+    expect(convertMessages(model, { messages: [output] })).toEqual([
+      {
+        role: "model",
+        parts: parts.map((part) =>
+          "thoughtSignature" in part && !("text" in part) ? { ...part, text: "" } : part,
+        ),
+      },
+    ]);
+  });
+
+  it("keeps an explicit signature-only thought separate from the preceding tool call", async () => {
+    const output = createOutput();
+
+    await consumeGoogleGenerateContentStream({
+      chunks: chunks([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { functionCall: { id: "call_1", name: "lookup", args: {} } },
+                  { thought: true, thoughtSignature: "dGhvdWdodF9zaWc=" },
+                  { thought: true, text: "draft" },
+                ],
+              },
+              finishReason: FinishReason.STOP,
+            },
+          ],
+        } as GenerateContentResponse,
+      ]),
+      model,
+      output,
+      stream: new AssistantMessageEventStream(),
+      nextToolCallId: () => "generated-lookup",
+    });
+
+    expect(output.content).toEqual([
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+      { type: "thinking", thinking: "", thinkingSignature: "dGhvdWdodF9zaWc=" },
+      { type: "thinking", thinking: "draft", thinkingSignature: undefined },
+    ]);
+  });
+
+  it.each([
+    { label: "different", signature: "c2lnXzI=" },
+    { label: "identical", signature: "c2lnXzE=" },
+  ])(
+    "never overwrites a signed tool call with a separate $label provider signature part",
+    async ({ signature }) => {
+      const output = createOutput();
+
+      await consumeGoogleGenerateContentStream({
+        chunks: chunks([
+          {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      functionCall: { id: "call_1", name: "lookup", args: {} },
+                      thoughtSignature: "c2lnXzE=",
+                    },
+                    { thoughtSignature: signature },
+                  ],
+                },
+                finishReason: FinishReason.STOP,
+              },
+            ],
+          } as GenerateContentResponse,
+        ]),
+        model,
+        output,
+        stream: new AssistantMessageEventStream(),
+        nextToolCallId: () => "generated-lookup",
+      });
+
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "lookup",
+          arguments: {},
+          thoughtSignature: "c2lnXzE=",
+        },
+        { type: "text", text: "", textSignature: signature },
+      ]);
+    },
+  );
+
+  it("never attaches a signed media Part to the preceding unsigned tool call", async () => {
+    const output = createOutput();
+
+    await consumeGoogleGenerateContentStream({
+      chunks: chunks([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { functionCall: { id: "call_1", name: "lookup", args: {} } },
+                  {
+                    inlineData: { mimeType: "image/png", data: "aW1hZ2U=" },
+                    thoughtSignature: "c2lnXzE=",
+                  },
+                ],
+              },
+              finishReason: FinishReason.STOP,
+            },
+          ],
+        } as GenerateContentResponse,
+      ]),
+      model,
+      output,
+      stream: new AssistantMessageEventStream(),
+      nextToolCallId: () => "generated-lookup",
+    });
+
+    expect(output.content).toEqual([
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+    ]);
+  });
+
+  it("keeps a same-candidate standalone signature separate from an unsigned tool call", async () => {
+    const output = createOutput();
+
+    await consumeGoogleGenerateContentStream({
+      chunks: chunks([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { functionCall: { id: "call_1", name: "lookup", args: {} } },
+                  { thoughtSignature: "c2lnXzE=" },
+                ],
+              },
+              finishReason: FinishReason.STOP,
+            },
+          ],
+        } as GenerateContentResponse,
+      ]),
+      model,
+      output,
+      stream: new AssistantMessageEventStream(),
+      nextToolCallId: () => "generated-lookup",
+    });
+
+    expect(output.content).toEqual([
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+      { type: "text", text: "", textSignature: "c2lnXzE=" },
+    ]);
+  });
+
+  it.each([
+    {
+      label: "signed text followed by unsigned text",
+      parts: [{ text: "signed", thoughtSignature: "c2lnXzE=" }, { text: "unsigned" }],
+      content: [
+        { type: "text", text: "signed", textSignature: "c2lnXzE=" },
+        { type: "text", text: "unsigned", textSignature: undefined },
+      ],
+    },
+    {
+      label: "signed thinking followed by unsigned thinking",
+      parts: [
+        { thought: true, text: "signed", thoughtSignature: "c2lnXzE=" },
+        { thought: true, text: "unsigned" },
+      ],
+      content: [
+        { type: "thinking", thinking: "signed", thinkingSignature: "c2lnXzE=" },
+        { type: "thinking", thinking: "unsigned", thinkingSignature: undefined },
+      ],
+    },
+    {
+      label: "separately signed text parts",
+      parts: [
+        { text: "first", thoughtSignature: "c2lnXzE=" },
+        { text: "second", thoughtSignature: "c2lnXzI=" },
+      ],
+      content: [
+        { type: "text", text: "first", textSignature: "c2lnXzE=" },
+        { type: "text", text: "second", textSignature: "c2lnXzI=" },
+      ],
+    },
+    {
+      label: "separately signed text parts with the same signature",
+      parts: [
+        { text: "first", thoughtSignature: "c2lnXzE=" },
+        { text: "second", thoughtSignature: "c2lnXzE=" },
+      ],
+      content: [
+        { type: "text", text: "first", textSignature: "c2lnXzE=" },
+        { type: "text", text: "second", textSignature: "c2lnXzE=" },
+      ],
+    },
+    {
+      label: "separately signed thought parts with the same signature",
+      parts: [
+        { thought: true, text: "first", thoughtSignature: "c2lnXzE=" },
+        { thought: true, text: "second", thoughtSignature: "c2lnXzE=" },
+      ],
+      content: [
+        { type: "thinking", thinking: "first", thinkingSignature: "c2lnXzE=" },
+        { type: "thinking", thinking: "second", thinkingSignature: "c2lnXzE=" },
+      ],
+    },
+  ])("keeps exact provider part ownership for $label", async ({ parts, content }) => {
+    const output = createOutput();
+
+    await consumeGoogleGenerateContentStream({
+      chunks: chunks([
+        {
+          candidates: [{ content: { parts }, finishReason: FinishReason.STOP }],
+        } as GenerateContentResponse,
+      ]),
+      model,
+      output,
+      stream: new AssistantMessageEventStream(),
+      nextToolCallId: () => "generated-lookup",
+    });
+
+    expect(output.content).toEqual(content);
+    expect(convertMessages(model, { messages: [output] })).toEqual([{ role: "model", parts }]);
+  });
 });
 
 describe("runGoogleGenerateContentLifecycle", () => {
@@ -604,9 +882,36 @@ describe("runGoogleGenerateContentLifecycle", () => {
 
     expect(await stream.result()).toMatchObject({
       stopReason: "aborted",
+      errorCode: "GATEWAY_RESTART",
       errorMessage: "Google run restarted",
     });
-    expect(output.errorCode).toBeUndefined();
+    expect(output.errorCode).toBe("GATEWAY_RESTART");
+  });
+
+  it.each([429, 503])("preserves the official Google SDK's %s API error status", async (status) => {
+    const output = createOutput();
+    const stream = new AssistantMessageEventStream();
+
+    await runGoogleGenerateContentLifecycle({
+      stream,
+      model,
+      output,
+      createClient: () => ({
+        models: {
+          generateContentStream: async () => {
+            throw new ApiError({ status, message: "Google quota exceeded" });
+          },
+        },
+      }),
+      buildParams: () => ({ model: model.id, contents: [] }),
+      nextToolCallId: () => "call_1",
+    });
+
+    expect(await stream.result()).toMatchObject({
+      stopReason: "error",
+      errorCode: String(status),
+      errorMessage: `${status}: Google quota exceeded`,
+    });
   });
 
   it("preserves the typed Gemini finish reason when the official SDK omits finishMessage", async () => {

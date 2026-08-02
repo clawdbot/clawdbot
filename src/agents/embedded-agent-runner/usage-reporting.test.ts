@@ -5,9 +5,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
-  mockedEnsureRuntimePluginsLoaded,
+  mockedAcquireAgentRunPreparedModelRuntime,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
+  resetRunOverflowCompactionHarnessMocks,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -49,11 +50,20 @@ describe("runEmbeddedAgent usage reporting", () => {
   });
 
   beforeEach(() => {
-    mockedEnsureRuntimePluginsLoaded.mockReset();
-    mockedRunEmbeddedAttempt.mockReset();
+    resetRunOverflowCompactionHarnessMocks();
   });
 
   it("bootstraps runtime plugins with the resolved workspace before running", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/test-model",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+        },
+      },
+    };
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Response 1"],
@@ -68,12 +78,99 @@ describe("runEmbeddedAgent usage reporting", () => {
       prompt: "hello",
       timeoutMs: 30000,
       runId: "run-plugin-bootstrap",
+      config,
     });
 
-    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: {},
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        workspaceDir: "/tmp/workspace",
+        runtimePluginSelections: expect.arrayContaining([
+          expect.objectContaining({ provider: "openai", modelId: "gpt-5.5" }),
+        ]),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("includes named-agent fallback owners in the runtime plugin plan", async () => {
+    const config = {
+      agents: {
+        defaults: { model: { primary: "anthropic/test-model" } },
+        list: [
+          {
+            id: "support",
+            model: { fallbacks: ["openai/gpt-5.5"] },
+          },
+        ],
+      },
+    };
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["Response 1"] }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "test-session",
+      sessionKey: "agent:support:test-key",
+      sessionFile: "agent:support:test-key",
+      agentId: "support",
       workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-agent-fallback-plugin-bootstrap",
+      config,
     });
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "support",
+        runtimePluginSelections: expect.arrayContaining([
+          expect.objectContaining({ provider: "openai", modelId: "gpt-5.5" }),
+        ]),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("preserves an explicitly pinned harness across fallback plugin planning", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex/test-model",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+        },
+      },
+    };
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["Response 1"] }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "test-key",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-pinned-fallback-plugin-bootstrap",
+      agentHarnessId: "codex",
+      config,
+    });
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: expect.arrayContaining([
+          expect.objectContaining({
+            provider: "openai",
+            modelId: "gpt-5.5",
+            runtime: "codex",
+          }),
+        ]),
+      }),
+      expect.anything(),
+    );
   });
 
   it("forwards gateway subagent binding opt-in to runtime plugin bootstrap", async () => {
@@ -94,11 +191,14 @@ describe("runEmbeddedAgent usage reporting", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: {},
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        workspaceDir: "/tmp/workspace",
+        allowGatewaySubagentBinding: true,
+      }),
+      expect.anything(),
+    );
     expect(firstAttemptInput().allowGatewaySubagentBinding).toBe(true);
   });
 

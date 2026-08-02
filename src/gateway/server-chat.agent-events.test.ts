@@ -3118,6 +3118,44 @@ describe("agent event handler", () => {
     expect(payload.data?.partialResult).toEqual(partialResult);
   });
 
+  it("preserves sanitized outcome-unknown exec details for Control UI recipients", () => {
+    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+    const result = {
+      content: [{ type: "text", text: "The command may have executed." }],
+      details: {
+        status: "failed",
+        reason: "outcome-unknown",
+        nodeInvokeFailure: {
+          failureCode: "DISCONNECTED",
+          message: "node disconnected",
+          nodeCommandDispatched: true,
+        },
+      },
+    };
+    registerAgentRunContext("run-outcome-unknown", {
+      sessionKey: "session-1",
+      verboseLevel: "full",
+    });
+    toolEventRecipients.add("run-outcome-unknown", "conn-1");
+
+    emitAgentEvent(handler, "run-outcome-unknown", "tool", {
+      phase: "result",
+      name: "exec",
+      toolCallId: "tool-outcome-unknown",
+      isError: true,
+      result,
+    });
+
+    const payload = requireMockPayload(broadcastToConnIds, 0, 1, "outcome unknown tool payload");
+    expect(requireRecord(payload.data, "outcome unknown tool data")).toMatchObject({
+      phase: "result",
+      isError: true,
+      result,
+    });
+  });
+
   it("broadcasts fallback events to agent subscribers and node session", () => {
     const { broadcast, broadcastToConnIds, nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-fallback",

@@ -333,9 +333,15 @@ export async function finalizeCronRun(params: {
     }
   };
 
+  const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
+  const spawnOnlyHandoff =
+    acceptedSessionSpawn &&
+    deliveryPayloads.length === 0 &&
+    normalizeOptionalString(synthesizedText) === undefined;
   const skipHeartbeatDelivery =
     prepared.deliveryRequested &&
     !hasFatalErrorPayload &&
+    !spawnOnlyHandoff &&
     isHeartbeatOnlyResponse(deliveryPayloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
   const sourceDeliveryOutcome = resolveSourceDeliveryOutcome(prepared.sourceDelivery, {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
@@ -356,7 +362,7 @@ export async function finalizeCronRun(params: {
   const hasCommittedTerminalProgress =
     hasCommittedMessagingToolDeliveryEvidence(finalRunResult) ||
     finalRunResult.didSendDeterministicApprovalPrompt === true ||
-    hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns) ||
+    acceptedSessionSpawn ||
     (finalRunResult.successfulCronAdds ?? 0) > 0;
   const hasIntentionalSilentReply =
     finalRunResult.meta?.terminalReplyKind === "silent-empty" ||
@@ -432,6 +438,7 @@ export async function finalizeCronRun(params: {
     resolvedDelivery: prepared.resolvedDelivery,
     deliveryRequested: prepared.deliveryRequested,
     skipHeartbeatDelivery,
+    spawnOnlyHandoff,
     sourceDeliveryOutcome,
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
@@ -483,6 +490,10 @@ export async function finalizeCronRun(params: {
       resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
     );
     if (!hasFatalErrorPayload) {
+      // Spawn-only turns are incomplete until a child produces output; keeping
+      // their failure visible prevents a one-shot job from being retired.
+      const incompleteSpawnOnlyHandoff =
+        spawnOnlyHandoff && normalizeOptionalString(deliveryResult.synthesizedText) === undefined;
       // A successful isolated agent turn must keep `status: "ok"` even when the
       // post-run delivery phase fails. Collapsing the delivery error into the
       // execution status made the outer scheduled run report `status=error`
@@ -492,6 +503,7 @@ export async function finalizeCronRun(params: {
       if (
         deliveryResult.result.status === "error" &&
         deliveryResult.result.errorKind !== "delivery-target" &&
+        !incompleteSpawnOnlyHandoff &&
         !params.isAborted()
       ) {
         const failedDeliveryError = resultWithDeliveryMeta.error;

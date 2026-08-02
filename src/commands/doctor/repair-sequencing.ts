@@ -9,7 +9,6 @@ import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig,
-  maybeRepairOpenAICodexAuthProfileStores,
 } from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
 import {
@@ -244,11 +243,6 @@ export async function runDoctorRepairSequence(params: {
     env,
   });
   appendRepairNotes(legacyOAuthSidecarRepair);
-  const openAIAuthProviderRepair = await maybeRepairOpenAICodexAuthProfileStores({
-    cfg: state.candidate,
-    env,
-  });
-  appendRepairNotes(openAIAuthProviderRepair);
   const staleOAuthShadowRepair = await repairStaleOAuthProfileShadows({
     cfg: state.candidate,
     env,
@@ -277,7 +271,6 @@ export async function runDoctorRepairSequence(params: {
   applyMutation(staleAuthOrderRepair);
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
-    openAIAuthProviderRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
     authProfileSqliteMigration.changes.length > 0;
 

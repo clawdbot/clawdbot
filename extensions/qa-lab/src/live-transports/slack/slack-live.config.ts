@@ -62,6 +62,7 @@ type SlackQaPostMessageAttempt = {
   formattingDisabled: boolean;
   nativeDataBlockCount: number;
   status: "failed" | "sent";
+  text: string;
 };
 
 export function countSlackNativeDataBlocks(value: unknown) {
@@ -85,10 +86,11 @@ export function instrumentSlackPostMessage(client: WebClient) {
   const originalPostMessage = client.chat.postMessage;
   const attempts: SlackQaPostMessageAttempt[] = [];
   client.chat.postMessage = (async (payload) => {
-    const payloadRecord = payload as { blocks?: unknown; mrkdwn?: boolean };
+    const payloadRecord = payload as { blocks?: unknown; mrkdwn?: boolean; text?: unknown };
     const attempt = {
       formattingDisabled: payloadRecord.mrkdwn === false,
       nativeDataBlockCount: countSlackNativeDataBlocks(payloadRecord.blocks),
+      text: typeof payloadRecord.text === "string" ? payloadRecord.text : "",
     };
     try {
       const response = await originalPostMessage.call(client.chat, payload);
@@ -286,21 +288,23 @@ export function buildSlackQaConfig(
               ? { dm: { enabled: true, groupEnabled: true } }
               : {}),
             replyToMode: params.overrides?.replyToMode ?? "off",
-            ...(progressOverrides
-              ? {
-                  streaming: {
-                    mode: "progress" as const,
-                    progress: {
-                      label: false,
-                      maxLines: 4,
-                      toolProgress: progressOverrides.toolProgress,
-                      ...(progressOverrides.commentary === undefined
-                        ? {}
-                        : { commentary: progressOverrides.commentary }),
+            ...(params.overrides?.streamingMode
+              ? { streaming: { mode: params.overrides.streamingMode } }
+              : progressOverrides
+                ? {
+                    streaming: {
+                      mode: "progress" as const,
+                      progress: {
+                        label: false,
+                        maxLines: 4,
+                        toolProgress: progressOverrides.toolProgress,
+                        ...(progressOverrides.commentary === undefined
+                          ? {}
+                          : { commentary: progressOverrides.commentary }),
+                      },
                     },
-                  },
-                }
-              : {}),
+                  }
+                : {}),
             ...(execApprovalsConfig ? { execApprovals: execApprovalsConfig } : {}),
             channels: {
               [params.channelId]: {

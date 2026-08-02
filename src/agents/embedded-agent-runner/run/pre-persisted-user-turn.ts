@@ -17,9 +17,6 @@ export function reconcilePrePersistedCurrentUserTurn(params: {
   preparedUserTurnMessage: AgentMessage | undefined;
   userTurnAlreadyPersisted: boolean;
 }): boolean {
-  if (!params.userTurnAlreadyPersisted) {
-    return false;
-  }
   const idempotencyKey = (
     params.preparedUserTurnMessage as { idempotencyKey?: unknown } | undefined
   )?.idempotencyKey;
@@ -29,10 +26,16 @@ export function reconcilePrePersistedCurrentUserTurn(params: {
   const durableIdempotencyKey = (
     params.durableUserTurnMessage as { idempotencyKey?: unknown } | undefined
   )?.idempotencyKey;
+  // Recorder state is process-local; after restart the durable keyed leaf is the
+  // authoritative proof that this exact admitted turn was already persisted.
+  const durableTurnMatches = durableIdempotencyKey === idempotencyKey;
+  if (!params.userTurnAlreadyPersisted && !durableTurnMatches) {
+    return false;
+  }
   const messages = params.activeSession.agent.state.messages;
   const tail = messages.at(-1) as (AgentMessage & { idempotencyKey?: unknown }) | undefined;
   const activeTailMatches = tail?.role === "user" && tail.idempotencyKey === idempotencyKey;
-  if (!activeTailMatches && durableIdempotencyKey !== idempotencyKey) {
+  if (!activeTailMatches && !durableTurnMatches) {
     return false;
   }
   if (activeTailMatches) {

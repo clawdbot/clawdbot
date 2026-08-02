@@ -226,7 +226,8 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
       await page.setViewportSize({ height: 900, width: 1280 });
       await page.getByRole("button", { name: "Stay in settings" }).click();
       const currentConnection = page.locator(".model-setup__current");
-      await currentConnection.getByText(modelRef, { exact: true }).waitFor();
+      await currentConnection.getByText("llama.cpp", { exact: true }).waitFor();
+      await currentConnection.getByText("gemma-4-e4b-it-q4_k_m", { exact: true }).waitFor();
       await expect
         .poll(() => currentConnection.locator('[data-provider-icon="llamacpp"]').count())
         .toBe(1);

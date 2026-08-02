@@ -2,12 +2,14 @@
 import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import {
+  resolveTelegramMessageCachePersistentScopeKey,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+} from "./message-cache-persistence.js";
+import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
   hasProviderObservedTelegramThreadBinding,
-  resolveTelegramMessageCachePersistentScopeKey,
-  TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
 } from "./message-cache.js";
 import { resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest } from "./runtime.test-support.js";
 

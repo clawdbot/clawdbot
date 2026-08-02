@@ -121,10 +121,11 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     applyResolvedCommandOutputMode(jsonOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
-      protocolCommandPath: getCommanderCommandPath(actionCommand),
+      commandPath: getCommanderCommandPath(actionCommand),
       jsonOutputMode,
       env: process.env,
     });
+    const bypassConfigGuard = shouldBypassConfigGuardForCommandPath(commandPath, argv);
     await applyCliExecutionStartupPresentation({
       startupPolicy,
       version: programVersion,
@@ -139,7 +140,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       process.env.NODE_NO_WARNINGS ??= "1";
     }
     if (
-      shouldBypassConfigGuardForCommandPath(commandPath) ||
+      bypassConfigGuard ||
       isGuidedConfigAction(actionCommand) ||
       isGuidedConfigCommandPath(commandPath)
     ) {
@@ -184,7 +185,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
       ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
       ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
-      skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
+      skipConfigGuard: bypassConfigGuard,
     });
     if (beforeStateMigrations) {
       const { reloadTrustedGatewayRunEnvironment } =

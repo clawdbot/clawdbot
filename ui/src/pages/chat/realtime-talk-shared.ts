@@ -104,9 +104,12 @@ export type RealtimeTalkSessionResult =
   | RealtimeTalkGatewayRelaySessionResult
   | RealtimeTalkManagedRoomSessionResult;
 
+export type RealtimeTalkTransportStartResult = "ready" | "cancelled";
+
 export type RealtimeTalkTransport = {
-  start(): Promise<void>;
-  stop(): void;
+  start(): Promise<RealtimeTalkTransportStartResult>;
+  activate?: () => void;
+  stop(options?: { emitClosed?: boolean }): void;
   setVideoEnabled?: (enabled: boolean) => Promise<void>;
   switchCamera?: (videoDeviceId: string | undefined) => Promise<void>;
 };
@@ -579,6 +582,10 @@ export async function submitRealtimeTalkConsult(params: {
     const args =
       typeof params.args === "string" ? JSON.parse(params.args || "{}") : (params.args ?? {});
     await ctx.flushTranscriptWrites?.();
+    if (params.signal?.aborted) {
+      await submitAbortResult();
+      return;
+    }
     const response = await ctx.client.request<{ runId?: string; idempotencyKey?: string }>(
       "talk.client.toolCall",
       {

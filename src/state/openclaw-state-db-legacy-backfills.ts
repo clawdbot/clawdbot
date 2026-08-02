@@ -120,6 +120,45 @@ export function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
   `);
 }
 
+/** Canonicalize shipped subagent rows whose pause/kill owner only wrote root terminal fields. */
+export function repairLegacySubagentExecutionPayloads(db: DatabaseSync): void {
+  if (!tableExists(db, "subagent_runs")) {
+    return;
+  }
+  db.exec(`
+    UPDATE subagent_runs
+    SET payload_json = json_remove(
+      CASE
+        WHEN json_extract(payload_json, '$.pauseReason') = 'sessions_yield'
+          AND json_extract(payload_json, '$.execution.status') <> 'terminal'
+          AND json_type(payload_json, '$.endedAt') IN ('integer', 'real')
+        THEN json_remove(json_set(
+          payload_json,
+          '$.execution.status', 'terminal',
+          '$.execution.endedAt', json_extract(payload_json, '$.endedAt')
+        ), '$.execution.outcome')
+        WHEN (json_type(payload_json, '$.killReconciliation') = 'object'
+          OR json_extract(payload_json, '$.endedReason') = 'subagent-killed')
+          AND json_extract(payload_json, '$.execution.status') <> 'terminal'
+          AND json_type(payload_json, '$.endedAt') IN ('integer', 'real')
+          AND json_type(payload_json, '$.outcome') = 'object'
+        THEN json_set(
+          payload_json,
+          '$.execution.status', 'terminal',
+          '$.execution.endedAt', json_extract(payload_json, '$.endedAt'),
+          '$.execution.outcome', json_extract(payload_json, '$.outcome')
+        )
+        ELSE payload_json
+      END,
+      '$.startedAt', '$.endedAt', '$.outcome'
+    )
+    WHERE json_valid(payload_json)
+      AND (json_type(payload_json, '$.startedAt') IS NOT NULL
+        OR json_type(payload_json, '$.endedAt') IS NOT NULL
+        OR json_type(payload_json, '$.outcome') IS NOT NULL);
+  `);
+}
+
 export function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
   if (
     !tableExists(db, "acp_replay_events") ||

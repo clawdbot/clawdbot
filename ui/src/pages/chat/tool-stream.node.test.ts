@@ -291,6 +291,58 @@ describe("app-tool-stream approval lifecycle", () => {
   });
 });
 
+describe("app-tool-stream throttled projections", () => {
+  it.each(["start", "update"] as const)(
+    "renders a deferred tool %s when its projection flushes",
+    (phase) => {
+      useToolStreamFakeTimers();
+      try {
+        const requestUpdate = vi.fn();
+        const host = createHost({ requestUpdate });
+        const toolCallId = "call-deferred";
+        handleAgentEvent(
+          host,
+          agentEvent("run-1", 1, "tool", {
+            phase: "start",
+            name: "read",
+            toolCallId,
+            args: { path: "notes.txt" },
+          }),
+        );
+        if (phase === "update") {
+          vi.advanceTimersByTime(80);
+          requestUpdate.mockClear();
+          handleAgentEvent(
+            host,
+            agentEvent("run-1", 2, "tool", {
+              phase,
+              name: "read",
+              toolCallId,
+              partialResult: "still reading",
+            }),
+          );
+        }
+
+        expect(requestUpdate).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(79);
+        expect(requestUpdate).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+
+        expect(host.chatToolMessages).toHaveLength(1);
+        expect(requestUpdate).toHaveBeenCalledOnce();
+        if (phase === "update") {
+          expect(host.chatToolMessages[0]?.content).toEqual([
+            { type: "toolcall", name: "read", arguments: { path: "notes.txt" } },
+            { type: "toolresult", name: "read", text: "still reading" },
+          ]);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+});
+
 describe("app-tool-stream result blocks", () => {
   it("emits a result block for completed tools with empty output", () => {
     useToolStreamFakeTimers();

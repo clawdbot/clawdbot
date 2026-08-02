@@ -166,15 +166,8 @@ async function runOutboundDeliveryWithQueue(
     existingStableDelivery?.renderedBatchPlan ??
     (params.preparedBatch ? params.renderedBatchPlan : undefined) ??
     createRenderedMessageBatchPlan(preparedPayloads);
-  const deliveryParams: DeliverOutboundPayloadsParams = {
-    ...params,
-    payloads: preparedPayloads,
-    preparedBatch,
-    // Recovery must preserve the provider-facing plan captured before local
-    // media was rewritten to spool paths; reconciliation uses that same plan.
-    renderedBatchPlan: preparedRenderedBatchPlan,
-  };
-  if (params.requireUnknownSendReconciliation === true) {
+  let unknownSendReconciliationEnabled = params.requireUnknownSendReconciliation === true;
+  if (params.requireUnknownSendReconciliation !== false && preparedPayloads.length === 1) {
     const requirements = deriveDurableFinalDeliveryRequirementsForBatch({
       payloads: preparedPayloads,
       replyToId: params.replyToId,
@@ -188,13 +181,26 @@ async function runOutboundDeliveryWithQueue(
       channel,
       requirements,
     });
-    if (!support.ok) {
+    if (params.requireUnknownSendReconciliation === true && !support.ok) {
       emitPreQueueFailure();
       throw new Error(
         `Required durable message send is unsupported for ${channel}: prepared payload capability mismatch${support.capability ? ` (${support.capability})` : ""}`,
       );
     }
+    unknownSendReconciliationEnabled =
+      support.ok &&
+      (params.requireUnknownSendReconciliation === true ||
+        support.automaticUnknownSendReconciliation);
   }
+  const deliveryParams: DeliverOutboundPayloadsParams = {
+    ...params,
+    payloads: preparedPayloads,
+    preparedBatch,
+    // Recovery must preserve the provider-facing plan captured before local
+    // media was rewritten to spool paths; reconciliation uses that same plan.
+    renderedBatchPlan: preparedRenderedBatchPlan,
+    ...(unknownSendReconciliationEnabled ? { requireUnknownSendReconciliation: true } : {}),
+  };
 
   // Invocation authority is not queued; recovery must re-enter delegated after restart.
   // Write-ahead delivery queue: persist before sending, remove after success.

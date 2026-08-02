@@ -8,6 +8,7 @@ import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 const RUNTIME_SIDECAR_ARTIFACTS = new Set([
   "helper-api.js",
   "light-runtime-api.js",
+  "qa-runner-api.js",
   "runtime-api.js",
   "runtime-setter-api.js",
   "thread-bindings-runtime.js",

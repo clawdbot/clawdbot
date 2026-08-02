@@ -20,7 +20,7 @@ import {
   type PluginCapabilityEntry,
   type PluginInspectShape,
 } from "./inspect-shape.js";
-import { loadOpenClawPlugins, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
+import { loadPluginRegistryHandle, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -269,14 +269,13 @@ function buildPluginReport(
     ? tracePluginLifecyclePhase(
         "runtime plugin registry load",
         () =>
-          loadOpenClawPlugins(
+          loadPluginRegistryHandle(
             buildPluginRuntimeLoadOptions(context, {
               config: runtimeCompatConfig,
               activationSourceConfig: rawConfig,
               workspaceDir,
               env: params?.env,
               loadModules,
-              activate: false,
               cache: false,
               onlyPluginIds,
             }),
@@ -318,11 +317,14 @@ function buildPluginReport(
         version: resolveReportedPluginVersion(plugin, params?.env),
         dependencyStatus:
           plugin.dependencyStatus ??
-          buildPluginDependencyStatus({
-            rootDir: plugin.rootDir,
-            dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
-            optionalDependencies: manifestByPluginId.get(plugin.id)?.packageOptionalDependencies,
-          }),
+          (plugin.origin === "bundled"
+            ? undefined
+            : buildPluginDependencyStatus({
+                rootDir: plugin.rootDir,
+                dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
+                optionalDependencies: manifestByPluginId.get(plugin.id)
+                  ?.packageOptionalDependencies,
+              })),
       }),
     ),
   });

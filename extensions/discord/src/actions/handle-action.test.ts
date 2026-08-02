@@ -643,6 +643,7 @@ describe("handleDiscordMessageAction", () => {
       },
       cfg,
       options: {
+        mediaAccess: undefined,
         mediaLocalRoots: ["/tmp/agent-root"],
         mediaReadFile,
       },

@@ -953,6 +953,7 @@ describe("scripts/changed-lanes", () => {
 
     expect(shouldRunControlUiI18nVerify(result.paths)).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:ui:i18n");
+    expect(shouldRunControlUiI18nVerify(["ui/config/control-ui-locales.ts"])).toBe(true);
     expect(shouldRunControlUiI18nVerify(["scripts/lib/example.ts"])).toBe(false);
   });
 
@@ -2110,7 +2111,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
-        name: "Canvas A2UI native resource sync",
+        name: "Canvas A2UI native resource generation",
         bin: "node",
         args: ["scripts/sync-native-a2ui.mjs", "--check"],
       }),
@@ -2129,7 +2130,7 @@ describe("scripts/changed-lanes", () => {
     expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
-        name: "Canvas A2UI native resource sync",
+        name: "Canvas A2UI native resource generation",
         bin: "node",
         args: ["scripts/sync-native-a2ui.mjs", "--check"],
       }),
@@ -2148,7 +2149,26 @@ describe("scripts/changed-lanes", () => {
     expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
-        name: "Canvas A2UI native resource sync",
+        name: "Canvas A2UI native resource generation",
+        bin: "node",
+        args: ["scripts/sync-native-a2ui.mjs", "--check"],
+      }),
+    );
+  });
+
+  it.each([
+    "apps/android/app/build.gradle.kts",
+    "apps/ios/project.yml",
+    "apps/linux/src-tauri/build.rs",
+    "apps/linux/src-tauri/src/canvas.rs",
+  ])("checks native A2UI ownership when %s changes", (ownerPath) => {
+    const result = detectChangedLanes([ownerPath]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "Canvas A2UI native resource generation",
         bin: "node",
         args: ["scripts/sync-native-a2ui.mjs", "--check"],
       }),

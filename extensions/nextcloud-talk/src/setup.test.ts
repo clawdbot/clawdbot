@@ -243,6 +243,38 @@ describe("nextcloud talk setup", () => {
     ).toBe("Nextcloud Talk requires --base-url.");
 
     expect(
+      validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: { useEnv: false, secret: "secret", baseUrl: "ftp://cloud.example.com" },
+      } as never),
+    ).toBe("URL must start with http:// or https://");
+
+    expect(
+      validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: { useEnv: false, secret: "secret", baseUrl: "cloud.example.com" },
+      } as never),
+    ).toBe("URL must start with http:// or https://");
+
+    expect(
+      validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          useEnv: false,
+          secret: "secret",
+          baseUrl: " https://cloud.example.com/talk/// ",
+        },
+      } as never),
+    ).toBeNull();
+
+    expect(
+      validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: { useEnv: false, secret: "secret", baseUrl: "http://cloud.example.com" },
+      } as never),
+    ).toBeNull();
+
+    expect(
       applyAccountConfig({
         cfg: {
           channels: {
@@ -252,7 +284,7 @@ describe("nextcloud talk setup", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input: {
           name: "Default",
-          baseUrl: "https://cloud.example.com///",
+          baseUrl: " https://cloud.example.com/// ",
           secret: "bot-secret",
         },
       } as never),

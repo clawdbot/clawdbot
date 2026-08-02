@@ -17,6 +17,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",
   "ui/src/pages/chat/chat-pane.test.ts",
   "ui/src/pages/chat/components/chat-thread.measure.test.ts",
+  "ui/src/pages/config/memory-mutation-owner.test.ts",
+  "ui/src/pages/config/memory-page.test.ts",
   "ui/src/pages/workboard/view.test.ts",
 ];
 

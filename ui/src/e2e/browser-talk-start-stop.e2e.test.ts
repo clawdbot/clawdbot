@@ -509,11 +509,21 @@ describeControlUiE2e("Control UI browser Talk", () => {
         channel?.dispatchEvent(
           new MessageEvent("message", {
             data: JSON.stringify({
-              type: "response.function_call_arguments.done",
-              item_id: "item-camera",
-              call_id: "call-camera",
-              name: "describe_view",
-              arguments: "{}",
+              type: "response.done",
+              response: {
+                id: "response-camera",
+                status: "completed",
+                output: [
+                  {
+                    type: "function_call",
+                    id: "item-camera",
+                    status: "completed",
+                    call_id: "call-camera",
+                    name: "describe_view",
+                    arguments: "{}",
+                  },
+                ],
+              },
             }),
           }),
         );

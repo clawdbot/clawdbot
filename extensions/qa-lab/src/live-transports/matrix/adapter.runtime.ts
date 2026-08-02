@@ -286,10 +286,9 @@ export async function createMatrixQaTransportAdapter(
         if (!logicalConversation) {
           continue;
         }
-        const replacedMessageId =
-          event.relatesTo?.relType === "m.replace" && event.relatesTo.eventId
-            ? busMessageIds.get(event.relatesTo.eventId)
-            : undefined;
+        const replacedMessageId = event.replacesEventId
+          ? busMessageIds.get(event.replacesEventId)
+          : undefined;
         if (replacedMessageId) {
           const outbound = await context.messages.editMessage({
             accountId,

@@ -126,6 +126,48 @@ describe("classifyControlUiRequest", () => {
         expected: { kind: "not-control-ui" as const },
       },
       {
+        name: "keeps the standalone MCP App shell outside the SPA catch-all",
+        pathname: "/__openclaw__/mcp-app",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps the standalone MCP App view outside the SPA catch-all",
+        pathname: "/__openclaw__/mcp-app/view",
+        method: "HEAD",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "preserves SPA routes that only resemble the standalone MCP App namespace",
+        pathname: "/__openclaw__/mcp-apps",
+        method: "GET",
+        expected: { kind: "serve" as const },
+      },
+      {
+        name: "keeps MCP App descendants outside the SPA catch-all",
+        pathname: "/__openclaw__/mcp-app/other",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps health probe descendants outside the SPA catch-all",
+        pathname: "/healthz/details",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps readiness probe trailing slashes outside the SPA catch-all",
+        pathname: "/readyz/",
+        method: "HEAD",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "preserves SPA routes that only resemble probe paths",
+        pathname: "/healthcheck",
+        method: "GET",
+        expected: { kind: "serve" as const },
+      },
+      {
         name: "preserves the SPA root that only resembles the OpenAI-compatible API",
         pathname: "/v12",
         method: "GET",

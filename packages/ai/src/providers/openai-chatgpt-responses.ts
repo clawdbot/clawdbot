@@ -36,18 +36,19 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
-import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
+import {
+  processResponsesStream,
+  ResponsesStreamFailure,
+} from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
-  Api,
   AssistantMessage,
   Context,
   Model,
   SimpleStreamOptions,
   StreamFunction,
   StreamOptions,
-  Usage,
 } from "../types.js";
 import {
   appendAssistantMessageDiagnostic,
@@ -68,8 +69,10 @@ import { inspectTlsCertificateError } from "../utils/tls-certificate-errors.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
+  applyResponsesServiceTierPricing,
   convertResponsesMessages,
   convertResponsesToolPayload,
+  createResponsesAssistantOutput,
   resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -263,23 +266,7 @@ export const streamOpenAICodexResponses: StreamFunction<
     let requestTimeoutSignal: AbortSignal | undefined;
     let activeSignal: AbortSignal | undefined;
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
-    const output: AssistantMessage = {
-      role: "assistant",
-      content: [],
-      api: "openai-chatgpt-responses" as Api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: Date.now(),
-    };
+    const output = createResponsesAssistantOutput(model);
 
     try {
       const unresolvedApiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -341,6 +328,9 @@ export const streamOpenAICodexResponses: StreamFunction<
 
             if (activeSignal?.aborted) {
               throw transportAbortError(activeSignal);
+            }
+            if (output.stopReason === "aborted" || output.stopReason === "error") {
+              throw new CodexApiError(output.errorMessage ?? "An unknown error occurred");
             }
             stream.push({
               type: "done",
@@ -484,6 +474,10 @@ export const streamOpenAICodexResponses: StreamFunction<
         throw transportAbortError(activeSignal);
       }
 
+      if (output.stopReason === "aborted" || output.stopReason === "error") {
+        throw new Error(output.errorMessage ?? "An unknown error occurred");
+      }
+
       stream.push({
         type: "done",
         reason: output.stopReason as "stop" | "length" | "toolUse",
@@ -591,38 +585,6 @@ function buildRequestBody(
   return body;
 }
 
-function getServiceTierCostMultiplier(
-  model: Pick<Model<"openai-chatgpt-responses">, "id">,
-  serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-): number {
-  switch (serviceTier) {
-    case "flex":
-      return 0.5;
-    case "priority":
-      return model.id === "gpt-5.5" ? 2.5 : 2;
-    default:
-      return 1;
-  }
-}
-
-function applyServiceTierPricing(
-  usage: Usage,
-  serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  model: Pick<Model<"openai-chatgpt-responses">, "id">,
-) {
-  const multiplier = getServiceTierCostMultiplier(model, serviceTier);
-  if (multiplier === 1) {
-    return;
-  }
-
-  usage.cost.input *= multiplier;
-  usage.cost.output *= multiplier;
-  usage.cost.cacheRead *= multiplier;
-  usage.cost.cacheWrite *= multiplier;
-  usage.cost.total =
-    usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
-}
-
 function resolveCodexServiceTier(
   responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
   requestServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
@@ -679,7 +641,7 @@ async function processStream(
     signal: options?.signal,
     resolveServiceTier: resolveCodexServiceTier,
     applyServiceTierPricing: (usage, serviceTier) =>
-      applyServiceTierPricing(usage, serviceTier, model),
+      applyResponsesServiceTierPricing(usage, serviceTier, model),
   });
 }
 
@@ -711,7 +673,11 @@ class CodexProtocolError extends Error {
 }
 
 function isCodexNonTransportError(error: unknown): boolean {
-  return error instanceof CodexApiError || error instanceof CodexProtocolError;
+  return (
+    error instanceof CodexApiError ||
+    error instanceof CodexProtocolError ||
+    error instanceof ResponsesStreamFailure
+  );
 }
 
 function isWebSocketConnectionLimitReachedError(error: unknown): boolean {
@@ -759,14 +725,6 @@ async function* mapCodexEvents(
       });
     }
 
-    if (type === "response.failed") {
-      const response = (event as { response?: { error?: { code?: string; message?: string } } })
-        .response;
-      const code = response?.error?.code;
-      const message = response?.error?.message;
-      throw new CodexApiError(message || "Codex response failed", { code, payload: event });
-    }
-
     if (
       type === "response.done" ||
       type === "response.completed" ||
@@ -778,7 +736,7 @@ async function* mapCodexEvents(
         : response;
       yield {
         ...event,
-        type: "response.completed",
+        type: type === "response.done" ? "response.completed" : type,
         response: normalizedResponse,
       } as ResponseStreamEvent;
       return;
@@ -824,18 +782,28 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
   try {
     while (true) {
       const { done, value } = await guard.read();
-      if (done) {
-        break;
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
       }
-      buffer += decoder.decode(value, { stream: true });
+      if (done) {
+        buffer += decoder.decode();
+      }
 
-      let idx = buffer.indexOf("\n\n");
-      while (idx !== -1) {
-        const chunk = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
+      while (true) {
+        // Defer a possible CRLF only when CR does not already complete a blank line.
+        const deferTrailingCr =
+          !done && buffer.endsWith("\r") && !buffer.endsWith("\r\r") && !buffer.endsWith("\n\r");
+        const searchable = deferTrailingCr ? buffer.slice(0, -1) : buffer;
+        // A CRLF is one line ending: never backtrack its CR into a false blank line.
+        const boundary = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/.exec(searchable);
+        if (!boundary) {
+          break;
+        }
+        const chunk = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
 
         const dataLines = chunk
-          .split("\n")
+          .split(/\r\n|\r|\n/)
           .filter((l) => l.startsWith("data:"))
           .map((l) => l.slice(5).trim());
         if (dataLines.length > 0) {
@@ -857,7 +825,10 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
             yield event;
           }
         }
-        idx = buffer.indexOf("\n\n");
+      }
+
+      if (done) {
+        break;
       }
     }
   } finally {
@@ -1545,7 +1516,7 @@ async function processWebSocketStream(
         signal: options?.signal,
         resolveServiceTier: resolveCodexServiceTier,
         applyServiceTierPricing: (usage, serviceTier) =>
-          applyServiceTierPricing(usage, serviceTier, model),
+          applyResponsesServiceTierPricing(usage, serviceTier, model),
       },
     );
     if (options?.signal?.aborted) {

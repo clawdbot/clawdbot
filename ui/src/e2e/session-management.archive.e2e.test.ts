@@ -16,6 +16,64 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it("deletes every archived thread exactly once when the paged roster reorders", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const keys = ["agent:main:first", "agent:main:repeated", "agent:main:moved"];
+    const archived = keys.map((key, index) =>
+      sessionRow(key, key.split(":").at(-1) ?? key, 3 - index, { archived: true }),
+    );
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: true },
+        "sessions.list": sessionsListResponse([archived[0]], { totalCount: 1 }),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions?status=archived`);
+      const remove = page.getByRole("button", { name: /Delete all archived/ });
+      await remove.waitFor();
+      await gateway.setMethodResponse("sessions.list", {
+        sequence: [
+          sessionsListResponse([archived[0], archived[1]], {
+            hasMore: true,
+            nextOffset: 2,
+            totalCount: 3,
+          }),
+          sessionsListResponse([archived[1]], {
+            offset: 2,
+            totalCount: 3,
+          }),
+          sessionsListResponse(archived, { totalCount: 3 }),
+        ],
+      });
+      page.once("dialog", (dialog) => void dialog.accept());
+      await remove.click();
+
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.delete")).map(
+            (request) => requireRecord(request.params).key,
+          ),
+        )
+        .toEqual(keys);
+      for (const request of await gateway.getRequests("sessions.delete")) {
+        expect(requireRecord(request.params)).toMatchObject({
+          archivedOnly: true,
+          deleteTranscript: true,
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("never deletes a hidden thread selected before changing the roster search", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -444,7 +502,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps a session row when the Gateway reports no deletion", async () => {
+  it("archive-gates a row-menu delete and keeps the row when the Gateway reports no deletion", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -457,7 +515,9 @@ suite.define(() => {
         "sessions.delete": { ok: true, deleted: false },
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
+          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z"), {
+            archived: true,
+          }),
         ]),
       },
       sessionKey: "agent:main:main",
@@ -465,7 +525,7 @@ suite.define(() => {
     page.on("dialog", (dialog) => void dialog.accept());
 
     try {
-      await page.goto(`${suite.server.baseUrl}sessions`);
+      await page.goto(`${suite.server.baseUrl}sessions?status=archived`);
       const row = page.locator(".session-data-row").filter({ hasText: "Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
@@ -475,7 +535,11 @@ suite.define(() => {
       );
 
       const request = await gateway.waitForRequest("sessions.delete");
-      expect(requireRecord(request.params)).toMatchObject({ key });
+      expect(requireRecord(request.params)).toMatchObject({
+        archivedOnly: true,
+        deleteTranscript: true,
+        key,
+      });
       await row.waitFor({ state: "visible" });
     } finally {
       await context.close();

@@ -1265,6 +1265,39 @@ describe("readSystemdServiceExecStart", () => {
     expect(command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN).toBe("inline-and-file");
   });
 
+  it("reads all inline assignments in order before EnvironmentFile overrides", async () => {
+    mockReadGatewayServiceFile(
+      [
+        "[Service]",
+        "ExecStart=/usr/bin/openclaw gateway run",
+        'Environment=PLAIN=first "QUOTED=value with spaces" REPEATED=first',
+        "Environment='REPEATED=last value' INLINE_FILE=inline",
+        "EnvironmentFile=%h/.openclaw/.env",
+      ],
+      {
+        [`${TEST_SERVICE_HOME}/.openclaw/.env`]: ["INLINE_FILE=file", "FILE_ONLY=from-file"].join(
+          "\n",
+        ),
+      },
+    );
+
+    const command = await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME });
+    expect(command?.environment).toEqual({
+      PLAIN: "first",
+      QUOTED: "value with spaces",
+      REPEATED: "last value",
+      INLINE_FILE: "file",
+      FILE_ONLY: "from-file",
+    });
+    expect(command?.environmentValueSources).toEqual({
+      PLAIN: "inline",
+      QUOTED: "inline",
+      REPEATED: "inline",
+      INLINE_FILE: "inline-and-file",
+      FILE_ONLY: "file",
+    });
+  });
+
   it("ignores missing optional EnvironmentFile entries", async () => {
     await expectExecStartWithoutEnvironment("EnvironmentFile=-%h/.openclaw/missing.env");
   });

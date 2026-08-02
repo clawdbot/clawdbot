@@ -17,6 +17,7 @@ import { createSessionEventSubscriptionOwner } from "./session-event-subscriptio
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import {
   normalizeAgentId,
+  parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
   uiSessionEventMatches,
 } from "./session-key.ts";
@@ -35,6 +36,7 @@ export type { SessionArchivedFilter } from "./navigation.ts";
 export type {
   SessionCapability,
   SessionListOptions,
+  SessionListSnapshot,
   SessionMessageSubscription,
 } from "./session-capability.ts";
 export type { SessionPatch } from "./patch.ts";
@@ -363,6 +365,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     });
     const eventInfo = readSessionChangedEvent(event.payload);
     const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
+    const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
     if (eventReason === "groups") {
       groups.invalidate();
       void groups.load();
@@ -398,7 +401,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
     }
     // Gateway lists own filtering/order; events coalesce into one canonical refresh.
-    roster.scheduleEvent();
+    roster.scheduleEvent({
+      agentId:
+        eventInfo?.agentId ??
+        parseAgentSessionKey(eventInfo?.key)?.agentId ??
+        (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
+      filtered: event.event === "sessions.changed",
+    });
   });
 
   return {
@@ -409,6 +418,16 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return canonicalListRevision;
     },
     list: roster.list,
+    listSnapshot: (scope) => roster.listSnapshot(scope),
+    subscribeList(scope, listener) {
+      if (scope.archivedFilter && scope.archivedFilter !== "active") {
+        return roster.subscribeList(scope, listener);
+      }
+      const notify = () => listener(roster.listSnapshot(scope));
+      listeners.add(notify);
+      return () => listeners.delete(notify);
+    },
+    refreshList: (options) => roster.refreshList(options),
     setCreatorFilter: (creatorId) => roster.setCreatorFilter(creatorId),
     reconcile,
     reconcileChanged,

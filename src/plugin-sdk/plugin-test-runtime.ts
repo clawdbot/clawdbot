@@ -34,7 +34,6 @@ export {
 } from "../plugins/web-provider-public-artifacts.explicit.js";
 export {
   getActivePluginRegistry,
-  releasePinnedPluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";

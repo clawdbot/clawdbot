@@ -37,6 +37,7 @@ import {
   scopedAgentParamsForSession,
   type SessionArchivedFilter,
 } from "../../lib/sessions/index.ts";
+import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
 import {
   resolveSessionPreferredFaceForKey,
   resolveSessionNavigationAgentId,
@@ -86,6 +87,8 @@ type SessionsPageRequestScope = {
 };
 
 type SessionsPageMutationResult = "completed" | "failed" | "stale";
+
+type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived">;
 
 class SessionsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -692,14 +695,17 @@ class SessionsPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    await this.deleteSessions(keys);
+    const rowsByKey = new Map(this.result?.sessions.map((row) => [row.key, row]) ?? []);
+    // Only current row state may opt into write-scoped archive deletion.
+    // Unknown selections stay unflagged and therefore admin-only.
+    await this.deleteSessions(keys.map((key) => rowsByKey.get(key) ?? { key }));
   }
 
   private async deleteSessions(
-    keys: string[],
-    options: { deleteTranscript?: boolean; archivedOnly?: boolean } = {},
+    rows: SessionDeleteRow[],
+    options: { deleteTranscript?: boolean } = {},
   ) {
-    if (keys.length === 0 || this.loading || this.sessionMutationPending) {
+    if (rows.length === 0 || this.loading || this.sessionMutationPending) {
       return;
     }
     const scope = this.captureRequestScope();
@@ -709,10 +715,11 @@ class SessionsPage extends OpenClawLightDomElement {
     this.sessionMutationPending = true;
     try {
       const result = await scope.sessions.deleteMany(
-        keys.map((key) => ({
-          key,
-          agentId: this.sessionAgentId(key, scope.context),
+        rows.map((row) => ({
+          key: row.key,
+          agentId: this.sessionAgentId(row.key, scope.context),
           ...options,
+          ...(row.archived === true ? { archivedOnly: true } : {}),
         })),
       );
       if (!this.isRequestScopeCurrent(scope)) {
@@ -794,47 +801,45 @@ class SessionsPage extends OpenClawLightDomElement {
     // full archived set so "all archived" means all of them. Any abnormal page
     // (failure, non-advancing offset) aborts: deleting a partial enumeration
     // would silently violate the "all archived" contract.
-    const keys: string[] = [];
+    let rows: GatewaySessionRow[];
     try {
       // One options snapshot for every page: filter edits made while pages load
-      // must not mix enumeration populations.
-      const listOptions = this.sessionListOptions();
-      let offset = 0;
-      for (;;) {
-        const listed = await scope.sessions.list({ ...listOptions, limit: 1000, offset });
-        if (!this.isRequestScopeCurrent(scope)) {
-          return;
-        }
-        if (!listed) {
-          this.error = scope.sessions.state.error;
-          return;
-        }
-        for (const row of listed.sessions) {
-          if (row.archived === true) {
-            keys.push(row.key);
-          }
-        }
-        if (listed.hasMore !== true) {
-          break;
-        }
-        if (typeof listed.nextOffset !== "number" || listed.nextOffset <= offset) {
-          throw new Error("archived session enumeration did not advance");
-        }
-        offset = listed.nextOffset;
+      // must not mix populations; a deep link never narrows "all archived".
+      const {
+        search: _deepLinkSearch,
+        agentId: _linkedAgentId,
+        ...filters
+      } = this.sessionListOptions();
+      const agentId = scope.context.agentSelection.state.scopeId?.trim();
+      const listOptions = { ...filters, ...(agentId ? { agentId } : {}) };
+      const listed = await fetchPagedSessionRows({
+        list: (offset) => scope.sessions.list({ ...listOptions, limit: 1000, offset }),
+        isCurrent: () => this.isRequestScopeCurrent(scope),
+        missingResultError:
+          scope.sessions.state.error ?? "archived session enumeration returned no result",
+        stalledPaginationError: "archived session enumeration did not advance",
+        incompletePaginationError: "archived session enumeration was incomplete",
+      });
+      if (!listed) {
+        return;
       }
+      rows = listed;
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
         this.error = String(error);
       }
       return;
     }
+    const archivedRows = rows.filter((row) => row.archived === true);
     if (
-      keys.length === 0 ||
-      !window.confirm(t("sessionsView.deleteAllArchivedConfirm", { count: String(keys.length) }))
+      archivedRows.length === 0 ||
+      !window.confirm(
+        t("sessionsView.deleteAllArchivedConfirm", { count: String(archivedRows.length) }),
+      )
     ) {
       return;
     }
-    await this.deleteSessions(keys, { deleteTranscript: true, archivedOnly: true });
+    await this.deleteSessions(archivedRows, { deleteTranscript: true });
   }
 
   private async deleteSessionFromMenu(row: GatewaySessionRow) {
@@ -842,7 +847,7 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: label }))) {
       return;
     }
-    await this.deleteSessions([row.key]);
+    await this.deleteSessions([row]);
   }
 
   private async stopCloudWorker(row: GatewaySessionRow) {

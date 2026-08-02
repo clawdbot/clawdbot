@@ -811,22 +811,31 @@ describe("openai transport stream", () => {
       ],
     };
     const recoveredStream = streamChunks([]);
+    const recoveredResponse = new Response(null, { status: 200 });
     const create = vi
       .fn()
-      .mockRejectedValueOnce(
-        new OpenAI.BadRequestError(
-          400,
-          {
-            code: "thinking_signature_invalid",
-            message:
-              "The encrypted content for item rs_prior could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
-            type: "invalid_request_error",
-          },
-          undefined,
-          new Headers(),
+      .mockReturnValueOnce({
+        withResponse: vi.fn().mockRejectedValue(
+          new OpenAI.BadRequestError(
+            400,
+            {
+              code: "thinking_signature_invalid",
+              message:
+                "The encrypted content for item rs_prior could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+              type: "invalid_request_error",
+            },
+            undefined,
+            new Headers(),
+          ),
         ),
-      )
-      .mockResolvedValueOnce(recoveredStream);
+      })
+      .mockReturnValueOnce({
+        withResponse: vi.fn().mockResolvedValue({
+          data: recoveredStream,
+          response: recoveredResponse,
+          request_id: null,
+        }),
+      });
 
     await expect(
       testing.createResponsesStreamWithEncryptedContentRetry({
@@ -846,7 +855,7 @@ describe("openai transport stream", () => {
           maxTokens: 8192,
         },
       }),
-    ).resolves.toBe(recoveredStream);
+    ).resolves.toEqual({ stream: recoveredStream, response: recoveredResponse });
 
     expect(create).toHaveBeenCalledTimes(2);
     expect(create.mock.calls[0]?.[0]).toBe(request);
@@ -862,6 +871,47 @@ describe("openai transport stream", () => {
         request.input[2],
       ],
     });
+  });
+
+  it("preserves HTTP status when a managed Responses request rejects", async () => {
+    const failure = new OpenAI.RateLimitError(
+      429,
+      {
+        code: "rate_limit_exceeded",
+        message: "rate limited",
+        type: "rate_limit_error",
+      },
+      undefined,
+      new Headers(),
+    );
+    const withResponse = vi.fn().mockRejectedValue(failure);
+
+    await expect(
+      testing.createResponsesStreamWithEncryptedContentRetry({
+        client: {
+          responses: {
+            create: vi.fn().mockReturnValue({ withResponse }),
+          },
+        } as never,
+        request: { model: "gpt-5.5", stream: true, input: [] } as never,
+        requestOptions: undefined,
+        model: {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 8192,
+        },
+      }),
+    ).rejects.toBe(failure);
+
+    expect(failure.status).toBe(429);
+    expect(withResponse).toHaveBeenCalledOnce();
   });
 
   it.each([

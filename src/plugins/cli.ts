@@ -1,6 +1,6 @@
 // Registers plugin-related CLI commands.
 import type { Command } from "commander";
-import { getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
+import { getRuntimeConfigSnapshot, readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLogger,
@@ -81,7 +81,7 @@ export const loadValidatedConfigForPluginRegistration =
     if (!snapshot.valid) {
       return null;
     }
-    return getRuntimeConfig();
+    return getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
   };
 
 export async function getPluginCliCommandDescriptors(

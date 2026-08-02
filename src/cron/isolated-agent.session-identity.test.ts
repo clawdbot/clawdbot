@@ -56,8 +56,13 @@ function lastEmbeddedAgentCall(): {
   prompt?: string;
   sessionId?: string;
   sessionKey?: string;
+  sessionTarget?: {
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    storePath?: string;
+  };
   workspaceDir?: string;
-  sessionFile?: string;
 } {
   const calls = runEmbeddedAgentMock.mock.calls;
   const call = calls[calls.length - 1];
@@ -74,8 +79,13 @@ function lastEmbeddedAgentCall(): {
     prompt?: string;
     sessionId?: string;
     sessionKey?: string;
+    sessionTarget?: {
+      agentId?: string;
+      sessionId?: string;
+      sessionKey?: string;
+      storePath?: string;
+    };
     workspaceDir?: string;
-    sessionFile?: string;
   };
 }
 
@@ -206,18 +216,28 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       const call = lastEmbeddedAgentCall();
       expect(call.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
       expect(call.workspaceDir).toBe(opsWorkspace);
-      expect(call.sessionFile).toBe(call.sessionKey);
+      expect(call.sessionTarget).toEqual({
+        agentId: "ops",
+        sessionId: call.sessionId,
+        sessionKey: call.sessionKey,
+        storePath: path.join(home, ".openclaw", "agents", "ops", "sessions", "sessions.json"),
+      });
     });
   });
 
-  it("passes the canonical key through the deprecated sessionFile field", async () => {
+  it("passes the canonical identity through the structured session target", async () => {
     await withTempHome(async (home) => {
       await runCronTurn(home, {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
       });
       const call = lastEmbeddedAgentCall();
 
-      expect(call.sessionFile).toBe(call.sessionKey);
+      expect(call.sessionTarget).toEqual({
+        agentId: "main",
+        sessionId: call.sessionId,
+        sessionKey: call.sessionKey,
+        storePath: expect.any(String),
+      });
     });
   });
 

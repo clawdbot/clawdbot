@@ -28,6 +28,7 @@ import {
   assertGatewayServiceMutationAllowed,
   formatExternalSupervisorActionRequired,
   isGatewayExternallySupervised,
+  resolveGatewayServiceMutationError,
 } from "../../infra/gateway-supervision.js";
 import {
   clearGatewayRestartIntentSync,
@@ -383,16 +384,13 @@ async function signalGatewayRestart(
   };
 }
 
-async function restartGatewayWithoutServiceManager(
-  port: number,
-  restartIntent?: GatewayRestartIntent,
-) {
-  const managed = await handleSystemScopeSystemdGateway("restart");
+async function restartUnmanaged(port: number, intent?: GatewayRestartIntent, allowSystem = true) {
+  const managed = allowSystem ? await handleSystemScopeSystemdGateway("restart") : null;
   if (managed) {
     return managed;
   }
   return await signalGatewayRestart(port, {
-    restartIntent,
+    restartIntent: intent,
     enforceRestartConfig: true,
     processLabel: "unmanaged",
     auditSource: "cli",
@@ -402,7 +400,7 @@ async function restartGatewayWithoutServiceManager(
 type GatewaySignalRestartResult = NonNullable<Awaited<ReturnType<typeof signalGatewayRestart>>>;
 
 function isGatewaySignalRestartResult(
-  result: Awaited<ReturnType<typeof restartGatewayWithoutServiceManager>>,
+  result: Awaited<ReturnType<typeof restartUnmanaged>>,
 ): result is GatewaySignalRestartResult {
   return result !== null && "pid" in result && typeof result.pid === "number";
 }
@@ -595,6 +593,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     checkTokenDrift: true,
     expectedPort: configuredPort,
+    beforeServiceMutation: () => assertGatewayServiceMutationAllowed("restart the gateway"),
     repairLoadedService: async ({ json, stdout, warn, state, issues }) => {
       const result = await repairLoadedGatewayServiceForStart({
         action: "restart",
@@ -612,7 +611,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       return result;
     },
     onNotLoaded: async () => {
-      if (process.platform === "darwin") {
+      const mutationError = resolveGatewayServiceMutationError("restart the gateway");
+      if (process.platform === "darwin" && !mutationError) {
         const recovered = await recoverInstalledLaunchAgent({ result: "restarted" });
         if (recovered) {
           appendGatewayLifecycleAudit({
@@ -623,7 +623,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           return recovered;
         }
       }
-      const handled = await restartGatewayWithoutServiceManager(unmanagedPort, restartIntent);
+      const handled = await restartUnmanaged(unmanagedPort, restartIntent, !mutationError);
       if (handled) {
         restartedWithoutServiceManager = true;
         if (isGatewaySignalRestartResult(handled) && handled.previousLockIdentity) {
@@ -634,6 +634,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           unmanagedRestartWaitSeconds = healthWait.timeoutSeconds;
         }
         return handled;
+      }
+      if (mutationError) {
+        throw mutationError;
       }
       return null;
     },

@@ -302,7 +302,13 @@ export class NodeRegistry {
           },
         });
       } else {
-        pending.reject(new Error(`node disconnected (${pending.command})`));
+        pending.resolve({
+          ok: false,
+          error: {
+            code: "DISCONNECTED",
+            message: `node disconnected (${pending.command})`,
+          },
+        });
       }
     },
   });

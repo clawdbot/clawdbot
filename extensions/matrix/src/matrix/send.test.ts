@@ -1,8 +1,17 @@
 // Matrix tests cover send plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  resetPluginBlobStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
+import { installMatrixTestRuntime } from "../test-runtime.js";
 import { voteMatrixPoll } from "./actions/polls.js";
+import { loadMatrixDeliveryPlan, resolveMatrixDurableDeliveryIdentity } from "./delivery-plan.js";
 import { markdownToMatrixBody, markdownToMatrixHtml } from "./format.js";
 import {
   chunkMatrixText,
@@ -115,6 +124,8 @@ const makeClient = () => {
     getEvent,
     getJoinedRoomMembers,
     uploadContent,
+    getTransactionScopeId: vi.fn().mockResolvedValue("scope-1"),
+    getMessageWireEventType: vi.fn().mockResolvedValue("m.room.message"),
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
     prepareForOneOff: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
@@ -411,6 +422,87 @@ describe("Matrix formatted chunk boundaries", () => {
   });
 });
 
+describe("sendMessageMatrix durable delivery", () => {
+  let stateDir = "";
+
+  beforeEach(() => {
+    resetMatrixSendRuntimeMocks();
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-send-plan-"));
+    installMatrixTestRuntime({
+      stateDir,
+      cfg: {},
+      channel: runtimeStub.channel,
+    });
+  });
+
+  afterEach(() => {
+    resetPluginBlobStoreForTests({ closeDatabase: false });
+    resetPluginStateStoreForTests();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("persists the complete event plan before the first provider dispatch", async () => {
+    const { client, sendMessage } = makeClient();
+    const deliveryIdentity = resolveMatrixDurableDeliveryIdentity({
+      queueId: "queue-1",
+      partIndex: 0,
+      partCount: 1,
+    });
+    if (!deliveryIdentity) {
+      throw new Error("expected durable Matrix identity");
+    }
+    const dispatch = vi.fn(async () => {
+      await expect(
+        loadMatrixDeliveryPlan({
+          identity: deliveryIdentity,
+          accountId: "default",
+          roomId: "!room:example",
+          transactionScopeId: "scope-1",
+          wireEventType: "m.room.message",
+        }),
+      ).resolves.not.toBeNull();
+    });
+    sendMessage.mockImplementation(
+      async (
+        roomId: string,
+        _content: unknown,
+        transactionId?: string,
+        beforeWireDispatch?: (dispatch: {
+          roomId: string;
+          eventType: "m.room.message";
+          transactionId: string;
+          requestPath: string;
+        }) => Promise<void>,
+      ) => {
+        if (!transactionId || !beforeWireDispatch) {
+          throw new Error("expected durable Matrix dispatch context");
+        }
+        await beforeWireDispatch({
+          roomId,
+          eventType: "m.room.message",
+          transactionId,
+          requestPath: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${transactionId}`,
+        });
+        return "$event-1";
+      },
+    );
+
+    const result = await sendMessageMatrix("room:!room:example", "durable", {
+      client,
+      cfg: {} as never,
+      accountId: "default",
+      deliveryQueueId: "queue-1",
+      deliveryPartIndex: 0,
+      deliveryPartCount: 1,
+      onPlatformSendDispatch: dispatch,
+    });
+
+    expect(result.messageId).toBe("$event-1");
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[0]?.[2]).toMatch(/^oc_/);
+  });
+});
+
 describe("sendMessageMatrix media", () => {
   beforeEach(() => {
     resetMatrixSendRuntimeMocks();
@@ -418,15 +510,32 @@ describe("sendMessageMatrix media", () => {
 
   it("uploads media with url payloads", async () => {
     const { client, sendMessage, uploadContent } = makeClient();
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw"],
+      workspaceDir: "/tmp/openclaw",
+    };
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
       cfg: {} as never,
-      mediaUrl: "file:///tmp/photo.png",
+      mediaUrl: "chart.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
     });
+
+    expect(mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 0)).toBe(
+      "chart.png",
+    );
+    const mediaOptions = requireRecord(
+      mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 1),
+      "outbound media options",
+    );
+    expect(mediaOptions.mediaAccess).toBe(mediaAccess);
+    expect(mediaOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
 
     const uploadArg = mockCallArg(uploadContent, "uploadContent", 0);
     expect(Buffer.isBuffer(uploadArg)).toBe(true);
+    expect(uploadArg).toEqual(Buffer.from("media"));
 
     const content = sentContent(sendMessage) as {
       url?: string;

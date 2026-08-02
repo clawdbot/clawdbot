@@ -4,19 +4,7 @@
 import { connect } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import {
-  getActivePluginChannelRegistry,
-  getActivePluginSessionExtensionRegistry,
-  pinActivePluginHttpRouteRegistry,
-  pinActivePluginChannelRegistry,
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginChannelRegistry,
-  releasePinnedPluginHttpRouteRegistry,
-  releasePinnedPluginSessionExtensionRegistry,
-  resetPluginRuntimeStateForTest,
-  resolveActivePluginHttpRouteRegistry,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 const mocks = vi.hoisted(() => ({
@@ -34,19 +22,6 @@ vi.mock("./net.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./net.js")>();
   return { ...actual, resolveGatewayListenHosts: mocks.resolveGatewayListenHosts };
 });
-
-function createRegistryWithRoute(path: string) {
-  const registry = createEmptyPluginRegistry();
-  registry.httpRoutes.push({
-    path,
-    auth: "plugin",
-    match: "exact",
-    handler: () => true,
-    pluginId: "demo",
-    source: "test",
-  });
-  return registry;
-}
 
 async function requestPluginUpgrade(port: number, path: string): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
@@ -88,32 +63,7 @@ describe("createGatewayRuntimeState", () => {
   });
 
   afterEach(() => {
-    releasePinnedPluginHttpRouteRegistry();
-    releasePinnedPluginChannelRegistry();
-    releasePinnedPluginSessionExtensionRegistry();
     resetPluginRuntimeStateForTest();
-  });
-
-  it("releases post-bootstrap repinned plugin registries on cleanup", async () => {
-    const startupRegistry = createRegistryWithRoute("/startup");
-    const loadedRegistry = createRegistryWithRoute("/loaded");
-    const fallbackRegistry = createRegistryWithRoute("/fallback");
-
-    setActivePluginRegistry(startupRegistry);
-    const runtimeState = await createGatewayRuntimeStateForTest(startupRegistry);
-
-    pinActivePluginHttpRouteRegistry(loadedRegistry);
-    pinActivePluginSessionExtensionRegistry(loadedRegistry);
-    pinActivePluginChannelRegistry(loadedRegistry);
-    expect(resolveActivePluginHttpRouteRegistry(fallbackRegistry)).toBe(loadedRegistry);
-    expect(getActivePluginSessionExtensionRegistry()).toBe(loadedRegistry);
-    expect(getActivePluginChannelRegistry()).toBe(loadedRegistry);
-
-    runtimeState.releasePluginRouteRegistry();
-
-    expect(resolveActivePluginHttpRouteRegistry(fallbackRegistry)).toBe(startupRegistry);
-    expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
-    expect(getActivePluginChannelRegistry()).toBe(startupRegistry);
   });
 
   it("delegates directly after lazily loading the plugin HTTP handler", async () => {
@@ -171,7 +121,7 @@ describe("createGatewayRuntimeState", () => {
     }
   });
 
-  it("keeps a loaded plugin upgrade handler on the repinned route registry", async () => {
+  it("keeps a loaded plugin upgrade handler on the current route registry", async () => {
     const startupRegistry = createEmptyPluginRegistry();
     let runtimeRegistry = startupRegistry;
     let startupUpgradeCalls = 0;
@@ -229,14 +179,12 @@ describe("createGatewayRuntimeState", () => {
       });
       const emptyRegistry = createEmptyPluginRegistry();
       runtimeRegistry = emptyRegistry;
-      pinActivePluginHttpRouteRegistry(emptyRegistry);
       await expect(requestPluginUpgrade(address.port, "/demo")).resolves.not.toContain(
         "101 Switching Protocols",
       );
       expect(startupUpgradeCalls).toBe(1);
 
       runtimeRegistry = replacementRegistry;
-      pinActivePluginHttpRouteRegistry(replacementRegistry);
 
       await expect(requestPluginUpgrade(address.port, "/demo")).resolves.toContain(
         "101 Switching Protocols",

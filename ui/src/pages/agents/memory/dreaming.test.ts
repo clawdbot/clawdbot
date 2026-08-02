@@ -121,10 +121,40 @@ function getConfigPatchRawPayload(config: DreamingConfigCapability): Record<stri
   return patch;
 }
 
+const wikiResources = [
+  {
+    label: "import insights",
+    key: "wikiImportInsights",
+    method: "wiki.importInsights",
+    load: loadWikiImportInsights,
+    payload: () => ({
+      sourceType: "chatgpt" as const,
+      totalItems: 0,
+      totalClusters: 0,
+      clusters: [],
+    }),
+  },
+  {
+    label: "overview",
+    key: "wikiOverview",
+    method: "wiki.overview",
+    load: loadWikiOverview,
+    payload: () => ({
+      totalItems: 0,
+      totalPages: 0,
+      pageCounts: { source: 0, synthesis: 0, report: 0, entity: 0, concept: 0 },
+      totalClaims: 0,
+      totalQuestions: 0,
+      totalContradictions: 0,
+      clusters: [],
+    }),
+  },
+] as const;
+
 describe("dreaming controller", () => {
-  it("loads and normalizes dreaming status from doctor.memory.status", async () => {
+  it("retains the authoritative dreaming status from doctor.memory.status", async () => {
     const { state, request } = createState();
-    request.mockResolvedValue({
+    const payload = {
       dreaming: {
         enabled: true,
         timezone: "America/Los_Angeles",
@@ -223,12 +253,14 @@ describe("dreaming controller", () => {
           },
         },
       },
-    });
+    };
+    request.mockResolvedValue(payload);
 
     await loadDreamingStatus(state);
 
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
     const status = state.dreamingStatus;
+    expect(status).toBe(payload.dreaming);
     expect(status?.enabled).toBe(true);
     expect(status?.shortTermCount).toBe(8);
     expect(status?.groundedSignalCount).toBe(5);
@@ -340,35 +372,74 @@ describe("dreaming controller", () => {
     expect(state.dreamingStatusError).toBeNull();
   });
 
-  it("preserves unknown phase state when status omits phase metadata", async () => {
-    const { state, request } = createState();
-    request.mockResolvedValue({
-      dreaming: {
-        enabled: true,
-        shortTermCount: 1,
-        recallSignalCount: 0,
-        dailySignalCount: 0,
-        groundedSignalCount: 0,
-        totalSignalCount: 1,
-        phaseSignalCount: 0,
-        lightPhaseHitCount: 0,
-        remPhaseHitCount: 0,
-        promotedTotal: 0,
-        promotedToday: 0,
-        shortTermEntries: [],
-        signalEntries: [],
-        promotedEntries: [],
-      },
-    });
+  it.each(wikiResources)(
+    "keeps the newest $label response across an A-to-B-to-A agent switch",
+    async ({ key, method, load, payload }) => {
+      const { state, request } = createState();
+      const firstAgentA = createDeferred<unknown>();
+      const agentB = createDeferred<unknown>();
+      const secondAgentA = createDeferred<unknown>();
+      state.hello = {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        features: { methods: [method] },
+      };
+      request
+        .mockImplementationOnce(async () => firstAgentA.promise)
+        .mockImplementationOnce(async () => agentB.promise)
+        .mockImplementationOnce(async () => secondAgentA.promise);
 
-    await loadDreamingStatus(state);
+      state.selectedAgentId = "agent-a";
+      const staleA = load(state);
+      state.selectedAgentId = "agent-b";
+      const staleB = load(state);
+      state.selectedAgentId = "agent-a";
+      const latest = load(state);
+      const latestPayload = payload();
 
-    expect(state.dreamingStatus?.enabled).toBe(true);
-    expect(state.dreamingStatus?.phases).toBeUndefined();
-    expect(state.dreamingStatusError).toBeNull();
-  });
+      secondAgentA.resolve(latestPayload);
+      await latest;
+      expect(state[key]).toBe(latestPayload);
 
-  it("loads and normalizes wiki import insights", async () => {
+      firstAgentA.resolve(payload());
+      agentB.resolve(payload());
+      await Promise.all([staleA, staleB]);
+
+      expect(state[key]).toBe(latestPayload);
+      expect(state.resourceRequests[key]).toBeUndefined();
+      expect(request).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it.each(wikiResources)(
+    "invalidates an in-flight $label request when its gateway capability disappears",
+    async ({ key, method, load, payload }) => {
+      const { state, request } = createState();
+      const deferred = createDeferred<unknown>();
+      state.hello = {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        features: { methods: [method] },
+      };
+      request.mockImplementationOnce(async () => deferred.promise);
+
+      const stale = load(state);
+      state.hello = { ...state.hello, features: { methods: [] } };
+      await load(state);
+      expect(state[key]).toBeNull();
+
+      deferred.resolve(payload());
+      await stale;
+
+      expect(state[key]).toBeNull();
+      expect(state.resourceRequests[key]).toBeUndefined();
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("loads authoritative wiki import insights", async () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
@@ -708,56 +779,6 @@ describe("dreaming controller", () => {
     expect(state.wikiOverviewError).toBeNull();
   });
 
-  it("derives legacy wiki wiki overview page counts from clusters", async () => {
-    const { state, request } = createState();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.overview"] },
-    };
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
-    request.mockResolvedValue({
-      totalItems: 1,
-      totalClaims: 2,
-      totalQuestions: 1,
-      totalContradictions: 0,
-      clusters: [
-        {
-          key: "synthesis",
-          label: "Syntheses",
-          itemCount: 1,
-          claimCount: 2,
-          questionCount: 1,
-          contradictionCount: 0,
-          items: [],
-        },
-      ],
-    });
-
-    await loadWikiOverview(state);
-
-    expect(state.wikiOverview?.totalPages).toBe(1);
-    expect(state.wikiOverview?.pageCounts).toEqual({
-      synthesis: 1,
-      entity: 0,
-      concept: 0,
-      source: 0,
-      report: 0,
-    });
-  });
-
   it("falls back to config gating for wiki wiki overview when methods are not advertised", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
@@ -773,8 +794,10 @@ describe("dreaming controller", () => {
       },
     };
     request.mockResolvedValue({
-      totalItems: 1,
-      totalClaims: 2,
+      totalItems: 0,
+      totalPages: 0,
+      pageCounts: { synthesis: 0, entity: 0, concept: 0, source: 0, report: 0 },
+      totalClaims: 0,
       totalQuestions: 0,
       totalContradictions: 0,
       clusters: [],
@@ -783,8 +806,8 @@ describe("dreaming controller", () => {
     await loadWikiOverview(state);
 
     expect(request).toHaveBeenCalledWith("wiki.overview", {});
-    expect(state.wikiOverview?.totalItems).toBe(1);
-    expect(state.wikiOverview?.totalPages).toBe(1);
+    expect(state.wikiOverview?.totalItems).toBe(0);
+    expect(state.wikiOverview?.totalPages).toBe(0);
     expect(state.wikiOverview?.pageCounts).toEqual({
       synthesis: 0,
       entity: 0,
@@ -792,7 +815,7 @@ describe("dreaming controller", () => {
       source: 0,
       report: 0,
     });
-    expect(state.wikiOverview?.totalClaims).toBe(2);
+    expect(state.wikiOverview?.totalClaims).toBe(0);
     expect(state.wikiOverviewError).toBeNull();
     expect(state.wikiOverviewLoading).toBe(false);
   });

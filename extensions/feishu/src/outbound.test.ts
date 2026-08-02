@@ -310,29 +310,46 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       adapter,
       proofs: {
         text: async () => {
+          const onDeliveryResult = vi.fn();
           const result = await adapterSendText({
             cfg: emptyConfig,
             to: "chat:chat-1",
             text: "hello",
             accountId: "default",
+            onDeliveryResult,
           });
           expect(sendMessageCall()?.to).toBe("chat:chat-1");
           expect(sendMessageCall()?.text).toBe("hello");
           expect(sendMessageCall()?.accountId).toBe("default");
           expect(result.receipt.platformMessageIds).toEqual(["feishu-text-1"]);
+          expect(onDeliveryResult.mock.calls[0]?.[0]?.receipt.platformMessageIds).toEqual([
+            "feishu-text-1",
+          ]);
         },
         media: async () => {
           const onDeliveryResult = vi.fn();
+          const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+          const mediaAccess = {
+            localRoots: ["/approved/workspace"],
+            workspaceDir: "/approved/workspace",
+            readFile: mediaReadFile,
+          };
           const result = await adapterSendMedia({
             cfg: emptyConfig,
             to: "chat:chat-1",
             text: "",
-            mediaUrl: "https://example.com/image.png",
+            mediaUrl: "image.png",
+            mediaAccess,
+            mediaLocalRoots: mediaAccess.localRoots,
+            mediaReadFile,
             accountId: "default",
             onDeliveryResult,
           });
           expect(sendMediaCall()?.to).toBe("chat:chat-1");
-          expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/image.png");
+          expect(sendMediaCall()?.mediaUrl).toBe("image.png");
+          expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
+          expect(sendMediaCall()?.mediaLocalRoots).toBe(mediaAccess.localRoots);
+          expect(sendMediaCall()?.mediaReadFile).toBe(mediaReadFile);
           expect(sendMediaCall()?.accountId).toBe("default");
           expect(result.receipt.platformMessageIds).toEqual(["feishu-media-1"]);
           expect(onDeliveryResult.mock.calls[0]?.[0]?.receipt.platformMessageIds).toEqual([
@@ -379,9 +396,15 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
   }
 
   it("sends missing TTS text before its voice supplement", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("approved audio"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+      readFile: mediaReadFile,
+    };
     const payload = {
       text: "Readable answer",
-      mediaUrl: "https://example.com/reply.ogg",
+      mediaUrl: "reply.ogg",
       audioAsVoice: true,
       ttsSupplement: { spokenText: "Readable answer" },
     };
@@ -391,11 +414,16 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       to: "chat_1",
       text: payload.text,
       accountId: "main",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
       payload,
     });
 
     expect(sendMessageCall()?.text).toBe("Readable answer");
-    expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/reply.ogg");
+    expect(sendMediaCall()?.mediaUrl).toBe("reply.ogg");
+    expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
+    expect(sendMediaCall()?.mediaReadFile).toBe(mediaReadFile);
     expect(sendMediaCall()?.audioAsVoice).toBe(true);
     expect(sendMessageFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
       sendMediaFeishuMock.mock.invocationCallOrder[0] ?? 0,
@@ -458,19 +486,25 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     "sends an existing absolute %s image path as media instead of leaking it",
     async (extension) => {
       const { dir, file } = await createTmpImage(extension);
+      const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+      const mediaAccess = { localRoots: [dir], workspaceDir: dir, readFile: mediaReadFile };
       try {
         const result = await sendText({
           cfg: emptyConfig,
           to: "chat_1",
           text: file,
           accountId: "main",
+          mediaAccess,
           mediaLocalRoots: [dir],
+          mediaReadFile,
         });
 
         expect(sendMediaCall()?.to).toBe("chat_1");
         expect(sendMediaCall()?.mediaUrl).toBe(file);
         expect(sendMediaCall()?.accountId).toBe("main");
+        expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
         expect(sendMediaCall()?.mediaLocalRoots).toEqual([dir]);
+        expect(sendMediaCall()?.mediaReadFile).toBe(mediaReadFile);
         expect(sendMessageFeishuMock).not.toHaveBeenCalled();
         expectFeishuResult(result, "media_msg");
       } finally {
@@ -567,6 +601,29 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     }
   });
 
+  it("does not send fallback text when accepted local-image progress cannot be persisted", async () => {
+    const { dir, file } = await createTmpImage();
+    const onDeliveryResult = vi.fn().mockRejectedValueOnce(new Error("progress write failed"));
+
+    try {
+      await expect(
+        sendText({
+          cfg: emptyConfig,
+          to: "chat_1",
+          text: file,
+          accountId: "main",
+          mediaLocalRoots: [dir],
+          onDeliveryResult,
+        }),
+      ).rejects.toThrow("progress write failed");
+      expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      expect(onDeliveryResult).toHaveBeenCalledOnce();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses markdown cards when renderMode=card", async () => {
     const result = await sendText({
       cfg: cardRenderConfig,
@@ -650,6 +707,52 @@ describe("feishuOutbound.sendPayload native cards", () => {
     await fs.writeFile(file, "image-data");
     return { dir, file };
   }
+
+  it("records delegated post subchunks once without duplicating parent receipts", async () => {
+    sendMessageFeishuMock.mockImplementation(async () => ({
+      messageId: `chunk_${sendMessageFeishuMock.mock.calls.length}`,
+    }));
+    const onDeliveryResult = vi.fn();
+    const text = Array.from({ length: 2_200 }, () => "a").join("\n");
+
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      payload: { text },
+      onDeliveryResult,
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual(
+      sendMessageFeishuMock.mock.calls.map((_call, index) => `chunk_${index + 1}`),
+    );
+  });
+
+  it("records separate fallback media and each expanded text chunk once", async () => {
+    sendMessageFeishuMock.mockImplementation(async () => ({
+      messageId: `chunk_${sendMessageFeishuMock.mock.calls.length}`,
+    }));
+    const onDeliveryResult = vi.fn();
+    const text = Array.from({ length: 2_200 }, () => "a").join("\n");
+
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      payload: { text, mediaUrl: "https://example.com/image.png" },
+      onDeliveryResult,
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual([
+      "media_msg",
+      ...sendMessageFeishuMock.mock.calls.map((_call, index) => `chunk_${index + 1}`),
+    ]);
+  });
 
   it("renders presentation-only payloads into Feishu channelData cards for core delivery", async () => {
     const presentation: MessagePresentation = {
@@ -839,16 +942,22 @@ describe("feishuOutbound.sendPayload native cards", () => {
   });
 
   it("sends media once before chunking an oversized table fallback", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+      readFile: mediaReadFile,
+    };
     const presentation = createOversizedTablePresentation();
     const rendered = await feishuOutbound.renderPresentation?.({
-      payload: { presentation, mediaUrl: "/tmp/pipeline.png" },
+      payload: { presentation, mediaUrl: "pipeline.png" },
       presentation,
       ctx: {
         cfg: emptyConfig,
         to: "chat_1",
         text: "",
         accountId: "main",
-        payload: { presentation, mediaUrl: "/tmp/pipeline.png" },
+        payload: { presentation, mediaUrl: "pipeline.png" },
       },
     });
     if (!rendered) {
@@ -861,7 +970,9 @@ describe("feishuOutbound.sendPayload native cards", () => {
       to: "chat_1",
       text: coreRenderedPayload.text ?? "",
       accountId: "main",
-      mediaLocalRoots: ["/tmp"],
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
       replyToId: "   ",
       threadId: "om_thread",
       payload: coreRenderedPayload,
@@ -876,10 +987,13 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(sendMediaCall()).toEqual(
       expect.objectContaining({
         to: "chat_1",
-        mediaUrl: "/tmp/pipeline.png",
-        mediaLocalRoots: ["/tmp"],
+        mediaUrl: "pipeline.png",
+        mediaAccess,
+        mediaLocalRoots: mediaAccess.localRoots,
+        mediaReadFile,
       }),
     );
+    expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
     expect(sendMediaCall()?.text).toBeUndefined();
     expect(sendMediaCall()?.replyToMessageId).toBe("om_thread");
     expect(sendMediaCall()?.replyInThread).toBe(true);
@@ -1694,25 +1808,39 @@ describe("feishuOutbound.sendPayload native cards", () => {
   });
 
   it("sends payload media before final native cards", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+      readFile: mediaReadFile,
+    };
+    const mediaUrls = ["image.png", "summary.png"];
     const result = await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
       to: "chat_1",
       text: "See attached",
       accountId: "main",
-      mediaLocalRoots: ["/tmp"],
+      mediaAccess,
+      mediaLocalRoots: ["/legacy/workspace"],
+      mediaReadFile,
       payload: {
         text: "See attached",
-        mediaUrl: "/tmp/image.png",
+        mediaUrls,
         interactive: {
           blocks: [{ type: "buttons", buttons: [{ label: "Open", url: "https://example.com" }] }],
         },
       },
     });
 
-    expect(sendMediaCall()?.to).toBe("chat_1");
-    expect(sendMediaCall()?.mediaUrl).toBe("/tmp/image.png");
-    expect(sendMediaCall()?.mediaLocalRoots).toEqual(["/tmp"]);
-    expect(sendMediaCall()?.accountId).toBe("main");
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(mediaUrls.length);
+    for (const [index, mediaUrl] of mediaUrls.entries()) {
+      expect(sendMediaCall(index)?.to).toBe("chat_1");
+      expect(sendMediaCall(index)?.mediaUrl).toBe(mediaUrl);
+      expect(sendMediaCall(index)?.mediaAccess).toBe(mediaAccess);
+      expect(sendMediaCall(index)?.mediaLocalRoots).toEqual(["/legacy/workspace"]);
+      expect(sendMediaCall(index)?.mediaReadFile).toBe(mediaReadFile);
+      expect(sendMediaCall(index)?.accountId).toBe("main");
+    }
     expect(sendCardCall()?.to).toBe("chat_1");
     expect(sendCardCall()?.accountId).toBe("main");
     expectFeishuResult(result, "native_card_msg");
@@ -1815,20 +1943,26 @@ describe("feishuOutbound.sendPayload native cards", () => {
 
   it("keeps text/media fallback behavior for non-card payloads, including local image text", async () => {
     const { dir, file } = await createTmpImage();
+    const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+    const mediaAccess = { localRoots: [dir], workspaceDir: dir, readFile: mediaReadFile };
     try {
       const result = await feishuOutbound.sendPayload?.({
         cfg: emptyConfig,
         to: "chat_1",
         text: file,
         accountId: "main",
+        mediaAccess,
         mediaLocalRoots: [dir],
+        mediaReadFile,
         payload: { text: file },
       });
 
       expect(sendCardFeishuMock).not.toHaveBeenCalled();
       expect(sendMediaCall()?.to).toBe("chat_1");
       expect(sendMediaCall()?.mediaUrl).toBe(file);
+      expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
       expect(sendMediaCall()?.mediaLocalRoots).toEqual([dir]);
+      expect(sendMediaCall()?.mediaReadFile).toBe(mediaReadFile);
       expect(sendMediaCall()?.accountId).toBe("main");
       expect(sendMessageFeishuMock).not.toHaveBeenCalled();
       expectFeishuResult(result, "media_msg");
@@ -2315,6 +2449,82 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     }
   });
 
+  it("keeps explicit first-mode replies sticky across expanded post-md chunks", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+      replyToId: "om_explicit_reply",
+      replyToIdSource: "explicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      expect(params.replyToMessageId).toBe("om_explicit_reply");
+    }
+  });
+
+  it("records each accepted expanded text chunk before the next send", async () => {
+    sendMessageFeishuMock.mockImplementation(async () => ({
+      messageId: `chunk_${sendMessageFeishuMock.mock.calls.length}`,
+    }));
+    const onDeliveryResult = vi.fn();
+
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+      accountId: "main",
+      onDeliveryResult,
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual(
+      sendMessageFeishuMock.mock.calls.map((_call, index) => `chunk_${index + 1}`),
+    );
+  });
+
+  it("preserves the first accepted text chunk when the following send fails", async () => {
+    sendMessageFeishuMock
+      .mockResolvedValueOnce({ messageId: "accepted_chunk" })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendText({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+        accountId: "main",
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual([
+      "accepted_chunk",
+    ]);
+  });
+
+  it("stops text fanout immediately when accepted delivery cannot be persisted", async () => {
+    const onDeliveryResult = vi.fn().mockRejectedValueOnce(new Error("progress write failed"));
+
+    await expect(
+      sendText({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+        accountId: "main",
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("progress write failed");
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+  });
+
   it("re-chunks expanded post-md text at the selected account limit", async () => {
     await sendText({
       cfg: {
@@ -2380,18 +2590,182 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     resetOutboundMocks();
   });
 
+  it("sends and records text-only media requests exactly once", async () => {
+    const onDeliveryResult = vi.fn();
+
+    const result = await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "text without an attachment",
+      replyToId: "om_reply_target",
+      accountId: "main",
+      onDeliveryResult,
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(onDeliveryResult.mock.calls.map(([delivery]) => delivery.messageId)).toEqual([
+      "text_msg",
+    ]);
+    expectFeishuResult(result, "text_msg");
+  });
+
   it("forwards replyToId to sendMediaFeishu", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+      readFile: mediaReadFile,
+    };
     await feishuOutbound.sendMedia?.({
       cfg: emptyConfig,
       to: "chat_1",
       text: "",
-      mediaUrl: "https://example.com/image.png",
+      mediaUrl: "image.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
       replyToId: "om_reply_target",
       accountId: "main",
     });
 
+    expect(sendMediaCall()?.mediaUrl).toBe("image.png");
+    expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
+    expect(sendMediaCall()?.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(sendMediaCall()?.mediaReadFile).toBe(mediaReadFile);
     expect(sendMediaCall()?.replyToMessageId).toBe("om_reply_target");
     expect(sendMediaCall()?.replyInThread).toBe(false);
+  });
+
+  it("consumes an implicit first-reply target on the caption before sending its attachment", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "caption text",
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "om_reply_target",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMessageCall()?.replyToMessageId).toBe("om_reply_target");
+    expect(sendMediaCall()?.replyToMessageId).toBeUndefined();
+  });
+
+  it("does not reuse an implicit first-reply target for the upload-failure fallback", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "caption text",
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "om_reply_target",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls[0]?.[0]?.replyToMessageId).toBe("om_reply_target");
+    expect(sendMessageFeishuMock.mock.calls[1]?.[0]?.replyToMessageId).toBeUndefined();
+  });
+
+  it("preserves an unconsumed implicit reply target when the first media upload fails", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "spoken reply",
+      mediaUrl: "https://example.com/reply.mp3",
+      audioAsVoice: true,
+      replyToId: "om_reply_target",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_reply_target");
+    expect(sendMessageCall()?.replyToMessageId).toBe("om_reply_target");
+  });
+
+  it("consumes an implicit first-reply target on degraded voice media before its text", async () => {
+    sendMediaFeishuMock.mockResolvedValueOnce({
+      messageId: "file_msg",
+      voiceIntentDegradedToFile: true,
+    });
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "spoken reply",
+      mediaUrl: "https://example.com/reply.mp3",
+      audioAsVoice: true,
+      replyToId: "om_reply_target",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_reply_target");
+    expect(sendMessageCall()?.replyToMessageId).toBeUndefined();
+  });
+
+  it("keeps explicit first-mode reply targets sticky across captions and media", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "caption text",
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "om_reply_target",
+      replyToIdSource: "explicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMessageCall()?.replyToMessageId).toBe("om_reply_target");
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_reply_target");
+  });
+
+  it("keeps explicit first-mode targets sticky across every caption chunk and attachment", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "om_explicit_reply",
+      replyToIdSource: "explicit",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      expect(params.replyToMessageId).toBe("om_explicit_reply");
+    }
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_explicit_reply");
+  });
+
+  it("keeps native topic roots sticky across captions, attachments, and fallback", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "caption text",
+      mediaUrl: "https://example.com/image.png",
+      threadId: "om_topic_root",
+      replyToMode: "first",
+      accountId: "main",
+    });
+
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_topic_root");
+    expect(sendMediaCall()?.replyInThread).toBe(true);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      expect(params.replyToMessageId).toBe("om_topic_root");
+      expect(params.replyInThread).toBe(true);
+    }
   });
 
   it("forwards threadId as replyInThread=true to sendMediaFeishu", async () => {
@@ -2537,6 +2911,71 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
       "fallback_msg",
     ]);
     expectFeishuResult(result, "fallback_msg");
+  });
+
+  it("records every accepted caption chunk before recording its attachment", async () => {
+    sendMessageFeishuMock.mockImplementation(async () => ({
+      messageId: `caption_${sendMessageFeishuMock.mock.calls.length}`,
+    }));
+    const onDeliveryResult = vi.fn();
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+      mediaUrl: "https://example.com/image.png",
+      accountId: "main",
+      onDeliveryResult,
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual([
+      ...sendMessageFeishuMock.mock.calls.map((_call, index) => `caption_${index + 1}`),
+      "media_msg",
+    ]);
+  });
+
+  it("preserves accepted caption chunks when a later chunk fails before media", async () => {
+    sendMessageFeishuMock
+      .mockResolvedValueOnce({ messageId: "accepted_caption" })
+      .mockRejectedValueOnce(new Error("second caption failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+        mediaUrl: "https://example.com/image.png",
+        accountId: "main",
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second caption failed");
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual([
+      "accepted_caption",
+    ]);
+  });
+
+  it("stops before later caption chunks and media when delivery persistence fails", async () => {
+    const onDeliveryResult = vi.fn().mockRejectedValueOnce(new Error("progress write failed"));
+
+    await expect(
+      feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+        mediaUrl: "https://example.com/image.png",
+        accountId: "main",
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("progress write failed");
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
   });
 
   it("does not send fallback text after an accepted media send loses its receipt", async () => {

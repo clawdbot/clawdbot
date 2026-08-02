@@ -3,6 +3,14 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { getPluginCompatRecord } from "../plugins/compat/registry.js";
+import type {
+  ContextEngineFactory,
+  ContextEngineFactoryContext,
+  ContextEngineRegistration,
+  ContextEngineRegistrationLifecycle,
+} from "../plugins/registry-contribution-types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -13,42 +21,19 @@ import {
 import type {
   BootstrapResult,
   ContextEngine,
-  ContextEngineInfo,
   ContextEngineMaintenanceResult,
   IngestBatchResult,
   IngestResult,
 } from "./types.js";
+
+export type { ContextEngineFactory } from "../plugins/registry-contribution-types.js";
 
 /**
  * Runtime context passed to context engine factories during resolution.
  * Provides config and path information so plugins can initialize engines
  * without fragile workarounds.
  */
-type ContextEngineFactoryContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-};
-
-/**
- * A factory that creates a ContextEngine instance.
- * Supports async creation for engines that need DB connections etc.
- *
- * The factory receives a {@link ContextEngineFactoryContext} with runtime
- * environment context (config, paths). Existing no-arg factories remain
- * backward compatible because TypeScript permits assigning functions with
- * fewer parameters to wider signatures.
- */
-export type ContextEngineFactory = (
-  ctx: ContextEngineFactoryContext,
-) => ContextEngine | Promise<ContextEngine>;
 type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
-type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
-type ContextEngineRegistration = {
-  factory: ContextEngineFactory;
-  owner: string;
-  lifecycle: ContextEngineRegistrationLifecycle;
-};
 
 type RegisterContextEngineForOwnerOptions = {
   allowSameOwnerRefresh?: boolean;
@@ -64,76 +49,130 @@ const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
 export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
   "sessionKey prompt runtimeSettings sessionTarget runtimeContext".split(" "),
 );
-function wrapContextEngineWithHostParamProjection(engine: ContextEngine): ContextEngine {
-  const removeAfter = getPluginCompatRecord("context-engine-legacy-host-param-default").removeAfter;
-  const accepted = engine.info.acceptedHostParams;
-  const engineRecord = engine as unknown as Record<PropertyKey, unknown>;
-  const wrappedRecord: Record<PropertyKey, unknown> = {};
-  Object.defineProperty(wrappedRecord, "info", { get: () => engine.info });
-  for (const methodName of GUARDED_CONTEXT_ENGINE_METHODS) {
-    const method = engineRecord[methodName];
-    if (typeof method !== "function") {
-      continue;
-    }
-    wrappedRecord[methodName] = (params: Record<string, unknown>) => {
-      // Removal(2026-08-12): undeclared engines get full params. Contract: context-engine-legacy-host-param-default.
-      const useLegacyDefault =
-        removeAfter !== undefined && new Date().toISOString().slice(0, 10) <= removeAfter;
-      const currentAccepted = accepted ?? (useLegacyDefault ? [] : undefined);
-      if (!currentAccepted) {
-        return method.call(engine, params);
-      }
-      const projected = Object.fromEntries(
-        Object.entries(params).filter(
-          ([key]) => currentAccepted.includes(key) || !CONTEXT_ENGINE_HOST_PARAMS.has(key),
-        ),
-      );
-      return method.call(engine, projected);
-    };
-  }
-  if (engine.dispose) {
-    wrappedRecord.dispose = engine.dispose.bind(engine);
-  }
-  return Object.create(engine, Object.getOwnPropertyDescriptors(wrappedRecord)) as ContextEngine;
-}
-
 type ResolvedContextEngineMetadata = {
   owner: string;
-};
-
-type RuntimeQuarantineProxyState = {
   engineId: string;
-  getResolvedFallbackEngine: () => ContextEngine | undefined;
 };
 
-const RESOLVED_CONTEXT_ENGINE_METADATA = new WeakMap<
-  ContextEngine,
-  ResolvedContextEngineMetadata
->();
-const RUNTIME_QUARANTINE_PROXY_STATE = new WeakMap<ContextEngine, RuntimeQuarantineProxyState>();
+const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
 function wrapResolvedContextEngine(
   engine: ContextEngine,
-  metadata: {
-    owner: string;
-    engineId: string;
+  metadata: ResolvedContextEngineMetadata & {
     defaultEngineId?: string;
     factoryCtx?: ContextEngineFactoryContext;
   },
 ): ContextEngine {
-  const projected = wrapContextEngineWithHostParamProjection(engine);
-  const wrapped =
+  const removeAfter = getPluginCompatRecord("context-engine-legacy-host-param-default").removeAfter;
+  const accepted = engine.info.acceptedHostParams;
+  const fallback =
     metadata.defaultEngineId &&
     metadata.factoryCtx &&
     metadata.engineId !== metadata.defaultEngineId
-      ? wrapContextEngineWithRuntimeQuarantine({
-          engine: projected,
-          engineId: metadata.engineId,
-          owner: metadata.owner,
-          defaultEngineId: metadata.defaultEngineId,
-          factoryCtx: metadata.factoryCtx,
-        })
-      : projected;
-  RESOLVED_CONTEXT_ENGINE_METADATA.set(wrapped, metadata);
+      ? { defaultEngineId: metadata.defaultEngineId, factoryCtx: metadata.factoryCtx }
+      : undefined;
+  let fallbackEnginePromise: Promise<ContextEngine> | undefined;
+  let resolvedFallbackEngine: ContextEngine | undefined;
+  const getFallbackEngine = fallback
+    ? () =>
+        (fallbackEnginePromise ??= resolveDefaultContextEngine(
+          fallback.defaultEngineId,
+          fallback.factoryCtx,
+        ).then((resolved) => {
+          resolvedFallbackEngine = resolved;
+          return resolved;
+        }))
+    : undefined;
+  const projectParams = (params: Record<string, unknown>) => {
+    // Removal(2026-08-12): undeclared engines get full params. Contract: context-engine-legacy-host-param-default.
+    const useLegacyDefault =
+      removeAfter !== undefined && new Date().toISOString().slice(0, 10) <= removeAfter;
+    const currentAccepted = accepted ?? (useLegacyDefault ? [] : undefined);
+    return currentAccepted
+      ? Object.fromEntries(
+          Object.entries(params).filter(
+            ([key]) => currentAccepted.includes(key) || !CONTEXT_ENGINE_HOST_PARAMS.has(key),
+          ),
+        )
+      : params;
+  };
+
+  // A fresh target keeps Proxy invariants compatible with frozen engines and private getters.
+  const wrapped = new Proxy(
+    Object.create(engine, { info: { get: () => engine.info } }) as ContextEngine,
+    {
+      get(_target, property) {
+        if (property === "info") {
+          if (!fallback || !getContextEngineQuarantine(metadata.engineId)) {
+            return engine.info;
+          }
+          return (
+            resolvedFallbackEngine?.info ?? {
+              id: fallback.defaultEngineId,
+              name:
+                fallback.defaultEngineId === "legacy"
+                  ? "Legacy Context Engine"
+                  : `${fallback.defaultEngineId} Context Engine`,
+            }
+          );
+        }
+
+        const method = Reflect.get(engine, property, engine);
+        if (typeof method !== "function") {
+          return method;
+        }
+        if (!GUARDED_CONTEXT_ENGINE_METHODS.has(property)) {
+          return method.bind(engine);
+        }
+        if (!fallback || !getFallbackEngine) {
+          return (params: Record<string, unknown>) => method.call(engine, projectParams(params));
+        }
+
+        const methodName = property as GuardedContextEngineMethodName;
+        return async (methodParams: Record<string, unknown>) => {
+          const abortSignal = contextEngineAbortSignal(methodParams);
+          if (abortSignal?.aborted) {
+            const reason = abortSignal.reason;
+            throw reason instanceof Error
+              ? reason
+              : createAbortError(
+                  typeof reason === "string" && reason
+                    ? reason
+                    : "Context engine operation aborted.",
+                );
+          }
+          const invokeFallback = () =>
+            invokeFallbackContextEngineMethod({ getFallbackEngine, methodName, methodParams });
+          if (getContextEngineQuarantine(metadata.engineId)) {
+            // Runtime failures downgrade future guarded calls for this process.
+            return await invokeFallback();
+          }
+
+          try {
+            return await method.call(engine, projectParams(methodParams));
+          } catch (error) {
+            if (isContextEngineAbortRejection(error, abortSignal)) {
+              // Abort is caller intent, not engine instability; never quarantine for it.
+              throw error;
+            }
+            recordContextEngineQuarantine({
+              engineId: metadata.engineId,
+              owner: metadata.owner,
+              operation: methodName,
+              error,
+              defaultEngineId: fallback.defaultEngineId,
+            });
+            if (methodName === "compact" || methodName === "prepareSubagentSpawn") {
+              throw error;
+            }
+            return await invokeFallback().catch(() => {
+              throw error;
+            });
+          }
+        };
+      },
+    },
+  );
+  resolvedEngineMetadata.set(wrapped, metadata);
   return wrapped;
 }
 
@@ -153,7 +192,6 @@ type ContextEngineRuntimeQuarantine = {
 };
 
 type ContextEngineRegistryState = {
-  engines: Map<string, ContextEngineRegistration>;
   quarantinedEngines: Map<string, ContextEngineRuntimeQuarantine>;
 };
 
@@ -162,10 +200,11 @@ type ContextEngineRegistryState = {
 const contextEngineRegistryState = resolveGlobalSingleton<ContextEngineRegistryState>(
   CONTEXT_ENGINE_REGISTRY_STATE,
   () => ({
-    engines: new Map(),
     quarantinedEngines: new Map(),
   }),
 );
+
+const getContextEngines = () => requireActivePluginRegistry().contextEngines;
 
 function requireContextEngineOwner(owner: string): string {
   const normalizedOwner = owner.trim();
@@ -175,10 +214,6 @@ function requireContextEngineOwner(owner: string): string {
     );
   }
   return normalizedOwner;
-}
-
-function formatContextEngineError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function recordContextEngineQuarantine(params: {
@@ -197,7 +232,7 @@ function recordContextEngineQuarantine(params: {
   const quarantine: ContextEngineRuntimeQuarantine = {
     engineId: params.engineId,
     operation: params.operation,
-    reason: formatContextEngineError(params.error),
+    reason: params.error instanceof Error ? params.error.message : String(params.error),
     failedAt: new Date(),
     ...(params.owner ? { owner: params.owner } : {}),
   };
@@ -225,23 +260,13 @@ export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[]
     ({ failedAt, ...quarantine }) => ({ ...quarantine, failedAt: new Date(failedAt) }),
   );
   const seenEngineIds = new Set(quarantines.map((entry) => entry.engineId));
-  for (const entry of listPersistedContextEngineQuarantines()) {
-    if (seenEngineIds.has(entry.engineId)) {
-      continue;
-    }
-    quarantines.push(entry);
-    seenEngineIds.add(entry.engineId);
-  }
-  return quarantines;
+  return quarantines.concat(
+    listPersistedContextEngineQuarantines().filter(({ engineId }) => !seenEngineIds.has(engineId)),
+  );
 }
 
-function clearContextEngineRuntimeQuarantine(engineId?: string): void {
-  const quarantinedEngines = contextEngineRegistryState.quarantinedEngines;
-  if (engineId === undefined) {
-    quarantinedEngines.clear();
-  } else {
-    quarantinedEngines.delete(engineId);
-  }
+function clearContextEngineRuntimeQuarantine(engineId: string): void {
+  contextEngineRegistryState.quarantinedEngines.delete(engineId);
   clearPersistedContextEngineQuarantineForProcess(engineId, process.pid);
 }
 
@@ -254,9 +279,29 @@ export function registerContextEngineForOwner(
   owner: string,
   opts?: RegisterContextEngineForOwnerOptions,
 ): ContextEngineRegistrationResult {
+  const targetRegistry = requireActivePluginRegistry();
+  const result = registerContextEngineInRegistry(targetRegistry, id, factory, owner, opts);
+  if (
+    result.ok &&
+    (opts?.lifecycle ?? "runtime") === "runtime" &&
+    getActivePluginRegistry() === targetRegistry
+  ) {
+    clearContextEngineRuntimeQuarantine(id);
+  }
+  return result;
+}
+
+/** Registers an engine in a registry value while that value is being assembled. */
+export function registerContextEngineInRegistry(
+  pluginRegistry: PluginRegistry,
+  id: string,
+  factory: ContextEngineFactory,
+  owner: string,
+  opts?: RegisterContextEngineForOwnerOptions,
+): ContextEngineRegistrationResult {
   const normalizedOwner = requireContextEngineOwner(owner);
   const lifecycle = opts?.lifecycle ?? "runtime";
-  const registry = contextEngineRegistryState.engines;
+  const registry = pluginRegistry.contextEngines;
   const existing = registry.get(id);
   if (
     id === defaultSlotIdForKey("contextEngine") &&
@@ -277,27 +322,33 @@ export function registerContextEngineForOwner(
     return { ok: false, existingOwner: existing.owner };
   }
   registry.set(id, { factory, owner: normalizedOwner, lifecycle });
-  if (lifecycle === "runtime") {
-    clearContextEngineRuntimeQuarantine(id);
-  }
   return { ok: true };
+}
+
+/** Clear runtime quarantine only after a complete builder-local registry becomes active. */
+export function activateContextEngineRegistrations(pluginRegistry: PluginRegistry): void {
+  for (const [id, registration] of pluginRegistry.contextEngines) {
+    if (registration.lifecycle === "runtime") {
+      clearContextEngineRuntimeQuarantine(id);
+    }
+  }
 }
 
 /** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */
 export function getContextEngineRegistration(id: string): ContextEngineRegistration | undefined {
-  return contextEngineRegistryState.engines.get(id);
+  return getContextEngines().get(id);
 }
 
 /**
  * List all registered engine ids.
  */
 function listContextEngineIds(): string[] {
-  return [...contextEngineRegistryState.engines.keys()];
+  return [...getContextEngines().keys()].toSorted();
 }
 
 export function clearContextEnginesForOwner(owner: string): void {
   const normalizedOwner = requireContextEngineOwner(owner);
-  const registry = contextEngineRegistryState.engines;
+  const registry = getContextEngines();
   for (const [id, entry] of registry.entries()) {
     if (entry.owner === normalizedOwner) {
       registry.delete(id);
@@ -312,29 +363,15 @@ export function clearContextEnginesForOwner(owner: string): void {
 export function resolveContextEngineOwnerPluginId(
   engine: ContextEngine | undefined | null,
 ): string | undefined {
-  const owner = engine && resolveEffectiveContextEngineMetadata(engine)?.owner;
+  const metadata = engine ? resolvedEngineMetadata.get(engine) : undefined;
+  // Quarantined work belongs to its core-owned fallback, never the disabled plugin.
+  const owner =
+    metadata && !getContextEngineQuarantine(metadata.engineId) ? metadata.owner : undefined;
   if (!owner?.startsWith("plugin:")) {
     return undefined;
   }
   const pluginId = owner.slice("plugin:".length).trim();
   return pluginId || undefined;
-}
-
-function resolveEffectiveContextEngineMetadata(
-  engine: ContextEngine,
-): ResolvedContextEngineMetadata | undefined {
-  const quarantineState = RUNTIME_QUARANTINE_PROXY_STATE.get(engine);
-  if (quarantineState && getContextEngineQuarantine(quarantineState.engineId)) {
-    // After quarantine, metadata follows the resolved fallback so plugin-scoped operations do not
-    // keep attributing work to a disabled engine.
-    const fallbackEngine = quarantineState.getResolvedFallbackEngine();
-    return (
-      (fallbackEngine ? RESOLVED_CONTEXT_ENGINE_METADATA.get(fallbackEngine) : undefined) ?? {
-        owner: CORE_CONTEXT_ENGINE_OWNER,
-      }
-    );
-  }
-  return RESOLVED_CONTEXT_ENGINE_METADATA.get(engine);
 }
 
 function describeResolvedContextEngineContractError(
@@ -393,14 +430,10 @@ const CONTEXT_ENGINE_FALLBACK_RESULTS = {
 };
 
 function contextEngineAbortSignal(methodParams: unknown): AbortSignal | undefined {
-  if (!methodParams || typeof methodParams !== "object") {
-    return undefined;
-  }
-  const signal = (methodParams as { abortSignal?: unknown }).abortSignal;
-  if (signal && typeof signal === "object" && "aborted" in signal) {
-    return signal as AbortSignal;
-  }
-  return undefined;
+  const signal = (methodParams as { abortSignal?: unknown } | null | undefined)?.abortSignal;
+  return signal && typeof signal === "object" && "aborted" in signal
+    ? (signal as AbortSignal)
+    : undefined;
 }
 
 function isContextEngineAbortRejection(error: unknown, signal: AbortSignal | undefined): boolean {
@@ -438,93 +471,6 @@ async function invokeFallbackContextEngineMethod(params: {
   return fallbackResult ? { ...fallbackResult } : undefined;
 }
 
-function wrapContextEngineWithRuntimeQuarantine(params: {
-  engine: ContextEngine;
-  engineId: string;
-  owner: string;
-  defaultEngineId: string;
-  factoryCtx: ContextEngineFactoryContext;
-}): ContextEngine {
-  let fallbackEnginePromise: Promise<ContextEngine> | undefined;
-  let resolvedFallbackEngine: ContextEngine | undefined;
-  const getFallbackEngine = () => {
-    fallbackEnginePromise ??= resolveDefaultContextEngine(
-      params.defaultEngineId,
-      params.factoryCtx,
-    ).then((engine) => {
-      resolvedFallbackEngine = engine;
-      return engine;
-    });
-    return fallbackEnginePromise;
-  };
-  const fallbackInfo = (): ContextEngineInfo =>
-    resolvedFallbackEngine?.info ?? {
-      id: params.defaultEngineId,
-      name:
-        params.defaultEngineId === "legacy"
-          ? "Legacy Context Engine"
-          : `${params.defaultEngineId} Context Engine`,
-    };
-  const isQuarantined = () => Boolean(getContextEngineQuarantine(params.engineId));
-
-  const proxy = new Proxy(params.engine, {
-    get(target, property, receiver) {
-      if (property === "info" && isQuarantined()) {
-        return fallbackInfo();
-      }
-      const value = Reflect.get(target, property, receiver);
-      if (typeof value !== "function" || !GUARDED_CONTEXT_ENGINE_METHODS.has(property)) {
-        return typeof value === "function" ? value.bind(target) : value;
-      }
-
-      const methodName = property as GuardedContextEngineMethodName;
-      return async (methodParams: unknown) => {
-        const abortSignal = contextEngineAbortSignal(methodParams);
-        if (abortSignal?.aborted) {
-          const reason = abortSignal.reason;
-          throw reason instanceof Error
-            ? reason
-            : createAbortError(
-                typeof reason === "string" && reason ? reason : "Context engine operation aborted.",
-              );
-        }
-        const invokeFallback = () =>
-          invokeFallbackContextEngineMethod({ getFallbackEngine, methodName, methodParams });
-        if (isQuarantined()) {
-          // Runtime failures downgrade future guarded calls for this process.
-          return await invokeFallback();
-        }
-
-        try {
-          return await (value as (methodParams: unknown) => unknown).call(target, methodParams);
-        } catch (error) {
-          if (isContextEngineAbortRejection(error, abortSignal)) {
-            // Abort is caller intent, not engine instability; never quarantine for it.
-            throw error;
-          }
-          recordContextEngineQuarantine({
-            engineId: params.engineId,
-            owner: params.owner,
-            operation: methodName,
-            error,
-            defaultEngineId: params.defaultEngineId,
-          });
-          if (methodName === "compact" || methodName === "prepareSubagentSpawn") {
-            throw error;
-          }
-          return await invokeFallback().catch(() => {
-            throw error;
-          });
-        }
-      };
-    },
-  });
-  RUNTIME_QUARANTINE_PROXY_STATE.set(proxy, {
-    engineId: params.engineId,
-    getResolvedFallbackEngine: () => resolvedFallbackEngine,
-  });
-  return proxy;
-}
 // ---------------------------------------------------------------------------
 // Resolution
 // ---------------------------------------------------------------------------
@@ -575,7 +521,7 @@ export async function resolveContextEngine(
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
-  const entry = contextEngineRegistryState.engines.get(engineId);
+  const entry = getContextEngines().get(engineId);
   if (!entry) {
     if (isDefaultEngine) {
       throw new Error(
@@ -640,7 +586,7 @@ async function resolveDefaultContextEngine(
   defaultEngineId: string,
   factoryCtx: ContextEngineFactoryContext,
 ): Promise<ContextEngine> {
-  const defaultEntry = contextEngineRegistryState.engines.get(defaultEngineId);
+  const defaultEntry = getContextEngines().get(defaultEngineId);
   if (!defaultEntry) {
     throw new Error(
       `[context-engine] fallback failed: default engine "${defaultEngineId}" is not registered. ` +

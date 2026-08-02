@@ -80,8 +80,7 @@ export function nativeHookRelayEventToolMatcher(
     if (nativePreToolUseMayRunLoopDetection(registration)) {
       return undefined;
     }
-    // Relay selection and policy execution must read the same composed registry
-    // so active, pinned, and isolated plugin sources cannot diverge.
+    // Relay selection and policy execution must read the same scoped/root registry.
     const policyRegistry = getGlobalHookRunnerRegistry();
     const scope = mergePluginToolMatcherScopes([
       getGlobalToolHookMatcherScope("before_tool_call"),

@@ -6,7 +6,7 @@ import { sessionsCompactCommand } from "./sessions-compact.js";
 
 const callGatewayCli = vi.hoisted(() => vi.fn());
 
-vi.mock("../cli/gateway-cli/call.js", () => ({ callGatewayCli }));
+vi.mock("../cli/gateway-rpc.js", () => ({ callGatewayFromCliWithTransport: callGatewayCli }));
 
 function createRuntime() {
   return {

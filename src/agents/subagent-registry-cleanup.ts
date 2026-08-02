@@ -34,7 +34,7 @@ export function resolveCleanupCompletionReason(
 }
 
 function resolveEndedAgoMs(entry: SubagentRunRecord, now: number): number {
-  return typeof entry.endedAt === "number" ? now - entry.endedAt : 0;
+  return typeof entry.execution.endedAt === "number" ? now - entry.execution.endedAt : 0;
 }
 
 /** Decide whether deferred subagent cleanup should retry, defer, or give up. */

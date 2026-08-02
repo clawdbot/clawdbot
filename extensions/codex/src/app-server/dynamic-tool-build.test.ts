@@ -461,7 +461,16 @@ describe("Codex app-server dynamic tool build", () => {
       sourceTool: "subagent_announce",
     };
     params.config = {};
-    params.trustedInternalHandoff = true;
+    const trustedInternalHandoff: NonNullable<EmbeddedRunAttemptParams["trustedInternalHandoff"]> =
+      {
+        kind: "subagent-completion",
+        sourceSessionKey: "agent:main:subagent:codex-child",
+        targetSessionKey: "agent:main:session-1",
+        targetSessionId: "session-1",
+        provider: "codex",
+        model: "gpt-5.4-codex",
+      };
+    params.trustedInternalHandoff = trustedInternalHandoff;
     params.scheduledToolPolicy = {
       version: 1,
       mode: "account",
@@ -478,13 +487,13 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(receivedOptions).toMatchObject({
       inputProvenance: params.inputProvenance,
-      trustedInternalHandoff: true,
+      trustedInternalHandoff,
       scheduledToolPolicy: params.scheduledToolPolicy,
     });
     expect(hoisted.resolveWebSearchToolPolicy).toHaveBeenCalledWith(
       expect.objectContaining({
         inputProvenance: params.inputProvenance,
-        trustedInternalHandoff: true,
+        trustedInternalHandoff,
         scheduledToolPolicy: params.scheduledToolPolicy,
       }),
     );

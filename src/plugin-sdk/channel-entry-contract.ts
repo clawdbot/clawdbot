@@ -63,6 +63,7 @@ type DefineBundledChannelEntryOptions<TPlugin = ChannelPlugin> = {
   features?: BundledChannelEntryFeatures;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
+  registerCapabilities?: (api: OpenClawPluginApi) => void;
 };
 
 type DefineBundledChannelSetupEntryOptions = {
@@ -482,6 +483,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   features,
   registerCliMetadata,
   registerFull,
+  registerCapabilities,
 }: DefineBundledChannelEntryOptions<TPlugin>): BundledChannelEntryContract<TPlugin> {
   const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
     typeof configSchema === "function"
@@ -540,6 +542,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
       if (api.registrationMode === "tool-discovery") {
         const profile = createProfiler({ pluginId: id, source: importMetaUrl });
         profile("bundled-register:registerFull", () => registerFull?.(api));
+        profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
         return;
       }
       const profile = createProfiler({ pluginId: id, source: importMetaUrl });
@@ -550,6 +553,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
       profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
       if (api.registrationMode === "discovery") {
         profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
+        profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
         return;
       }
       if (api.registrationMode !== "full") {
@@ -557,6 +561,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
       }
       profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
       profile("bundled-register:registerFull", () => registerFull?.(api));
+      profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
     },
     loadChannelPlugin,
     ...(loadChannelOutbound ? { loadChannelOutbound } : {}),

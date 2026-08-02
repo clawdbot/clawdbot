@@ -289,6 +289,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         .find((group) => group.shard_name === "core-runtime-tui-pty")?.env,
     ).toEqual({
       OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+      OPENCLAW_TUI_PTY_USE_BUILT_CLI: "1",
       // Timing-sensitive groups pin the worker budget while the job-level
       // default scales with the runner class.
       OPENCLAW_VITEST_MAX_WORKERS: "2",
@@ -459,7 +460,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .filter((shard) => shard.requiresDist)
       .map((shard) => shard.shardName);
 
-    expect(requiresDistShardNames).toEqual(["core-support-boundary"]);
+    expect(requiresDistShardNames).toEqual(["core-support-boundary", "core-runtime-tui-pty"]);
   });
 
   it("splits tooling checks independently from built artifacts", () => {
@@ -698,7 +699,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       },
       {
         configs: ["test/vitest/vitest.tui-pty.config.ts"],
-        requiresDist: false,
+        requiresDist: true,
         runner: "blacksmith-4vcpu-ubuntu-2404",
         shardName: "core-runtime-tui-pty",
       },
@@ -747,7 +748,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ]);
   });
 
-  it("runs the TUI PTY local smoke inside the CI node shard", () => {
+  it("runs the TUI PTY local smoke against built CLI artifacts", () => {
     const tuiPtyShard = createNodeTestShards().find(
       (shard) => shard.shardName === "core-runtime-tui-pty",
     );
@@ -757,8 +758,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       configs: ["test/vitest/vitest.tui-pty.config.ts"],
       env: {
         OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+        OPENCLAW_TUI_PTY_USE_BUILT_CLI: "1",
       },
-      requiresDist: false,
+      requiresDist: true,
     });
   });
 

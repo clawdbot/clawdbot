@@ -16,7 +16,6 @@ import {
   buildSlackMpimHistoryBotReply,
   QA_TOOL_SEARCH_PROMPT_RE,
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
-  type MockScenarioState,
 } from "./mock-openai-contracts.js";
 import {
   extractExactReplyDirective,
@@ -66,11 +65,7 @@ function readCompletedImageGenerationMediaPath(prompt: string): string | undefin
   return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
 }
 
-export function buildAssistantText(
-  input: ResponsesInputItem[],
-  body: Record<string, unknown>,
-  scenarioState: MockScenarioState,
-) {
+export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
   const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
   const completedImageMediaPath = readCompletedImageGenerationMediaPath(latestRawUserText);
@@ -320,11 +315,6 @@ export function buildAssistantText(
   }
   if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
     return "FORKED-CONTEXT-ALPHA";
-  }
-  const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
-    scenarioState.subagentFanoutPhase = 3;
-    return fanoutCompleteReply;
   }
   if (
     /forked subagent context qa check/i.test(prompt) &&

@@ -389,9 +389,12 @@ export function createLiveTransportQaCliRegistration(
   };
 }
 
-type QaRunnerRuntimeSurface = {
+type QaRunnerSurface = {
   qaRunnerCliRegistrations?: readonly QaRunnerCliRegistration[];
 };
+
+const QA_RUNNER_API_ARTIFACT_BASENAME = "qa-runner-api.js";
+const LEGACY_QA_RUNNER_API_ARTIFACT_BASENAME = "runtime-api.js";
 
 type QaRuntimeSurface = {
   defaultQaRuntimeModelForMode: (
@@ -500,7 +503,7 @@ function listDeclaredQaRunnerPlugins(
 
 function indexRuntimeRegistrations(
   pluginId: string,
-  surface: QaRunnerRuntimeSurface,
+  surface: QaRunnerSurface,
 ): ReadonlyMap<string, QaRunnerCliRegistration> {
   const registrations = surface.qaRunnerCliRegistrations ?? [];
   const registrationByCommandName = new Map<string, QaRunnerCliRegistration>();
@@ -518,20 +521,38 @@ function indexRuntimeRegistrations(
   return registrationByCommandName;
 }
 
-function loadQaRunnerRuntimeSurface(
+function loadQaRunnerSurface(
   plugin: PluginManifestRecord,
   env?: NodeJS.ProcessEnv,
-): QaRunnerRuntimeSurface | null {
+): QaRunnerSurface | null {
   if (plugin.origin === "bundled") {
-    return loadBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>({
+    return loadBundledPluginPublicSurfaceModuleSync<QaRunnerSurface>({
       dirName: plugin.id,
-      artifactBasename: "runtime-api.js",
+      artifactBasename: QA_RUNNER_API_ARTIFACT_BASENAME,
       ...(env ? { env } : {}),
     });
   }
-  return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerRuntimeSurface>({
+  try {
+    return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerSurface>({
+      dirName: plugin.id,
+      artifactBasename: QA_RUNNER_API_ARTIFACT_BASENAME,
+      ...(env ? { env } : {}),
+    });
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      error.message !==
+        `Unable to resolve bundled plugin public surface ${plugin.id}/${QA_RUNNER_API_ARTIFACT_BASENAME}`
+    ) {
+      throw error;
+    }
+  }
+
+  // qaRunners shipped through runtime-api.js in v2026.6.9. Keep activated
+  // installed plugins working until the 2026-10-01 removal review.
+  return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerSurface>({
     dirName: plugin.id,
-    artifactBasename: "runtime-api.js",
+    artifactBasename: LEGACY_QA_RUNNER_API_ARTIFACT_BASENAME,
     ...(env ? { env } : {}),
   });
 }
@@ -542,9 +563,9 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
   const contributions = new Map<string, QaRunnerCliContribution>();
 
   for (const plugin of listDeclaredQaRunnerPlugins(env)) {
-    const runtimeSurface = loadQaRunnerRuntimeSurface(plugin, env);
-    const runtimeRegistrationByCommandName = runtimeSurface
-      ? indexRuntimeRegistrations(plugin.id, runtimeSurface)
+    const runnerSurface = loadQaRunnerSurface(plugin, env);
+    const runtimeRegistrationByCommandName = runnerSurface
+      ? indexRuntimeRegistrations(plugin.id, runnerSurface)
       : null;
     const declaredCommandNames = new Set(plugin.qaRunners.map((runner) => runner.commandName));
 
@@ -557,7 +578,7 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
       }
 
       const registration = runtimeRegistrationByCommandName?.get(runner.commandName);
-      if (!runtimeSurface) {
+      if (!runnerSurface) {
         contributions.set(runner.commandName, {
           pluginId: plugin.id,
           commandName: runner.commandName,
@@ -568,7 +589,7 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
       }
       if (!registration) {
         throw new Error(
-          `QA runner plugin "${plugin.id}" declared "${runner.commandName}" in openclaw.plugin.json but did not export a matching CLI registration`,
+          `QA runner plugin "${plugin.id}" declared "${runner.commandName}" in openclaw.plugin.json but did not export a matching CLI registration from its QA runner surface`,
         );
       }
       const adapterFactory = registration.adapterFactory;
@@ -596,7 +617,7 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
     for (const commandName of runtimeRegistrationByCommandName?.keys() ?? []) {
       if (!declaredCommandNames.has(commandName)) {
         throw new Error(
-          `QA runner plugin "${plugin.id}" exported "${commandName}" from runtime-api.js but did not declare it in openclaw.plugin.json`,
+          `QA runner plugin "${plugin.id}" exported "${commandName}" from its QA runner surface but did not declare it in openclaw.plugin.json`,
         );
       }
     }
