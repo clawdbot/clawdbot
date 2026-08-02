@@ -223,6 +223,7 @@ async function sendMessageTelegramWithContext(
       mediaUrl,
       buildOutboundMediaLoadOptions({
         maxBytes: mediaMaxBytes,
+        mediaAccess: opts.mediaAccess,
         mediaLocalRoots: opts.mediaLocalRoots,
         mediaReadFile: opts.mediaReadFile,
         optimizeImages: opts.forceDocument ? false : undefined,
