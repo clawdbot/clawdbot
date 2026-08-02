@@ -1253,6 +1253,215 @@ describe("killControlledSubagentRun", () => {
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("run-current");
   });
 
+  it("does not let 24 in-flight kills cross into successor generations", async () => {
+    const count = 24;
+    const controllerSessionKey = "agent:main:main";
+    const oldRuns = Array.from({ length: count }, (_, index) =>
+      createSubagentRunRecord({
+        runId: `run-old-${index}`,
+        childSessionKey: `agent:main:subagent:generation-race-${index}`,
+        controllerSessionKey,
+        requesterSessionKey: controllerSessionKey,
+        requesterDisplayKey: "main",
+        task: `old task ${index}`,
+        cleanup: "keep",
+        generation: 1,
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+      }),
+    );
+    const storePath = await writeSessionStoreFixture(
+      "generation-race",
+      Object.fromEntries(
+        oldRuns.map((entry, index) => [
+          entry.childSessionKey,
+          { sessionId: `sess-generation-race-${index}`, updatedAt: Date.now() },
+        ]),
+      ),
+    );
+    for (const entry of oldRuns) {
+      addSubagentRunForTests(entry);
+    }
+
+    const isActive = vi.fn(() => false);
+    const abort = vi.fn(() => false);
+    const clearQueues = vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] }));
+    setSubagentControlDepsForTest({
+      isEmbeddedAgentRunActive: isActive,
+      abortEmbeddedAgentRun: abort,
+      clearSessionQueues: clearQueues,
+    });
+
+    const pendingKills = oldRuns.map((entry) =>
+      killControlledSubagentRun({
+        cfg: cfgWithSessionStore(storePath),
+        controller: {
+          controllerSessionKey,
+          callerSessionKey: controllerSessionKey,
+          callerIsSubagent: false,
+          controlScope: "children",
+        },
+        entry,
+      }),
+    );
+
+    const successorKeys: string[] = [];
+    const descendantKeys: string[] = [];
+    for (const [index, entry] of oldRuns.entries()) {
+      const successorOwner = `agent:foreign:controller-${index}`;
+      successorKeys.push(entry.childSessionKey);
+      descendantKeys.push(`${entry.childSessionKey}:subagent:leaf`);
+      addSubagentRunForTests({
+        ...entry,
+        runId: `run-successor-${index}`,
+        controllerSessionKey: successorOwner,
+        requesterSessionKey: successorOwner,
+        requesterDisplayKey: successorOwner,
+        task: `successor task ${index}`,
+        generation: 2,
+        createdAt: Date.now(),
+        execution: { status: "running", startedAt: Date.now() },
+      });
+      addSubagentRunForTests({
+        ...entry,
+        runId: `run-successor-leaf-${index}`,
+        childSessionKey: descendantKeys[index]!,
+        controllerSessionKey: entry.childSessionKey,
+        requesterSessionKey: entry.childSessionKey,
+        requesterDisplayKey: entry.childSessionKey,
+        task: `successor leaf ${index}`,
+        generation: 1,
+        createdAt: Date.now(),
+        execution: { status: "running", startedAt: Date.now() },
+      });
+    }
+
+    const results = await Promise.all(pendingKills);
+
+    expect(results.every((result) => result.status === "done")).toBe(true);
+    expect(isActive).not.toHaveBeenCalled();
+    expect(abort).not.toHaveBeenCalled();
+    expect(clearQueues).not.toHaveBeenCalled();
+    for (const [index, childSessionKey] of successorKeys.entries()) {
+      expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+        runId: `run-successor-${index}`,
+        controllerSessionKey: `agent:foreign:controller-${index}`,
+        execution: { status: "running" },
+      });
+      expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
+      expect(getSubagentRunByChildSessionKey(descendantKeys[index]!)).toMatchObject({
+        runId: `run-successor-leaf-${index}`,
+        execution: { status: "running" },
+      });
+      expect(
+        getSubagentRunByChildSessionKey(descendantKeys[index]!)?.execution.endedAt,
+      ).toBeUndefined();
+    }
+  });
+
+  it("fences a successor that appears while kill persistence is pending", async () => {
+    const childSessionKey = "agent:main:subagent:persist-generation-race";
+    const descendantSessionKey = `${childSessionKey}:subagent:leaf`;
+    const controllerSessionKey = "agent:main:main";
+    const oldRun = createSubagentRunRecord({
+      runId: "run-persist-old",
+      childSessionKey,
+      controllerSessionKey,
+      requesterSessionKey: controllerSessionKey,
+      requesterDisplayKey: "main",
+      task: "old persisted task",
+      cleanup: "keep",
+      generation: 1,
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+    const storePath = await writeSessionStoreFixture("persist-generation-race", {
+      [childSessionKey]: {
+        sessionId: "sess-persist-generation-race",
+        updatedAt: Date.now(),
+      },
+    });
+    addSubagentRunForTests(oldRun);
+
+    let releasePersistence!: () => void;
+    let markPersistenceStarted!: () => void;
+    const persistenceStarted = new Promise<void>((resolve) => {
+      markPersistenceStarted = resolve;
+    });
+    const persistenceRelease = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const abort = vi.fn(() => false);
+    const clearQueues = vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] }));
+    setSubagentControlDepsForTest({
+      isEmbeddedAgentRunActive: () => false,
+      abortEmbeddedAgentRun: abort,
+      clearSessionQueues: clearQueues,
+      patchSessionEntry: async (_scope, patcher) => {
+        markPersistenceStarted();
+        await persistenceRelease;
+        const current = { sessionId: "sess-persist-generation-race", updatedAt: Date.now() };
+        const patch = await patcher(current, { existingEntry: { ...current } });
+        return patch ? { ...current, ...patch } : current;
+      },
+    });
+
+    const pendingKill = killControlledSubagentRun({
+      cfg: cfgWithSessionStore(storePath),
+      controller: {
+        controllerSessionKey,
+        callerSessionKey: controllerSessionKey,
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: oldRun,
+    });
+    await persistenceStarted;
+
+    addSubagentRunForTests({
+      ...oldRun,
+      runId: "run-persist-successor",
+      controllerSessionKey: "agent:foreign:controller",
+      requesterSessionKey: "agent:foreign:controller",
+      requesterDisplayKey: "agent:foreign:controller",
+      task: "successor persisted task",
+      generation: 2,
+      createdAt: Date.now(),
+      execution: { status: "running", startedAt: Date.now() },
+    });
+    addSubagentRunForTests({
+      ...oldRun,
+      runId: "run-persist-successor-leaf",
+      childSessionKey: descendantSessionKey,
+      controllerSessionKey: childSessionKey,
+      requesterSessionKey: childSessionKey,
+      requesterDisplayKey: childSessionKey,
+      task: "successor persisted leaf",
+      createdAt: Date.now(),
+      execution: { status: "running", startedAt: Date.now() },
+    });
+    releasePersistence();
+
+    await expect(pendingKill).resolves.toMatchObject({
+      status: "done",
+      runId: "run-persist-old",
+    });
+    expect(abort).toHaveBeenCalledOnce();
+    expect(clearQueues).toHaveBeenCalledOnce();
+    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+      runId: "run-persist-successor",
+      execution: { status: "running" },
+    });
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
+    expect(getSubagentRunByChildSessionKey(descendantSessionKey)).toMatchObject({
+      runId: "run-persist-successor-leaf",
+      execution: { status: "running" },
+    });
+    expect(
+      getSubagentRunByChildSessionKey(descendantSessionKey)?.execution.endedAt,
+    ).toBeUndefined();
+  });
+
   it("kills a yielded descendant without reviving a stale child row", async () => {
     const parentSessionKey = "agent:main:subagent:kill-parent";
     const childSessionKey = `${parentSessionKey}:subagent:child`;

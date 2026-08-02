@@ -203,6 +203,10 @@ function isFinishedForSteerControl(entry: SubagentRunRecord, hasPendingDescendan
   );
 }
 
+function isCurrentSubagentRun(entry: SubagentRunRecord): boolean {
+  return getLatestSubagentRunByChildSessionKey(entry.childSessionKey)?.runId === entry.runId;
+}
+
 type SubagentKillTargetState =
   | { state: "finalizing" }
   | { state: "terminal"; task: DetachedTaskTerminalState };
@@ -246,6 +250,7 @@ async function persistSubagentAbortedLastRun(params: {
   storePath: string;
   hasSessionEntry: boolean;
   abortedLastRun: boolean;
+  isCurrent?: () => boolean;
 }): Promise<void> {
   if (!params.hasSessionEntry) {
     return;
@@ -253,11 +258,14 @@ async function persistSubagentAbortedLastRun(params: {
   try {
     await subagentControlDeps.patchSessionEntry(
       { storePath: params.storePath, sessionKey: params.childSessionKey },
-      (current) => ({
-        ...current,
-        abortedLastRun: params.abortedLastRun,
-        updatedAt: Date.now(),
-      }),
+      (current) =>
+        params.isCurrent?.() === false
+          ? null
+          : {
+              ...current,
+              abortedLastRun: params.abortedLastRun,
+              updatedAt: Date.now(),
+            },
       { replaceEntry: true },
     );
   } catch (error) {
@@ -289,6 +297,7 @@ async function killSubagentRun(params: {
 }): Promise<{
   killed: boolean;
   sessionId?: string;
+  superseded?: boolean;
   targetState?: SubagentKillTargetState;
 }> {
   const initialTargetState = resolveSubagentKillTargetState(params.entry);
@@ -299,7 +308,6 @@ async function killSubagentRun(params: {
     ) {
       markSubagentRunTerminatedBestEffort({
         runId: params.entry.runId,
-        childSessionKey: params.entry.childSessionKey,
         reason: "killed",
       });
     }
@@ -316,6 +324,11 @@ async function killSubagentRun(params: {
   });
   const sessionId = resolved.entry?.sessionId;
   const runtime = await resolveSubagentControlRuntime();
+  // Runtime loading yields. Fence the exact row before touching session-owned
+  // queues so a successor generation cannot inherit an older owner's kill.
+  if (!isCurrentSubagentRun(params.entry)) {
+    return { killed: false, sessionId, superseded: true };
+  }
   const targetStateAfterRuntimeLoad = resolveSubagentKillTargetState(params.entry);
   if (targetStateAfterRuntimeLoad) {
     if (
@@ -324,7 +337,6 @@ async function killSubagentRun(params: {
     ) {
       markSubagentRunTerminatedBestEffort({
         runId: params.entry.runId,
-        childSessionKey,
         reason: "killed",
       });
     }
@@ -347,8 +359,20 @@ async function killSubagentRun(params: {
       storePath: resolved.storePath,
       hasSessionEntry: resolved.entry !== undefined,
       abortedLastRun,
+      isCurrent: () => isCurrentSubagentRun(params.entry),
     });
   await persistAbortedLastRun(true);
+  if (!isCurrentSubagentRun(params.entry)) {
+    const marked = markSubagentRunTerminatedBestEffort({
+      runId: params.entry.runId,
+      reason: "killed",
+    });
+    return {
+      killed: marked > 0 || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0,
+      sessionId,
+      superseded: true,
+    };
+  }
   const targetState = resolveSubagentKillTargetState(params.entry);
   if (targetState) {
     const killedTarget =
@@ -358,7 +382,6 @@ async function killSubagentRun(params: {
     if (killedTarget) {
       markSubagentRunTerminatedBestEffort({
         runId: params.entry.runId,
-        childSessionKey,
         reason: "killed",
       });
     } else {
@@ -370,7 +393,6 @@ async function killSubagentRun(params: {
   }
   const marked = markSubagentRunTerminatedBestEffort({
     runId: params.entry.runId,
-    childSessionKey,
     reason: "killed",
   });
   const killed = marked > 0 || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0;
@@ -413,6 +435,9 @@ async function killSubagentRunTree(params: {
         entry,
         cache: params.cache,
       });
+      if (stopResult.superseded || !isCurrentSubagentRun(entry)) {
+        continue;
+      }
       if (stopResult.killed) {
         killed += 1;
         labels.push(resolveSubagentLabel(entry));
@@ -513,6 +538,15 @@ export async function killControlledSubagentRun(params: {
     entry: currentEntry,
     cache: killCache,
   });
+  if (stopResult.superseded || !isCurrentSubagentRun(currentEntry)) {
+    return {
+      status: "done" as const,
+      runId: params.entry.runId,
+      sessionKey: params.entry.childSessionKey,
+      label: resolveSubagentLabel(params.entry),
+      text: `${resolveSubagentLabel(params.entry)} is already finished.`,
+    };
+  }
   const seenChildSessionKeys = new Set<string>();
   const targetChildKey = params.entry.childSessionKey?.trim();
   if (targetChildKey) {
@@ -565,6 +599,15 @@ export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessio
     entry,
     cache: killCache,
   });
+  if (stopResult.superseded || !isCurrentSubagentRun(entry)) {
+    return {
+      found: true as const,
+      killed: false,
+      runId: entry.runId,
+      sessionKey: entry.childSessionKey,
+      cascadeKilled: 0,
+    };
+  }
   const seenChildSessionKeys = new Set<string>([targetSessionKey]);
   const cascade = await cascadeKillChildren({
     cfg: params.cfg,
@@ -597,6 +640,7 @@ export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessio
       storePath: resolved.storePath,
       hasSessionEntry: resolved.entry !== undefined,
       abortedLastRun: false,
+      isCurrent: () => isCurrentSubagentRun(entry),
     });
   }
 
