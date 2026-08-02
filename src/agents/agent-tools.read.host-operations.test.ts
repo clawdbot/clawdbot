@@ -1,5 +1,5 @@
 /**
- * Tests tilde expansion in host workspace file operations.
+ * Tests host workspace file operation path handling.
  * Non-workspace mode should resolve home paths before passing through guarded
  * edit and write operations.
  */
@@ -199,4 +199,32 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
       await expectMissingPath(fs.access(path.join(openclawHome, path.basename(testFile))));
     });
   });
+});
+
+describe("createHostWorkspaceEditTool host access mapping", () => {
+  it.runIf(process.platform !== "win32")(
+    "silently passes access for outside-workspace paths so readFile reports the real error",
+    async () => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-access-test-"));
+      try {
+        const workspaceDir = path.join(tmpDir, "workspace");
+        const outsideDir = path.join(tmpDir, "outside");
+        const linkDir = path.join(workspaceDir, "escape");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.writeFile(path.join(outsideDir, "secret.txt"), "secret", "utf8");
+        await fs.symlink(outsideDir, linkDir);
+
+        createHostWorkspaceEditTool(workspaceDir, { workspaceOnly: true });
+
+        // Let the guarded read surface the real workspace-escape error instead of
+        // having the upstream library replace an access error with "File not found".
+        await expect(
+          readEditOps().access(path.join(workspaceDir, "escape", "secret.txt")),
+        ).resolves.toBeUndefined();
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
