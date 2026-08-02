@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
@@ -522,6 +523,8 @@ describe("printCronList", () => {
 
 describe("parseAt", () => {
   it.each([
+    ["2026-03-23", "Asia/Shanghai", "2026-03-22T16:00:00.000Z"],
+    ["2026-03-23", "America/New_York", "2026-03-23T04:00:00.000Z"],
     ["2026-03-23T00:00:00", "UTC", "2026-03-23T00:00:00.000Z"],
     ["2026-03-23T00:30:00.250", "UTC", "2026-03-23T00:30:00.250Z"],
     ["2026-03-23T00:30:00", "Europe/Oslo", "2026-03-22T23:30:00.000Z"],
@@ -529,6 +532,9 @@ describe("parseAt", () => {
     ["2026-03-23T23:00:00", "Europe/Oslo", "2026-03-23T22:00:00.000Z"],
     ["2026-03-29T01:30:00", "Europe/Oslo", "2026-03-29T00:30:00.000Z"],
     ["2026-03-29T02:30:00", "Europe/Oslo", null],
+    ["2026-10-25T02:30:00", "Europe/Oslo", "2026-10-25T00:30:00.000Z"],
+    ["2026-11-01T01:30:00", "America/New_York", "2026-11-01T05:30:00.000Z"],
+    ["2026-04-05T01:45:00", "Australia/Lord_Howe", "2026-04-04T14:45:00.000Z"],
     ["2027-02-28T24:00:00", "UTC", "2027-03-01T00:00:00.000Z"],
     ["2027-02-28t24:00", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
     ["2027-02-28t24:00:00.000", "America/New_York", "2027-03-01T05:00:00.000Z"],
@@ -537,6 +543,20 @@ describe("parseAt", () => {
     ["2027-09-04t24:00", "America/Santiago", null],
   ])("interprets offsetless one-shot %s in %s", (input, timezone, expected) => {
     expect(parseAt(input, timezone)).toBe(expected);
+    if (expected !== null) {
+      expect(resolveCronCreateScheduleFromArgs({ at: input, tz: timezone })).toEqual({
+        kind: "at",
+        at: expected,
+      });
+    }
+  });
+
+  it("keeps date-only one-shot schedules in UTC without an explicit timezone", () => {
+    expect(parseAt("2026-03-23")).toBe("2026-03-23T00:00:00.000Z");
+    expect(resolveCronCreateScheduleFromArgs({ at: "2026-03-23" })).toEqual({
+      kind: "at",
+      at: "2026-03-23T00:00:00.000Z",
+    });
   });
 
   it("accepts leading plus relative durations for cron add --at", () => {
