@@ -19,8 +19,10 @@ import {
 import { t } from "../../i18n/index.ts";
 import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
 import { resolveChatPaneObserverRunId } from "../../lib/observer-digest.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { resolveSessionCreateParams } from "../../lib/sessions/create.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -172,6 +174,27 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     const client = state.client;
     const previousSessionKey = state.sessionKey;
     const preservesBoard = this.resolveBoardView().hasBoard;
+    const createParams = {
+      currentSessionKey: previousSessionKey,
+      agentId:
+        scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+        resolveAgentIdFromSessionKey(previousSessionKey),
+    };
+    const createRequestParams = {
+      ...resolveSessionCreateParams(createParams.currentSessionKey, createParams.agentId),
+    };
+    const readCreateAccess = () =>
+      readSessionMethodAccess(context.gateway.snapshot, {
+        method: preservesBoard ? "sessions.reset" : "sessions.create",
+        ...(preservesBoard
+          ? { requiredScope: "operator.admin" as const }
+          : { params: createRequestParams }),
+      });
+    const publishCreateAccessError = (reason: string) => {
+      state.lastError = reason;
+      state.chatError = reason;
+      state.requestUpdate?.();
+    };
     const connectionGeneration = this.connectionGeneration;
     const isCurrent = () =>
       this.isConnected &&
@@ -196,6 +219,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       state.requestUpdate?.();
       return false;
     }
+    const initialAccess = readCreateAccess();
+    if (!initialAccess.allowed) {
+      publishCreateAccessError(initialAccess.reason);
+      return false;
+    }
     if (
       !(await this.confirmConversationReset()) ||
       !isCurrent() ||
@@ -207,6 +235,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       state.lastError = NEW_SESSION_ACTIVE_RUN_MESSAGE;
       state.chatError = state.lastError;
       state.requestUpdate?.();
+      return false;
+    }
+    const currentAccess = readCreateAccess();
+    if (!currentAccess.allowed) {
+      publishCreateAccessError(currentAccess.reason);
       return false;
     }
 
@@ -232,12 +265,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       }
       return resetResult !== "failed";
     }
-    const nextSessionKey = await sessions.create({
-      currentSessionKey: previousSessionKey,
-      agentId:
-        scopedAgentParamsForSession(state, previousSessionKey).agentId ??
-        resolveAgentIdFromSessionKey(previousSessionKey),
-    });
+    const nextSessionKey = await sessions.create(createParams);
     if (!isCurrent()) {
       return false;
     }

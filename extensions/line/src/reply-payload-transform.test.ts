@@ -104,6 +104,20 @@ describe("parseLineDirectives", () => {
           location: undefined,
         },
         {
+          text: "Meet me there. [[location: Blue Bottle | | 35.6895 | 139.6917]]",
+          location: undefined,
+          outputText: "Meet me there.",
+        },
+        {
+          text: "[[location: | Tokyo, Japan | 35.6812 | 139.7671]]",
+          location: {
+            title: "Location",
+            address: "Tokyo, Japan",
+            latitude: 35.6812,
+            longitude: 139.7671,
+          },
+        },
+        {
           text: "[[location: New | New Addr | 35.6 | 139.7]]",
           channelData: { line: { location: existing } },
           location: existing,

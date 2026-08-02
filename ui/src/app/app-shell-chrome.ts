@@ -20,6 +20,7 @@ import {
 import type { BoardFace } from "../lib/board/settings.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
+import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
@@ -233,6 +234,14 @@ export class ShellChromeOwner {
     if (!context) {
       // Native document-finish can beat runtime initialization; replay the idempotent request.
       host.pendingNativeNewSession = true;
+      return;
+    }
+    if (
+      !readSessionMethodAccess(context.gateway.snapshot, {
+        method: "sessions.create",
+        params: {},
+      }).allowed
+    ) {
       return;
     }
     host.openNewSession(context.agentSelection.state.selectedId ?? "");

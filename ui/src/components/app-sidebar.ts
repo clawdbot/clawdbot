@@ -313,7 +313,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   openNewSession(): void {
-    this.onOpenNewSession?.(this.expandedAgentId());
+    this.requestOpenNewSession(this.expandedAgentId());
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {

@@ -14,7 +14,11 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
+import type {
+  SessionMenuAction,
+  SessionMenuActionKind,
+  SessionMenuWork,
+} from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
 import { isStoppableCloudWorkerPlacement } from "../../components/session-row-badges.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
@@ -25,6 +29,7 @@ import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -405,6 +410,90 @@ class SessionsPage extends OpenClawLightDomElement {
     );
   }
 
+  private mutationDisabledReason(request: {
+    method: string;
+    params?: unknown;
+    requiredScope?: "operator.write" | "operator.admin";
+  }): string | undefined {
+    const access = readSessionMethodAccess(this.context?.gateway.snapshot, request);
+    return access.allowed ? undefined : access.reason;
+  }
+
+  private requireMutationAccess(
+    scope: SessionsPageRequestScope,
+    request: {
+      method: string;
+      params?: unknown;
+      requiredScope?: "operator.write" | "operator.admin";
+    },
+  ): boolean {
+    const access = readSessionMethodAccess(scope.gateway.snapshot, request);
+    if (access.allowed) {
+      return true;
+    }
+    this.error = access.reason;
+    return false;
+  }
+
+  private selectedDeleteDisabledReason(): string | undefined {
+    const rowsByKey = new Map(this.result?.sessions.map((row) => [row.key, row]) ?? []);
+    for (const key of this.selectedKeys) {
+      const row = rowsByKey.get(key);
+      const reason = this.mutationDisabledReason({
+        method: "sessions.delete",
+        params: {
+          key,
+          ...(row?.archived === true ? { archivedOnly: true } : {}),
+        },
+      });
+      if (reason) {
+        return reason;
+      }
+    }
+    return undefined;
+  }
+
+  private sessionMenuActionDisabledReasons(
+    row: GatewaySessionRow,
+  ): Partial<Record<SessionMenuActionKind, string>> {
+    const patchReason = this.mutationDisabledReason({
+      method: "sessions.patch",
+      params: { key: row.key, label: null },
+    });
+    const groupReason = this.mutationDisabledReason({
+      method: "sessions.groups.put",
+      requiredScope: "operator.write",
+    });
+    const forkReason = this.mutationDisabledReason({
+      method: "sessions.create",
+      params: { parentSessionKey: row.key, fork: true },
+    });
+    const reclaimReason = this.mutationDisabledReason({
+      method: "sessions.reclaim",
+      requiredScope: "operator.admin",
+    });
+    const deleteReason = this.mutationDisabledReason({
+      method: "sessions.delete",
+      params: { key: row.key, ...(row.archived === true ? { archivedOnly: true } : {}) },
+    });
+    return {
+      ...(patchReason
+        ? {
+            "toggle-pin": patchReason,
+            "set-icon": patchReason,
+            "toggle-unread": patchReason,
+            rename: patchReason,
+            "move-to-group": patchReason,
+            "toggle-archived": patchReason,
+          }
+        : {}),
+      ...(groupReason || patchReason ? { "new-group": groupReason ?? patchReason } : {}),
+      ...(forkReason ? { fork: forkReason } : {}),
+      ...(reclaimReason ? { "stop-cloud-worker": reclaimReason } : {}),
+      ...(deleteReason ? { delete: deleteReason } : {}),
+    };
+  }
+
   private applyRouteData() {
     const data = this.routeData;
     const context = this.context;
@@ -712,16 +801,20 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
+    const requests = rows.map((row) => ({
+      key: row.key,
+      agentId: this.sessionAgentId(row.key, scope.context),
+      ...options,
+      ...(row.archived === true ? { archivedOnly: true } : {}),
+    }));
+    for (const params of requests) {
+      if (!this.requireMutationAccess(scope, { method: "sessions.delete", params })) {
+        return;
+      }
+    }
     this.sessionMutationPending = true;
     try {
-      const result = await scope.sessions.deleteMany(
-        rows.map((row) => ({
-          key: row.key,
-          agentId: this.sessionAgentId(row.key, scope.context),
-          ...options,
-          ...(row.archived === true ? { archivedOnly: true } : {}),
-        })),
-      );
+      const result = await scope.sessions.deleteMany(requests);
       if (!this.isRequestScopeCurrent(scope)) {
         return;
       }
@@ -860,7 +953,13 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     const scope = this.captureRequestScope();
-    if (!scope) {
+    if (
+      !scope ||
+      !this.requireMutationAccess(scope, {
+        method: "sessions.reclaim",
+        requiredScope: "operator.admin",
+      })
+    ) {
       return;
     }
     const agentId = parseAgentSessionKey(row.key)?.agentId;
@@ -899,6 +998,15 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private async rememberCustomGroup(name: string) {
     const scope = this.captureRequestScope();
+    if (
+      scope &&
+      !this.requireMutationAccess(scope, {
+        method: "sessions.groups.put",
+        requiredScope: "operator.write",
+      })
+    ) {
+      return;
+    }
     await rememberSessionCustomGroup({
       name,
       knownCategories: this.knownCategories(),
@@ -959,9 +1067,18 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!scope) {
       return "stale";
     }
+    const agentId = this.sessionAgentId(key, scope.context);
+    if (
+      !this.requireMutationAccess(scope, {
+        method: "sessions.patch",
+        params: { key, ...patch, ...(agentId ? { agentId } : {}) },
+      })
+    ) {
+      return "failed";
+    }
     try {
       const patched = await scope.sessions.patch(key, patch, {
-        agentId: this.sessionAgentId(key, scope.context),
+        agentId,
       });
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";
@@ -1016,12 +1133,16 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     const agentId = this.sessionAgentId(key, scope.context);
+    const createParams = {
+      parentSessionKey: key,
+      fork: true,
+      ...(agentId ? { agentId } : {}),
+    };
+    if (!this.requireMutationAccess(scope, { method: "sessions.create", params: createParams })) {
+      return;
+    }
     try {
-      const forkedKey = await scope.sessions.create({
-        parentSessionKey: key,
-        fork: true,
-        ...(agentId ? { agentId } : {}),
-      });
+      const forkedKey = await scope.sessions.create(createParams);
       if (!this.isRequestScopeCurrent(scope)) {
         return;
       }
@@ -1096,7 +1217,13 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     const scope = this.captureRequestScope();
-    if (!scope) {
+    if (
+      !scope ||
+      !this.requireMutationAccess(scope, {
+        method: "sessions.compaction.branch",
+        requiredScope: "operator.write",
+      })
+    ) {
       return;
     }
     this.checkpointBusyKey = checkpointId;
@@ -1135,7 +1262,13 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     const scope = this.captureRequestScope();
-    if (!scope) {
+    if (
+      !scope ||
+      !this.requireMutationAccess(scope, {
+        method: "sessions.compaction.restore",
+        requiredScope: "operator.admin",
+      })
+    ) {
       return;
     }
     this.checkpointBusyKey = checkpointId;
@@ -1251,6 +1384,7 @@ class SessionsPage extends OpenClawLightDomElement {
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
+        .actionDisabledReasons=${this.sessionMenuActionDisabledReasons(row)}
         .forkDisabled=${row.modelSelectionLocked === true}
         .archiveAllowed=${archiveAllowed}
         .cloudWorkerStopAllowed=${isStoppableCloudWorkerPlacement(row.placement) &&
@@ -1390,6 +1524,31 @@ class SessionsPage extends OpenClawLightDomElement {
           checkpointLoadingKey: this.checkpointLoadingKey,
           checkpointBusyKey: this.checkpointBusyKey,
           checkpointErrorByKey: this.checkpointErrorByKey,
+          patchWriteDisabledReason: this.mutationDisabledReason({
+            method: "sessions.patch",
+            params: { key: "", label: null },
+          }),
+          patchAdminDisabledReason: this.mutationDisabledReason({
+            method: "sessions.patch",
+            params: { key: "", thinkingLevel: null },
+          }),
+          groupWriteDisabledReason: this.mutationDisabledReason({
+            method: "sessions.groups.put",
+            requiredScope: "operator.write",
+          }),
+          deleteArchivedDisabledReason: this.mutationDisabledReason({
+            method: "sessions.delete",
+            params: { key: "", archivedOnly: true, deleteTranscript: true },
+          }),
+          checkpointBranchDisabledReason: this.mutationDisabledReason({
+            method: "sessions.compaction.branch",
+            requiredScope: "operator.write",
+          }),
+          checkpointRestoreDisabledReason: this.mutationDisabledReason({
+            method: "sessions.compaction.restore",
+            requiredScope: "operator.admin",
+          }),
+          deleteSelectedDisabledReason: this.selectedDeleteDisabledReason(),
           onFiltersChange: (next) => this.updateFilters(next),
           onClearFilters: () => {
             this.activeMinutes = "";

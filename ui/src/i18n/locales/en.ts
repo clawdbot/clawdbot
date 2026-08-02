@@ -665,6 +665,11 @@ export const en: TranslationMap = {
   sessionsView: {
     subagentPrefix: "Subagent:",
     automationPrefix: "Automation:",
+    actionRequiresConnection: "Connect to the Gateway to change threads.",
+    actionUnavailable: "This Gateway does not support this thread action.",
+    actionRequiresRead: "This action requires operator.read access.",
+    actionRequiresWrite: "This action requires operator.write access.",
+    actionRequiresAdmin: "This action requires operator.admin access.",
     deletePreservedWorktrees:
       "{count} thread worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
