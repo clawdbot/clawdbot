@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 
-export const COLD_READ_COMMAND_PATHS = [
+export const COLD_READ_COMMAND_PATHS: string[][] = [
   ["skills", "info"],
   ["skills", "search"],
   ["hooks"],
   ["memory", "status"],
   ["memory", "search"],
-] as const;
+];
 
 export function registerColdReadCommandFixtures(program: Command, skills: Command): void {
   for (const skillCommand of ["info", "search"]) {
