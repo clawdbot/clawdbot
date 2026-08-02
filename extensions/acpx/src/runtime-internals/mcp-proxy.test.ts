@@ -54,6 +54,28 @@ describe("mcp-proxy", () => {
     expect(createTargetSpawnOptions("linux")).toHaveProperty("detached", true);
   });
 
+  it("terminates the whole target tree on Windows via taskkill /T", async () => {
+    const moduleUrl = pathToFileURL(proxyPath).href;
+    const { createWindowsTreeKillCommand } = (await import(moduleUrl)) as {
+      createWindowsTreeKillCommand: (
+        pid: number,
+        signal: string,
+      ) => { command: string; args: string[] };
+    };
+
+    // No POSIX group signaling on Windows: taskkill /T walks the tree from
+    // the target pid so descendants are terminated together with it.
+    expect(createWindowsTreeKillCommand(1234, "SIGTERM")).toEqual({
+      command: "taskkill",
+      args: ["/PID", "1234", "/T"],
+    });
+    // The forced phase adds /F, the SIGKILL equivalent for a resistant tree.
+    expect(createWindowsTreeKillCommand(1234, "SIGKILL")).toEqual({
+      command: "taskkill",
+      args: ["/PID", "1234", "/T", "/F"],
+    });
+  });
+
   it("injects configured MCP servers into ACP session bootstrap requests", async () => {
     const echoServerPath = await makeTempScript(
       "echo-server.cjs",
@@ -308,6 +330,173 @@ setTimeout(() => {}, 300_000);
     expect(() => process.kill(pids.grandchildPid, 0)).toThrow();
   }, 15_000);
 
+  it("reaps target descendants when the target exits cooperatively on EOF", async () => {
+    const cooperativeParentPath = await makeTempScript(
+      "cooperative-parent-server.cjs",
+      String.raw`#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, 300000)"], {
+  stdio: "ignore",
+});
+process.stdout.write("ready " + process.pid + " " + grandchild.pid + "\n");
+process.stdin.on("data", () => {});
+process.stdin.on("end", () => process.exit(0));
+`,
+    );
+
+    const payload = encodePayload({
+      targetCommand: `${process.execPath} ${cooperativeParentPath}`,
+      mcpServers: [],
+    });
+
+    const child = spawn(process.execPath, [proxyPath, "--payload", payload], {
+      stdio: ["pipe", "pipe", "inherit"],
+      cwd: process.cwd(),
+    });
+
+    let stdout = "";
+    const pids = await new Promise<{ targetPid: number; grandchildPid: number }>((resolve) => {
+      child.stdout.on("data", (chunk) => {
+        stdout += String(chunk);
+        const match = stdout.match(/ready (\d+) (\d+)\n/);
+        if (match) {
+          resolve({ targetPid: Number(match[1]), grandchildPid: Number(match[2]) });
+        }
+      });
+    });
+
+    // Host disconnects; the target handles the forwarded EOF by exiting
+    // cleanly, but its background descendant stays behind in the process group.
+    child.stdin.end();
+
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        for (const pid of [pids.targetPid, pids.grandchildPid]) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            // already gone
+          }
+        }
+        reject(new Error("proxy did not exit after cooperative target exit (descendant leak)"));
+      }, 8_000);
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+
+    expect(exitCode).toBe(0);
+    // EOF teardown must keep tree ownership past the cooperative parent exit
+    // and reap the surviving descendant instead of exiting with the parent.
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const deadline = Date.now() + 2_000;
+    while ((alive(pids.targetPid) || alive(pids.grandchildPid)) && Date.now() < deadline) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    }
+    const targetReaped = !alive(pids.targetPid);
+    const grandchildReaped = !alive(pids.grandchildPid);
+    for (const pid of [pids.targetPid, pids.grandchildPid]) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+    expect(targetReaped).toBe(true);
+    expect(grandchildReaped).toBe(true);
+  }, 15_000);
+
+  it.runIf(process.platform === "win32")(
+    "reaps the target tree on Windows after the host disconnects",
+    async () => {
+      const parentServerPath = await makeTempScript(
+        "windows-parent-server.cjs",
+        String.raw`#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, 300000)"], {
+  stdio: "ignore",
+});
+process.stdout.write("ready " + process.pid + " " + grandchild.pid + "\n");
+setTimeout(() => {}, 300_000);
+`,
+      );
+
+      const payload = encodePayload({
+        targetCommand: `${process.execPath} ${parentServerPath}`,
+        mcpServers: [],
+      });
+
+      const child = spawn(process.execPath, [proxyPath, "--payload", payload], {
+        stdio: ["pipe", "pipe", "inherit"],
+        cwd: process.cwd(),
+      });
+
+      let stdout = "";
+      const pids = await new Promise<{ targetPid: number; grandchildPid: number }>((resolve) => {
+        child.stdout.on("data", (chunk) => {
+          stdout += String(chunk);
+          const match = stdout.match(/ready (\d+) (\d+)\n/);
+          if (match) {
+            resolve({ targetPid: Number(match[1]), grandchildPid: Number(match[2]) });
+          }
+        });
+      });
+
+      child.stdin.end();
+
+      const exitCode = await new Promise<number | null>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          reject(new Error("proxy did not exit after host stdin EOF on Windows"));
+        }, 12_000);
+        child.once("close", (code) => {
+          clearTimeout(timer);
+          resolve(code);
+        });
+      });
+
+      expect(exitCode).toBe(0);
+      // taskkill /T must terminate the descendant together with the target.
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const deadline = Date.now() + 5_000;
+      while ((alive(pids.targetPid) || alive(pids.grandchildPid)) && Date.now() < deadline) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
+      }
+      const targetReaped = !alive(pids.targetPid);
+      const grandchildReaped = !alive(pids.grandchildPid);
+      for (const pid of [pids.targetPid, pids.grandchildPid]) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+      expect(targetReaped).toBe(true);
+      expect(grandchildReaped).toBe(true);
+    },
+    30_000,
+  );
+
   it("forwards a host SIGTERM to the detached target tree", async () => {
     const parentServerPath = await makeTempScript(
       "signal-parent-server.cjs",
@@ -377,7 +566,9 @@ setTimeout(() => {}, 300_000);
       }
     };
     while ((alive(pids.targetPid) || alive(pids.grandchildPid)) && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
     }
     expect(alive(pids.targetPid)).toBe(false);
     expect(alive(pids.grandchildPid)).toBe(false);
