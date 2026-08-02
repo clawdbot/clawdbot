@@ -18,10 +18,7 @@ import {
   applyProviderPluginAuthMethodResultConfig,
   runProviderPluginAuthMethodUnpersisted,
 } from "../plugins/provider-auth-choice.js";
-import {
-  type ProviderAuthChoiceMetadata,
-  resolveManifestProviderAuthChoice,
-} from "../plugins/provider-auth-choices.js";
+import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
