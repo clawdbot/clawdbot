@@ -376,7 +376,7 @@ private func settleQueuedAISetupTasks() async {
 
 private func pendingState(
     _ defaults: UserDefaults,
-    for route: String = "local",
+    for route: String? = "local",
     now: Date = Date()) -> OnboardingSystemAgentResumeStore.PendingState
 {
     OnboardingSystemAgentResumeStore.pendingState(for: route, defaults: defaults, now: now)
@@ -384,7 +384,7 @@ private func pendingState(
 
 private func storedActivationOwner(
     _ defaults: UserDefaults,
-    for route: String = "local",
+    for route: String? = "local",
     now: Date = Date()) -> OnboardingSystemAgentResumeStore.ActivationOwner?
 {
     OnboardingSystemAgentResumeStore.activationOwner(for: route, defaults: defaults, now: now)
@@ -392,7 +392,7 @@ private func storedActivationOwner(
 
 private func isPending(
     _ defaults: UserDefaults,
-    for route: String = "local",
+    for route: String? = "local",
     now: Date = Date()) -> Bool
 {
     OnboardingSystemAgentResumeStore.isPending(for: route, defaults: defaults, now: now)
@@ -401,7 +401,7 @@ private func isPending(
 private func isOwned(
     by owner: OnboardingSystemAgentResumeStore.ActivationOwner,
     defaults: UserDefaults,
-    for route: String = "local") -> Bool
+    for route: String? = "local") -> Bool
 {
     OnboardingSystemAgentResumeStore.isOwned(by: owner, for: route, defaults: defaults)
 }
@@ -409,7 +409,7 @@ private func isOwned(
 @discardableResult
 private func markPending(
     _ defaults: UserDefaults,
-    for route: String = "local",
+    for route: String? = "local",
     owner: OnboardingSystemAgentResumeStore.ActivationOwner? = nil,
     timeoutMs: Double = OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs,
     now: Date = Date()) -> Date?
@@ -425,7 +425,7 @@ private func markPending(
 @discardableResult
 private func markCompleted(
     _ defaults: UserDefaults,
-    for route: String = "local",
+    for route: String? = "local",
     owner: OnboardingSystemAgentResumeStore.ActivationOwner? = nil) -> Bool
 {
     OnboardingSystemAgentResumeStore.markCompleted(
@@ -462,8 +462,8 @@ private typealias AISetupHarnessHandler = @Sendable (
 private func makeAISetupRequestSession(
     recorder: AISetupRequestRecorder? = nil,
     preparationKind: String? = nil,
-    receiveHook: GatewayTestWebSocketTask.ReceiveHook? = nil,
-    handler: @escaping AISetupRequestHandler = { _, _ in }) -> GatewayTestWebSocketSession
+    handler: @escaping AISetupRequestHandler = { _, _ in },
+    receiveHook: GatewayTestWebSocketTask.ReceiveHook? = nil) -> GatewayTestWebSocketSession
 {
     GatewayTestWebSocketSession(taskFactory: {
         GatewayTestWebSocketTask(
@@ -541,20 +541,20 @@ private struct AISetupHarness {
         token: String? = nil,
         password: String? = nil,
         preparationKind: String? = nil,
-        receiveHook: GatewayTestWebSocketTask.ReceiveHook? = nil,
-        handler: @escaping AISetupHarnessHandler = { _, _, _ in nil })
+        handler: @escaping AISetupHarnessHandler = { _, _, _ in nil },
+        receiveHook: GatewayTestWebSocketTask.ReceiveHook? = nil)
     {
         let recorder = AISetupRequestRecorder()
         self.recorder = recorder
         self.session = makeAISetupRequestSession(
             recorder: recorder,
             preparationKind: preparationKind,
-            receiveHook: receiveHook,
             handler: { task, request in
                 if let response = try await handler(task, request, recorder) {
                     task.emitReceiveSuccess(.data(response))
                 }
-            })
+            },
+            receiveHook: receiveHook)
         self.gateway = makeAISetupGateway(
             url: url,
             token: token,
@@ -854,19 +854,6 @@ struct OnboardingAISetupTests {
         let preparedModelRef = "llama-cpp/gemma-4-e4b-it-q4_k_m"
         let session = makeAISetupRequestSession(
             recorder: recorder,
-            receiveHook: { task, receiveIndex in
-                if receiveIndex == 0 {
-                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                }
-                let id = task.snapshotConnectRequestID() ?? "connect"
-                return .data(GatewayWebSocketTestSupport.connectOkData(
-                    id: id,
-                    methods: [
-                        "openclaw.setup.prepare.start",
-                        "openclaw.setup.activate",
-                    ],
-                    capabilities: ["openclaw-setup-model-ref"]))
-            },
             handler: { task, request in
                 switch request.method {
                 case "openclaw.setup.detect":
@@ -917,6 +904,19 @@ struct OnboardingAISetupTests {
                 default:
                     break
                 }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                let id = task.snapshotConnectRequestID() ?? "connect"
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: id,
+                    methods: [
+                        "openclaw.setup.prepare.start",
+                        "openclaw.setup.activate",
+                    ],
+                    capabilities: ["openclaw-setup-model-ref"]))
             })
         let url = try #require(URL(string: "ws://example.invalid"))
         let gateway = makeAISetupGateway(url: url, session: session)
