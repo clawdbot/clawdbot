@@ -36,6 +36,11 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
+import { log as embeddedRunLog } from "../logger.js";
+import {
+  createEmbeddedRunStageTracker,
+  formatEmbeddedRunStageSummary,
+} from "./attempt-stage-timing.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
@@ -457,12 +462,20 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const applyApiKeyInfo = async (candidate?: string, attemptIndex?: number): Promise<void> => {
+    // Trace-gated timing: the auth "initialize" stage measured ~443ms/turn but
+    // its interior (prepare vs credential resolve vs runtime-auth hook) was
+    // unattributed. Keep marks here so the next trace capture names the cost.
+    const initStages = embeddedRunLog.isEnabled("trace")
+      ? createEmbeddedRunStageTracker()
+      : undefined;
     const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);
+    initStages?.mark("prepare-model");
     const apiKeyInfo = await resolveApiKeyForCandidate(
       candidate,
       preparedModel?.runtimeModel,
       preparedModel?.allowAuthProfileFallback,
     );
+    initStages?.mark("resolve-api-key");
     if (
       preparedModel?.authRequirement &&
       !providerModelRouteAcceptsAuthMode({
@@ -539,6 +552,15 @@ export function createEmbeddedRunAuthController(params: {
       authMode: apiKeyInfo.mode,
       profileId: apiKeyInfo.profileId,
     });
+    initStages?.mark("prepare-runtime-auth");
+    if (initStages) {
+      embeddedRunLog.trace(
+        formatEmbeddedRunStageSummary(
+          `[trace:embedded-run] auth initialize stages: provider=${runtimeModel.provider}`,
+          initStages.snapshot(),
+        ),
+      );
+    }
     applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
     if (preparedAuth?.apiKey) {
       clearRuntimeAuthRefreshTimer();

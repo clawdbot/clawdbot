@@ -7,6 +7,7 @@ import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-prov
 import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
+import type { PreparedRuntimeRouteModelMemo } from "./runtime-plan/credential-scoped-model.js";
 import type { AuthStorage } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
@@ -42,6 +43,13 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
   inlineProviderModels: readonly InlineModelEntry[];
   createStores: () => PreparedModelRuntimeStores;
+  /**
+   * Generation-owned memo of materialized route models. Auth plans mint fresh
+   * objects per turn, so without this every run repeats resolveModelAsync for
+   * the same decision inputs (~420ms/turn measured). Per-run snapshot wrappers
+   * spread this reference through; a new generation replaces the memo.
+   */
+  routeModelResolutionMemo?: PreparedRuntimeRouteModelMemo;
 }>;
 
 export type PreparedModelRuntimeStores = {
