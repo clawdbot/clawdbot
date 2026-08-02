@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TELEGRAM_DM_HISTORY_LIMIT, resolveTelegramDmHistoryLimit } from "./dm-history.js";
+import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
 
 describe("resolveTelegramDmHistoryLimit", () => {
   it("uses the Telegram default when no limit is configured", () => {
-    expect(resolveTelegramDmHistoryLimit({ config: {} })).toBe(DEFAULT_TELEGRAM_DM_HISTORY_LIMIT);
+    expect(resolveTelegramDmHistoryLimit({ config: {} })).toBe(10);
   });
 
   it("honors and clamps the account limit", () => {
