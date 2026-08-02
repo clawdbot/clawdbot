@@ -353,6 +353,7 @@ export class TelegramPollingSession {
   /** Long-lived monitor for this session; stop only when the cycle ends. */
   #getOrCreateSpooledMonitor(params: {
     bot: TelegramBot;
+    botInfo: TelegramBot["botInfo"];
     spoolDir: string;
     pollIntervalMs: number;
     abortSignal?: AbortSignal;
@@ -365,7 +366,7 @@ export class TelegramPollingSession {
       bot: params.bot,
       cfg: this.opts.config,
       accountId: this.opts.accountId,
-      botInfo: this.opts.botInfo,
+      botInfo: params.botInfo,
       adoptionStallTimeoutMs: this.#spooledUpdateHandlerTimeoutMs,
       pollIntervalMs: params.pollIntervalMs,
       ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
@@ -400,6 +401,9 @@ export class TelegramPollingSession {
       );
       return shouldRetry ? "continue" : "exit";
     }
+    // A pre-probed or cached bot may already be initialized; admission and replay
+    // must share grammY's actual capability snapshot instead of a second source.
+    const botInfo = bot.botInfo;
     const spoolDir =
       ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
     const workerFactory = ingress.createWorker ?? createTelegramIngressWorker;
@@ -456,6 +460,7 @@ export class TelegramPollingSession {
       : this.opts.abortSignal;
     const ingressMonitor = this.#getOrCreateSpooledMonitor({
       bot,
+      botInfo,
       spoolDir,
       pollIntervalMs: drainIntervalMs,
       ...(ingressAbortSignal ? { abortSignal: ingressAbortSignal } : {}),
@@ -524,7 +529,7 @@ export class TelegramPollingSession {
             updateId = await writeTelegramSpooledUpdate({
               spoolDir,
               update: message.update,
-              laneKey: telegramSpooledUpdateLaneKey(message.update, this.opts.botInfo),
+              laneKey: telegramSpooledUpdateLaneKey(message.update, botInfo),
             });
             this.opts.log(`[telegram][diag] isolated polling update spooled updateId=${updateId}`);
           } catch (err: unknown) {

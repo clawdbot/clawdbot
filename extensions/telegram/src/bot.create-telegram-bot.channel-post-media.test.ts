@@ -6,7 +6,14 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import {
+  telegramBotInfoForTest,
+  telegramIngestGroupForTest,
+  waitForTelegramMockCalls,
+  type TelegramIngestGroupForTest,
+  type TelegramMentionCaseForTest,
+  type TelegramMentionPolicyForTest,
+} from "./bot.create-telegram-bot.test-support.js";
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -149,15 +156,6 @@ function createImageFetchSpy(params?: { body?: Uint8Array; contentType?: string 
   );
 }
 
-async function waitForMockCalls(mock: { mock: { calls: unknown[] } }, count: number) {
-  for (let index = 0; index < 80; index++) {
-    if (mock.mock.calls.length >= count) {
-      return;
-    }
-    await delay(25);
-  }
-}
-
 function createChannelPostContext(params: {
   messageId: number;
   date: number;
@@ -257,41 +255,10 @@ function expectTypeOnlyMediaPayload(kind: string, rawBody = "") {
   expect(media[0]?.path).toBeUndefined();
 }
 
-type TelegramMentionPolicyForTest = {
-  mode: "allow" | "deny";
-  allowIn?: string[];
-  denyIn?: string[];
-};
-
-type TelegramIngestGroupForTest = {
-  requireMention: boolean;
-  ingest?: boolean;
-  topics?: Record<string, { ingest: boolean }>;
-};
-
-function telegramIngestGroupForTest(
-  ingest?: boolean,
-  topics?: Record<string, { ingest: boolean }>,
-): TelegramIngestGroupForTest {
-  return {
-    requireMention: true,
-    ...(ingest === undefined ? {} : { ingest }),
-    ...(topics ? { topics } : {}),
-  };
-}
-
-type TelegramMentionCaseForTest = [
-  string,
-  TelegramMentionPolicyForTest,
-  TelegramMentionPolicyForTest | undefined,
-  number | undefined,
-  boolean,
-  number,
-];
-
 function setTelegramIngestGroupConfig(
   params: {
     groups?: Record<string, TelegramIngestGroupForTest>;
+    groupAllowFrom?: string[];
     providerPolicy?: TelegramMentionPolicyForTest;
     accountPolicy?: TelegramMentionPolicyForTest;
     customMentionPatterns?: boolean;
@@ -304,6 +271,7 @@ function setTelegramIngestGroupConfig(
     channels: {
       telegram: {
         groupPolicy: "open",
+        ...(params.groupAllowFrom ? { groupAllowFrom: params.groupAllowFrom } : {}),
         ...(params.providerPolicy ? { mentionPatterns: params.providerPolicy } : {}),
         groups: params.groups ?? { "-100456": { requireMention: true, ingest: true } },
         ...(params.accountPolicy
@@ -504,7 +472,7 @@ describe("createTelegramBot channel_post media", () => {
       });
       expect(replySpy).not.toHaveBeenCalled();
       await flushChannelPostMediaGroup(setTimeoutSpy);
-      await waitForMockCalls(replySpy, 1);
+      await waitForTelegramMockCalls(replySpy, 1);
 
       await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
       const payload = replyPayload() as { Body?: string };
@@ -594,7 +562,7 @@ describe("createTelegramBot channel_post media", () => {
       createTelegramBot({ token: "tok" });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
       await handler(createTelegramPrivateMediaContext({ messageId: 411, fileId: "p1" }));
-      await waitForMockCalls(sendMessageSpy, 1);
+      await waitForTelegramMockCalls(sendMessageSpy, 1);
       expectTelegramDownloadWarning(411);
       expect(replySpy).toHaveBeenCalledOnce();
       expectTypeOnlyMediaPayload("image");
@@ -617,7 +585,7 @@ describe("createTelegramBot channel_post media", () => {
         },
       }),
     );
-    await waitForMockCalls(sendMessageSpy, 1);
+    await waitForTelegramMockCalls(sendMessageSpy, 1);
     expectTelegramDownloadWarning(100000);
     expect(replySpy).toHaveBeenCalledOnce();
     expectTypeOnlyMediaPayload("document");
@@ -644,7 +612,7 @@ describe("createTelegramBot channel_post media", () => {
           },
         }),
       );
-      await waitForMockCalls(sendMessageSpy, 1);
+      await waitForTelegramMockCalls(sendMessageSpy, 1);
       expectTelegramDownloadWarning(
         messageId,
         `⚠️ File too large. Maximum size is ${expectedLimitMb}MB.`,
@@ -711,17 +679,32 @@ describe("createTelegramBot channel_post media", () => {
     ["group disables wildcard", false, true, undefined, false],
     ["topic enables group", false, undefined, true, true],
     ["topic disables group", true, undefined, false, false],
+    ["unauthorized unmentioned command", true, undefined, undefined, false],
+    ["unauthorized mentioned command", true, undefined, undefined, false],
+    ["unauthorized mention-optional command", true, undefined, undefined, false],
+    ["unauthorized prefixed mention-optional command", true, undefined, undefined, false],
   ] as Array<[string, boolean | undefined, boolean | undefined, boolean | undefined, boolean]>)(
     "honors %s before skipping unmentioned group media (#92067)",
     async (_name, groupIngest, wildcardIngest, topicIngest, shouldIngest) => {
+      const unauthorizedCommand = _name.startsWith("unauthorized");
+      const command = `${_name.includes("prefixed") ? "[Tue 2026-06-02 12:34] " : ""}${
+        _name === "unauthorized mentioned command" ? "/reset@openclaw_bot" : "/reset"
+      }`;
+      const commandOffset = command.indexOf("/");
       const topics = topicIngest === undefined ? undefined : { "42": { ingest: topicIngest } };
       const groups = {
         ...(wildcardIngest === undefined
           ? {}
           : { "*": telegramIngestGroupForTest(wildcardIngest) }),
-        "-100456": telegramIngestGroupForTest(groupIngest, topics),
+        "-100456": {
+          ...telegramIngestGroupForTest(groupIngest, topics),
+          requireMention: !_name.includes("mention-optional"),
+        },
       };
-      setTelegramIngestGroupConfig({ groups });
+      setTelegramIngestGroupConfig({
+        groups,
+        groupAllowFrom: unauthorizedCommand ? ["999"] : undefined,
+      });
       const getFile = vi.fn(async () => ({ file_path: "photos/ingested.jpg" }));
       const fetchSpy = createImageFetchSpy();
       try {
@@ -729,6 +712,18 @@ describe("createTelegramBot channel_post media", () => {
         await dispatchTelegramGroupPhoto({
           messageId: 92067,
           topicId: topicIngest === undefined ? undefined : 42,
+          caption: unauthorizedCommand ? command : undefined,
+          extraMessage: unauthorizedCommand
+            ? {
+                caption_entities: [
+                  {
+                    type: "bot_command",
+                    offset: commandOffset,
+                    length: command.length - commandOffset,
+                  },
+                ],
+              }
+            : undefined,
           getFile,
         });
         const expectedCalls = Number(shouldIngest);
@@ -765,9 +760,12 @@ describe("createTelegramBot channel_post media", () => {
     { name: "all", messageIds: [92068, 92069], partial: false, deniedMention: false },
     { name: "partial", messageIds: [92071, 92072], partial: true, deniedMention: false },
     { name: "denied mention", messageIds: [92071, 92072], partial: true, deniedMention: true },
-  ])("silently ingests group media albums with $name exactly once (#92067)", async (testCase) => {
+    { name: "unauthorized", messageIds: [92079, 92080], partial: false, deniedMention: false },
+  ])("applies group media album policy to $name (#92067)", async (testCase) => {
+    const unauthorizedCommand = testCase.name === "unauthorized";
     setTelegramIngestGroupConfig({
       customMentionPatterns: testCase.deniedMention,
+      groupAllowFrom: unauthorizedCommand ? ["999"] : undefined,
       ...(testCase.deniedMention ? { providerPolicy: { mode: "deny" } } : {}),
     });
     rejectFirstTelegramAlbumDownloadWhen(testCase.partial);
@@ -777,22 +775,29 @@ describe("createTelegramBot channel_post media", () => {
     try {
       createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
       for (const messageId of testCase.messageIds) {
+        const commandCaption = unauthorizedCommand && messageId === testCase.messageIds[1];
         await dispatchTelegramGroupPhoto({
           messageId,
           albumId: "ingested-album",
-          ...(testCase.deniedMention && messageId === testCase.messageIds[0]
-            ? { caption: "bert, see attachment" }
-            : {}),
+          caption: commandCaption
+            ? "/reset@openclaw_bot"
+            : unauthorizedCommand
+              ? "ordinary caption"
+              : testCase.deniedMention && messageId === testCase.messageIds[0]
+                ? "bert, see attachment"
+                : undefined,
+          extraMessage: commandCaption
+            ? { caption_entities: [{ type: "bot_command", offset: 0, length: 19 }] }
+            : undefined,
           getFile,
         });
       }
       expect(getFile).not.toHaveBeenCalled();
       await flushChannelPostMediaGroup(setTimeoutSpy);
-      expect(getFile).toHaveBeenCalledTimes(2);
-      expect(fetchSpy).toHaveBeenCalledTimes(testCase.partial ? 1 : 2);
-      expectTelegramIngestHook(
-        testCase.partial ? testCase.messageIds.slice(1) : testCase.messageIds,
-      );
+      expect(getFile).toHaveBeenCalledTimes(unauthorizedCommand ? 0 : 2);
+      expect(fetchSpy).toHaveBeenCalledTimes(unauthorizedCommand ? 0 : testCase.partial ? 1 : 2);
+      const ingestedIds = testCase.partial ? testCase.messageIds.slice(1) : testCase.messageIds;
+      expectTelegramIngestHook(ingestedIds, { expectedCalls: Number(!unauthorizedCommand) });
       expect(sendMessageSpy).not.toHaveBeenCalled();
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
@@ -905,7 +910,7 @@ describe("createTelegramBot channel_post media", () => {
         ...("caption" in testCase ? { caption: testCase.caption } : {}),
         ...("extraMessage" in testCase ? { extraMessage: testCase.extraMessage } : {}),
       });
-      await waitForMockCalls(sendMessageSpy, 1);
+      await waitForTelegramMockCalls(sendMessageSpy, 1);
       expect(sendMessageSpy).toHaveBeenCalledWith(
         -100456,
         "⚠️ Failed to download media. Please try again.",
@@ -1004,7 +1009,7 @@ describe("createTelegramBot channel_post media", () => {
         secondMessageId: firstMessageId + 1,
       });
       await flushChannelPostMediaGroup(setTimeoutSpy);
-      await waitForMockCalls(replySpy, 1);
+      await waitForTelegramMockCalls(replySpy, 1);
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       expect(replyPayload()).toMatchObject({

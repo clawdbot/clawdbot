@@ -2,9 +2,11 @@
  * Regression coverage for deterministic unknown-value stringification.
  * Verifies sorted keys, repeated references, cycles, binary data, and errors.
  */
-import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
 import { describe, expect, it } from "vitest";
 import { stableStringify } from "./stable-stringify.js";
+
+const sanitizeSurrogates = (text: string) =>
+  text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 
 describe("stableStringify", () => {
   it("sorts object keys recursively", () => {
