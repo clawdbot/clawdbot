@@ -750,7 +750,6 @@ async function compactResolvedContextEngine(
         }
         if (
           result.ok &&
-          result.compacted &&
           hookRunner?.hasHooks?.("after_compaction") &&
           hookRunner.runAfterCompaction
         ) {
@@ -762,7 +761,7 @@ async function compactResolvedContextEngine(
             await hookRunner.runAfterCompaction(
               {
                 messageCount: -1,
-                compactedCount: -1,
+                compactedCount: result.compacted ? -1 : 0,
                 tokenCount: result.result?.tokensAfter,
                 sessionFile: postCompactionSessionFile,
                 ...(postCompactionSessionId !== params.sessionId

@@ -2599,6 +2599,27 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("pairs a successful no-op compaction with after_compaction", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: false,
+      reason: "already compacted",
+      result: undefined,
+    });
+
+    const result = await compactEmbeddedAgentSession(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({ ok: true, compacted: false });
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(hookRunner.runAfterCompaction)).toEqual({
+      messageCount: -1,
+      compactedCount: 0,
+      tokenCount: undefined,
+      sessionFile: TEST_SESSION_KEY,
+    });
+  });
+
   it("passes the rotated session id to engine-owned after_compaction hooks", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     const rotatedSessionId = "rotated-session";

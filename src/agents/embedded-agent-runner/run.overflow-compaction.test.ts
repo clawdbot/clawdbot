@@ -3459,6 +3459,10 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("recovers preflight compaction when stale tokens point at an empty transcript", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_compaction" || hookName === "after_compaction",
+    );
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-empty-preflight-"));
     const storePath = path.join(dir, "sessions.json");
     await replaceSessionEntry(
@@ -3540,6 +3544,12 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       });
 
       expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+      expect(mockedGlobalHookRunner.runBeforeCompaction).toHaveBeenCalledTimes(1);
+      expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction), {
+        messageCount: -1,
+        compactedCount: 0,
+        sessionFile: overflowBaseRunParams.sessionKey,
+      });
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(result.meta.error).toBeUndefined();
       expect(result.meta.agentMeta?.compactionTokensAfter).toBeUndefined();

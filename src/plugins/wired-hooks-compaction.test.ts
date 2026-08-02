@@ -226,16 +226,18 @@ describe("compaction hook wiring", () => {
   });
 
   it.each([
-    ["does not increment counter when compaction was aborted", { willRetry: false, aborted: true }],
+    ["does not complete compaction when it was aborted", { willRetry: false, aborted: true }],
     [
-      "does not increment counter when compaction has result but was aborted",
+      "does not complete compaction when it has a result but was aborted",
       { willRetry: false, result: { summary: "compacted" }, aborted: true },
     ],
-    ["does not increment counter when result is undefined", { willRetry: false }],
+    ["does not complete compaction when result is undefined", { willRetry: false }],
   ] as const)("%s", (_name, event) => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
     const ctx = createCompactionEndCtx({ runId: "r3c" });
     runCompactionEnd(ctx, event);
     expect(ctx.incrementCompactionCount).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
   });
 
   it("resets stale assistant usage after final compaction", () => {

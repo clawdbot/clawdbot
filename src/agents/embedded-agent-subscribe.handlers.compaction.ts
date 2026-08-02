@@ -189,9 +189,9 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
   }
   emitCompactionAgentEvent(ctx, { phase: "end", willRetry, completed });
 
-  // after_compaction runs only once the run will not retry, matching the visible
-  // post-compaction session state plugin authors observe.
-  if (!willRetry) {
+  // Incomplete and retrying compactions have no stable post-compaction state
+  // for plugin observers.
+  if (completed && !willRetry) {
     runBestEffortCompactionHook(ctx, "after");
   }
 }
