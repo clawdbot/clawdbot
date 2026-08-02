@@ -16,7 +16,11 @@ export function acceptsControlUiHtmlResponse(accept: string | undefined): boolea
     return true;
   }
   return normalized.split(",").some((entry) => {
-    const mediaType = entry.split(";", 1)[0]?.trim().toLowerCase();
+    const [rawMediaType, ...parameters] = entry.split(";");
+    if (parameters.some((parameter) => /^\s*q\s*=\s*0(?:\.0{0,3})?\s*$/i.test(parameter))) {
+      return false;
+    }
+    const mediaType = rawMediaType?.trim().toLowerCase();
     return (
       mediaType === "*/*" || mediaType === "text/html" || mediaType === "application/xhtml+xml"
     );
