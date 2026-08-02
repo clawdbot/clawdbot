@@ -49,6 +49,8 @@ export type SessionRestartRecoveryState = {
   restartRecoveryDeliveryRequestMessageId?: string;
   restartRecoveryDeliveryRunId?: string;
   restartRecoveryDeliverySourceRunId?: string;
+  /** Durable at-most-once reservation for the user-visible gateway-reset notice. */
+  restartRecoveryResumingNoticeRunId?: string;
   restartRecoverySourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
   restartRecoveryTerminalRunIds?: string[];

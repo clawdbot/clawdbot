@@ -461,6 +461,7 @@ describe("session store writer queue", () => {
         restartRecoverySuppressTextDelivery: "yes",
         restartRecoveryDeliveryRunId: 123,
         restartRecoveryDeliverySourceRunId: 123,
+        restartRecoveryResumingNoticeRunId: 123,
         restartRecoveryTerminalDeliveryEvidence: [{ runId: 123, payloads: "bad" }],
         restartRecoveryTerminalRunIds: [123, "", {}],
       },
@@ -491,6 +492,7 @@ describe("session store writer queue", () => {
         restartRecoverySuppressTextDelivery: true,
         restartRecoveryDeliveryRunId: "run-1",
         restartRecoveryDeliverySourceRunId: "source-run-1",
+        restartRecoveryResumingNoticeRunId: " source-run-1 ",
         restartRecoveryTerminalDeliveryEvidence: [
           {
             runId: " terminal-1 ",
@@ -545,6 +547,7 @@ describe("session store writer queue", () => {
     expect(bad?.restartRecoverySuppressTextDelivery).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(bad?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(bad?.restartRecoveryResumingNoticeRunId).toBeUndefined();
     expect(bad?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
     expect(bad?.restartRecoveryTerminalRunIds).toBeUndefined();
 
@@ -573,6 +576,7 @@ describe("session store writer queue", () => {
       restartRecoverySuppressTextDelivery: true,
       restartRecoveryDeliveryRunId: "run-1",
       restartRecoveryDeliverySourceRunId: "source-run-1",
+      restartRecoveryResumingNoticeRunId: "source-run-1",
       restartRecoveryTerminalDeliveryEvidence: [
         {
           runId: "terminal-1",

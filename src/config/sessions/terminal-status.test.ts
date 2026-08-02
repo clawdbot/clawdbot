@@ -8,8 +8,10 @@ describe("recoverTerminalSessionEntryForVisibleTurn", () => {
       updatedAt: Date.now(),
       status: "failed",
       restartRecoveryDeliveryRequestMessageId: "request-1",
+      restartRecoveryResumingNoticeRunId: "interrupted-run-1",
     });
 
     expect(recovered.restartRecoveryDeliveryRequestMessageId).toBeUndefined();
+    expect(recovered.restartRecoveryResumingNoticeRunId).toBeUndefined();
   });
 });

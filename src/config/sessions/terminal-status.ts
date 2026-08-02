@@ -25,6 +25,7 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
     restartRecoveryDeliveryRequestMessageId: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryResumingNoticeRunId: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
   };
 }

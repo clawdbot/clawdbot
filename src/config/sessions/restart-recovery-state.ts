@@ -246,6 +246,7 @@ type RestartRecoveryNormalizedField =
   | "restartRecoveryDeliveryRequestMessageId"
   | "restartRecoveryDeliveryRunId"
   | "restartRecoveryDeliverySourceRunId"
+  | "restartRecoveryResumingNoticeRunId"
   | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoveryTerminalDeliveryEvidence"
   | "restartRecoveryTerminalRunIds";
@@ -292,6 +293,10 @@ export function normalizeRestartRecoveryEntryFields(
   assign(
     "restartRecoveryDeliverySourceRunId",
     normalizeRunId(entry.restartRecoveryDeliverySourceRunId),
+  );
+  assign(
+    "restartRecoveryResumingNoticeRunId",
+    normalizeRunId(entry.restartRecoveryResumingNoticeRunId),
   );
   assign(
     "restartRecoverySourceReplyDeliveryMode",
@@ -395,6 +400,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRequestMessageId: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryResumingNoticeRunId: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
     restartRecoveryForceSafeTools: undefined,
     ...(terminalDeliveryEvidence
