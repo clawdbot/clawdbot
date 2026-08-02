@@ -5,12 +5,14 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { CAPABILITY_METADATA, registerCapabilityCli } from "./capability-cli.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runCap(...argv: string[]): Promise<void> {
   return runRegisteredCli({ register: registerCapabilityCli as (program: Command) => void, argv });
@@ -1943,7 +1945,7 @@ describe("capability cli", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-generate-"));
+    const tempDir = tempDirs.make("openclaw-video-generate-");
     const outputBase = path.join(tempDir, "result");
     const outputPath = `${outputBase}.mp4`;
     await fs.writeFile(outputPath, "previous-video");
@@ -2000,7 +2002,7 @@ describe("capability cli", () => {
           }),
       ),
     );
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-stream-fail-"));
+    const tempDir = tempDirs.make("openclaw-video-stream-fail-");
     const outputBase = path.join(tempDir, "result");
     const outputPath = `${outputBase}.mp4`;
     await fs.writeFile(outputPath, "keep-existing-video");
@@ -2292,9 +2294,7 @@ describe("capability cli", () => {
         }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const tempDir = withOutput
-      ? await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-empty-video-"))
-      : undefined;
+    const tempDir = withOutput ? tempDirs.make("openclaw-empty-video-") : undefined;
     const outputBase = tempDir ? path.join(tempDir, "result") : undefined;
     const outputPath = outputBase ? `${outputBase}.mp4` : undefined;
     if (outputPath) {
