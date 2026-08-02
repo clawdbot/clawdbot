@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  clearAgentRunContext,
+  registerAgentRunContext,
+  resetAgentEventsForTest,
+} from "../../infra/agent-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -84,7 +89,7 @@ async function listSessions(params: {
   return responses[0]?.[1] as {
     count: number;
     nextOffset: number | null;
-    sessions: Array<{ key: string }>;
+    sessions: Array<{ hasActiveRun?: boolean; key: string }>;
   };
 }
 
@@ -132,7 +137,12 @@ async function seedSessions(): Promise<OpenClawConfig> {
   return config;
 }
 
+beforeEach(() => {
+  resetAgentEventsForTest();
+});
+
 afterEach(() => {
+  resetAgentEventsForTest();
   vi.restoreAllMocks();
   loader.calls.mockClear();
   loader.failNext = false;
@@ -198,6 +208,43 @@ describe("sessions.list single-flight", () => {
 
       emitSessionsChanged(context, { reason: "test", sessionKey: "agent:main:active" });
       await listSessions({ client, context, request });
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("rebuilds a completed result when a projected run ends without a store mutation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { agentId: "main", archived: "all" as const, limit: 100 };
+      const runId = "sessions-list-cache-active-run";
+      registerAgentRunContext(runId, {
+        agentId: "main",
+        projectSessionActive: true,
+        sessionId: "main-active",
+        sessionKey: "agent:main:active",
+      });
+
+      const active = await listSessions({ client, context, request });
+      expect(active.sessions.find((session) => session.key === "agent:main:active")).toMatchObject({
+        hasActiveRun: true,
+      });
+      const activeCached = await listSessions({ client, context, request });
+      expect(activeCached).toBe(active);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      clearAgentRunContext(runId);
+      const settled = await listSessions({ client, context, request });
+      expect(settled.sessions.find((session) => session.key === "agent:main:active")).toMatchObject(
+        {
+          hasActiveRun: false,
+        },
+      );
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+
+      const settledCached = await listSessions({ client, context, request });
+      expect(settledCached).toBe(settled);
       expect(loader.calls).toHaveBeenCalledTimes(2);
     });
   });

@@ -123,6 +123,7 @@ type AgentEventState = {
 
 const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
 const AGENT_EVENT_EXECUTION_CONTEXT_KEY = Symbol.for("openclaw.agentEvents.executionContext");
+const AGENT_RUN_INDEX_VERSION_KEY = Symbol.for("openclaw.agentEvents.runIndexVersion");
 
 type AgentEventExecutionContext = {
   lifecycleGeneration: string;
@@ -137,6 +138,21 @@ function getAgentEventState(): AgentEventState {
     runContextById: new Map<string, AgentRunContext>(),
     lifecycleGeneration: randomUUID(),
   }));
+}
+
+function getAgentRunIndexVersionState() {
+  return resolveGlobalSingleton<{ value: number }>(AGENT_RUN_INDEX_VERSION_KEY, () => ({
+    value: 0,
+  }));
+}
+
+function bumpAgentRunIndexVersion(): void {
+  getAgentRunIndexVersionState().value += 1;
+}
+
+/** Reads the process-local version of the active-run projection inputs. */
+export function readAgentRunIndexVersion(): number {
+  return getAgentRunIndexVersionState().value;
 }
 
 function getAgentEventExecutionContext() {
@@ -212,6 +228,7 @@ export function captureAgentRunLifecycleGeneration(runId: string): string {
 export function rotateAgentEventLifecycleGeneration(): string {
   const state = getAgentEventState();
   state.lifecycleGeneration = randomUUID();
+  bumpAgentRunIndexVersion();
   // Rotation is the liveness choke point: after it returns, no prior-generation
   // owner is operationally reachable. Recovery and runtime consumers therefore
   // agree that only current-generation owners can drive or receive work.
@@ -249,6 +266,7 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
       lifecycleGeneration: context.lifecycleGeneration ?? state.lifecycleGeneration,
       registeredAt: context.registeredAt ?? Date.now(),
     });
+    bumpAgentRunIndexVersion();
     return;
   }
   if (
@@ -258,11 +276,14 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
   ) {
     return;
   }
+  let runIndexChanged = false;
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
     existing.sessionKey = context.sessionKey;
+    runIndexChanged = true;
   }
   if (context.sessionId && existing.sessionId !== context.sessionId) {
     existing.sessionId = context.sessionId;
+    runIndexChanged = true;
   }
   if (context.agentId && existing.agentId !== context.agentId) {
     existing.agentId = context.agentId;
@@ -273,8 +294,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
   if (context.isControlUiVisible !== undefined) {
     existing.isControlUiVisible = context.isControlUiVisible;
   }
-  if (context.projectSessionActive !== undefined) {
+  if (
+    context.projectSessionActive !== undefined &&
+    existing.projectSessionActive !== context.projectSessionActive
+  ) {
     existing.projectSessionActive = context.projectSessionActive;
+    runIndexChanged = true;
   }
   if (context.projectSessionLifecycle !== undefined) {
     existing.projectSessionLifecycle = context.projectSessionLifecycle;
@@ -293,6 +318,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
   }
   if (context.lastActiveAt !== undefined) {
     existing.lastActiveAt = context.lastActiveAt;
+  }
+  if (runIndexChanged) {
+    bumpAgentRunIndexVersion();
   }
 }
 
@@ -368,6 +396,7 @@ export function claimAgentRunContext(
     ownersById.delete(runId);
   }
   if (existing?.lifecycleGeneration === lifecycleGeneration) {
+    const versionBeforeRegister = readAgentRunIndexVersion();
     registerAgentRunContext(
       runId,
       {
@@ -376,6 +405,9 @@ export function claimAgentRunContext(
       },
       claimId,
     );
+    if (readAgentRunIndexVersion() === versionBeforeRegister) {
+      bumpAgentRunIndexVersion();
+    }
     return claimId;
   }
   state.runContextById.set(runId, {
@@ -385,6 +417,7 @@ export function claimAgentRunContext(
   });
   state.seqByRun.delete(runId);
   clearAgentRunUsage(runId);
+  bumpAgentRunIndexVersion();
   return claimId;
 }
 
@@ -524,16 +557,23 @@ export function clearAgentRunContext(
   }
   if (owners?.claimIds.size) {
     if (!lifecycleGeneration || owners.lifecycleGeneration === lifecycleGeneration) {
+      const wasClearRequested = owners.clearRequested;
       owners.clearRequested = true;
       for (const [ownerClaimId, listener] of owners.clearListeners ?? []) {
         listener(ownerClaimId);
       }
+      if (!wasClearRequested) {
+        bumpAgentRunIndexVersion();
+      }
     }
     return;
   }
-  state.runContextById.delete(runId);
+  const removed = state.runContextById.delete(runId);
   state.seqByRun.delete(runId);
   clearAgentRunUsage(runId, lifecycleGeneration ?? existing?.lifecycleGeneration);
+  if (removed) {
+    bumpAgentRunIndexVersion();
+  }
 }
 
 /** Releases one tracked owner and clears its context after the final owner exits. */
@@ -547,16 +587,21 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
   if (!owners?.claimIds.delete(claimId)) {
     return;
   }
+  const versionBeforeRelease = readAgentRunIndexVersion();
   owners.clearListeners?.delete(claimId);
   if (owners.exclusiveClaimId === claimId) {
     owners.exclusiveClaimId = undefined;
   }
   if (owners.claimIds.size > 0) {
+    bumpAgentRunIndexVersion();
     return;
   }
   ownersById.delete(runId);
   if (owners.clearRequested || !owners.preserveAfterRelease) {
     clearAgentRunContext(runId, owners.lifecycleGeneration);
+  }
+  if (readAgentRunIndexVersion() === versionBeforeRelease) {
+    bumpAgentRunIndexVersion();
   }
 }
 
@@ -580,6 +625,9 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
       getAgentRunContextOwners(state).delete(runId);
       swept++;
     }
+  }
+  if (swept > 0) {
+    bumpAgentRunIndexVersion();
   }
   return swept;
 }
@@ -761,6 +809,7 @@ export function onAgentAuditEvent(listener: (evt: AgentEventPayload) => void) {
 /** Clears agent event state; test suites with a live Gateway can preserve its listeners. */
 export function resetAgentEventsForTest(options?: { preserveListeners?: boolean }) {
   const state = getAgentEventState();
+  const hadRunContexts = state.runContextById.size > 0;
   state.seqByRun.clear();
   resetAgentRunUsageForTest();
   if (!options?.preserveListeners) {
@@ -769,4 +818,7 @@ export function resetAgentEventsForTest(options?: { preserveListeners?: boolean 
   }
   state.runContextById.clear();
   getAgentRunContextOwners(state).clear();
+  if (hadRunContexts) {
+    bumpAgentRunIndexVersion();
+  }
 }

@@ -1,12 +1,17 @@
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readAgentRunIndexVersion } from "../../infra/agent-events.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readSessionsMutationVersion } from "./session-change-event.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-type SessionListOperation = { mutationVersion: number; promise: Promise<unknown> };
-type SessionListCompleted = { mutationVersion: number; result: unknown };
+type SessionListFence = {
+  agentRunIndexVersion: number;
+  sessionsMutationVersion: number;
+};
+type SessionListOperation = SessionListFence & { promise: Promise<unknown> };
+type SessionListCompleted = SessionListFence & { result: unknown };
 type SessionListState = {
   completed: Map<string, SessionListCompleted>;
   config: OpenClawConfig;
@@ -15,6 +20,20 @@ type SessionListState = {
 
 const SESSIONS_LIST_COMPLETED_CACHE_LIMIT = 64;
 const sessionListsByContext = new WeakMap<GatewayRequestContext, SessionListState>();
+
+function readSessionListFence(context: GatewayRequestContext): SessionListFence {
+  return {
+    agentRunIndexVersion: readAgentRunIndexVersion(),
+    sessionsMutationVersion: readSessionsMutationVersion(context),
+  };
+}
+
+function matchesSessionListFence(value: SessionListFence, fence: SessionListFence): boolean {
+  return (
+    value.agentRunIndexVersion === fence.agentRunIndexVersion &&
+    value.sessionsMutationVersion === fence.sessionsMutationVersion
+  );
+}
 
 function sessionListVisibilityIdentity(client: GatewayClient | null): string {
   if (isGatewayAdmin(client)) {
@@ -69,29 +88,31 @@ export async function respondWithCachedSessionList(params: {
 }): Promise<void> {
   const workKey = sessionListWorkKey(params.request, params.client);
   const state = sessionListState(params.context, params.config);
-  const mutationVersion = readSessionsMutationVersion(params.context);
+  // Every input that can change a projected row must fence reuse. Store mutations and
+  // live-run transitions have separate owners, so their monotonic counters stay separate.
+  const fence = readSessionListFence(params.context);
   const completed = state.completed.get(workKey);
-  if (completed?.mutationVersion === mutationVersion) {
+  if (completed && matchesSessionListFence(completed, fence)) {
     params.respond(true, completed.result, undefined);
     return;
   }
   const pending = state.inFlight.get(workKey);
-  if (pending?.mutationVersion === mutationVersion) {
+  if (pending && matchesSessionListFence(pending, fence)) {
     params.respond(true, await pending.promise, undefined);
     return;
   }
 
-  // A request may share only work begun at the same mutation version. A mutation during
-  // projection leaves current callers intact but fences every later caller and cache write.
+  // A request may share only work begun at the same fence. A transition during projection
+  // leaves current callers intact but fences every later caller and cache write.
   const promise = Promise.resolve()
     .then(params.run)
     .then((result) => {
-      if (readSessionsMutationVersion(params.context) === mutationVersion) {
-        rememberCompletedSessionList(state, workKey, { mutationVersion, result });
+      if (matchesSessionListFence(readSessionListFence(params.context), fence)) {
+        rememberCompletedSessionList(state, workKey, { ...fence, result });
       }
       return result;
     });
-  const operation = { mutationVersion, promise };
+  const operation = { ...fence, promise };
   state.inFlight.set(workKey, operation);
   try {
     params.respond(true, await promise, undefined);

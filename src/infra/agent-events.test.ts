@@ -15,6 +15,7 @@ import {
   onAgentAuditEvent,
   onAgentEvent,
   onAgentRuntimeEvent,
+  readAgentRunIndexVersion,
   registerAgentRunContext,
   releaseAgentRunContext,
   resetAgentEventsForTest,
@@ -64,6 +65,39 @@ describe("agent-events sequencing", () => {
     expect(getAgentRunContext("run-1")?.sessionKey).toBe("main");
     clearAgentRunContext("run-1");
     expect(getAgentRunContext("run-1")).toBeUndefined();
+  });
+
+  test("versions active-run projection ownership transitions", () => {
+    let version = readAgentRunIndexVersion();
+    registerAgentRunContext("projected-run", {
+      projectSessionActive: true,
+      sessionId: "projected-session-id",
+      sessionKey: "agent:main:projected",
+    });
+    expect(readAgentRunIndexVersion()).toBeGreaterThan(version);
+    version = readAgentRunIndexVersion();
+
+    registerAgentRunContext("projected-run", { verboseLevel: "full" });
+    expect(readAgentRunIndexVersion()).toBe(version);
+
+    const claimId = claimAgentRunContext(
+      "owned-projected-run",
+      {
+        projectSessionActive: true,
+        sessionId: "owned-session-id",
+        sessionKey: "agent:main:owned",
+      },
+      { ownsContext: true, trackOwner: true },
+    );
+    expect(readAgentRunIndexVersion()).toBeGreaterThan(version);
+    version = readAgentRunIndexVersion();
+
+    releaseAgentRunContext("owned-projected-run", claimId);
+    expect(readAgentRunIndexVersion()).toBeGreaterThan(version);
+    version = readAgentRunIndexVersion();
+
+    clearAgentRunContext("projected-run");
+    expect(readAgentRunIndexVersion()).toBeGreaterThan(version);
   });
 
   test("does not let an old execution clear a newer same-id context", () => {
@@ -944,7 +978,9 @@ describe("agent-events sequencing", () => {
     emitAgentEvent({ runId: "run-active", stream: "assistant", data: { text: "active" } });
 
     stop.mockReturnValue(1_000);
+    const versionBeforeSweep = readAgentRunIndexVersion();
     expect(sweepStaleRunContexts(500)).toBe(1);
+    expect(readAgentRunIndexVersion()).toBeGreaterThan(versionBeforeSweep);
     expect(getAgentRunContext("run-stale")).toBeUndefined();
     expect(getAgentRunContext("run-active")?.sessionKey).toBe("session-active");
 
