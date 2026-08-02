@@ -5,7 +5,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
-export type AgentRunContext = {
+type AgentRunContext = {
   sessionKey?: string;
   /** Resolved agent owner, including for unscoped session keys. */
   agentId?: string;
@@ -30,7 +30,7 @@ export type AgentRunContext = {
   lastActiveAt?: number;
 };
 
-export type AgentRunContextOwnership = {
+type AgentRunContextOwnership = {
   lifecycleGeneration: string;
   claimIds: Set<string>;
   preserveAfterRelease: boolean;
