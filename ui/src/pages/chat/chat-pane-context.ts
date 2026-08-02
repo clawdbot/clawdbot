@@ -243,8 +243,14 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     if (sourceChanged && snapshot.phase === "connected" && state.sessionKey && !clientChanged) {
       // A logical reconnect can retain the browser client and skip full startup.
-      // The existing transcript is already authoritative, so rehydrate after its next commit.
-      this.deferSessionHydrationUntilTranscript(state.sessionKey, Promise.resolve());
+      // Disconnect cleanup drops transient tool rows, so reload this pane's
+      // active-run snapshot before secondary session surfaces hydrate.
+      const historyRefresh = refreshPageChat(state, {
+        startup: true,
+        awaitHistory: true,
+        deferBranches: true,
+      });
+      this.deferSessionHydrationUntilTranscript(state.sessionKey, historyRefresh);
     }
     state.terminalAvailable =
       this.context.config.current.terminalEnabled &&

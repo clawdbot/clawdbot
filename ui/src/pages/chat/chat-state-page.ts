@@ -231,6 +231,7 @@ export function createPageState(
     imageLightboxRequestVersion: 0,
     toolStreamById: new Map(),
     toolStreamOrder: [],
+    activityEventSeqById: new Map(),
     toolStreamSyncTimer: null,
     ...createInitialChatRealtimeState(),
     renderLifecycle,

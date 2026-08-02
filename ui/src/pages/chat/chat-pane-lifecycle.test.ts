@@ -864,7 +864,7 @@ describe("chat pane connection lifecycle", () => {
     expect(state.realtimeTalkCameraError).toBe(false);
   });
 
-  it("advances session ownership once per same-client connection transition", () => {
+  it("advances session ownership once per same-client connection transition", async () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const initialGeneration = pane.connectionGeneration;
@@ -889,7 +889,7 @@ describe("chat pane connection lifecycle", () => {
 
     expect(pane.connectionGeneration).toBe(initialGeneration + 2);
     expect(state.connectionEpoch).toBe(initialGeneration + 2);
-    expect(state.chatLoading).toBe(false);
+    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
 
     state.chatLoading = true;
     pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
@@ -899,9 +899,10 @@ describe("chat pane connection lifecycle", () => {
     expect(state.chatLoading).toBe(true);
   });
 
-  it("rehydrates secondary session state after a same-client logical reconnect", () => {
+  it("refreshes the transcript before secondary hydration after a same-client reconnect", () => {
+    const request = vi.fn(() => new Promise<never>(() => {}));
     const client = {
-      request: vi.fn(() => new Promise<never>(() => {})),
+      request,
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const deferHydration = vi.spyOn(pane, "deferSessionHydrationUntilTranscript");
@@ -914,6 +915,10 @@ describe("chat pane connection lifecycle", () => {
       phase: "connected",
     });
 
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ limit: 100, sessionKey: state.sessionKey }),
+    );
     expect(deferHydration).toHaveBeenCalledWith(state.sessionKey, expect.any(Promise));
   });
 

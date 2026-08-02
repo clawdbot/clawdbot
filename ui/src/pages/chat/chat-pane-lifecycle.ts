@@ -624,12 +624,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
         // after its transcript commit in deferSessionHydrationUntilTranscript.
         this.sessionDiscussionStates.delete(nextSessionKey);
       }
-      if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
+      if (nextSessionKey && !areUiSessionKeysEquivalent(nextSessionKey, this.state.sessionKey)) {
         this.switchPaneSession(nextSessionKey);
       } else if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
         this.catalogLoadGeneration += 1;
         this.openCatalogSession(catalogKey, this.state);
       } else if (nextSessionKey) {
+        // Route aliases name the same conversation. Adopt the canonical spelling
+        // without clearing the active stream and tool state as a session switch.
+        this.state.sessionKey = nextSessionKey;
         // A pane routed straight onto the created session never runs the switch
         // path, so its one-shot handoffs would expire unclaimed: the rejected turn
         // would vanish instead of offering a retry, and the accepted prompt would

@@ -85,7 +85,7 @@ import {
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
-import { normalizePlanSnapshot, type PlanStatus } from "./tool-stream.ts";
+import { handleAgentEvent, normalizePlanSnapshot, type PlanStatus } from "./tool-stream.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
@@ -339,12 +339,36 @@ export type ChatHistoryResult = {
   inFlightRun?: {
     runId: string;
     text?: string;
+    events?: Array<{
+      runId: string;
+      seq: number;
+      stream: string;
+      ts: number;
+      sessionKey?: string;
+      agentId?: string;
+      data: Record<string, unknown>;
+    }>;
     plan?: {
       steps: Array<PlanStatus["steps"][number] | string>;
       explanation?: string;
     };
   };
 };
+
+function replayInFlightRunEvents(
+  state: ChatState,
+  run: NonNullable<ChatHistoryResult["inFlightRun"]>,
+): void {
+  if (state.chatRunId !== run.runId || !Array.isArray(run.events)) {
+    return;
+  }
+  for (const event of run.events) {
+    if (!event || event.runId !== run.runId) {
+      continue;
+    }
+    handleAgentEvent(state as never, event as never);
+  }
+}
 
 function resolveInFlightAssistantTail(
   messages: unknown[],
@@ -450,6 +474,17 @@ function onlyInFlightRunProjectionChanged(
     }
   }
   return true;
+}
+
+function runProjectionsUnchanged(
+  previous: ReturnType<typeof getChatSessionProjection>["runs"],
+  current: ReturnType<typeof getChatSessionProjection>["runs"],
+): boolean {
+  const previousEntries = Object.entries(previous);
+  return (
+    previousEntries.length === Object.keys(current).length &&
+    previousEntries.every(([runId, run]) => current[runId] === run)
+  );
 }
 
 function mergeInFlightAssistantTails(
@@ -1486,6 +1521,16 @@ async function loadChatHistoryUncached(
       });
       return undefined;
     }
+    // Fence concurrent run lifecycle before applying the response. A remount
+    // may replace the map itself, so compare its canonical run entries.
+    const runProjectionsBeforeApply = getChatSessionProjection(
+      state,
+      state.chatMessages,
+      readChatSessionProjectionScope(state, {
+        sessionKey,
+        ...(requestAgentId ? { agentId: requestAgentId } : {}),
+      }),
+    ).runs;
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const nextPagination = resolveChatHistoryPagination(res);
     const nextSessionId = resolveChatHistorySessionId(res);
@@ -1560,6 +1605,7 @@ async function loadChatHistoryUncached(
     state.chatQueueModeOverride = res.sessionInfo?.queueMode;
     state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
     const planStatusBeforeStreamReset = state.planStatus ?? null;
+    const activeStreamBeforeReset = state.chatRunId ? state.chatStream : null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
@@ -1649,17 +1695,27 @@ async function loadChatHistoryUncached(
         inFlightRunId,
       ),
     );
-    if (
+    const inFlightRunIsActive = Boolean(
       inFlightRunId &&
       isSessionRunActive(res.sessionInfo ?? {}) &&
       (!Array.isArray(activeRunIds) || activeRunIds.includes(inFlightRunId)) &&
-      (!projectedInFlightRun || projectedInFlightRun.status === "streaming") &&
-      ((resetStream && !state.chatRunId && historyProjection.runs === previousRunProjections) ||
-        sameRunContinued)
-    ) {
+      (!projectedInFlightRun || projectedInFlightRun.status === "streaming"),
+    );
+    const canAdoptInFlightRun = Boolean(
+      inFlightRunId &&
+      inFlightRunIsActive &&
+      ((resetStream &&
+        !state.chatRunId &&
+        runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)) ||
+        sameRunContinued),
+    );
+    if (inFlightRunId && canAdoptInFlightRun) {
       // Canonical run projections change on every live delta or terminal.
       // Their identity fences ABA races where a run starts and finishes while
       // history is pending; deltas from this same live run must still merge.
+      state.chatRunId = inFlightRunId;
+    }
+    if (inFlightRunIsActive && res.inFlightRun && state.chatRunId === inFlightRunId) {
       const snapshotTail = resolveInFlightAssistantTail(
         state.chatMessages,
         res.inFlightRun?.text,
@@ -1671,12 +1727,15 @@ async function loadChatHistoryUncached(
             extractText(projectedInFlightRun?.message),
             inFlightRunId,
           )
-        : null;
+        : activeStreamBeforeReset;
       const tail = mergeInFlightAssistantTails(snapshotTail, liveTail);
-      state.chatRunId = inFlightRunId;
       state.chatStream = tail;
       state.chatStreamStartedAt = tail ? (state.chatStreamStartedAt ?? Date.now()) : null;
       state.chatRunStartup = { state: "activity", runId: inFlightRunId };
+      // Disconnect cleanup intentionally removes transient activity rows while
+      // retaining the owned run. Replay fills that gap; per-identity sequence
+      // fences keep a delayed snapshot from replacing newer live progress.
+      replayInFlightRunEvents(state, res.inFlightRun);
     }
 
     // Plan reconciliation shares stream adoption: rejected history cannot clobber newer live state.

@@ -35,11 +35,6 @@ import {
   createDirectChatContext,
   createTextTranscriptEvent,
 } from "./server-chat.agent-events.test-helpers.js";
-import {
-  createAgentEventHandler,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import type {
   GatewayRequestContext,
@@ -533,6 +528,11 @@ describe("gateway server chat", () => {
   test.each(["chat.history", "chat.startup"] as const)(
     "%s replays bounded active progress events in inFlightRun",
     async (method) => {
+      const {
+        createAgentEventHandler,
+        createSessionEventSubscriberRegistry,
+        createSessionMessageSubscriberRegistry,
+      } = await import("./server-chat.js");
       openDirectChatSession();
       const context = createDirectChatContext();
       const handler = createAgentEventHandler({

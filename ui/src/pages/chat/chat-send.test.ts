@@ -743,6 +743,44 @@ describe("refreshChat", () => {
     expect(requestUpdate).toHaveBeenCalled();
   });
 
+  it("keeps an active run adopted from history over newer stale catalog metadata", async () => {
+    const runId = "run-restored";
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          inFlightRun: { runId, text: "Still working after navigation." },
+          sessionInfo: row("main", {
+            activeRunIds: [runId],
+            hasActiveRun: true,
+            status: "running",
+            updatedAt: 1,
+          }),
+        },
+      },
+      sessionKey: "main",
+      sessionsResult: createSessionsResult([
+        row("main", { hasActiveRun: false, status: "done", updatedAt: 10 }),
+      ]),
+    });
+
+    await refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(host.chatRunId).toBe(runId);
+    expect(host.chatStream).toBe("Still working after navigation.");
+    expect(host.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+      updatedAt: 10,
+    });
+  });
+
   it.each([
     {
       name: "drains a restored queue after history proves the selected session is idle",

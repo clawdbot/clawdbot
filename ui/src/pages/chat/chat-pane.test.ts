@@ -515,6 +515,53 @@ describe("chat pane initialization", () => {
       expect.objectContaining({ sessionKey: canonicalSessionKey }),
     );
   });
+
+  it("keeps active turn state when re-entry canonicalizes the main route alias", () => {
+    const canonicalSessionKey = "agent:main:main";
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    const hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: canonicalSessionKey,
+        },
+      },
+    } as unknown as NonNullable<ApplicationContext["gateway"]["snapshot"]["hello"]>;
+    pane.context = {
+      ...pane.context,
+      gateway: {
+        ...pane.context.gateway,
+        snapshot: { ...pane.context.gateway.snapshot, hello },
+      },
+    } as unknown as ApplicationContext;
+    state.sessionKey = "main";
+    state.hello = hello;
+    state.initialUserMessage = createInitialUserMessageHandoff();
+    state.chatRunId = "run-reconnected";
+    state.chatStream = "The response survived navigation.";
+    pane.sessionKey = canonicalSessionKey;
+    const switchPaneSession = vi.spyOn(pane, "switchPaneSession").mockImplementation((next) => {
+      state.sessionKey = next;
+      state.chatRunId = null;
+      state.chatStream = null;
+    });
+
+    (
+      pane as TestChatPane & {
+        willUpdate: (changedProperties: Map<PropertyKey, unknown>) => void;
+      }
+    ).willUpdate(new Map([["sessionKey", "main"]]));
+
+    expect(state.sessionKey).toBe(canonicalSessionKey);
+    expect(switchPaneSession).not.toHaveBeenCalled();
+    expect(state.chatRunId).toBe("run-reconnected");
+    expect(state.chatStream).toBe("The response survived navigation.");
+  });
 });
 
 describe("chat pane keyboard shortcuts", () => {
