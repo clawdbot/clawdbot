@@ -52,6 +52,7 @@ import {
   replaceSqliteTranscriptEvents,
 } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
@@ -3066,6 +3067,164 @@ describe("session accessor seam", () => {
         storePath,
       })?.entry.sessionFile,
     ).toBe(`sqlite:main:session-1:${path.join(tempDir, "openclaw-agent.sqlite")}`);
+  });
+
+  it("keeps canonical terminal metadata across repeated legacy transcript imports", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      abortedLastRun: true,
+      restartRecoveryTerminalRunIds: ["recovery-run"],
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: scope.agentId,
+        sessionId: scope.sessionId,
+        storePath: expectDefined(
+          resolveSqliteTargetFromSessionStorePath(scope.storePath, {
+            agentId: scope.agentId,
+          }).path,
+          "SQLite target path",
+        ),
+      }),
+      sessionId: scope.sessionId,
+      status: "failed",
+      updatedAt: 5_000,
+    });
+    const canonicalUpdatedAt = loadSessionEntry(scope)?.updatedAt;
+    const staleEntry: SessionEntry = {
+      abortedLastRun: true,
+      restartRecoveryDeliveryContext: {
+        channel: "slack",
+        to: "channel:C1",
+      },
+      restartRecoveryDeliveryRunId: "recovery-run",
+      sessionFile: path.join(tempDir, "legacy-transcript.jsonl"),
+      sessionId: scope.sessionId,
+      status: "timeout",
+      updatedAt: 2_000,
+    };
+    const readTranscriptEvents = (
+      append: (event: { sessionId?: string; type: string }) => void,
+    ) => {
+      append({ sessionId: scope.sessionId, type: "session" });
+    };
+
+    const first = await importSqliteSessionRows({
+      agentId: scope.agentId,
+      entry: staleEntry,
+      readTranscriptEvents,
+      sessionKey: scope.sessionKey,
+      storePath: scope.storePath,
+    });
+    const second = await importSqliteSessionRows({
+      agentId: scope.agentId,
+      entry: staleEntry,
+      readTranscriptEvents,
+      sessionKey: scope.sessionKey,
+      storePath: scope.storePath,
+    });
+
+    expect(first).toMatchObject({
+      entryDisposition: "preserved",
+      transcriptEvents: 1,
+    });
+    expect(second).toMatchObject({
+      entryDisposition: "preserved",
+      transcriptEvents: 0,
+    });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      abortedLastRun: true,
+      restartRecoveryTerminalRunIds: ["recovery-run"],
+      status: "failed",
+      updatedAt: canonicalUpdatedAt,
+    });
+    expect(loadSessionEntry(scope)?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBeUndefined();
+    await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(1);
+  });
+
+  it("does not repoint a canonical session key to an older legacy session generation", async () => {
+    const currentScope = {
+      agentId: "main",
+      sessionId: "current-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(currentScope, {
+      sessionId: currentScope.sessionId,
+      status: "running",
+      updatedAt: 5_000,
+    });
+    const canonicalUpdatedAt = loadSessionEntry(currentScope)?.updatedAt;
+
+    const result = await importSqliteSessionRows({
+      agentId: currentScope.agentId,
+      entry: {
+        sessionId: "legacy-session",
+        status: "timeout",
+        updatedAt: 2_000,
+      },
+      readTranscriptEvents: (append) => {
+        append({ sessionId: "legacy-session", type: "session" });
+      },
+      sessionKey: currentScope.sessionKey,
+      storePath: currentScope.storePath,
+    });
+
+    expect(result).toMatchObject({
+      entryDisposition: "superseded",
+      transcriptEvents: 1,
+    });
+    expect(loadSessionEntry(currentScope)).toMatchObject({
+      sessionId: "current-session",
+      status: "running",
+      updatedAt: canonicalUpdatedAt,
+    });
+    await expect(
+      loadTranscriptEvents({ ...currentScope, sessionId: "legacy-session" }),
+    ).resolves.toHaveLength(1);
+  });
+
+  it("materializes the canonical key when legacy import resolves a folded alias row", async () => {
+    const canonicalKey = "agent:main:signal:group:AbC12==";
+    const aliasKey = canonicalKey.toLowerCase();
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "SQLite target path",
+    );
+    const entry: SessionEntry = {
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "signal-session",
+        storePath: databasePath,
+      }),
+      sessionId: "signal-session",
+      status: "failed",
+      updatedAt: 5_000,
+    };
+    await upsertSessionEntry({ sessionKey: canonicalKey, storePath }, entry);
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    database.db
+      .prepare("UPDATE session_entries SET session_key = ? WHERE session_key = ?")
+      .run(aliasKey, canonicalKey);
+
+    const result = await importSqliteSessionRows({
+      agentId: "main",
+      entry: { ...entry, updatedAt: 2_000 },
+      sessionKey: canonicalKey,
+      storePath,
+    });
+
+    expect(result.entryDisposition).toBe("preserved");
+    expect(
+      loadExactSqliteSessionEntry({ agentId: "main", sessionKey: canonicalKey, storePath })?.entry,
+    ).toMatchObject({
+      sessionId: "signal-session",
+      status: "failed",
+    });
   });
 
   it("tracks replacement and deletion transcript mutations", async () => {

@@ -12,6 +12,7 @@ import {
   readSqliteTranscriptStatsSync,
   upsertSqliteSessionEntry,
 } from "../config/sessions/session-accessor.sqlite.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as replaceFile from "../infra/replace-file.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -24,6 +25,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   assertSafeSessionSqliteMigrationMove,
+  findLatestFailedSessionSqliteMigrationManifest,
   restoreSessionSqliteMigrationRun,
   type ActiveSessionSqliteMigrationRun,
 } from "./doctor-session-sqlite-migration-run.js";
@@ -328,7 +330,7 @@ describe("runDoctorSessionSqlite", () => {
     ).toBe(transcriptMtimeMs);
   });
 
-  it("preserves a same-generation canonical harness owner during legacy import", async () => {
+  it("seeds legacy metadata while preserving a same-generation plugin owner claim", async () => {
     const store = createLegacyStore({
       entryOverrides: { lifecycleRevision: "rev-1" },
     });
@@ -343,7 +345,7 @@ describe("runDoctorSessionSqlite", () => {
         agentHarnessId: "codex",
         lifecycleRevision: "rev-1",
         sessionId: "session-1",
-        updatedAt: 3000,
+        updatedAt: 3_000,
       },
     );
 
@@ -362,10 +364,317 @@ describe("runDoctorSessionSqlite", () => {
       })?.entry,
     ).toMatchObject({
       agentHarnessId: "codex",
+      channel: "cli",
+      chatType: "direct",
       lifecycleRevision: "rev-1",
       sessionId: "session-1",
       sessionFile: expect.stringMatching(/^sqlite:/),
+      sessionStartedAt: 1_000,
     });
+  });
+
+  it("preserves the whole canonical row during same-generation legacy import", async () => {
+    const store = createLegacyStore({
+      entryOverrides: {
+        lifecycleRevision: "rev-1",
+        restartRecoveryDeliveryContext: { channel: "slack", to: "channel:C1" },
+        restartRecoveryDeliveryRunId: "stale-recovery-run",
+        status: "timeout",
+      },
+    });
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env: store.env,
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      },
+      {
+        abortedLastRun: true,
+        agentHarnessId: "codex",
+        lifecycleRevision: "rev-1",
+        restartRecoveryTerminalRunIds: ["stale-recovery-run"],
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "session-1",
+          storePath: resolveTargetSqlitePath({
+            agentId: "main",
+            storePath: store.storePath,
+          }),
+        }),
+        sessionId: "session-1",
+        status: "failed",
+        updatedAt: 3000,
+      },
+    );
+    const canonicalUpdatedAt = loadExactSqliteSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath: store.storePath,
+    })?.entry.updatedAt;
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      importedEntries: 0,
+      issues: 0,
+      validatedEntries: 1,
+    });
+    expect(
+      loadExactSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      })?.entry,
+    ).toMatchObject({
+      abortedLastRun: true,
+      agentHarnessId: "codex",
+      lifecycleRevision: "rev-1",
+      restartRecoveryTerminalRunIds: ["stale-recovery-run"],
+      sessionId: "session-1",
+      sessionFile: expect.stringMatching(/^sqlite:/),
+      status: "failed",
+      updatedAt: canonicalUpdatedAt,
+    });
+  });
+
+  it("does not seed older legacy lifecycle metadata into a newer plugin claim", async () => {
+    const store = createLegacyStore({
+      entryOverrides: {
+        lifecycleRevision: "legacy-revision",
+        restartRecoveryDeliveryRunId: "stale-recovery-run",
+        status: "timeout",
+      },
+    });
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env: store.env,
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      },
+      {
+        agentHarnessId: "codex",
+        lifecycleRevision: "current-revision",
+        sessionId: "session-1",
+        status: "failed",
+        updatedAt: 3_000,
+      },
+    );
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      importedEntries: 0,
+      issues: 1,
+      supersededEntries: 1,
+    });
+    expect(report.targets[0]?.issues).toContainEqual(
+      expect.objectContaining({ code: "entry_superseded" }),
+    );
+    expect(
+      loadExactSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      })?.entry,
+    ).toMatchObject({
+      agentHarnessId: "codex",
+      lifecycleRevision: "current-revision",
+      status: "failed",
+    });
+  });
+
+  it("salvages an older session transcript without repointing the canonical key", async () => {
+    const store = createLegacyStore();
+    const legacyStoreJson = fs.readFileSync(store.storePath, "utf-8");
+    const legacyTranscriptJsonl = fs.readFileSync(store.transcriptPath, "utf-8");
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env: store.env,
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      },
+      {
+        sessionId: "current-session",
+        status: "running",
+        updatedAt: 3_000,
+      },
+    );
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      archivedLegacyStoreFiles: 1,
+      importedEntries: 0,
+      importedTranscriptEvents: 2,
+      issues: 1,
+      supersededEntries: 1,
+      validatedEntries: 0,
+      validatedTranscriptEvents: 0,
+    });
+    expect(report.targets[0]?.issues).toContainEqual(
+      expect.objectContaining({ code: "entry_superseded" }),
+    );
+    expect(
+      findLatestFailedSessionSqliteMigrationManifest(store.env, [trustedMigrationTarget(store)]),
+    ).toBeUndefined();
+    expect(
+      loadExactSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      })?.entry,
+    ).toMatchObject({
+      sessionId: "current-session",
+      status: "running",
+    });
+    expect(
+      loadSqliteTranscriptEventsSync({
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      }),
+    ).toHaveLength(2);
+    fs.writeFileSync(store.storePath, legacyStoreJson, { mode: 0o600 });
+    fs.writeFileSync(store.transcriptPath, legacyTranscriptJsonl, { mode: 0o600 });
+    const validation = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "validate",
+      store: store.storePath,
+    });
+    expect(validation.totals).toMatchObject({
+      issues: 1,
+      supersededEntries: 1,
+      validatedTranscriptEvents: 2,
+    });
+    expect(validation.targets[0]?.issues).toEqual([
+      expect.objectContaining({ code: "entry_superseded" }),
+    ]);
+  });
+
+  it("materializes an exact canonical key when import resolves a folded SQLite alias", async () => {
+    const store = createLegacyStore();
+    const canonicalKey = "agent:main:signal:group:AbC12==";
+    const aliasKey = canonicalKey.toLowerCase();
+    const rawStore = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    fs.writeFileSync(
+      store.storePath,
+      `${JSON.stringify({ [canonicalKey]: rawStore["agent:main:main"] }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env: store.env,
+        sessionKey: aliasKey,
+        storePath: store.storePath,
+      },
+      {
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "session-1",
+          storePath: resolveTargetSqlitePath({
+            agentId: "main",
+            storePath: store.storePath,
+          }),
+        }),
+        sessionId: "session-1",
+        status: "failed",
+        updatedAt: 3_000,
+      },
+    );
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      archivedLegacyStoreFiles: 1,
+      importedEntries: 0,
+      issues: 0,
+      validatedEntries: 1,
+    });
+    expect(report.targets[0]?.issues).not.toContainEqual(
+      expect.objectContaining({ code: "sqlite_entry_missing" }),
+    );
+    expect(
+      loadExactSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: canonicalKey,
+        storePath: store.storePath,
+      })?.entry,
+    ).toMatchObject({ sessionId: "session-1", status: "failed" });
+  });
+
+  it("archives a legacy store after preserving invalid records in the recovery archive", async () => {
+    const store = createLegacyStore();
+    const legacyStore = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    legacyStore["agent:main:invalid"] = { status: "timeout", updatedAt: 1_000 };
+    fs.writeFileSync(store.storePath, `${JSON.stringify(legacyStore, null, 2)}\n`, { mode: 0o600 });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      archivedLegacyStoreFiles: 1,
+      importedEntries: 1,
+      issues: 1,
+    });
+    expect(report.targets[0]?.issues).toEqual([
+      expect.objectContaining({ code: "entry_invalid", sessionKey: "agent:main:invalid" }),
+    ]);
+    expect(fs.existsSync(store.storePath)).toBe(false);
+    const archivedStore = expectDefined(
+      report.targets[0]?.archivedLegacyStoreFiles?.[0],
+      "archived legacy store path",
+    );
+    expect(fs.readFileSync(archivedStore, "utf-8")).toContain('"agent:main:invalid"');
+    expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
+  });
+
+  it("writes failure artifacts for a blocking import issue", async () => {
+    const store = createLegacyStore();
+    fs.rmSync(store.storePath);
+    fs.mkdirSync(store.storePath);
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+
+    expect(report.targets[0]?.issues).toContainEqual(
+      expect.objectContaining({ code: "store_unreadable" }),
+    );
+    expect(manifest.failedAt).toBeTruthy();
+    expect(report.migrationRun?.failureReportMarkdownPath).toBeTruthy();
   });
 
   it("imports and validates legacy sessions idempotently", async () => {
@@ -2345,14 +2654,8 @@ describe("runDoctorSessionSqlite", () => {
     expect(
       manifest.targets[0]?.completedMoves.some((move) => move.kind === "unreferenced-jsonl"),
     ).toBe(true);
-    expect(report.migrationRun?.failureReportMarkdownPath).toBeTruthy();
-    const failureReport = fs.readFileSync(
-      report.migrationRun?.failureReportMarkdownPath ?? "",
-      "utf-8",
-    );
-    expect(failureReport).toContain("transcript_malformed");
-    expect(failureReport).toContain("openclaw doctor --session-sqlite recover --github-issue");
-    expect(failureReport).not.toContain("supersecret");
+    expect(manifest.failedAt).toBeUndefined();
+    expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
   });
 
   it("reports malformed selected legacy transcripts during validation", async () => {

@@ -199,6 +199,73 @@ describe("runStartupSessionMigration", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("warns without restoring and logs an archived warning-only legacy store", async () => {
+    const log = makeLog();
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const restoreSessionSqliteMigrationRun = vi.fn();
+    const runDoctorSessionSqlite = makeSessionSqliteImport({
+      migrationRun: {
+        manifestPath: "/tmp/run.json",
+        runId: "run",
+      },
+      targets: [
+        {
+          agentId: "main",
+          archivedLegacyStoreFiles: ["/tmp/archive/sessions.json"],
+          archivedTranscriptFiles: [],
+          archivedUnreferencedJsonlFiles: [],
+          importedEntries: 0,
+          importedTranscriptEvents: 0,
+          issues: [
+            {
+              code: "entry_invalid",
+              message: "Session entry is missing a valid sessionId.",
+              sessionKey: "agent:main:invalid",
+            },
+          ],
+          legacyEntries: 1,
+          referencedTranscriptFiles: 1,
+          sqliteEntries: 1,
+          sqlitePath: "/tmp/openclaw-agent.sqlite",
+          storePath: "/tmp/sessions.json",
+          unreferencedJsonlFiles: [],
+          validatedEntries: 1,
+          validatedTranscriptEvents: 0,
+        },
+      ],
+      totals: {
+        archivedLegacyStoreFiles: 1,
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedEntries: 0,
+        importedTranscriptEvents: 0,
+        issues: 1,
+        legacyEntries: 1,
+        sqliteEntries: 1,
+        targets: 1,
+        unreferencedJsonlFiles: 0,
+        validatedEntries: 1,
+        validatedTranscriptEvents: 0,
+      },
+    });
+
+    await runStartupSessionMigration({
+      cfg: makeCfg(),
+      log,
+      deps: {
+        ...makeDeps(migrate, 0, runDoctorSessionSqlite),
+        restoreSessionSqliteMigrationRun,
+      },
+    });
+
+    expect(restoreSessionSqliteMigrationRun).not.toHaveBeenCalled();
+    expect(firstLogMessage(log.info, "sqlite import info")).toContain(
+      "session: imported legacy session metadata/transcripts into SQLite",
+    );
+    expect(firstLogMessage(log.info, "sqlite import info")).toContain("archivedLegacyStores=1");
+    expect(firstLogMessage(log.warn, "sqlite warning")).toContain("[entry_invalid]");
+  });
+
   it("warns without blocking when hot legacy session SQLite import reports legacy file issues", async () => {
     const log = makeLog();
     const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });

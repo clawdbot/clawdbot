@@ -59,6 +59,7 @@ import {
   buildExpectedTranscriptTurnSessionPatch,
   sessionMatchesExpectedTranscriptTurn,
 } from "./session-transcript-turn-state.js";
+import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 import type { SessionEntry } from "./types.js";
 import { mergeSessionEntry } from "./types.js";
 
@@ -84,6 +85,7 @@ type SqliteSessionImportRowsParams = {
 
 /** Summary of rows written by an internal doctor/migration import. */
 type SqliteSessionImportRowsResult = {
+  entryDisposition: "imported" | "preserved" | "superseded";
   sessionId: string;
   sessionKey: string;
   transcriptEvents: number;
@@ -149,26 +151,56 @@ export async function importSqliteSessionRows(
     ...(params.storePath ? { storePath: params.storePath } : {}),
   });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let entryDisposition: SqliteSessionImportRowsResult["entryDisposition"] = "superseded";
     let transcriptEvents = 0;
     runOpenClawAgentWriteTransaction((database) => {
-      const currentEntry = readSessionEntryRow(database, resolved.sessionKey)?.entry;
-      const preservedHarnessId =
-        params.entry.agentHarnessId === undefined &&
-        currentEntry?.sessionId === params.entry.sessionId &&
-        currentEntry.lifecycleRevision === params.entry.lifecycleRevision
-          ? currentEntry.agentHarnessId?.trim()
-          : undefined;
-      // Plugin doctor migrations can claim a legacy session before the full
-      // session import runs. Preserve that same-generation canonical owner.
-      const importedEntry = {
-        ...params.entry,
-        ...(preservedHarnessId ? { agentHarnessId: preservedHarnessId } : {}),
-        sessionFile: formatSqliteSessionMarkerForScope({
-          ...resolved,
-          sessionId: params.entry.sessionId,
-        }),
-      };
-      writeSessionEntry(database, resolved.sessionKey, importedEntry);
+      const currentRow = readSessionEntryRow(database, resolved.sessionKey);
+      const currentEntry = currentRow?.entry;
+      const sessionFile = formatSqliteSessionMarkerForScope({
+        ...resolved,
+        sessionId: params.entry.sessionId,
+      });
+      let entryToWrite: SessionEntry | undefined;
+      if (!currentEntry) {
+        entryToWrite = {
+          ...params.entry,
+          sessionFile,
+        };
+        entryDisposition = "imported";
+      } else if (currentEntry.sessionId === params.entry.sessionId) {
+        if (
+          !parseSqliteSessionFileMarker(currentEntry.sessionFile) &&
+          currentEntry.lifecycleRevision === params.entry.lifecycleRevision
+        ) {
+          // A plugin doctor may claim the owner fields before core import. Seed
+          // the full legacy row once, without losing that same-generation owner.
+          entryToWrite = {
+            ...params.entry,
+            ...(currentEntry.agentHarnessId ? { agentHarnessId: currentEntry.agentHarnessId } : {}),
+            ...(currentEntry.lifecycleRevision
+              ? { lifecycleRevision: currentEntry.lifecycleRevision }
+              : {}),
+            sessionFile,
+          };
+          entryDisposition = "imported";
+        } else if (currentEntry.sessionFile !== sessionFile) {
+          entryToWrite = { ...currentEntry, sessionFile };
+          entryDisposition = parseSqliteSessionFileMarker(currentEntry.sessionFile)
+            ? "preserved"
+            : "superseded";
+        } else {
+          entryDisposition = "preserved";
+        }
+      }
+      if (!entryToWrite && currentRow && currentRow.row.session_key !== resolved.sessionKey) {
+        entryToWrite = {
+          ...currentRow.entry,
+          sessionFile: formatSqliteSessionMarkerForScope({
+            ...resolved,
+            sessionId: currentRow.entry.sessionId,
+          }),
+        };
+      }
       if (params.readTranscriptEvents) {
         const transcriptScope = {
           ...resolved,
@@ -202,8 +234,12 @@ export async function importSqliteSessionRows(
       } else if (transcriptEvents > 0) {
         touchTranscriptMutationInTransaction(database, params.entry.sessionId);
       }
+      if (entryToWrite) {
+        writeSessionEntry(database, resolved.sessionKey, entryToWrite);
+      }
     }, toDatabaseOptions(resolved));
     return {
+      entryDisposition,
       sessionId: params.entry.sessionId,
       sessionKey: resolved.sessionKey,
       transcriptEvents,

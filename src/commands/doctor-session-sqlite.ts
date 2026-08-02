@@ -42,6 +42,7 @@ import {
   type SessionSqliteMigrationMoveKind,
   type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
+import { SESSION_SQLITE_WARNING_ISSUE_CODES } from "./doctor-session-sqlite-policy.js";
 import {
   countTranscriptEventsForPath,
   createTranscriptEventReader,
@@ -81,13 +82,6 @@ type LegacySessionRecord = {
   sessionKey: string;
   transcriptPath?: string;
 };
-
-const WARNING_ISSUE_CODES = new Set([
-  "transcript_missing",
-  "transcript_archive_failed",
-  "transcript_malformed",
-  "unreferenced_jsonl_archive_failed",
-]);
 
 /** Runs the targeted doctor SQLite session migration/inspection submode. */
 export async function runDoctorSessionSqlite(
@@ -140,9 +134,9 @@ export async function runDoctorSessionSqlite(
   }
   if (activeRun) {
     archiveImportedLegacySessionStores(targets, reports, activeRun, fullyCoveredStorePaths);
-    const hasIssues = reports.some((report) => report.issues.length > 0);
+    const hasBlockingIssues = reports.some((report) => blockingIssueCount(report) > 0);
     activeRun.manifest.completedAt = new Date().toISOString();
-    if (hasIssues) {
+    if (hasBlockingIssues) {
       activeRun.manifest.failedAt = activeRun.manifest.completedAt;
       const failureReports = writeSessionSqliteMigrationFailureReports(activeRun.manifestPath, {
         reason: "doctor import reported session SQLite migration issues",
@@ -246,6 +240,7 @@ async function inspectOrMigrateTarget(params: {
     sqliteEntries: readSqliteEntryCount(params.target),
     sqlitePath: resolveTargetSqlitePath(params.target),
     storePath: params.target.storePath,
+    supersededEntries: 0,
     unreferencedJsonlFiles: listUnreferencedJsonlFiles(params.target.storePath, [
       ...referencedTranscriptFiles,
     ]),
@@ -340,7 +335,10 @@ function resolveFullyCoveredLegacyStorePaths(
           isLegacySessionRecordOwnedByTarget(cfg, target, record.sessionKey),
       ),
     );
-    if (issues.length === 0 && coversEveryRecord) {
+    if (
+      issues.every((issue) => SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code)) &&
+      coversEveryRecord
+    ) {
       covered.add(storePath);
     }
   }
@@ -458,7 +456,8 @@ function countLegacyTranscript(
 }
 
 function blockingIssueCount(report: DoctorSessionSqliteTargetReport): number {
-  return report.issues.filter((issue) => !WARNING_ISSUE_CODES.has(issue.code)).length;
+  return report.issues.filter((issue) => !SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code))
+    .length;
 }
 
 async function importLegacySessionRecord(
@@ -478,7 +477,7 @@ async function importLegacySessionRecord(
       sessionKey: record.sessionKey,
       storePath: target.storePath,
     });
-    report.importedEntries += 1;
+    recordSessionMetadataImport(imported.entryDisposition, record, report);
     report.importedTranscriptEvents += imported.transcriptEvents;
     report.issues.push({
       code: "transcript_missing",
@@ -497,7 +496,7 @@ async function importLegacySessionRecord(
         : {}),
       ...(transcriptMtimeMs !== undefined ? { transcriptMtimeMs } : {}),
     });
-    report.importedEntries += 1;
+    recordSessionMetadataImport(imported.entryDisposition, record, report);
     report.importedTranscriptEvents += imported.transcriptEvents;
     report.issues.push({
       code: "transcript_malformed",
@@ -516,8 +515,30 @@ async function importLegacySessionRecord(
       : {}),
     ...(transcriptMtimeMs !== undefined ? { transcriptMtimeMs } : {}),
   });
-  report.importedEntries += 1;
+  recordSessionMetadataImport(imported.entryDisposition, record, report);
   report.importedTranscriptEvents += imported.transcriptEvents;
+}
+
+function recordSessionMetadataImport(
+  disposition: "imported" | "preserved" | "superseded",
+  record: LegacySessionRecord,
+  report: DoctorSessionSqliteTargetReport,
+): void {
+  if (disposition === "imported") {
+    report.importedEntries += 1;
+    return;
+  }
+  if (disposition === "preserved") {
+    report.validatedEntries += 1;
+    return;
+  }
+  report.supersededEntries = (report.supersededEntries ?? 0) + 1;
+  report.issues.push({
+    code: "entry_superseded",
+    message:
+      "Legacy session metadata was superseded by the canonical SQLite row; transcript events were retained.",
+    sessionKey: record.sessionKey,
+  });
 }
 
 function markAlreadyMigratedTranscript(
@@ -566,12 +587,14 @@ function validateImportedRecordBeforeArchive(
     return;
   }
   if (sqliteEntry.entry.sessionId !== record.entry.sessionId) {
-    report.issues.push({
-      code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteEntry.entry.sessionId} does not match ${record.entry.sessionId}.`,
-      sessionKey: record.sessionKey,
-    });
-    return;
+    if (!hasSessionIssue(report, "entry_superseded", record.sessionKey)) {
+      report.issues.push({
+        code: "sqlite_entry_mismatch",
+        message: `SQLite sessionId ${sqliteEntry.entry.sessionId} does not match ${record.entry.sessionId}.`,
+        sessionKey: record.sessionKey,
+      });
+      return;
+    }
   }
   const result = countTranscriptEvents(record);
   if (result.status === "missing") {
@@ -808,10 +831,13 @@ function validateLegacySessionRecord(
   }
   if (sqliteEntry.entry.entry.sessionId !== record.entry.sessionId) {
     report.issues.push({
-      code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteEntry.entry.entry.sessionId} does not match ${record.entry.sessionId}.`,
+      code: "entry_superseded",
+      message:
+        "Legacy session metadata was superseded by the canonical SQLite row; transcript events were retained.",
       sessionKey: record.sessionKey,
     });
+    report.supersededEntries = (report.supersededEntries ?? 0) + 1;
+    validateTranscriptEventCount(target, record, report);
     return;
   }
   report.validatedEntries += 1;
@@ -1232,6 +1258,10 @@ function summarizeDoctorSessionSqliteReport(
         0,
       ),
       sqliteEntries: sumTargets(targets, "sqliteEntries"),
+      supersededEntries: targets.reduce(
+        (total, target) => total + (target.supersededEntries ?? 0),
+        0,
+      ),
       targets: targets.length,
       unreferencedJsonlFiles: targets.reduce(
         (total, target) => total + target.unreferencedJsonlFiles.length,

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import * as replaceFile from "../infra/replace-file.js";
 import { VERSION } from "../version.js";
+import { SESSION_SQLITE_WARNING_ISSUE_CODES } from "./doctor-session-sqlite-policy.js";
 import type {
   DoctorSessionSqliteIssue,
   DoctorSessionSqliteRestoreConflict,
@@ -849,7 +850,9 @@ function isFailedSessionSqliteMigrationManifest(manifest: SessionSqliteMigration
     manifest.completedAt === undefined ||
     manifest.failedAt !== undefined ||
     manifest.failureReports !== undefined ||
-    manifest.targets.some((target) => target.issues.length > 0)
+    manifest.targets.some((target) =>
+      target.issues.some((issue) => !SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code)),
+    )
   );
 }
 

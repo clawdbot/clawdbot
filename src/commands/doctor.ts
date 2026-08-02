@@ -108,7 +108,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       }
       for (const target of report.targets) {
         outputRuntime.log(
-          `- ${target.agentId}: imported=${target.importedEntries}/${target.importedTranscriptEvents} events, validated=${target.validatedEntries}/${target.validatedTranscriptEvents} events, archived-unreferenced-jsonl=${target.archivedUnreferencedJsonlFiles.length}, unreferenced-jsonl=${target.unreferencedJsonlFiles.length}`,
+          `- ${target.agentId}: imported=${target.importedEntries}/${target.importedTranscriptEvents} events, validated=${target.validatedEntries}/${target.validatedTranscriptEvents} events, superseded=${target.supersededEntries ?? 0}, archived-legacy-stores=${target.archivedLegacyStoreFiles?.length ?? 0}, archived-unreferenced-jsonl=${target.archivedUnreferencedJsonlFiles.length}, unreferenced-jsonl=${target.unreferencedJsonlFiles.length}`,
         );
         if (target.restore) {
           outputRuntime.log(
