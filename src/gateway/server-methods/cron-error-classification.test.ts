@@ -14,4 +14,14 @@ describe("isCronInvalidRequestError", () => {
   it("does not classify unrelated script runtime failures", () => {
     expect(isCronInvalidRequestError(new Error("cron script payload runtime failed"))).toBe(false);
   });
+
+  it("classifies ambiguous announce delivery validation", () => {
+    expect(
+      isCronInvalidRequestError(
+        new Error(
+          "cron announce delivery requires an explicit channel when multiple channels are configured (discord, reef)",
+        ),
+      ),
+    ).toBe(true);
+  });
 });

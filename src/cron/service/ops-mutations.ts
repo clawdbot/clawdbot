@@ -16,6 +16,7 @@ import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import { cronPatchTouchesDeliveryResolution } from "./jobs-validation.js";
 import {
   applyJobPatch,
   applyDeclarativeJobSpec,
@@ -47,6 +48,22 @@ import {
   warnIfDisabled,
 } from "./store.js";
 import { armTimer } from "./timer.js";
+
+async function resolveConfiguredChannelsForValidation(
+  state: CronServiceState,
+): Promise<readonly string[] | undefined> {
+  if (!state.deps.listConfiguredChannels) {
+    return undefined;
+  }
+  try {
+    return await state.deps.listConfiguredChannels();
+  } catch {
+    // Channel discovery is advisory at mutation time. Runtime delivery remains
+    // authoritative, so discovery failures must not create false rejections.
+    state.deps.log.debug({}, "cron: configured channel validation skipped");
+    return undefined;
+  }
+}
 
 function reconcileStreamSourceIdentity(job: CronJob, nextJob: CronJob): void {
   if (nextJob.schedule.kind !== "stream") {
@@ -229,6 +246,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       throw new Error(`cron declarationKey is ambiguous within caller scope: ${declarationKey}`);
     }
     const existing = matches[0];
+    const configuredChannels = await resolveConfiguredChannelsForValidation(state);
 
     if (existing) {
       // A declarative upsert may not repurpose an existing heartbeat monitor
@@ -246,6 +264,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         nowMs: now,
         cronConfig: state.deps.cronConfig,
         scheduledToolPolicy: opts?.scheduledToolPolicy,
+        configuredChannels,
       });
       const includeEnabled = opts?.enabledExplicit === true;
       if (
@@ -274,6 +293,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     const snapshot = snapshotStoreForRollback(state);
     const job = createJob(state, normalizedInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
+      configuredChannels,
     });
     state.store?.jobs.push(job);
 
@@ -352,11 +372,15 @@ export async function updateLoadedJob(params: {
   const now = state.deps.nowMs();
   await precondition?.(structuredClone(job), now);
   const nextJob = structuredClone(job);
+  const configuredChannels = cronPatchTouchesDeliveryResolution(patch)
+    ? await resolveConfiguredChannelsForValidation(state)
+    : undefined;
   applyJobPatch(nextJob, patch, {
     defaultAgentId: state.deps.defaultAgentId,
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
     scheduledToolPolicy: opts?.scheduledToolPolicy,
+    configuredChannels,
   });
   if (patch.agentId !== undefined) {
     const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
