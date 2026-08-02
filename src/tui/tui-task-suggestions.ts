@@ -382,6 +382,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
           hiddenIds.delete(id);
         }
       }
+      return true;
     },
     () => {
       if (activeId && !suggestions.has(activeId)) {
