@@ -519,6 +519,7 @@ public actor GatewayNodeSession {
         return self.executingLifecycleCallbackIDs.contains(id)
     }
 
+    // periphery:ignore - package tests verify credential handoff rollback without exposing mutable channel state.
     public func currentIssuedDeviceAuthRoles() async -> Set<String> {
         guard let channel else { return [] }
         return await channel.currentIssuedDeviceAuthRoles()
