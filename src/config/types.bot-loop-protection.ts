@@ -8,4 +8,6 @@ export type ChannelBotLoopProtectionConfig = {
   windowSeconds?: number;
   /** Cooldown seconds applied to a pair after the limit is hit. */
   cooldownSeconds?: number;
+  /** Bot events allowed per conversation in a rolling 10-minute window (3+ active bots) before suppression. */
+  maxConversationBotEvents?: number;
 };

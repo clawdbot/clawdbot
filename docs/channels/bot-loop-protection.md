@@ -7,22 +7,25 @@ title: "Bot loop protection"
 sidebarTitle: "Bot loop protection"
 ---
 
-OpenClaw can accept messages written by other bots on channels that support `allowBots`. When that path is enabled, pair loop protection prevents two bot identities from replying to each other indefinitely.
+OpenClaw can accept messages written by other bots on channels that support `allowBots`. When that path is enabled, loop protection prevents bot identities from replying to each other indefinitely, using two budgets that share one config surface.
 
 The guard is enforced by the core inbound reply runner. Each supporting channel maps its inbound event into generic facts: account or scope, conversation id, sender bot id, and receiver bot id. Core tracks the participant pair in both directions (A to B and B to A count as the same pair), applies a sliding-window budget, and suppresses the pair during a cooldown after the budget is exceeded.
+
+A second, conversation-scoped burst budget covers the multi-party case the pair budget cannot see: with three or more bots in one conversation, no single pair may exceed its window while the conversation as a whole runs away. The guard counts bot-authored events per conversation (as seen by each receiving bot) inside a rolling 10-minute window. The budget trips only when the window holds more events than the limit AND at least two peer bots besides the receiving bot are each actively posting (2+ events in the window), so two-party bot conversations and stray bots that post only once never trip it. Low-rate traffic drains out of the window on its own; once tripped, the standard cooldown applies and a sustained storm stays suppressed until the conversation actually goes quiet. Note that a channel where several bots each post steadily (say three integration bots posting every couple of minutes) can exceed the default budget during dense periods — suppression there is cooldown-bounded and self-heals, and the limit is tunable per channel.
 
 ## Defaults
 
 Pair loop protection is active whenever a channel lets bot-authored messages reach dispatch. Built-in defaults:
 
-| Key                  | Default | Meaning                                             |
-| -------------------- | ------- | --------------------------------------------------- |
-| `enabled`            | `true`  | Guard active for channels that support it.          |
-| `maxEventsPerWindow` | `20`    | Events a bot pair can exchange within the window.   |
-| `windowSeconds`      | `60`    | Sliding window length.                              |
-| `cooldownSeconds`    | `60`    | Suppression time after the pair exceeds the budget. |
+| Key                        | Default | Meaning                                                                     |
+| -------------------------- | ------- | --------------------------------------------------------------------------- |
+| `enabled`                  | `true`  | Both budgets active. `false` disables pair and burst protection together.   |
+| `maxEventsPerWindow`       | `20`    | Events a bot pair can exchange within the window.                           |
+| `windowSeconds`            | `60`    | Sliding window length.                                                      |
+| `cooldownSeconds`          | `60`    | Suppression time after either budget is exceeded.                           |
+| `maxConversationBotEvents` | `10`    | Bot events per conversation in a rolling 10-minute window (3+ active bots). |
 
-The guard does not affect human-authored messages, single-bot deployments, self-message filtering, or bot replies that stay under the budget.
+The guard does not affect human-authored messages, single-bot deployments, self-message filtering, or bot replies that stay under the budgets.
 
 ## Configure shared defaults
 

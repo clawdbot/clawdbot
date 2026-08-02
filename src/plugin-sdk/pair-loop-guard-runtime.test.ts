@@ -185,6 +185,133 @@ describe("createPairLoopGuard", () => {
   });
 });
 
+describe("conversation burst budget", () => {
+  // Pair budget stays permissive in these tests so only the burst can trip.
+  const burstSettings: PairLoopGuardSettings = {
+    enabled: true,
+    maxEventsPerWindow: 1_000,
+    windowMs: 60_000,
+    cooldownMs: 5_000,
+    maxConversationBotEvents: 10,
+  };
+  const base = {
+    scopeId: "scope-1",
+    conversationId: "conversation-1",
+    receiverId: "self",
+    settings: burstSettings,
+  };
+
+  it("suppresses a three-party storm the pair budget cannot see", () => {
+    const guard = createPairLoopGuard();
+    // Two peer senders alternating every 15s: each pair stays far below its
+    // own window budget while the conversation as a whole runs away.
+    for (let index = 0; index < 10; index += 1) {
+      expect(
+        guard.recordAndCheck({
+          ...base,
+          senderId: `bot-${index % 2}`,
+          nowMs: index * 15_000,
+        }),
+      ).toEqual({ suppressed: false });
+    }
+    const tripped = guard.recordAndCheck({ ...base, senderId: "bot-0", nowMs: 150_000 });
+    expect(tripped).toEqual({ suppressed: true, cooldownUntilMs: 155_000 });
+    // A sustained storm stays suppressed past cooldown expiry because tripped
+    // events stay in the window and immediately re-trip.
+    expect(guard.recordAndCheck({ ...base, senderId: "bot-1", nowMs: 161_000 }).suppressed).toBe(
+      true,
+    );
+  });
+
+  it("never trips two-party traffic, even with one-off posts from stray bots", () => {
+    const guard = createPairLoopGuard();
+    guard.recordAndCheck({ ...base, senderId: "stray-ci", nowMs: 0 });
+    guard.recordAndCheck({ ...base, senderId: "stray-alerts", nowMs: 1_000 });
+    // A rapid two-party exchange with strays in the window: only one sender is
+    // actively posting, so the burst budget leaves it to the pair budget.
+    for (let index = 0; index < 20; index += 1) {
+      expect(
+        guard.recordAndCheck({
+          ...base,
+          senderId: "peer-bot",
+          nowMs: 2_000 + index * 10_000,
+        }).suppressed,
+      ).toBe(false);
+    }
+  });
+
+  it("lets slow multi-bot traffic drain out of the window", () => {
+    const guard = createPairLoopGuard();
+    // Three senders posting round-robin every 4 minutes: the 10-minute window
+    // never holds more than the budget, so nothing ever accumulates.
+    for (let index = 0; index < 15; index += 1) {
+      expect(
+        guard.recordAndCheck({
+          ...base,
+          senderId: `bot-${index % 3}`,
+          nowMs: index * 240_000,
+        }).suppressed,
+      ).toBe(false);
+    }
+  });
+
+  it("re-arms once the conversation actually goes quiet", () => {
+    const guard = createPairLoopGuard();
+    for (let index = 0; index < 12; index += 1) {
+      guard.recordAndCheck({ ...base, senderId: `bot-${index % 2}`, nowMs: index * 15_000 });
+    }
+    // 11 minutes of silence drains the window; the next event is clean.
+    expect(
+      guard.recordAndCheck({ ...base, senderId: "bot-0", nowMs: 180_000 + 11 * 60_000 }).suppressed,
+    ).toBe(false);
+  });
+
+  it("still trips when an operator raises the limit past the retention cap", () => {
+    const guard = createPairLoopGuard();
+    const lenient = { ...base, settings: { ...burstSettings, maxConversationBotEvents: 500 } };
+    // The retention cap must scale with the limit; a fixed cap of 500 would
+    // trim the window below the trip threshold and silently void the budget.
+    for (let index = 0; index < 500; index += 1) {
+      expect(
+        guard.recordAndCheck({ ...lenient, senderId: `bot-${index % 3}`, nowMs: index * 1_000 })
+          .suppressed,
+      ).toBe(false);
+    }
+    expect(guard.recordAndCheck({ ...lenient, senderId: "bot-0", nowMs: 500_000 }).suppressed).toBe(
+      true,
+    );
+  });
+
+  it("catches a storm rotating across many senders", () => {
+    const guard = createPairLoopGuard();
+    // 10 senders round-robin at 5s: no sender is prolific, but once two of
+    // them have posted twice the burst over the limit is suppressed.
+    const results: boolean[] = [];
+    for (let index = 0; index < 20; index += 1) {
+      results.push(
+        guard.recordAndCheck({ ...base, senderId: `bot-${index % 10}`, nowMs: index * 5_000 })
+          .suppressed,
+      );
+    }
+    expect(results[11]).toBe(true);
+  });
+
+  it("tracks each receiving bot independently", () => {
+    const guard = createPairLoopGuard();
+    for (let index = 0; index < 11; index += 1) {
+      guard.recordAndCheck({ ...base, senderId: `bot-${index % 2}`, nowMs: index * 1_000 });
+    }
+    expect(
+      guard.recordAndCheck({
+        ...base,
+        receiverId: "other-agent",
+        senderId: "bot-0",
+        nowMs: 12_000,
+      }).suppressed,
+    ).toBe(false);
+  });
+});
+
 describe("mergePairLoopGuardConfig", () => {
   it("layers partial child config over parent config field-by-field", () => {
     expect(
@@ -231,6 +358,7 @@ describe("resolvePairLoopGuardSettings", () => {
       maxEventsPerWindow: 4,
       windowMs: 10_000,
       cooldownMs: 30_000,
+      maxConversationBotEvents: 10,
     });
   });
 

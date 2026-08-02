@@ -8,6 +8,11 @@ export type PairLoopGuardSettings = {
   windowMs: number;
   /** Suppression duration in milliseconds once the threshold is exceeded. */
   cooldownMs: number;
+  /**
+   * Bot events allowed per conversation inside the burst window. Absent or
+   * non-positive values resolve to the default; disable via `enabled` instead.
+   */
+  maxConversationBotEvents?: number;
 };
 
 /** User-facing pair-loop guard config accepted by channel plugins. */
@@ -20,6 +25,15 @@ export type PairLoopGuardConfig = {
   windowSeconds?: number;
   /** Suppression duration in seconds for config files. */
   cooldownSeconds?: number;
+  /**
+   * Bot events allowed in one conversation within a rolling 10-minute burst
+   * window before suppression. Covers N-party storms the unordered pair
+   * budget cannot see: with 3+ bots no single pair crosses maxEventsPerWindow
+   * while the conversation as a whole runs away. Trips only when 2+ peer
+   * senders are each actively posting, so two-party exchanges and one-off
+   * stray posts stay governed by the pair budget alone.
+   */
+  maxConversationBotEvents?: number;
 };
 
 const PAIR_LOOP_GUARD_CONFIG_KEYS = [
@@ -27,6 +41,7 @@ const PAIR_LOOP_GUARD_CONFIG_KEYS = [
   "maxEventsPerWindow",
   "windowSeconds",
   "cooldownSeconds",
+  "maxConversationBotEvents",
 ] as const satisfies ReadonlyArray<keyof PairLoopGuardConfig>;
 
 /** Result of recording one pair interaction against the loop guard. */
@@ -47,6 +62,12 @@ export type PairLoopGuardSnapshotEntry = {
 type PairLoopGuardEntry = {
   recentMs: number[];
   windowMs: number;
+  cooldownStartedAtMs: number;
+  cooldownUntilMs: number;
+};
+
+type ConversationBurstEntry = {
+  events: Array<{ tsMs: number; senderId: string }>;
   cooldownStartedAtMs: number;
   cooldownUntilMs: number;
 };
@@ -83,6 +104,7 @@ export const DEFAULT_PAIR_LOOP_GUARD_CONFIG: Required<PairLoopGuardConfig> = {
   maxEventsPerWindow: 20,
   windowSeconds: 60,
   cooldownSeconds: 60,
+  maxConversationBotEvents: 10,
 };
 
 /** Default runtime loop guard settings derived from the default config. */
@@ -91,7 +113,35 @@ export const DEFAULT_PAIR_LOOP_GUARD_SETTINGS: PairLoopGuardSettings = {
   maxEventsPerWindow: DEFAULT_PAIR_LOOP_GUARD_CONFIG.maxEventsPerWindow,
   windowMs: DEFAULT_PAIR_LOOP_GUARD_CONFIG.windowSeconds * 1000,
   cooldownMs: DEFAULT_PAIR_LOOP_GUARD_CONFIG.cooldownSeconds * 1000,
+  maxConversationBotEvents: DEFAULT_PAIR_LOOP_GUARD_CONFIG.maxConversationBotEvents,
 };
+
+/**
+ * Rolling window for the conversation burst budget. Longer than the pair
+ * window so slow-cadence storms (agents replying once a minute) still
+ * accumulate, while low-rate legitimate bot traffic drains out on its own.
+ */
+const CONVERSATION_BURST_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Burst suppression needs at least this many ACTIVE peer senders inside the
+ * window. The receiving bot is never in the set, so 2 means 3+ bots total —
+ * the smallest storm the pair budget structurally cannot see. Two-party
+ * conversations (including agent-to-agent relays) never trip this budget.
+ */
+const CONVERSATION_BURST_MIN_ACTIVE_SENDERS = 2;
+
+/**
+ * A sender counts as an active storm participant only with this many events
+ * inside the window. One-off posts from stray bots (CI, alerts) can never
+ * reclassify a two-party exchange as a multi-party storm. Kept at 2 so a
+ * rotating storm cannot stay invisible by spreading events across many
+ * senders (at 3, any fan-out of 6+ bots posting twice each evades detection).
+ */
+const CONVERSATION_BURST_ACTIVE_SENDER_MIN_EVENTS = 2;
+
+/** Bounds retained burst events per conversation against event floods. */
+const CONVERSATION_BURST_EVENT_CAP = 500;
 
 /** Merges pair-loop configs from broad defaults to narrow overrides, ignoring undefined values. */
 export function mergePairLoopGuardConfig(
@@ -117,6 +167,9 @@ export function mergePairLoopGuardConfig(
             break;
           case "cooldownSeconds":
             merged.cooldownSeconds = config.cooldownSeconds;
+            break;
+          case "maxConversationBotEvents":
+            merged.maxConversationBotEvents = config.maxConversationBotEvents;
             break;
         }
         hasValue = true;
@@ -156,6 +209,10 @@ export function resolvePairLoopGuardSettings(params: {
     positiveInteger(params.config?.cooldownSeconds) ??
     positiveInteger(params.defaultsConfig?.cooldownSeconds) ??
     DEFAULT_PAIR_LOOP_GUARD_CONFIG.cooldownSeconds;
+  const maxConversationBotEvents =
+    positiveInteger(params.config?.maxConversationBotEvents) ??
+    positiveInteger(params.defaultsConfig?.maxConversationBotEvents) ??
+    DEFAULT_PAIR_LOOP_GUARD_CONFIG.maxConversationBotEvents;
 
   return {
     // Channel-level capability gates can disable protection even when config/defaults enable it.
@@ -163,6 +220,7 @@ export function resolvePairLoopGuardSettings(params: {
     maxEventsPerWindow,
     windowMs: windowSeconds * 1000,
     cooldownMs: cooldownSeconds * 1000,
+    maxConversationBotEvents,
   };
 }
 
@@ -190,6 +248,7 @@ function countCurrentWindowEvents(entry: PairLoopGuardEntry, nowMs: number): num
 /** Creates an in-memory pair-loop guard with bounded periodic pruning. */
 export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): PairLoopGuard {
   const tracked = new Map<string, PairLoopGuardEntry>();
+  const burstTracked = new Map<string, ConversationBurstEntry>();
   const pruneIntervalMs = params?.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS;
   let nextPruneAtMs = 0;
 
@@ -204,6 +263,79 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
         tracked.delete(key);
       }
     }
+    for (const [key, entry] of burstTracked) {
+      entry.events = entry.events.filter(
+        (event) => event.tsMs > nowMs - CONVERSATION_BURST_WINDOW_MS,
+      );
+      if (entry.events.length === 0 && entry.cooldownUntilMs <= nowMs) {
+        burstTracked.delete(key);
+      }
+    }
+  }
+
+  function recordConversationBurstAndCheck(paramsLocal: {
+    scopeId: string;
+    conversationId: string;
+    senderId: string;
+    receiverId: string;
+    settings: PairLoopGuardSettings;
+    nowMs: number;
+  }): PairLoopGuardResult {
+    const limit =
+      positiveInteger(paramsLocal.settings.maxConversationBotEvents) ??
+      DEFAULT_PAIR_LOOP_GUARD_CONFIG.maxConversationBotEvents;
+    // recordAndCheck already rejected non-positive cooldowns before this call.
+    const cooldownMs = Math.floor(paramsLocal.settings.cooldownMs);
+    // Keyed per receiving bot so one conversation event fanned out to several
+    // receivers is counted once per receiver, never multiplied for any of them.
+    const key = [paramsLocal.scopeId, paramsLocal.conversationId, paramsLocal.receiverId].join(
+      KEY_SEPARATOR,
+    );
+    const nowMs = paramsLocal.nowMs;
+    let entry = burstTracked.get(key);
+    if (!entry) {
+      entry = { events: [], cooldownStartedAtMs: 0, cooldownUntilMs: 0 };
+      burstTracked.set(key, entry);
+    }
+    entry.events = entry.events.filter(
+      (event) => event.tsMs > nowMs - CONVERSATION_BURST_WINDOW_MS,
+    );
+    entry.events.push({ tsMs: nowMs, senderId: paramsLocal.senderId });
+    // The cap must always sit above the configured limit: trimming below it
+    // would keep inWindow.length under the trip threshold forever and turn a
+    // "lenient" operator limit into a silently disabled budget.
+    const eventCap = Math.max(limit + 1, CONVERSATION_BURST_EVENT_CAP);
+    if (entry.events.length > eventCap) {
+      entry.events.splice(0, entry.events.length - eventCap);
+    }
+    if (entry.cooldownStartedAtMs <= nowMs && entry.cooldownUntilMs > nowMs) {
+      return { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs };
+    }
+    // Mirror the pair budget's reordered-event tolerance: only events at or
+    // before this event's timestamp count against it.
+    const inWindow = entry.events.filter((event) => event.tsMs <= nowMs);
+    if (inWindow.length <= limit) {
+      return { suppressed: false };
+    }
+    const senderEventCounts = new Map<string, number>();
+    for (const event of inWindow) {
+      senderEventCounts.set(event.senderId, (senderEventCounts.get(event.senderId) ?? 0) + 1);
+    }
+    let activeSenders = 0;
+    for (const count of senderEventCounts.values()) {
+      if (count >= CONVERSATION_BURST_ACTIVE_SENDER_MIN_EVENTS) {
+        activeSenders += 1;
+      }
+    }
+    if (activeSenders < CONVERSATION_BURST_MIN_ACTIVE_SENDERS) {
+      return { suppressed: false };
+    }
+    entry.cooldownStartedAtMs = nowMs;
+    entry.cooldownUntilMs = nowMs + cooldownMs;
+    // Unlike the pair budget, tripped events stay in the window: a storm that
+    // keeps posting through cooldown re-trips immediately on expiry, while the
+    // window drains on its own once the conversation actually goes quiet.
+    return { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs };
   }
 
   function recordAndCheck(paramsLocal: {
@@ -239,6 +371,11 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     const nowMs = paramsLocal.nowMs ?? Date.now();
     pruneInactiveTrackedPairs(nowMs);
 
+    // The burst bucket records every event even when the pair budget also
+    // suppresses it, so a live storm keeps its burst armed instead of
+    // resetting through pair cooldown gaps.
+    const burstResult = recordConversationBurstAndCheck({ ...paramsLocal, nowMs });
+
     const key = buildPairKey(paramsLocal);
     let entry = tracked.get(key);
     if (!entry) {
@@ -260,13 +397,14 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
       return { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs };
     }
 
-    return { suppressed: false };
+    return burstResult;
   }
 
   return {
     recordAndCheck,
     clear: () => {
       tracked.clear();
+      burstTracked.clear();
       nextPruneAtMs = 0;
     },
     snapshot: () =>

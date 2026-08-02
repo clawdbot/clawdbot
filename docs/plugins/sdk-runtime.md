@@ -69,7 +69,7 @@ these actions with `{ modelPicker: true }`; channels without a picker
 capability continue to fail closed instead of treating the action as an opaque
 callback.
 
-Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically.
+Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically. The same facts also feed a conversation-scoped burst budget that suppresses windows dense with bot events from multiple actively-posting senders — the multi-party storm shape no single pair budget can see.
 
 Channel plugins that expose this behavior to operators should prefer the shared `channels.defaults.botLoopProtection` shape for baseline budgets, then layer channel/provider-specific overrides on top. The shared config uses seconds because it is user-facing:
 
@@ -79,6 +79,7 @@ type ChannelBotLoopProtectionConfig = {
   maxEventsPerWindow?: number;
   windowSeconds?: number;
   cooldownSeconds?: number;
+  maxConversationBotEvents?: number;
 };
 ```
 
