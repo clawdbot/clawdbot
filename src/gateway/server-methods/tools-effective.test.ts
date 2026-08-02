@@ -562,7 +562,9 @@ describe("tools.effective handler", () => {
     runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockImplementation(() => {
       throw new Error("synchronous model context should not be used");
     });
-    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync.mockResolvedValue({});
+    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync.mockResolvedValue(
+      {} as never,
+    );
 
     const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
     await invoke();
