@@ -561,6 +561,20 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.loadConfig).not.toHaveBeenCalled();
   });
 
+  it("skips unrelated plugin validation for cold plugin-owned CLI commands", async () => {
+    const snapshotConfig = { plugins: { enabled: true } } as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+      valid: true,
+      config: {},
+      runtimeConfig: snapshotConfig,
+    });
+
+    await expect(
+      loadValidatedConfigForPluginRegistration({ skipPluginValidation: true }),
+    ).resolves.toBe(snapshotConfig);
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
+  });
+
   it("preserves an already-active runtime config snapshot", async () => {
     const snapshotConfig = { plugins: { enabled: true } } as OpenClawConfig;
     const activeConfig = { plugins: { enabled: false } } as OpenClawConfig;
