@@ -240,11 +240,6 @@ export class UrbitSSEClient {
 
     if (!response.ok) {
       this.streamRelease = null;
-      // Failed connects never read the body; cancel before release so undici
-      // does not keep the socket pinned (release alone is not enough).
-      if (!response.bodyUsed) {
-        await response.body?.cancel().catch(() => undefined);
-      }
       await release();
       throw new UrbitHttpError({ operation: "Stream connection", status: response.status });
     }
@@ -548,19 +543,15 @@ export class UrbitSSEClient {
       }));
 
       {
-        const { response, release } = await this.putChannelPayload(unsubscribes, {
+        const { release } = await this.putChannelPayload(unsubscribes, {
           timeoutMs: 30_000,
           auditContext: "tlon-urbit-unsubscribe",
         });
-        try {
-          void response.body?.cancel().catch(() => undefined);
-        } finally {
-          await release();
-        }
+        await release();
       }
 
       {
-        const { response, release } = await urbitFetch({
+        const { release } = await urbitFetch({
           baseUrl: this.url,
           path: `/~/channel/${this.channelId}`,
           init: {
@@ -575,11 +566,7 @@ export class UrbitSSEClient {
           timeoutMs: 30_000,
           auditContext: "tlon-urbit-channel-close",
         });
-        try {
-          void response.body?.cancel().catch(() => undefined);
-        } finally {
-          await release();
-        }
+        await release();
       }
     } catch (error) {
       this.logger.error?.(`Error closing channel: ${String(error)}`);
