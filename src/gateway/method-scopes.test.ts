@@ -83,6 +83,7 @@ describe("method scope resolution", () => {
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
+    ["hooks.status", ["operator.read"]],
     ["skills.curator.pin", ["operator.admin"]],
     ["skills.curator.unpin", ["operator.admin"]],
     ["skills.curator.restore", ["operator.admin"]],

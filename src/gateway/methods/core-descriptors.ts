@@ -479,6 +479,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Additive Skill Workshop methods append so older advertised indices stay stable.
   ["skills.proposals.events.list", "skills", "operator.read", "2026.7"],
   ["skills.proposals.evaluate", "skills", "operator.admin", "2026.7", { controlPlaneWrite: true }],
+  // Additive hook status RPC appends so older advertised method indices stay stable.
+  ["hooks.status", "hooks-status", "operator.read", "2026.7"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
