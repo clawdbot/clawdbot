@@ -4,11 +4,19 @@ import path from "node:path";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildOfficialChannelDocsCatalog,
   buildOfficialChannelCatalog,
+  checkOfficialChannelDocsIndex,
   checkOfficialChannelCatalogSource,
+  findDuplicateOfficialChannelDocsNavRoutes,
+  findMissingOfficialChannelDocsNavRoutes,
+  findUnexpectedOfficialChannelDocsNavRoutes,
   OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH,
   OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH,
+  OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH,
+  renderOfficialChannelDocsIndex,
   writeOfficialChannelCatalog,
+  writeOfficialChannelDocsIndex,
   writeOfficialChannelCatalogSource,
 } from "../scripts/write-official-channel-catalog.mjs";
 import { describePluginInstallSource } from "../src/plugins/install-source-info.js";
@@ -29,6 +37,66 @@ function makeRepoRoot(prefix: string): string {
 
 function writeJson(filePath: string, value: unknown): void {
   writeJsonFile(filePath, value);
+}
+
+function writeChannelDocContent(repoRoot: string, docsPath: string, content: string): void {
+  const route = docsPath.replace(/^\/+/u, "");
+  const filePath = path.join(repoRoot, "docs", `${route}.md`);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, "utf8");
+}
+
+function writeChannelDoc(repoRoot: string, docsPath: string, title: string, summary: string): void {
+  writeChannelDocContent(
+    repoRoot,
+    docsPath,
+    `---\nsummary: ${JSON.stringify(summary)}\ntitle: ${JSON.stringify(title)}\n---\n`,
+  );
+}
+
+function writeExternalChannelDocs(repoRoot: string): void {
+  const seed = JSON.parse(
+    fs.readFileSync(path.resolve("scripts/lib/official-external-channel-seed.json"), "utf8"),
+  ) as {
+    entries: Array<{
+      openclaw?: { channel?: { docsPath?: string; id?: string; label?: string } };
+    }>;
+  };
+  for (const entry of seed.entries) {
+    const channel = entry.openclaw?.channel;
+    if (!channel?.docsPath || !channel.label) {
+      continue;
+    }
+    const title = channel.id === "openclaw-weixin" ? "WeChat" : channel.label;
+    writeChannelDoc(repoRoot, channel.docsPath, title, `${title} test summary`);
+  }
+  writeChannelDoc(repoRoot, "/web/webchat", "WebChat", "Gateway WebChat UI over WebSocket");
+}
+
+function writeEnglishDocsNavigation(
+  repoRoot: string,
+  channelPages: string[],
+  otherPages: string[] = [],
+): void {
+  writeJson(path.join(repoRoot, "docs", "docs.json"), {
+    navigation: {
+      languages: [
+        {
+          language: "en",
+          tabs: [
+            {
+              tab: "Channels",
+              groups: [{ group: "Test channels", pages: channelPages }],
+            },
+            {
+              tab: "Other",
+              groups: [{ group: "Other pages", pages: otherPages }],
+            },
+          ],
+        },
+      ],
+    },
+  });
 }
 
 function requireInstall(entry: OfficialChannelCatalogEntry | undefined): OfficialChannelInstall {
@@ -79,6 +147,31 @@ afterEach(() => {
 describe("buildOfficialChannelCatalog", () => {
   it("keeps the committed official catalog synchronized with repository manifests", () => {
     expect(checkOfficialChannelCatalogSource({ repoRoot: process.cwd() })).toBe(true);
+  });
+
+  it("keeps the generated channel docs index and navigation synchronized", () => {
+    expect(checkOfficialChannelDocsIndex({ repoRoot: process.cwd() })).toBe(true);
+    expect(findMissingOfficialChannelDocsNavRoutes({ repoRoot: process.cwd() })).toEqual([]);
+    expect(findUnexpectedOfficialChannelDocsNavRoutes({ repoRoot: process.cwd() })).toEqual([]);
+    expect(findDuplicateOfficialChannelDocsNavRoutes({ repoRoot: process.cwd() })).toEqual([]);
+
+    const entries = buildOfficialChannelDocsCatalog({ repoRoot: process.cwd() }).entries;
+    expect(entries.find((entry) => entry.id === "openclaw-weixin")).toMatchObject({
+      label: "WeChat",
+      summary: "WeChat channel setup through the external openclaw-weixin plugin",
+    });
+    expect(entries.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["reef", "telegram", "webchat"]),
+    );
+    expect(entries.map((entry) => entry.id)).not.toEqual(
+      expect.arrayContaining(["qa-channel", "voice-call"]),
+    );
+    const rendered = renderOfficialChannelDocsIndex({ repoRoot: process.cwd() });
+    expect(rendered).toContain(
+      "[Voice Call](/plugins/voice-call) - Telephony via Plivo, Telnyx, or Twilio",
+    );
+    expect(rendered).not.toContain("Very well supported right now");
+    expect(rendered).not.toContain('David Reagans: "Hop on Discord."');
   });
 
   it("lets publishable package metadata override same-id seeds and skips non-publishable entries", () => {
@@ -232,7 +325,7 @@ describe("buildOfficialChannelCatalog", () => {
         selectionLabel: "Yuanbao (元宝)",
         detailLabel: "Yuanbao",
         docsLabel: "yuanbao",
-        docsPath: "/plugins/community#yuanbao",
+        docsPath: "/channels/yuanbao",
         blurb: "Tencent Yuanbao AI assistant conversation channel.",
         order: 85,
         aliases: ["yuanbao", "yb", "tencent-yuanbao", "元宝"],
@@ -340,6 +433,239 @@ describe("buildOfficialChannelCatalog", () => {
         return channelId ? publishableChannelIds.has(channelId) : false;
       }),
     ).toBe(false);
+  });
+
+  it("projects bundled, external, and built-in channels into docs while hiding source-only channels", () => {
+    const repoRoot = makeRepoRoot("openclaw-official-channel-docs-");
+    writeJson(path.join(repoRoot, "package.json"), {
+      files: ["dist/extensions/**", "!dist/extensions/hidden/**"],
+    });
+    writeJson(path.join(repoRoot, "extensions", "bundled", "package.json"), {
+      name: "@openclaw/bundled",
+      openclaw: {
+        channel: {
+          id: "bundled",
+          label: "Bundled",
+          docsPath: "/channels/bundled",
+          blurb: "bundled test channel",
+        },
+      },
+    });
+    writeJson(path.join(repoRoot, "extensions", "hidden", "package.json"), {
+      name: "@openclaw/hidden",
+      openclaw: {
+        channel: {
+          id: "hidden",
+          label: "Hidden",
+          docsPath: "/channels/hidden",
+          blurb: "hidden test channel",
+          exposure: {
+            docs: false,
+          },
+        },
+      },
+    });
+    writeExternalChannelDocs(repoRoot);
+    writeChannelDoc(repoRoot, "/channels/bundled", "Bundled Chat", "Public bundled summary");
+
+    const entries = buildOfficialChannelDocsCatalog({ repoRoot }).entries;
+
+    expect(entries.find((entry) => entry.id === "bundled")).toEqual({
+      id: "bundled",
+      label: "Bundled Chat",
+      docsPath: "/channels/bundled",
+      summary: "Public bundled summary",
+      source: "bundled",
+    });
+    expect(entries.some((entry) => entry.id === "hidden")).toBe(false);
+    expect(entries.find((entry) => entry.id === "webchat")).toEqual({
+      id: "webchat",
+      label: "WebChat",
+      docsPath: "/web/webchat",
+      summary: "Gateway WebChat UI over WebSocket",
+      source: "built-in",
+    });
+    expect(entries.find((entry) => entry.id === "wecom")?.docsPath).toBe("/channels/wecom");
+    expect(entries.find((entry) => entry.id === "yuanbao")?.docsPath).toBe("/channels/yuanbao");
+  });
+
+  it("uses the canonical channel docs route when a manifest omits docsPath", () => {
+    const repoRoot = makeRepoRoot("openclaw-default-channel-docs-route-");
+    writeJson(path.join(repoRoot, "extensions", "defaulted", "package.json"), {
+      name: "@openclaw/defaulted",
+      openclaw: {
+        channel: {
+          id: "defaulted",
+          label: "Defaulted",
+        },
+      },
+    });
+    writeExternalChannelDocs(repoRoot);
+    writeChannelDoc(repoRoot, "/channels/defaulted", "Defaulted Chat", "Default route summary");
+
+    expect(
+      buildOfficialChannelDocsCatalog({ repoRoot }).entries.find(
+        (entry) => entry.id === "defaulted",
+      ),
+    ).toEqual({
+      id: "defaulted",
+      label: "Defaulted Chat",
+      docsPath: "/channels/defaulted",
+      summary: "Default route summary",
+      source: "bundled",
+    });
+  });
+
+  it("rejects docs-visible source-only channels", () => {
+    const repoRoot = makeRepoRoot("openclaw-source-only-channel-docs-");
+    writeJson(path.join(repoRoot, "package.json"), {
+      files: ["dist/extensions/**", "!dist/extensions/source-only/**"],
+    });
+    writeJson(path.join(repoRoot, "extensions", "source-only", "package.json"), {
+      name: "@openclaw/source-only",
+      openclaw: {
+        channel: {
+          id: "source-only",
+          label: "Source Only",
+          docsPath: "/channels/source-only",
+        },
+      },
+    });
+
+    expect(() => buildOfficialChannelDocsCatalog({ repoRoot })).toThrow(
+      "docs-visible channel source-only is neither bundled nor installable",
+    );
+  });
+
+  it.each([
+    {
+      name: "missing docs file",
+      content: null,
+      error: "channel frontmatter-test docs route does not resolve",
+    },
+    {
+      name: "missing frontmatter",
+      content: "# Frontmatter test\n",
+      error: "docs/channels/frontmatter-test.md is missing YAML frontmatter",
+    },
+    {
+      name: "missing title",
+      content: '---\nsummary: "Summary"\n---\n',
+      error: "docs/channels/frontmatter-test.md must define title and summary",
+    },
+    {
+      name: "missing summary",
+      content: '---\ntitle: "Frontmatter test"\n---\n',
+      error: "docs/channels/frontmatter-test.md must define title and summary",
+    },
+  ])("rejects channel docs with $name", ({ content, error }) => {
+    const repoRoot = makeRepoRoot("openclaw-channel-docs-frontmatter-");
+    writeJson(path.join(repoRoot, "extensions", "frontmatter-test", "package.json"), {
+      name: "@openclaw/frontmatter-test",
+      openclaw: {
+        channel: {
+          id: "frontmatter-test",
+          label: "Manifest label",
+          docsPath: "/channels/frontmatter-test",
+          blurb: "Manifest blurb",
+        },
+      },
+    });
+    writeExternalChannelDocs(repoRoot);
+    if (content !== null) {
+      writeChannelDocContent(repoRoot, "/channels/frontmatter-test", content);
+    }
+
+    expect(() => buildOfficialChannelDocsCatalog({ repoRoot })).toThrow(error);
+  });
+
+  it("writes the generated docs block and reports missing or hidden navigation routes", () => {
+    const repoRoot = makeRepoRoot("openclaw-official-channel-docs-write-");
+    writeJson(path.join(repoRoot, "extensions", "bundled", "package.json"), {
+      name: "@openclaw/bundled",
+      openclaw: {
+        channel: {
+          id: "bundled",
+          label: "Bundled",
+          docsPath: "/channels/bundled",
+          blurb: "bundled test channel",
+        },
+      },
+    });
+    writeJson(path.join(repoRoot, "extensions", "hidden", "package.json"), {
+      name: "@openclaw/hidden",
+      openclaw: {
+        channel: {
+          id: "hidden",
+          label: "Hidden",
+          docsPath: "/channels/hidden",
+          exposure: {
+            docs: false,
+          },
+        },
+      },
+    });
+    writeExternalChannelDocs(repoRoot);
+    writeChannelDoc(repoRoot, "/channels/bundled", "Bundled Chat", "Public bundled summary");
+    const docsIndexPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH);
+    fs.mkdirSync(path.dirname(docsIndexPath), { recursive: true });
+    fs.writeFileSync(
+      docsIndexPath,
+      [
+        "# Channels",
+        "",
+        "<!-- BEGIN GENERATED: official channel catalog -->",
+        "- stale",
+        "<!-- END GENERATED: official channel catalog -->",
+        "",
+        "Footer",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeEnglishDocsNavigation(repoRoot, ["channels/hidden"], ["web/webchat", "channels/bundled"]);
+
+    expect(checkOfficialChannelDocsIndex({ repoRoot })).toBe(false);
+    expect(renderOfficialChannelDocsIndex({ repoRoot })).toContain(
+      "- [Bundled Chat](/channels/bundled) - Public bundled summary (bundled plugin).",
+    );
+    expect(writeOfficialChannelDocsIndex({ repoRoot })).toBe(true);
+    expect(writeOfficialChannelDocsIndex({ repoRoot })).toBe(false);
+    expect(checkOfficialChannelDocsIndex({ repoRoot })).toBe(true);
+    const generatedIndex = fs.readFileSync(docsIndexPath, "utf8");
+    expect(generatedIndex).toMatch(/^# Channels\n/u);
+    expect(generatedIndex).toContain("\nFooter\n");
+    expect(findMissingOfficialChannelDocsNavRoutes({ repoRoot })).toContain("channels/bundled");
+    expect(findUnexpectedOfficialChannelDocsNavRoutes({ repoRoot })).toEqual(["channels/hidden"]);
+    expect(findDuplicateOfficialChannelDocsNavRoutes({ repoRoot })).toEqual([]);
+
+    writeEnglishDocsNavigation(repoRoot, ["channels/bundled", "channels/bundled"], ["web/webchat"]);
+    expect(findDuplicateOfficialChannelDocsNavRoutes({ repoRoot })).toEqual(["channels/bundled"]);
+  });
+
+  it("rejects missing or duplicate generated docs markers", () => {
+    const repoRoot = makeRepoRoot("openclaw-official-channel-docs-markers-");
+    writeExternalChannelDocs(repoRoot);
+    const docsIndexPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH);
+    fs.mkdirSync(path.dirname(docsIndexPath), { recursive: true });
+    fs.writeFileSync(docsIndexPath, "# Channels\n", "utf8");
+
+    expect(() => renderOfficialChannelDocsIndex({ repoRoot })).toThrow(
+      "must contain exactly one generated channel marker pair",
+    );
+
+    fs.writeFileSync(
+      docsIndexPath,
+      [
+        "<!-- BEGIN GENERATED: official channel catalog -->",
+        "<!-- BEGIN GENERATED: official channel catalog -->",
+        "<!-- END GENERATED: official channel catalog -->",
+      ].join("\n"),
+      "utf8",
+    );
+    expect(() => renderOfficialChannelDocsIndex({ repoRoot })).toThrow(
+      "must contain exactly one generated channel marker pair",
+    );
   });
 
   it("keeps third-party official external catalog npm sources exactly pinned", () => {
