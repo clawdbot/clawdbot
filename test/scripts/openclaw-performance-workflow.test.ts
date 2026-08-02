@@ -247,7 +247,7 @@ describe("OpenClaw performance workflow", () => {
       "    sleep 1",
       "  fi",
     ].join("\n");
-    const benchmark = "node --import tsx scripts/bench-cli-startup.ts \\";
+    const benchmark = 'node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/bench-cli-startup.ts" \\';
 
     expect(run).toContain("gateway_ready_timeout_seconds=120");
     expect(run).toContain("gateway_probe_timeout_seconds=5");
@@ -289,9 +289,11 @@ describe("OpenClaw performance workflow", () => {
     expect(run).toContain('rm -rf "$gateway_home" "$gateway_readiness_home"');
   });
 
-  it("measures warmed and first-device gateway health separately", () => {
+  it("runs trusted CLI performance cases against the frozen candidate entrypoint", () => {
     const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
 
+    expect(run).toContain('"$PERFORMANCE_HELPER_DIR/scripts/bench-cli-startup.ts"');
+    expect(run).toContain('--entry "$GITHUB_WORKSPACE/openclaw.mjs"');
     expect(run).toContain("--case gatewayHealthJsonConnected \\");
     expect(run).toContain("--case gatewayHealthJsonFirstDevice \\");
   });
