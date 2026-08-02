@@ -3263,6 +3263,98 @@ describe("DiscordVoiceManager", () => {
     expect(player.stop).toHaveBeenCalledTimes(stopCallsAfterControl + 1);
   });
 
+  it("drops stale active-run control after provider continuity reset", async () => {
+    let resolveOldControl: ((result: RealtimeVoiceAgentControlResult) => void) | undefined;
+    controlRealtimeVoiceAgentRunMock
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOldControl = resolve;
+        }),
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        mode: "cancel",
+        sessionKey: "discord:g1:c1",
+        sessionId: "embedded-fresh",
+        active: true,
+        aborted: true,
+        message: "Fresh control result.",
+        speak: true,
+        show: true,
+        suppress: false,
+      });
+    const manager = createAgentProxyManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const bridgeParams = lastRealtimeBridgeParams();
+    bridgeParams?.onTranscript?.("user", "cancel that", true);
+    await vi.waitFor(() => expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledTimes(1));
+
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    resolveOldControl?.({
+      ok: true,
+      mode: "cancel",
+      sessionKey: "discord:g1:c1",
+      sessionId: "embedded-old",
+      active: true,
+      aborted: true,
+      message: "Stale control result.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expectUserMessageNotIncludes("Stale control result.");
+    expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+
+    bridgeParams?.onReady?.();
+    bridgeParams?.onTranscript?.("user", "stop that", true);
+    await vi.waitFor(() => expectUserMessageIncludes("Fresh control result."));
+    expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces stale talkback work across provider continuity reset", async () => {
+    let resolveOldTalkback: ((result: { payloads: Array<{ text: string }> }) => void) | undefined;
+    agentCommandMock
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOldTalkback = resolve;
+        }),
+      )
+      .mockResolvedValueOnce({ payloads: [{ text: "fresh talkback" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai", debounceMs: 1, toolPolicy: "none" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager);
+    const bridgeParams = lastRealtimeBridgeParams();
+    beginSpeakerTurn(entry);
+    await emitFinalRealtimeUserTranscript(bridgeParams, "old question");
+    await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onReady?.();
+    beginSpeakerTurn(entry);
+    await emitFinalRealtimeUserTranscript(bridgeParams, "fresh question");
+
+    await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expectUserMessageIncludes("fresh talkback"));
+    resolveOldTalkback?.({ payloads: [{ text: "stale talkback" }] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expectUserMessageNotIncludes("stale talkback");
+  });
+
   it("preserves realtime forced consults when no active run accepts steering", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "normal answer" }] });
     const manager = createAgentProxyManager();
@@ -3416,6 +3508,203 @@ describe("DiscordVoiceManager", () => {
     });
     expect(lastAgentCommandArgs().message).toContain("how is it going");
     expectUserMessageIncludes("wake answer");
+  });
+
+  it("does not carry partial wake-name state across provider continuity resets", async () => {
+    const { entry, bridgeParams } = await createWakeNameFixture();
+    const wakeAckCount = () =>
+      sentUserMessages().filter((message) => message.includes('Answer: "Yeah."')).length;
+
+    beginSpeakerTurn(entry);
+    bridgeParams?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+    bridgeParams?.onTranscript?.("user", "Hey, Mol", false);
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onTranscript?.("user", "ty", false);
+
+    expect(wakeAckCount()).toBe(0);
+
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onReady?.();
+    bridgeParams?.onTranscript?.("user", "Hey, Molty", false);
+    expect(wakeAckCount()).toBe(1);
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+  });
+
+  it("preserves the wake-name acknowledgement across provider continuity resets", async () => {
+    const { entry, bridgeParams } = await createWakeNameFixture();
+    const wakeAckCount = () =>
+      sentUserMessages().filter((message) => message.includes('Answer: "')).length;
+
+    beginSpeakerTurn(entry);
+    bridgeParams?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+    bridgeParams?.onTranscript?.("user", "Hey, Molty", false);
+    expect(wakeAckCount()).toBe(1);
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onReady?.();
+    bridgeParams?.onTranscript?.("user", "Hey, Molty", false);
+    expect(wakeAckCount()).toBe(1);
+
+    bridgeParams?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+    bridgeParams?.onTranscript?.("user", "Hey, Molty", false);
+    expect(wakeAckCount()).toBe(2);
+  });
+
+  it("replays zero-audio exact speech once after provider continuity reset", async () => {
+    agentCommandMock
+      .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
+      .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
+    const manager = createAgentProxyManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager);
+    const player = getLastAudioPlayer();
+    const bridgeParams = lastRealtimeBridgeParams();
+
+    beginSpeakerTurn(entry);
+    await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
+    await vi.waitFor(() => expectUserMessageIncludes("first answer"));
+    beginSpeakerTurn(entry);
+    await emitFinalRealtimeUserTranscript(bridgeParams, "second question");
+    expectUserMessageNotIncludes("second answer");
+
+    const stopCallsBeforeReset = player.stop.mock.calls.length;
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    expectUserMessageNotIncludes("second answer");
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeReset + 1);
+    expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+    expect(realtimeSessionMock.close).not.toHaveBeenCalled();
+
+    bridgeParams?.onReady?.();
+    expect(sentUserMessages().filter((message) => message.includes("first answer"))).toHaveLength(
+      2,
+    );
+    expectUserMessageNotIncludes("second answer");
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+    expect(sentUserMessages().filter((message) => message.includes("second answer"))).toHaveLength(
+      1,
+    );
+  });
+
+  it("replays exact speech buffered below playback preroll after continuity reset", async () => {
+    agentCommandMock
+      .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
+      .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
+    const manager = createAgentProxyManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager);
+    const player = getLastAudioPlayer();
+    const bridgeParams = lastRealtimeBridgeParams();
+
+    beginSpeakerTurn(entry);
+    await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
+    await vi.waitFor(() => expectUserMessageIncludes("first answer"));
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    expect(player.play).not.toHaveBeenCalled();
+    beginSpeakerTurn(entry);
+    await emitFinalRealtimeUserTranscript(bridgeParams, "second question");
+    expectUserMessageNotIncludes("second answer");
+
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onReady?.();
+
+    expect(sentUserMessages().filter((message) => message.includes("first answer"))).toHaveLength(
+      2,
+    );
+    expectUserMessageNotIncludes("second answer");
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+    expect(sentUserMessages().filter((message) => message.includes("second answer"))).toHaveLength(
+      1,
+    );
+  });
+
+  it("does not replay exact speech after Discord playback starts", async () => {
+    agentCommandMock
+      .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
+      .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
+    const manager = createAgentProxyManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager);
+    const player = getLastAudioPlayer();
+    const bridgeParams = lastRealtimeBridgeParams();
+
+    beginSpeakerTurn(entry);
+    await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
+    await vi.waitFor(() => expectUserMessageIncludes("first answer"));
+    for (let index = 0; index < 50; index += 1) {
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    }
+    expect(player.play).toHaveBeenCalledOnce();
+    beginSpeakerTurn(entry);
+    await emitFinalRealtimeUserTranscript(bridgeParams, "second question");
+    expectUserMessageNotIncludes("second answer");
+
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    bridgeParams?.onReady?.();
+
+    expect(sentUserMessages().filter((message) => message.includes("first answer"))).toHaveLength(
+      1,
+    );
+    expect(sentUserMessages().filter((message) => message.includes("second answer"))).toHaveLength(
+      1,
+    );
+  });
+
+  it("drops stale native consult delivery after provider continuity reset", async () => {
+    let resolveOld: ((result: { payloads: Array<{ text: string }> }) => void) | undefined;
+    agentCommandMock
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        }),
+      )
+      .mockResolvedValueOnce({ payloads: [{ text: "fresh answer" }] });
+    const manager = createAgentProxyManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager);
+    const bridgeParams = lastRealtimeBridgeParams();
+    beginSpeakerTurn(entry);
+    const oldSubmission = bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-old",
+        callId: "call-old",
+        name: "openclaw_agent_consult",
+        args: { question: "same question" },
+      },
+      realtimeSessionMock,
+    );
+    await Promise.resolve();
+
+    bridgeParams?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    resolveOld?.({ payloads: [{ text: "stale answer" }] });
+    await oldSubmission;
+    expect(
+      realtimeSessionMock.submitToolResult.mock.calls.some(([callId]) => callId === "call-old"),
+    ).toBe(false);
+
+    bridgeParams?.onReady?.();
+    beginSpeakerTurn(entry);
+    await bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-fresh",
+        callId: "call-fresh",
+        name: "openclaw_agent_consult",
+        args: { question: "same question" },
+      },
+      realtimeSessionMock,
+    );
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-fresh", {
+      text: "fresh answer",
+    });
   });
 
   it("treats a bare wake name as an activation for the next realtime transcript", async () => {

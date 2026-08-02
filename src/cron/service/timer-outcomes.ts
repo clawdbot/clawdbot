@@ -115,6 +115,7 @@ export function applyJobResult(
     job,
     runStatus: result.status,
     delivered: result.delivered,
+    deliveryAttempted: result.deliveryAttempted,
     // A successful run keeps `error` empty but may carry a dedicated
     // `deliveryError` when post-run delivery failed (#94058/#95419); prefer it
     // so `lastDeliveryError` is populated without conflating it with a

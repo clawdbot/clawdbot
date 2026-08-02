@@ -313,6 +313,12 @@ describe("discordOutbound", () => {
 
   it("routes audioAsVoice payloads through the Discord voice send helper", async () => {
     const onDeliveryResult = vi.fn();
+    const mediaReadFile = vi.fn(async () => Buffer.from("trusted media"));
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-workspace"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/agent-workspace",
+    };
     hoisted.sendMessageDiscordMock.mockImplementation(
       async (_to: unknown, _text: unknown, options: unknown) => {
         const deliveryResult = { messageId: "msg-1", channelId: "ch-1" };
@@ -328,10 +334,13 @@ describe("discordOutbound", () => {
       text: "",
       payload: {
         text: "voice note",
-        mediaUrls: ["https://example.com/voice.ogg", "https://example.com/extra.png"],
+        mediaUrls: ["./voice.ogg", "./extra.png"],
         audioAsVoice: true,
       },
       accountId: "default",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
       replyToId: "reply-1",
       replyToIdSource: "implicit",
       replyToMode: "first",
@@ -340,7 +349,7 @@ describe("discordOutbound", () => {
 
     const voiceCall = mockCall(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord");
     expect(voiceCall[0]).toBe("channel:123456");
-    expect(voiceCall[1]).toBe("https://example.com/voice.ogg");
+    expect(voiceCall[1]).toBe("./voice.ogg");
     const voiceOptions = mockObjectArg(
       hoisted.sendVoiceMessageDiscordMock,
       "sendVoiceMessageDiscord",
@@ -349,6 +358,9 @@ describe("discordOutbound", () => {
     );
     expect(voiceOptions.accountId).toBe("default");
     expect(voiceOptions.reply).toEqual({ messageId: "reply-1", scope: "first" });
+    expect(voiceOptions.mediaAccess).toBe(mediaAccess);
+    expect(voiceOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(voiceOptions.mediaReadFile).toBe(mediaReadFile);
 
     const messageCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0);
     expect(messageCall[0]).toBe("channel:123456");
@@ -361,13 +373,17 @@ describe("discordOutbound", () => {
     );
     expect(messageOptions.accountId).toBe("default");
     expect(messageOptions.reply).toBeUndefined();
+    expect(messageOptions).not.toHaveProperty("mediaAccess");
 
     const mediaCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1);
     expect(mediaCall[0]).toBe("channel:123456");
     expect(mediaCall[1]).toBe("");
     const mediaOptions = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1, 2);
     expect(mediaOptions.accountId).toBe("default");
-    expect(mediaOptions.mediaUrl).toBe("https://example.com/extra.png");
+    expect(mediaOptions.mediaUrl).toBe("./extra.png");
+    expect(mediaOptions.mediaAccess).toBe(mediaAccess);
+    expect(mediaOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(mediaOptions.mediaReadFile).toBe(mediaReadFile);
     expect(mediaOptions.reply).toBeUndefined();
     expect(result).toEqual({
       channel: "discord",
@@ -379,6 +395,36 @@ describe("discordOutbound", () => {
       "msg-1",
       "msg-1",
     ]);
+  });
+
+  it("preserves reader-free workspace authority on direct voice media sends", async () => {
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-workspace"],
+      workspaceDir: "/tmp/agent-workspace",
+    };
+
+    await discordOutbound.sendMedia?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      mediaUrl: "./voice.ogg",
+      audioAsVoice: true,
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+    });
+
+    const voiceCall = mockCall(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord");
+    expect(voiceCall[1]).toBe("./voice.ogg");
+    const voiceOptions = mockObjectArg(
+      hoisted.sendVoiceMessageDiscordMock,
+      "sendVoiceMessageDiscord",
+      0,
+      2,
+    );
+    expect(voiceOptions.mediaAccess).toBe(mediaAccess);
+    expect(voiceOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(voiceOptions.mediaReadFile).toBeUndefined();
+    expect(voiceOptions.mediaAccess).not.toHaveProperty("readFile");
   });
 
   it("uses a single implicit reply on audioAsVoice sends when replyToMode is batched", async () => {
@@ -679,6 +725,12 @@ describe("discordOutbound", () => {
   });
 
   it("keeps captioned video in the thread created by the forum starter", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("trusted video"));
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-workspace"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/agent-workspace",
+    };
     hoisted.sendMessageDiscordMock
       .mockResolvedValueOnce({
         messageId: "starter-1",
@@ -704,8 +756,11 @@ describe("discordOutbound", () => {
       cfg: {},
       to: "channel:forum-1",
       text: "rendered clip",
-      mediaUrl: "/tmp/render.mp4",
+      mediaUrl: "./render.mp4",
       accountId: "default",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
     });
 
     expect(mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0)[0]).toBe(
@@ -714,6 +769,13 @@ describe("discordOutbound", () => {
     expect(mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1)[0]).toBe(
       "channel:thread-1",
     );
+    expect(
+      mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2),
+    ).not.toHaveProperty("mediaAccess");
+    const videoOptions = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1, 2);
+    expect(videoOptions.mediaAccess).toBe(mediaAccess);
+    expect(videoOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(videoOptions.mediaReadFile).toBe(mediaReadFile);
     expect(result).toMatchObject({
       channel: "discord",
       messageId: "starter-1",
@@ -811,6 +873,12 @@ describe("discordOutbound", () => {
   });
 
   it("sends component payload media sequences with the component message first", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("trusted component media"));
+    const mediaAccess = {
+      localRoots: ["/tmp/media"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/media",
+    };
     hoisted.sendDiscordComponentMessageMock.mockResolvedValueOnce({
       messageId: "component-1",
       channelId: "ch-1",
@@ -844,7 +912,9 @@ describe("discordOutbound", () => {
       text: "",
       payload,
       accountId: "default",
-      mediaLocalRoots: ["/tmp/media"],
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
       replyToId: "reply-1",
       replyToIdSource: "implicit",
       replyToMode: "first",
@@ -866,7 +936,9 @@ describe("discordOutbound", () => {
       2,
     );
     expect(componentOptions.mediaUrl).toBe("https://example.com/1.png");
-    expect(componentOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
+    expect(componentOptions.mediaAccess).toBe(mediaAccess);
+    expect(componentOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(componentOptions.mediaReadFile).toBe(mediaReadFile);
     expect(componentOptions.accountId).toBe("default");
     expect(componentOptions.reply).toEqual({ messageId: "reply-1", scope: "first" });
 
@@ -880,7 +952,9 @@ describe("discordOutbound", () => {
       2,
     );
     expect(messageOptions.mediaUrl).toBe("https://example.com/2.png");
-    expect(messageOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
+    expect(messageOptions.mediaAccess).toBe(mediaAccess);
+    expect(messageOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(messageOptions.mediaReadFile).toBe(mediaReadFile);
     expect(messageOptions.accountId).toBe("default");
     expect(messageOptions.reply).toBeUndefined();
     expect(result).toEqual({

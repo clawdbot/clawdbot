@@ -206,6 +206,14 @@ export type CronServiceDeps = {
       nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome
   >;
+  /** Deliver a primary cron webhook before the run outcome is finalized. */
+  sendCronWebhook?: (params: {
+    job: CronJob;
+    event: CronEvent;
+    abortSignal: AbortSignal;
+    deadlineAtMs?: number;
+    onDeliveryAccepted: () => void;
+  }) => Promise<void>;
   cleanupTimedOutAgentRun?: (params: {
     job: CronJob;
     timeoutMs: number;

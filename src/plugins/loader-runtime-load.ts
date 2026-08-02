@@ -28,10 +28,52 @@ import {
 import type { PluginLoadOptions } from "./loader-types.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
+
+type PluginModuleLoaderOverrides = Pick<
+  Parameters<typeof createPluginModuleLoader>[0],
+  "aliasOverrides" | "tryNative" | "loaderFilename" | "installNativeSdkResolver"
+>;
+type InternalPluginLoadOverrides = {
+  moduleLoader: PluginModuleLoaderOverrides;
+  runtime: Pick<PluginRuntime, "config">;
+};
+
+function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRuntime["subagent"] {
+  return {
+    run: (...args) => runtime.subagent.run(...args),
+    waitForRun: (...args) => runtime.subagent.waitForRun(...args),
+    getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
+    deleteSession: (...args) => runtime.subagent.deleteSession(...args),
+  };
+}
+
+function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntime["nodes"] {
+  return {
+    list: (...args) => runtime.nodes.list(...args),
+    invoke: (...args) => runtime.nodes.invoke(...args),
+  };
+}
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+  return loadOpenClawPluginsInternal(options);
+}
+
+/** Internal entry for host-owned snapshots that need a narrow registration runtime. */
+export function loadOpenClawPluginsWithInternalOverrides(
+  options: PluginLoadOptions & { cache: false },
+  overrides: InternalPluginLoadOverrides,
+): PluginRegistry {
+  return loadOpenClawPluginsInternal(options, overrides);
+}
+
+function loadOpenClawPluginsInternal(
+  options: PluginLoadOptions,
+  overrides?: InternalPluginLoadOverrides,
+): PluginRegistry {
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
   if (requestedOnlyPluginIdSet && requestedOnlyPluginIdSet.size === 0) {
@@ -54,22 +96,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
   const cacheEnabled = options.cache !== false && options.resolveRawConfigEnvVars !== true;
   if (cacheEnabled) {
-    const cached = getReusableCachedPluginRegistry({
-      cacheKey: context.cacheKey,
-      onlyPluginIds: context.onlyPluginIds,
-      runtimeSubagentMode: context.runtimeSubagentMode,
-      options,
-    });
+    const cached = getReusableCachedPluginRegistry(context.cacheKey);
     if (cached) {
       if (context.shouldActivate) {
         activatePluginRegistry(
-          cached.state,
-          cached.cacheKey,
-          cached.runtimeSubagentMode,
+          cached,
+          context.cacheKey,
+          context.runtimeSubagentMode,
           options.workspaceDir,
         );
       }
-      return cached.state;
+      return cached;
     }
   }
 
@@ -80,13 +117,34 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const loadPluginModule = createPluginModuleLoader({
       devSourceRoot: context.devSourceRoot,
       pluginSdkResolution: options.pluginSdkResolution,
+      ...overrides?.moduleLoader,
     });
-    const runtime = createLazyPluginRuntime({
-      devSourceRoot: context.devSourceRoot,
-      pluginSdkResolution: options.pluginSdkResolution,
-      runtimeOptions: options.runtimeOptions,
-      loadPluginModule,
-    });
+    const activeRuntime =
+      options.runtimeOptions?.allowGatewaySubagentBinding === true
+        ? getActivePluginRegistry()
+        : undefined;
+    const activeGatewayRuntime = activeRuntime
+      ? getPluginRegistryRuntime(activeRuntime)
+      : undefined;
+    const borrowedSubagent = activeGatewayRuntime
+      ? createDeferredGatewaySubagentRuntime(activeGatewayRuntime)
+      : undefined;
+    const borrowedNodes = activeGatewayRuntime
+      ? createDeferredGatewayNodesRuntime(activeGatewayRuntime)
+      : undefined;
+    const runtime = overrides?.runtime
+      ? // The registry wraps this discovery-only base with scoped lazy capabilities.
+        (overrides.runtime as unknown as PluginRuntime)
+      : createLazyPluginRuntime({
+          devSourceRoot: context.devSourceRoot,
+          pluginSdkResolution: options.pluginSdkResolution,
+          runtimeOptions: {
+            ...options.runtimeOptions,
+            subagent: options.runtimeOptions?.subagent ?? borrowedSubagent,
+            nodes: options.runtimeOptions?.nodes ?? borrowedNodes,
+          },
+          loadPluginModule,
+        });
     registryBuilder = createPluginRegistry({
       logger,
       runtime,
@@ -209,8 +267,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
     }
     if (context.shouldActivate) {
-      // Install the complete bundle before hook-runner initialization because hook composition
-      // reads the active/pinned registry set and must never observe contributions from two loads.
+      // Install the complete bundle before hook-runner initialization.
       activatePluginRegistry(
         registry,
         context.cacheKey,
@@ -221,7 +278,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     // Publish only complete registries: failed activation restores the prior runtime selection,
     // then the catch below can discard this builder without poisoning a reusable cache value.
     if (cacheEnabled) {
-      setCachedPluginRegistry(context.cacheKey, registry, context.onlyPluginIds);
+      setCachedPluginRegistry(context.cacheKey, registry);
     }
     return registry;
   } catch (error) {

@@ -32,6 +32,7 @@ async function createHarness(params: {
   evaluateCronTrigger?: Evaluator;
   runIsolatedAgentJob?: IsolatedRunner;
   runScriptJob?: ScriptRunner;
+  sendCronWebhook?: CronServiceDeps["sendCronWebhook"];
 }) {
   const { storePath } = await makeStorePath();
   const events: CronEvent[] = [];
@@ -48,6 +49,7 @@ async function createHarness(params: {
     runIsolatedAgentJob,
     ...(params.evaluateCronTrigger ? { evaluateCronTrigger: params.evaluateCronTrigger } : {}),
     ...(params.runScriptJob ? { runScriptJob: params.runScriptJob } : {}),
+    ...(params.sendCronWebhook ? { sendCronWebhook: params.sendCronWebhook } : {}),
     onEvent: (event) => events.push(structuredClone(event)),
   });
   await cron.start();
@@ -214,6 +216,45 @@ describe("cron trigger evaluation", () => {
         nextRunAtMs: persisted?.state.nextRunAtMs,
         job: { state: { nextRunAtMs: persisted?.state.nextRunAtMs } },
       });
+    } finally {
+      harness.cron.stop();
+    }
+  });
+
+  it("keeps webhook delivery not-requested when trigger evaluation stops before payload", async () => {
+    const evaluateCronTrigger = vi.fn(async () => ({
+      kind: "error" as const,
+      code: "internal_error" as const,
+      error: "trigger failed",
+    }));
+    const sendCronWebhook = vi.fn();
+    const harness = await createHarness({ evaluateCronTrigger, sendCronWebhook });
+    try {
+      const job = await harness.cron.add(
+        watcher({ delivery: { mode: "webhook", to: "https://example.invalid/hook" } }),
+      );
+      await runWhenDue(harness.cron, job.id);
+
+      expect(sendCronWebhook).not.toHaveBeenCalled();
+      expect(harness.cron.getJob(job.id)?.state).toMatchObject({
+        lastDeliveryStatus: "not-requested",
+      });
+      expect(harness.cron.getJob(job.id)?.state.lastDelivered).toBeUndefined();
+      expect(harness.cron.getJob(job.id)?.state.lastDeliveryError).toBeUndefined();
+
+      const finished = harness.events.find((event) => event.action === "finished");
+      expect(finished).toMatchObject({ deliveryStatus: "not-requested" });
+      expect(finished?.delivered).toBeUndefined();
+      expect(finished?.deliveryError).toBeUndefined();
+
+      const history = readCronTaskRunHistoryPage({
+        storeKey: cronStoreKey(harness.storePath),
+        jobId: job.id,
+      }).entries;
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({ deliveryStatus: "not-requested" });
+      expect(history[0]?.delivered).toBeUndefined();
+      expect(history[0]?.deliveryError).toBeUndefined();
     } finally {
       harness.cron.stop();
     }

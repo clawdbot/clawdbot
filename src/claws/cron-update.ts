@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { stableStringify } from "../agents/stable-stringify.js";
+import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   CLAW_CRON_REF_SCHEMA_VERSION,

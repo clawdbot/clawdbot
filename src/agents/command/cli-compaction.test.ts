@@ -8,6 +8,7 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   resetCliCompactionTestDeps,
   runCliTurnCompactionLifecycle,
@@ -172,7 +173,10 @@ describe("runCliTurnCompactionLifecycle", () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-compaction-"));
-    setCliCompactionTestDeps({ resolveCliBackendConfig: () => null });
+    setCliCompactionTestDeps({
+      resolveCliBackendConfig: () => null,
+      loadAgentRuntimePluginRegistryHandle: () => createEmptyPluginRegistry(),
+    });
   });
 
   afterEach(async () => {
@@ -750,6 +754,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
     const contextEngine = buildContextEngine({ compactCalls });
     const resolveContextEngine = vi.fn(async () => contextEngine);
+    const pluginRegistry = createEmptyPluginRegistry();
+    const loadAgentRuntimePluginRegistryHandle = vi.fn(() => pluginRegistry);
     const ensureSelectedAgentHarnessPlugin = vi.fn(async () => undefined);
     const compactAgentHarnessSession = vi.fn(async () => ({
       ok: true,
@@ -766,6 +772,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     }));
     setCliCompactionTestDeps({
       resolveContextEngine,
+      loadAgentRuntimePluginRegistryHandle,
       ensureSelectedAgentHarnessPlugin,
       maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
       createPreparedEmbeddedAgentSettingsManager: async () => ({
@@ -813,8 +820,15 @@ describe("runCliTurnCompactionLifecycle", () => {
         modelId: "gpt-5.5",
         sessionKey,
         agentHarnessRuntimeOverride: "codex",
+        pluginRegistry,
       }),
     );
+    expect(loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+      config: {},
+      workspaceDir: tmpDir,
+      allowGatewaySubagentBinding: true,
+      selections: [{ agentId: "main", modelId: "gpt-5.5", provider: "openai", runtime: "codex" }],
+    });
     expect(applyAgentAutoCompactionGuard.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       compactAgentHarnessSession.mock.invocationCallOrder[0] ?? 0,
     );

@@ -13,6 +13,7 @@ import { resolveInternalSessionEffectsTarget } from "./internal-session-effects.
 import * as announceDelivery from "./subagent-announce-delivery.js";
 import {
   recoverOrphanedSubagentSessions as recoverOrphanedSubagentSessionsWithRuntime,
+  resetOrphanRecoveryCoordinationForTest,
   scheduleOrphanRecovery as scheduleOrphanRecoveryWithRuntime,
 } from "./subagent-orphan-recovery.js";
 import * as subagentRegistrySteerRuntime from "./subagent-registry-steer-runtime.js";
@@ -224,6 +225,7 @@ describe("subagent-orphan-recovery", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     resetGatewayWorkAdmission();
+    resetOrphanRecoveryCoordinationForTest();
     dispatchAgent.mockReset();
     dispatchAgent.mockResolvedValue({ runId: "test-run-id" });
     readSessionMessages.mockReset();
@@ -235,6 +237,7 @@ describe("subagent-orphan-recovery", () => {
 
   afterEach(() => {
     resetGatewayWorkAdmission();
+    resetOrphanRecoveryCoordinationForTest();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

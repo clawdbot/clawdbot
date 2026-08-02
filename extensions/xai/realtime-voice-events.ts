@@ -1,5 +1,5 @@
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
   XAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR,
@@ -50,15 +50,8 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           this.pendingToolResultAcks.delete(callId);
           return;
         }
-        if (event.type === "conversation.item.created" && item?.type === "function_call") {
-          // Resumption replays persisted items instead of replaying the original
-          // response event. Re-emit only calls this bridge did not already deliver.
-          this.emitToolCallOnce({
-            itemId: item.id ?? event.item_id,
-            callId: item.call_id,
-            name: item.name,
-            rawArgs: item.arguments,
-          });
+        if (event.type === "conversation.item.created") {
+          this.emitCompletedToolCall(item, event);
         }
         return;
       }
@@ -133,13 +126,35 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         this.inputTranscriptReplacements.delete(this.inputTranscriptKey(event));
         this.config.onError?.(new Error(readXaiRealtimeErrorDetail(event.error)));
         return;
-      case "response.done":
-        this.flushAssistantTranscript();
+      case "response.done": {
+        const status = event.response?.status;
+        const output = event.response?.output ?? [];
+        if (status === undefined || status === "completed") {
+          for (const item of output) {
+            this.emitCompletedToolCall(item, event);
+          }
+        }
+        const terminalTranscript = output
+          .filter((item) => item.type === "message" && item.role === "assistant")
+          .flatMap((item) => item.content ?? [])
+          .map((content) => content.transcript ?? content.text ?? "")
+          .join("");
+        this.flushAssistantTranscript(terminalTranscript);
         this.responseActive = false;
         this.responseCreateInFlight = false;
         this.responseCancelInFlight = false;
+        if (status === "failed" || status === "incomplete") {
+          const details = event.response?.status_details;
+          const error = isRecord(details) ? details.error : undefined;
+          const reason = isRecord(details) ? normalizeOptionalString(details.reason) : undefined;
+          const message = error
+            ? readXaiRealtimeErrorDetail(error)
+            : `xAI realtime voice response ${status}${reason ? `: ${reason}` : ""}`;
+          this.config.onError?.(new Error(message));
+        }
         this.flushPendingResponseCreate();
         return;
+      }
       case "response.function_call_arguments.delta": {
         const key = event.item_id ?? "unknown";
         const existing = this.toolCallBuffers.get(key);
@@ -157,6 +172,8 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
       case "response.function_call_arguments.done": {
         const key = event.item_id ?? "unknown";
         const buffered = this.toolCallBuffers.get(key);
+        // xAI's documented Function Call Flow requires executing finalized
+        // arguments immediately so tool results can continue the response.
         this.emitToolCallOnce({
           itemId: event.item_id,
           callId: buffered?.callId || event.call_id,
@@ -175,6 +192,19 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
 
   protected resetInputTranscripts(): void {
     this.inputTranscriptReplacements.clear();
+  }
+
+  private emitCompletedToolCall(item: XaiRealtimeEvent["item"], event: XaiRealtimeEvent): void {
+    if (item?.type === "function_call" && (!item.status || item.status === "completed")) {
+      // Completed items and resumed replay are authoritative; added items can
+      // still be in progress and must not dispatch incomplete arguments.
+      this.emitToolCallOnce({
+        itemId: item.id ?? event.item_id,
+        callId: item.call_id,
+        name: item.name,
+        rawArgs: item.arguments,
+      });
+    }
   }
 
   private appendAssistantTranscriptDelta(delta: string): void {

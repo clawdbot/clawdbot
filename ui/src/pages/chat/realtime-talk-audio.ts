@@ -160,8 +160,10 @@ export class RealtimeTalkMediaStreamMeter {
       analyser.fftSize = this.samples.length;
       analyser.smoothingTimeConstant = 0;
       source.connect(analyser);
-      this.publishCurrentLevel();
       this.timer = globalThis.setInterval(() => this.publishCurrentLevel(), 100);
+      // The initial level callback can synchronously stop its owning transport.
+      // Own the interval first so that reentrant cleanup cannot leave it behind.
+      this.publishCurrentLevel();
     } catch {
       // Metering is feedback only; capture must still work if Web Audio analysis
       // is unavailable in an otherwise functional WebRTC browser.

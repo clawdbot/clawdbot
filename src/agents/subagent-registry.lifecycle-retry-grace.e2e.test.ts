@@ -159,6 +159,7 @@ describe("subagent registry lifecycle error grace", () => {
     mod.testing.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      loadAgentRuntimePluginRegistryHandle: () => undefined,
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../infra/agent-events.js").onAgentEvent,
     });
@@ -575,10 +576,8 @@ describe("subagent registry lifecycle error grace", () => {
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("ok");
 
-    // Advance past the original grace window; no timeout completion should
-    // re-announce. The exhausted completion announce suspends its delivery,
-    // which fires the one-shot requester settle wake for the undelivered
-    // required completion — that wake is not a completion event.
+    // Advance past the original grace window; no timeout completion or
+    // requester-settle wake should be emitted after successful delivery.
     await vi.advanceTimersByTimeAsync(30_000);
     await flushAsync();
     const readIdempotencyKey = (request: GatewayRequest) => {
@@ -592,7 +591,7 @@ describe("subagent registry lifecycle error grace", () => {
       getAgentCalls()
         .map(readIdempotencyKey)
         .filter((key) => key.startsWith("announce:requester-settle:")),
-    ).toEqual(["announce:requester-settle:agent:main:main:run-timeout-cancel"]);
+    ).toHaveLength(0);
   });
 
   it("keeps parallel child completion results frozen even when late traffic arrives", async () => {

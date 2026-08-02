@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./loader.js", () => ({
   loadOpenClawPluginCliRegistry: (...args: unknown[]) =>
     mocks.loadOpenClawPluginCliRegistry(...args),
+  loadPluginRegistryHandle: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
   loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
 }));
 
@@ -385,7 +386,6 @@ describe("registerPluginCliCommands", () => {
     expect(loadOptions.autoEnabledReasons).toEqual({
       demo: ["demo configured"],
     });
-    expect(loadOptions.activate).toBe(false);
     expect(loadOptions.cache).toBe(false);
     expect(loadOptions.forceFullRuntimeForChannelPlugins).toBe(true);
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();

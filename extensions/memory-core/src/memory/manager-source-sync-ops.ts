@@ -174,6 +174,29 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     const deleteChunksByPathAndSource = this.db.prepare(
       `DELETE FROM memory_index_chunks WHERE path = ? AND source = ?`,
     );
+    const updateUnchangedSessionSourceMetadata = this.db.prepare(
+      `UPDATE memory_index_sources
+       SET mtime = ?, size = ?
+       WHERE path = ? AND source = 'sessions' AND hash = ?`,
+    );
+    const refreshUnchangedSessionSourceMetadata = (entry: MemoryIndexEntry): boolean => {
+      // Hash equality preserves chunks and embeddings; only converge the source
+      // fingerprint so restored sessions do not repeat catch-up on every startup.
+      return (
+        updateUnchangedSessionSourceMetadata.run(entry.mtimeMs, entry.size, entry.path, entry.hash)
+          .changes === 1
+      );
+    };
+    const canSkipUnchangedSessionEntry = (
+      entry: MemoryIndexEntry,
+      absPath: string,
+      existingHash: string | undefined,
+    ): boolean => {
+      if (params.needsFullReindex || existingHash !== entry.hash) {
+        return false;
+      }
+      return !this.sessionsDirtyFiles.has(absPath) || refreshUnchangedSessionSourceMetadata(entry);
+    };
     const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
@@ -340,7 +363,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
                   path: entry.path,
                   existingHashes,
                 });
-                if (!params.needsFullReindex && existingHash === entry.hash) {
+                if (canSkipUnchangedSessionEntry(entry, absPath, existingHash)) {
                   if (params.progress) {
                     params.progress.completed += 1;
                     params.progress.report({
@@ -412,7 +435,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           path: entry.path,
           existingHashes,
         });
-        if (!params.needsFullReindex && existingHash === entry.hash) {
+        if (canSkipUnchangedSessionEntry(entry, absPath, existingHash)) {
           if (params.progress) {
             params.progress.completed += 1;
             params.progress.report({

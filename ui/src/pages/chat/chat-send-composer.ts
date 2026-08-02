@@ -150,27 +150,62 @@ export function restoreFailedCommandComposer(
   return retained;
 }
 
-export function restoreComposerAfterFailedSend(
-  host: ChatHost,
-  opts: {
-    previousAttachments?: ChatAttachment[];
-    previousDraft?: string;
-  },
-) {
-  if (opts.previousDraft != null && !host.chatMessage.trim()) {
-    host.chatMessage = opts.previousDraft;
-  }
-  if (opts.previousAttachments?.length && host.chatAttachments.length === 0) {
-    host.chatAttachments = opts.previousAttachments;
-  }
-}
-
 type PendingComposerSnapshot = {
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
 };
 
-export function pendingComposerRestorePlan(host: ChatHost, snapshot: PendingComposerSnapshot) {
+function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot) {
+  // An attachment-only edit is still a newer draft. Restoring old text beside it
+  // would combine two independently authored sends.
+  const composerBlank = !host.chatMessage.trim() && host.chatAttachments.length === 0;
+  const attachments = Boolean(
+    snapshot.previousAttachments?.length && host.chatAttachments.length === 0 && composerBlank,
+  );
+  return { attachments, draft: snapshot.previousDraft != null && composerBlank };
+}
+
+export function restoreComposer(host: ChatHost, snapshot: PendingComposerSnapshot): void {
+  if (snapshot.previousDraft != null && !host.chatMessage.trim()) {
+    host.chatMessage = snapshot.previousDraft;
+  }
+  if (snapshot.previousAttachments?.length && host.chatAttachments.length === 0) {
+    host.chatAttachments = snapshot.previousAttachments;
+  }
+}
+
+export function cancelChatDelivery(
+  host: ChatHost,
+  item: ChatQueueItem,
+  snapshot: PendingComposerSnapshot,
+): void {
+  const removed = removeVisibleOrScopedQueuedMessageWithoutReleasing(
+    host,
+    item.id,
+    item.sessionKey,
+  );
+  const plan = removed ? strictComposerRestore(host, snapshot) : null;
+  if (plan?.draft) {
+    host.chatMessage = snapshot.previousDraft ?? "";
+  }
+  if (plan?.attachments) {
+    host.chatAttachments = snapshot.previousAttachments ?? [];
+  }
+  if (removed && !plan?.attachments) {
+    releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
+  }
+}
+
+export function canRestoreComposer(host: ChatHost, snapshot?: PendingComposerSnapshot): boolean {
+  const plan = strictComposerRestore(host, snapshot ?? {});
+  return (
+    (snapshot?.previousDraft !== undefined || snapshot?.previousAttachments !== undefined) &&
+    (!snapshot.previousDraft?.trim() || plan.draft) &&
+    (!snapshot.previousAttachments?.length || plan.attachments)
+  );
+}
+
+function pendingComposerRestorePlan(host: ChatHost, snapshot: PendingComposerSnapshot) {
   const willRestoreDraft = snapshot.previousDraft != null && !host.chatMessage.trim();
   const willRestoreAttachments = Boolean(
     snapshot.previousAttachments?.length &&
@@ -184,33 +219,4 @@ export function pendingComposerRestorePlan(host: ChatHost, snapshot: PendingComp
     willRestoreAttachments,
     willRestoreDraft,
   };
-}
-
-export function cancelPendingSendBeforeRequest(
-  host: ChatHost,
-  queued: ChatQueueItem,
-  opts: PendingComposerSnapshot & {
-    restoreComposer?: boolean;
-  },
-) {
-  const removed = removeVisibleOrScopedQueuedMessageWithoutReleasing(
-    host,
-    queued.id,
-    queued.sessionKey,
-  );
-  const restoreComposer = opts.restoreComposer !== false && removed != null;
-  const restorePlan = pendingComposerRestorePlan(host, opts);
-  const willRestoreDraft = restoreComposer && restorePlan.willRestoreDraft;
-  const willRestoreAttachments = restoreComposer && restorePlan.willRestoreAttachments;
-  if (restoreComposer) {
-    if (willRestoreDraft) {
-      host.chatMessage = opts.previousDraft ?? "";
-    }
-    if (willRestoreAttachments) {
-      host.chatAttachments = opts.previousAttachments ?? [];
-    }
-  }
-  if (removed && !willRestoreAttachments) {
-    releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
-  }
 }

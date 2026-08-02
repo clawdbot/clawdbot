@@ -75,14 +75,14 @@ export function parseLogLine(line: string): LogEntry {
     }
 
     const message =
-      typeof obj["1"] === "string"
-        ? obj["1"]
-        : typeof obj["2"] === "string"
-          ? obj["2"]
-          : !contextObj && typeof obj["0"] === "string"
-            ? obj["0"]
-            : typeof obj.message === "string"
-              ? obj.message
+      typeof obj.message === "string"
+        ? obj.message
+        : typeof obj["1"] === "string"
+          ? obj["1"]
+          : typeof obj["2"] === "string"
+            ? obj["2"]
+            : !contextObj && typeof obj["0"] === "string"
+              ? obj["0"]
               : line;
 
     return {

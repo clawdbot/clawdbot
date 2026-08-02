@@ -68,6 +68,21 @@ if [[ "\${1:-}" == "build" ]]; then
   echo "build DOCKER_BUILDKIT=\${DOCKER_BUILDKIT:-} $*" >>"$log"
   exit 0
 fi
+if [[ "\${1:-}" == "run" ]]; then
+  echo "run $*" >>"$log"
+  args=("$@")
+  for ((i = 0; i + 3 < \${#args[@]}; i++)); do
+    if [[ "\${args[$i]}" == "--entrypoint" && "\${args[$((i + 1))]}" == "node" ]]; then
+      for ((j = i + 2; j + 1 < \${#args[@]}; j++)); do
+        if [[ "\${args[$j]}" == "-e" ]]; then
+          node -e "\${args[$((j + 1))]}" "\${args[@]:$((j + 2))}"
+          exit $?
+        fi
+      done
+    fi
+  done
+  exit 0
+fi
 if [[ "\${1:-}" == "compose" ]]; then
   if [[ -n "$fail_match" && "$*" == *"$fail_match"* ]]; then
     echo "compose-fail $*" >>"$log"
@@ -161,6 +176,10 @@ export async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   await copyFile(
     join(repoRoot, "scripts", "lib", "docker-e2e-container.sh"),
     join(rootDir, "scripts", "lib", "docker-e2e-container.sh"),
+  );
+  await copyFile(
+    join(repoRoot, "scripts", "lib", "docker-e2e-resource-diagnostics.sh"),
+    join(rootDir, "scripts", "lib", "docker-e2e-resource-diagnostics.sh"),
   );
   await copyFile(
     join(repoRoot, "scripts", "lib", "host-timeout.sh"),

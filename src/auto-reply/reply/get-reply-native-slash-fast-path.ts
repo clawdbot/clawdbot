@@ -30,10 +30,6 @@ import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
-import {
-  normalizeStoredRuntimeModelRef,
-  resolveDirectStoredModelOverride,
-} from "./stored-model-override.js";
 import type { createTypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
@@ -186,28 +182,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionState.sessionStore[sessionState.sessionKey] = persistedInitialEntry;
     sessionState.sessionId = persistedInitialEntry.sessionId;
   }
-  // Native commands run before canonical directive/model-state resolution. Resolve
-  // the persisted session override now so command handling (e.g. /compact budget
-  // and harness policy) sees the session's active model instead of the configured
-  // default (issue #117470). Null when the session has no stored override, so the
-  // configured default is preserved.
-  const storedModelOverride = resolveDirectStoredModelOverride({
-    sessionEntry: sessionState.sessionEntry,
-    defaultProvider: params.defaultProvider,
-  });
-  // Mirror canonical model selection (model-selection.ts:464): normalize a stored
-  // CLI runtime alias (e.g. claude-cli -> anthropic) when the session is bound, so
-  // provider-keyed harness/context-budget policy is not missed (issue #117470).
-  const normalizedOverride = storedModelOverride
-    ? normalizeStoredRuntimeModelRef(
-        storedModelOverride.provider ?? params.defaultProvider,
-        storedModelOverride.model,
-        params.cfg,
-        sessionState.sessionEntry,
-      )
-    : undefined;
-  const effectiveProvider = normalizedOverride?.provider ?? params.provider;
-  const effectiveModel = normalizedOverride?.model ?? params.model;
   const command = buildCommandContext({
     ctx: params.ctx,
     cfg: params.cfg,
@@ -283,44 +257,51 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return loadedSkillCommands;
   };
 
-  const commandResult = await (
-    await loadCommandsRuntime()
-  ).handleCommands({
-    ctx: sessionState.sessionCtx,
-    rootCtx: params.ctx,
-    cfg: params.cfg,
-    command,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    directives: clearInlineDirectives(sessionState.triggerBodyNormalized),
-    elevated: {
-      enabled: false,
-      allowed: false,
-      failures: [],
-    },
-    sessionEntry: sessionState.sessionEntry,
-    previousSessionEntry: sessionState.previousSessionEntry,
-    sessionStore: sessionState.sessionStore,
-    sessionKey: sessionState.sessionKey,
-    storePath: sessionState.storePath,
-    sessionScope: sessionState.sessionScope,
-    workspaceDir: params.workspaceDir,
-    opts: params.opts,
-    defaultGroupActivation: () => "always",
-    resolvedThinkLevel: undefined,
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolvedElevatedLevel: "off",
-    blockReplyChunking: undefined,
-    resolvedBlockStreamingBreak: "text_end",
-    resolveDefaultThinkingLevel: async () => undefined,
-    provider: effectiveProvider,
-    model: effectiveModel,
-    contextTokens: params.agentCfg?.contextTokens ?? 0,
-    isGroup: sessionState.isGroup,
-    loadSkillCommands: loadNativeSkillCommands,
-    typing: params.typing,
-  });
+  // Compact needs the canonical model owner before consuming a provider-specific transcript.
+  const compactNeedsModelSelection =
+    command.isAuthorizedSender &&
+    (command.commandBodyNormalized === "/compact" ||
+      command.commandBodyNormalized.startsWith("/compact "));
+  const commandResult = compactNeedsModelSelection
+    ? { shouldContinue: true, reply: undefined }
+    : await (
+        await loadCommandsRuntime()
+      ).handleCommands({
+        ctx: sessionState.sessionCtx,
+        rootCtx: params.ctx,
+        cfg: params.cfg,
+        command,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        directives: clearInlineDirectives(sessionState.triggerBodyNormalized),
+        elevated: {
+          enabled: false,
+          allowed: false,
+          failures: [],
+        },
+        sessionEntry: sessionState.sessionEntry,
+        previousSessionEntry: sessionState.previousSessionEntry,
+        sessionStore: sessionState.sessionStore,
+        sessionKey: sessionState.sessionKey,
+        storePath: sessionState.storePath,
+        sessionScope: sessionState.sessionScope,
+        workspaceDir: params.workspaceDir,
+        opts: params.opts,
+        defaultGroupActivation: () => "always",
+        resolvedThinkLevel: undefined,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "off",
+        resolvedElevatedLevel: "off",
+        blockReplyChunking: undefined,
+        resolvedBlockStreamingBreak: "text_end",
+        resolveDefaultThinkingLevel: async () => undefined,
+        provider: params.provider,
+        model: params.model,
+        contextTokens: params.agentCfg?.contextTokens ?? 0,
+        isGroup: sessionState.isGroup,
+        loadSkillCommands: loadNativeSkillCommands,
+        typing: params.typing,
+      });
   const commandSessionMetadataChanges = takeCommandSessionMetadataChangesFromTargets([
     sessionState.sessionCtx,
     params.ctx,

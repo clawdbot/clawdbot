@@ -25,7 +25,6 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import { testing as runtimeRegistryLoaderTesting } from "./runtime/runtime-registry-loader.js";
 
 export const getEmbeddingProvider = (id: string) => getRegisteredEmbeddingProvider(id)?.adapter;
 
@@ -993,7 +992,6 @@ export function collectStartupTraceMetrics(
 export const globalAfterEach0 = () => {
   resetDiagnosticEventsForTest();
   clearRuntimeConfigSnapshot();
-  runtimeRegistryLoaderTesting.resetPluginRegistryLoadedForTests();
   resetPluginLoaderTestStateForTest();
 };
 

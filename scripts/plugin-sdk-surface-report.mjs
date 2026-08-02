@@ -206,7 +206,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared ingress retention defaults through channel-outbound and channel-message.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
-      4819,
+      // +1: forwarding-routed approver-restricted native approval capability factory.
+      4820,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -245,7 +246,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared ingress error factory through channel-outbound and channel-message.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
-      2896,
+      // +1: forwarding-routed approver-restricted native approval capability factory.
+      2897,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

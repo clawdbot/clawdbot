@@ -288,6 +288,9 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           ...ctx.withOpts(),
           reply: createReusableDiscordReplyReference(replyTo),
           silent,
+          mediaAccess: ctx.options?.mediaAccess,
+          mediaLocalRoots: ctx.options?.mediaLocalRoots,
+          mediaReadFile: ctx.options?.mediaReadFile,
         });
         return jsonResult(
           await appendDiscordThreadRenameResult(ctx, {
@@ -416,6 +419,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         {
           ...ctx.withOpts(),
           mediaUrl,
+          mediaAccess: ctx.options?.mediaAccess,
           mediaLocalRoots: ctx.options?.mediaLocalRoots,
           mediaReadFile: ctx.options?.mediaReadFile,
           reply: createReusableDiscordReplyReference(replyTo),

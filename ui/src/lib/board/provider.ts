@@ -26,7 +26,6 @@ export type { BoardCommandEvent };
 export type { BoardProvider } from "./provider-types.ts";
 export type { BoardViewCallbacks, BoardWidgetAppViewState } from "./view-types.ts";
 export { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
-export { GatewayBoardProvider } from "./gateway-provider.ts";
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
