@@ -1,3 +1,4 @@
+import { dispatchReplyWithBufferedBlockDispatcher as dispatchReplyWithBufferedBlockDispatcherRuntime } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -78,18 +79,18 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     );
   });
 
-  it("finalizes a streamed answer draft with the terminal error payload", async () => {
+  it("finalizes the default streamed draft in place after an unexpected reply failure", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "partial answer" });
-        await dispatcherOptions.deliver(
-          { text: "Something went wrong after partial output", isError: true },
-          { kind: "final" },
-        );
-        return { queuedFinal: true };
-      },
-    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
+      expect(params.replyOptions?.disableBlockStreaming).toBe(true);
+      return await dispatchReplyWithBufferedBlockDispatcherRuntime({
+        ...params,
+        replyResolver: async (_ctx, opts) => {
+          await opts?.onPartialReply?.({ text: "partial answer" });
+          throw new Error("unexpected model failure");
+        },
+      });
+    });
 
     await dispatchWithContext({
       context: createContext({
@@ -100,8 +101,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "partial answer");
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(2);
     expect(answerDraftStream.update).toHaveBeenLastCalledWith(
-      "partial answer\n\nSomething went wrong after partial output",
+      expect.stringMatching(
+        /^partial answer\n\n.*Something went wrong while processing your request\. Please try again, or use \/new to start a fresh session\.$/,
+      ),
     );
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();

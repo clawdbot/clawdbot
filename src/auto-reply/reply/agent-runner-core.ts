@@ -369,6 +369,7 @@ export async function handleReplyAgentRunError(
   context: {
     cfg: OpenClawConfig;
     blockReplyPipeline: BlockReplyPipeline | null;
+    didDeliverVisiblePartialReply: () => boolean;
     isHeartbeat: boolean;
     isRestartRecoveryArmed: () => boolean;
     replyOperation: ReplyOperation;
@@ -380,6 +381,7 @@ export async function handleReplyAgentRunError(
   const {
     cfg,
     blockReplyPipeline,
+    didDeliverVisiblePartialReply,
     isHeartbeat,
     isRestartRecoveryArmed,
     replyOperation,
@@ -442,11 +444,10 @@ export async function handleReplyAgentRunError(
       );
     }
   }
-  if (
-    !isHeartbeat &&
-    blockReplyPipeline?.didStreamTerminalReply?.() === true &&
-    !blockReplyPipeline.isAborted()
-  ) {
+  const didDeliverVisibleReply =
+    (blockReplyPipeline?.didStreamTerminalReply?.() === true && !blockReplyPipeline.isAborted()) ||
+    didDeliverVisiblePartialReply();
+  if (!isHeartbeat && didDeliverVisibleReply && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({ sessionCtx, cfg }),
