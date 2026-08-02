@@ -141,11 +141,17 @@ async function writeClawHubOriginFixture(params: {
   installedVersion?: string;
   installedAt?: number;
   writeLock?: boolean;
+  skillFile?: { path: string; sha256: string };
+  fileTreeSha256?: string;
 }) {
   const skillDir = path.join(params.workspaceDir, "skills", params.slug);
   const registry = params.registry ?? "https://private.example.com/clawhub";
   const installedVersion = params.installedVersion ?? "1.2.3";
   const installedAt = params.installedAt ?? 123;
+  const digests = {
+    ...(params.skillFile ? { skillFile: params.skillFile } : {}),
+    ...(params.fileTreeSha256 ? { fileTreeSha256: params.fileTreeSha256 } : {}),
+  };
   await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
   await fs.writeFile(
     path.join(skillDir, ".clawhub", "origin.json"),
@@ -159,6 +165,7 @@ async function writeClawHubOriginFixture(params: {
         ...(params.trustState ? { trustState: params.trustState } : {}),
         installedVersion,
         installedAt,
+        ...digests,
       },
       null,
       2,
@@ -182,6 +189,7 @@ async function writeClawHubOriginFixture(params: {
                 ? { requestedReference: params.requestedReference }
                 : {}),
               ...(params.trustState ? { trustState: params.trustState } : {}),
+              ...digests,
             },
           },
         },
@@ -2121,6 +2129,138 @@ describe("skills-clawhub", () => {
         version: "1.0.0",
       }),
     ]);
+  });
+
+  it("refuses to update a ClawHub skill with local changes unless forced", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-local-changes-update-");
+    const skillDir = await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "weather",
+      installedVersion: "0.9.0",
+      skillFile: {
+        path: "SKILL.md",
+        sha256: createHash("sha256").update("# Weather\n").digest("hex"),
+      },
+      fileTreeSha256: `sha256:${"a".repeat(64)}`,
+    });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Weather with local edits\n", "utf8");
+    pathExistsMock.mockImplementation(
+      async (input: string) => input === skillDir || input.endsWith("SKILL.md"),
+    );
+
+    const results = await updateSkillsFromClawHub({
+      workspaceDir,
+      slug: "weather",
+    });
+
+    expect(results).toEqual([
+      {
+        ok: false,
+        error:
+          'Skill "weather" has local SKILL.md changes. Updating replaces the installed skill directory; re-run with --force to update it anyway.',
+      },
+    ]);
+    expect(installPackageDirMock).not.toHaveBeenCalled();
+    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
+    expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(
+      "# Weather with local edits\n",
+    );
+  });
+
+  it("updates a ClawHub skill with local changes when forced", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-local-changes-forced-update-");
+    const skillDir = await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "weather",
+      installedVersion: "0.9.0",
+      skillFile: {
+        path: "SKILL.md",
+        sha256: createHash("sha256").update("# Weather\n").digest("hex"),
+      },
+      fileTreeSha256: `sha256:${"a".repeat(64)}`,
+    });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Weather with local edits\n", "utf8");
+    pathExistsMock.mockImplementation(
+      async (input: string) => input === skillDir || input.endsWith("SKILL.md"),
+    );
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "weather",
+      installKind: "archive",
+      archive: {
+        version: "1.0.0",
+        downloadUrl: "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
+      },
+    });
+    installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
+      await fs.mkdir(params.targetDir, { recursive: true });
+      await fs.writeFile(path.join(params.targetDir, "SKILL.md"), "# Weather\n", "utf8");
+      return { ok: true, targetDir: params.targetDir };
+    });
+
+    const results = await updateSkillsFromClawHub({
+      workspaceDir,
+      slug: "weather",
+      force: true,
+    });
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        ok: true,
+        slug: "weather",
+        previousVersion: "0.9.0",
+        version: "1.0.0",
+      }),
+    ]);
+    expect(installPackageDirMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates an unmodified ClawHub skill without requiring force", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-clean-update-");
+    const skillDir = await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "weather",
+      installedVersion: "0.9.0",
+      skillFile: {
+        path: "SKILL.md",
+        sha256: createHash("sha256").update("# Weather\n").digest("hex"),
+      },
+      fileTreeSha256: `sha256:${"a".repeat(64)}`,
+    });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Weather\n", "utf8");
+    pathExistsMock.mockImplementation(
+      async (input: string) => input === skillDir || input.endsWith("SKILL.md"),
+    );
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "weather",
+      installKind: "archive",
+      archive: {
+        version: "1.0.0",
+        downloadUrl: "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
+      },
+    });
+    installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
+      await fs.mkdir(params.targetDir, { recursive: true });
+      await fs.writeFile(path.join(params.targetDir, "SKILL.md"), "# Weather\n", "utf8");
+      return { ok: true, targetDir: params.targetDir };
+    });
+
+    const results = await updateSkillsFromClawHub({
+      workspaceDir,
+      slug: "weather",
+    });
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        ok: true,
+        slug: "weather",
+        previousVersion: "0.9.0",
+        version: "1.0.0",
+      }),
+    ]);
+    expect(installPackageDirMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects owner-qualified ClawHub updates when the requested owner does not match tracking", async () => {

@@ -856,6 +856,7 @@ describe("skills cli commands", () => {
   });
 
   it.each([
+    { flag: "--force", option: "force" },
     { flag: "--force-install", option: "forceInstall" },
     { flag: "--acknowledge-clawhub-risk", option: "acknowledgeClawHubRisk" },
   ])("passes $flag through for ClawHub skill updates", async ({ flag, option }) => {

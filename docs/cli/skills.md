@@ -38,6 +38,7 @@ openclaw skills install @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills install @owner/<slug> --agent <id>
 openclaw skills install @owner/<slug> --global
 openclaw skills update @owner/<slug>
+openclaw skills update @owner/<slug> --force
 openclaw skills update @owner/<slug> --force-install
 openclaw skills update @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills update @owner/<slug> --global
@@ -109,6 +110,7 @@ Notes:
 | `install --as <slug>`            | Overrides the inferred slug for Git and local directory installs.                                                                                                                                                                                                                |
 | `install --version <version>`    | Applies to native ClawHub skill refs, not `skills-sh:` refs; the mirrored reference already identifies the exact synchronized commit.                                                                                                                                            |
 | `install --force`                | Overwrites an existing workspace skill folder for the same slug.                                                                                                                                                                                                                 |
+| `update --force`                 | Replaces a tracked skill even when its installed files no longer match the recorded install digests. Without it, `update` skips skills with local changes so they are not destroyed.                                                                                              |
 | `install/update --force-install` | Installs a pending GitHub-backed ClawHub skill before ClawHub's scan completes.                                                                                                                                                                                                  |
 | `--global`                       | Targets the shared managed skills directory; cannot combine with `--agent <id>`.                                                                                                                                                                                                 |
 | `--agent <id>`                   | Targets one configured agent workspace; overrides current working directory inference.                                                                                                                                                                                           |

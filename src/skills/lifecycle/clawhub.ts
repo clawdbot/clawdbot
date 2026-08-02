@@ -34,6 +34,7 @@ import {
   type ClawHubSkillRef,
   type ClawHubSkillsLockfile,
 } from "./clawhub-store.js";
+import { planClawHubSkillUninstall } from "./clawhub-uninstall.js";
 
 export { readVerifiedClawHubSkillSourceUrl } from "./clawhub-install-core.js";
 export {
@@ -327,10 +328,31 @@ export async function installSkillFromClawHub(params: {
   );
 }
 
+async function guardTrackedSkillLocalState(params: {
+  workspaceDir: string;
+  slug: string;
+  previousVersion: string | null;
+}): Promise<string | undefined> {
+  const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
+  if (!(await pathExists(targetDir))) {
+    return undefined;
+  }
+  const local = await planClawHubSkillUninstall({
+    workspaceDir: params.workspaceDir,
+    slug: params.slug,
+    expectedVersion: params.previousVersion ?? "",
+  });
+  if (local.ok || local.code === "missing") {
+    return undefined;
+  }
+  return `${local.error} Updating replaces the installed skill directory; re-run with --force to update it anyway.`;
+}
+
 export async function updateSkillsFromClawHub(params: {
   workspaceDir: string;
   slug?: string;
   baseUrl?: string;
+  force?: boolean;
   forceInstall?: boolean;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
@@ -361,8 +383,18 @@ export async function updateSkillsFromClawHub(params: {
     }
     const install = await withClawPackageLifecycleLease(
       { kind: "skill", source: "clawhub", ref: tracked.slug, workspace: params.workspaceDir },
-      () =>
-        installTrackedSkillFromClawHub({
+      async () => {
+        if (!params.force) {
+          const blocked = await guardTrackedSkillLocalState({
+            workspaceDir: params.workspaceDir,
+            slug: tracked.slug,
+            previousVersion: tracked.previousVersion,
+          });
+          if (blocked) {
+            return { ok: false as const, error: blocked };
+          }
+        }
+        return await installTrackedSkillFromClawHub({
           workspaceDir: params.workspaceDir,
           slug: tracked.slug,
           ...(tracked.ownerHandle ? { ownerHandle: tracked.ownerHandle } : {}),
@@ -375,7 +407,8 @@ export async function updateSkillsFromClawHub(params: {
           onClawHubRisk: params.onClawHubRisk,
           logger: params.logger,
           config: params.config,
-        }),
+        });
+      },
       { required: true },
     );
     results.push(
