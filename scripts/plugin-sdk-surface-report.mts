@@ -138,8 +138,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   // +1: deprecated agent media projection re-export during the media migration window.
-  // +1: policy-gated outbound media access resolver for channel reply paths.
-  "media-runtime": 4,
+  "media-runtime": 3,
   // +3: deprecated media projection type, builder, and local-roots compatibility re-export.
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.

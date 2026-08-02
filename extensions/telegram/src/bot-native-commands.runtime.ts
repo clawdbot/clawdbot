@@ -6,7 +6,7 @@ export {
 export {
   getAgentScopedMediaLocalRoots,
   resolveAgentScopedOutboundMediaAccess,
-} from "openclaw/plugin-sdk/media-runtime";
+} from "openclaw/plugin-sdk/media-local-roots";
 export {
   finalizeInboundContext,
   resolveChunkMode,

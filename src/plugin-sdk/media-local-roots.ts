@@ -3,3 +3,4 @@ export {
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
 } from "../media/local-roots.js";
+export { resolveAgentScopedOutboundMediaAccess } from "../media/read-capability.js";
