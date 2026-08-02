@@ -5,7 +5,6 @@ import {
   buildChannelProgressDraftLineForEntry,
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
-  resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingProgressNarration,
@@ -24,7 +23,10 @@ import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
 import type { RequestClient } from "../internal/discord.js";
-import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
+import {
+  resolveDiscordBlockStreamingEnabled,
+  resolveDiscordPreviewStreamMode,
+} from "../preview-streaming.js";
 
 type DraftReplyReference = {
   peek: () => string | undefined;
@@ -55,16 +57,19 @@ export function createDiscordDraftPreviewController(params: {
     (hookRunner?.hasHooks("message_sending") ?? false)
   );
   const draftMaxChars = Math.min(params.textLimit, 2000);
-  const accountBlockStreamingEnabled =
-    resolveChannelStreamingBlockEnabled(params.discordConfig) ??
-    params.cfg.agents?.defaults?.blockStreamingDefault === "on";
   const canStreamProgressDraftForToolOnlySource =
     params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
-  const canStreamDraft =
+  const previewAvailable =
     allowProviderPreview &&
     (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
-    discordStreamMode !== "off" &&
-    !accountBlockStreamingEnabled;
+    discordStreamMode !== "off";
+  const accountBlockStreamingEnabled = resolveDiscordBlockStreamingEnabled({
+    account: params.discordConfig,
+    previewAvailable,
+    streamMode: discordStreamMode,
+    legacyBlockStreamingDefault: params.cfg.agents?.defaults?.blockStreamingDefault,
+  });
+  const canStreamDraft = previewAvailable && !accountBlockStreamingEnabled;
   const draftStream = canStreamDraft
     ? createDiscordDraftStream({
         rest: params.deliveryRest,

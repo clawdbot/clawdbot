@@ -366,15 +366,17 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         },
       })
     : undefined;
-  const canConsumeItemEvents = deliverStandaloneCommentaryProgress || canForwardItemEvents;
+  const canCaptureItemEvents = Boolean(params.replyOptions?.onItemEvent);
+  const canConsumeItemEvents =
+    deliverStandaloneCommentaryProgress || canForwardItemEvents || canCaptureItemEvents;
   // Item-event presence gates CLI commentary classification downstream, so
-  // the handler exists exactly when verbose buffers it or a channel consumes it.
+  // capture-only channels still need the handler to keep commentary out of final text.
   const onItemEvent = canConsumeItemEvents
     ? async (payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0]) => {
         if (isDispatchOperationAborted()) {
           return;
         }
-        if (!forwardItemEvent) {
+        if (!forwardItemEvent && deliverStandaloneCommentaryProgress) {
           // The wrapped forwarder marks progress itself when present.
           markProgress();
         }
