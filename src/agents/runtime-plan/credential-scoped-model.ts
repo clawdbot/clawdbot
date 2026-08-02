@@ -271,7 +271,9 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
     if (cached) {
       return cached;
     }
-    const memo = params.generationRouteModelMemo;
+    // Native-owned sessions resolve to the per-run base model, which must
+    // never be shared across runs (and costs nothing to rebuild).
+    const memo = params.nativeModelOwned ? undefined : params.generationRouteModelMemo;
     const memoKey = memo ? routeModelMemoKey(plan, params) : undefined;
     if (memo && memoKey) {
       const generationHit = memo.get(memoKey);
