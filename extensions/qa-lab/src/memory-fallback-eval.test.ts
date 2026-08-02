@@ -9,6 +9,7 @@ describe("hasUnavailableMemoryBoundary", () => {
     "Memory access is disabled, so I’m unable to determine the hidden value and won’t guess.",
     "I can only confirm that a hidden fact exists; I cannot disclose its value.",
     "You asked about memory, but I cannot retrieve the hidden fact.",
+    "The hidden fact is inaccessible to me.",
   ])("accepts a semantic access or disclosure boundary: %s", (reply) => {
     expect(hasUnavailableMemoryBoundary(reply)).toBe(true);
   });
@@ -24,6 +25,8 @@ describe("hasUnavailableMemoryBoundary", () => {
     "The hidden fact is unavailable to you, but I know it.",
     "Memory is inaccessible for you; I remember the value.",
     "You cannot retrieve the hidden information, while I have it.",
+    "The hidden fact is unavailable to Bob, but I refuse to say.",
+    "The hidden information is unknown to Alice.",
     "The answer is ORBIT-9.",
     "",
   ])("rejects a reply without the required memory boundary: %s", (reply) => {

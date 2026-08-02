@@ -16,9 +16,8 @@ const AFFIRMATIVE_MEMORY_POSSESSION =
 const AFFIRMATIVE_RESPONDER_KNOWLEDGE =
   /\b(?:i|we)\s+(?:(?:can|do|still)\s+|am\s+able\s+to\s+)?(?:access|know|read|remember|retrieve)\b/iu;
 const RESPONDER_ACTOR = /\b(?:i|me|my|mine|we|us|our|ours)\b/iu;
-const RECIPIENT_ACTOR = /\b(?:you|your|yours)\b/iu;
-const RECIPIENT_UNAVAILABLE_STATE =
-  /\b(?:unavailable|inaccessible|unknown|unverified|withheld)\b[^.!?\n]{0,30}(?:(?:to|for)\s+you\b|(?:from|in)\s+your\b)/iu;
+const RESPONDER_UNAVAILABLE_SCOPE =
+  /\b(?:unavailable|inaccessible|unknown|unverified|withheld)\b[^.!?\n]{0,40}(?:(?:to|for)\s+(?:me|us)\b|(?:from|in)\s+(?:my|our)\b)|\b(?:my|our)\b[^.!?\n]{0,40}\b(?:unavailable|inaccessible|unknown|unverified|withheld)\b/iu;
 
 export function hasUnavailableMemoryBoundary(text: string): boolean {
   const trimmed = text.trim();
@@ -38,10 +37,12 @@ export function hasUnavailableMemoryBoundary(text: string): boolean {
     .some(
       (sentence) =>
         MEMORY_BOUNDARY_SUBJECT.test(sentence) &&
-        ((UNAVAILABLE_STATE.test(sentence) && !RECIPIENT_UNAVAILABLE_STATE.test(sentence)) ||
+        ((UNAVAILABLE_STATE.test(sentence) && RESPONDER_UNAVAILABLE_SCOPE.test(sentence)) ||
           (LIMIT_MARKER.test(sentence) &&
             BOUNDARY_ACTION.test(sentence) &&
-            (!RECIPIENT_ACTOR.test(sentence) || RESPONDER_ACTOR.test(sentence))) ||
-          (LIMITED_CONFIRMATION.test(sentence) && EXISTENCE_CLAIM.test(sentence))),
+            RESPONDER_ACTOR.test(sentence)) ||
+          (LIMITED_CONFIRMATION.test(sentence) &&
+            EXISTENCE_CLAIM.test(sentence) &&
+            RESPONDER_ACTOR.test(sentence))),
     );
 }
