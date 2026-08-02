@@ -18,6 +18,7 @@ function projection(rows: SessionTranscriptProjectionSourceRow[]) {
   return buildSessionTranscriptProjection({
     rows,
     sessionId: SESSION_ID,
+    sourceTranscriptGeneration: null,
     sourceTranscriptUpdatedAt: 42,
   });
 }

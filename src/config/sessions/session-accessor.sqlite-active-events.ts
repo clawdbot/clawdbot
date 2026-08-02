@@ -37,7 +37,10 @@ import {
 } from "./session-accessor.sqlite-visible-cursor.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
-import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import {
+  isSessionTranscriptIndexReconcileRunning,
+  startSessionTranscriptIndexReconcile as startTranscriptReconcile,
+} from "./session-transcript-reconcile.js";
 export { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
@@ -170,12 +173,10 @@ function withCurrentProjectionSnapshot<T>(
   if (result.kind === "value") {
     return result.value;
   }
-  // Request latency never scales with transcript size. The maintenance owner
-  // rebuilds after this stack unwinds; callers return a retryable response.
-  startSessionTranscriptIndexReconcile({
-    ...databaseOptions,
-    preferredSessionId: resolved.sessionId,
-  });
+  // Rebuild after this stack unwinds; callers return a retryable response.
+  if (!isSessionTranscriptIndexReconcileRunning(databaseOptions)) {
+    startTranscriptReconcile({ ...databaseOptions, preferredSessionId: resolved.sessionId });
+  }
   throw new SessionTranscriptProjectionUnavailableError(resolved.sessionId);
 }
 

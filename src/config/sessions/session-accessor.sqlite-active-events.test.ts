@@ -1,3 +1,4 @@
+import { Worker } from "node:worker_threads";
 // Active transcript projection tests cover branch rebuilds and bounded large-history reads.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -21,7 +22,18 @@ import {
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { rotateTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  appendTranscriptEventInTransaction,
+  appendTranscriptEventsInTransaction,
+} from "./session-accessor.sqlite-transcript-store.js";
+import {
+  appendPreparedSessionTranscriptProjectionChunkInTransaction,
+  claimPreparedSessionTranscriptProjectionInTransaction,
+  deletePreparedSessionTranscriptProjectionChunkInTransaction,
+  finalizePreparedSessionTranscriptProjectionInTransaction,
+  prepareSessionTranscriptProjection,
+} from "./session-transcript-projection-rebuild.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
@@ -44,6 +56,18 @@ vi.mock("../../shared/store-writer-queue.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function prepareDirtyProjection(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  sessionId: string,
+) {
+  database.db
+    .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+    .run(sessionId);
+  const plan = prepareSessionTranscriptProjection(database.db, sessionId);
+  expect(plan).toBeDefined();
+  return plan!;
+}
 
 describe("SQLite active transcript event projection", () => {
   let stateDir: string;
@@ -261,6 +285,165 @@ describe("SQLite active transcript event projection", () => {
     ).toEqual({ needs_rebuild: 0 });
   });
 
+  it("claims and publishes a bounded append-only tail that lands after preparation", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "root", parentId: null, message: { role: "user", content: "root" } }],
+      touchSessionEntry: false,
+    });
+    const databaseOptions = { agentId: scope.agentId, env: scope.env };
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const plan = prepareDirtyProjection(database, scope.sessionId);
+
+    runOpenClawAgentWriteTransaction((writeDatabase) => {
+      for (let index = 0; index < 10; index += 1) {
+        appendTranscriptEventInTransaction(
+          writeDatabase,
+          scope,
+          {
+            type: "message",
+            id: `racing-append-${index}`,
+            parentId: index === 0 ? "root" : `racing-append-${index - 1}`,
+            message: { role: "assistant", content: `arrived after preparation ${index}` },
+          },
+          { scheduleProjectionReconcile: false },
+        );
+      }
+    }, databaseOptions);
+
+    const claimId = -42;
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (writeDatabase) =>
+          claimPreparedSessionTranscriptProjectionInTransaction(writeDatabase.db, plan, claimId),
+        databaseOptions,
+      ),
+    ).toBe(true);
+    let deleteResult = { hasMore: true, owned: true };
+    while (deleteResult.hasMore) {
+      deleteResult = runOpenClawAgentWriteTransaction(
+        (writeDatabase) =>
+          deletePreparedSessionTranscriptProjectionChunkInTransaction(writeDatabase.db, {
+            claimId,
+            maxRowsPerTable: 512,
+            sessionId: scope.sessionId,
+          }),
+        databaseOptions,
+      );
+      expect(deleteResult.owned).toBe(true);
+    }
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (writeDatabase) =>
+          appendPreparedSessionTranscriptProjectionChunkInTransaction(writeDatabase.db, {
+            activeRows: plan.activeRows,
+            claimId,
+            ftsRows: plan.ftsRows,
+            sessionId: scope.sessionId,
+          }),
+        databaseOptions,
+      ),
+    ).toBe(true);
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (writeDatabase) =>
+          finalizePreparedSessionTranscriptProjectionInTransaction(writeDatabase.db, plan, claimId),
+        databaseOptions,
+      ),
+    ).toBe(true);
+
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(11);
+    expect(
+      database.db
+        .prepare(
+          "SELECT indexed_seq, needs_rebuild, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
+        )
+        .get(scope.sessionId),
+    ).toEqual({
+      active_message_count: 11,
+      indexed_seq: plan.sourceIndexedSeq + 10,
+      needs_rebuild: 0,
+    });
+  });
+
+  it("leaves the projection dirty when a post-snapshot tail exceeds the byte bound", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "root", message: { role: "user", content: "root" } }],
+      touchSessionEntry: false,
+    });
+    const databaseOptions = { agentId: scope.agentId, env: scope.env };
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const plan = prepareDirtyProjection(database, scope.sessionId);
+    const claimId = -43;
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (writeDatabase) =>
+          claimPreparedSessionTranscriptProjectionInTransaction(writeDatabase.db, plan, claimId),
+        databaseOptions,
+      ),
+    ).toBe(true);
+    runOpenClawAgentWriteTransaction((writeDatabase) => {
+      appendTranscriptEventInTransaction(
+        writeDatabase,
+        scope,
+        {
+          type: "message",
+          id: "oversized-tail",
+          parentId: "root",
+          message: { role: "assistant", content: "x".repeat(257 * 1024) },
+        },
+        { scheduleProjectionReconcile: false },
+      );
+    }, databaseOptions);
+
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (writeDatabase) =>
+          finalizePreparedSessionTranscriptProjectionInTransaction(writeDatabase.db, plan, claimId),
+        databaseOptions,
+      ),
+    ).toBe(false);
+    expect(
+      database.db
+        .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
+        .get(scope.sessionId),
+    ).toEqual({ needs_rebuild: 1 });
+  });
+
+  it("rejects tail catch-up after the transcript generation changes", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "root", message: { role: "user", content: "root" } }],
+      touchSessionEntry: false,
+    });
+    const databaseOptions = { agentId: scope.agentId, env: scope.env };
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const plan = prepareDirtyProjection(database, scope.sessionId);
+    const claimId = -45;
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (writeDatabase) =>
+          claimPreparedSessionTranscriptProjectionInTransaction(writeDatabase.db, plan, claimId),
+        databaseOptions,
+      ),
+    ).toBe(true);
+    runOpenClawAgentWriteTransaction(
+      (writeDatabase) => rotateTranscriptGenerationInTransaction(writeDatabase, scope.sessionId),
+      databaseOptions,
+    );
+
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (writeDatabase) =>
+          finalizePreparedSessionTranscriptProjectionInTransaction(writeDatabase.db, plan, claimId),
+        databaseOptions,
+      ),
+    ).toBe(false);
+    expect(
+      database.db
+        .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
+        .get(scope.sessionId),
+    ).toEqual({ needs_rebuild: 1 });
+  });
+
   it("projects reset kept-tail and post-boundary messages without rewriting raw positions", async () => {
     await persistSessionTranscriptTurn(scope, {
       messages: [
@@ -452,6 +635,60 @@ describe("SQLite active transcript event projection", () => {
         )
         .all(),
     ).toEqual([]);
+  });
+
+  it("converges through the public owner when an append lands after worker preparation", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "root", parentId: null, message: { role: "user", content: "root" } }],
+      touchSessionEntry: false,
+    });
+    const databaseOptions = { agentId: scope.agentId, env: scope.env };
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    database.db
+      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+      .run(scope.sessionId);
+
+    queuedSessionWrite.mockClear();
+    let injected = false;
+    queuedSessionWrite.mockImplementation(() => {
+      if (queuedSessionWrite.mock.calls.length !== 2 || injected) {
+        return;
+      }
+      injected = true;
+      runOpenClawAgentWriteTransaction((writeDatabase) => {
+        appendTranscriptEventInTransaction(
+          writeDatabase,
+          scope,
+          {
+            type: "message",
+            id: "between-prepare-and-claim",
+            parentId: "root",
+            message: { role: "assistant", content: "caught up by owner" },
+          },
+          { scheduleProjectionReconcile: false },
+        );
+      }, databaseOptions);
+    });
+    let workerPasses = 0;
+    startSessionTranscriptIndexReconcile({
+      ...databaseOptions,
+      createWorker: (filename, options) => {
+        workerPasses += 1;
+        return new Worker(filename, options);
+      },
+    });
+    await waitForSessionTranscriptIndexReconcile(databaseOptions);
+
+    expect(injected).toBe(true);
+    expect(workerPasses).toBe(1);
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(2);
+    expect(
+      database.db
+        .prepare(
+          "SELECT indexed_seq, needs_rebuild, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
+        )
+        .get(scope.sessionId),
+    ).toEqual({ active_message_count: 2, indexed_seq: 2, needs_rebuild: 0 });
   });
 
   it("keeps projection state and rows on one snapshot during a concurrent append", async () => {

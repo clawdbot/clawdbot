@@ -15,18 +15,11 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   buildSessionTranscriptProjection,
-  extractTranscriptIndexEntry,
-  hasTranscriptMessage,
-  shouldProjectActiveEvent,
+  prepareSessionTranscriptProjectionAppend,
+  type PreparedSessionTranscriptProjectionAppend,
   type SessionTranscriptProjectionSourceRow,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-rebuild.js";
-import {
-  isCanonicalSessionTranscriptEntry,
-  isSessionTranscriptLeafControl,
-  isSessionTranscriptSideAppendEntry,
-  parseSessionTranscriptTreeEntry,
-} from "./transcript-tree.js";
 type TranscriptIndexDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   | "session_windows"
@@ -187,99 +180,58 @@ export function indexAppendedTranscriptEventInTransaction(
       // transcripts): stay unindexed until reconcile rebuilds the session.
       return true;
     }
-    applyForwardIndex(db, params, {
-      activeEventCount: 0,
-      activeMessageCount: 0,
-      indexedSeq: -1,
-      leafEventId: null,
-      needsRebuild: false,
+    const append = prepareSessionTranscriptProjectionAppend({
+      ...params,
+      cursor: {
+        activeEventCount: 0,
+        activeMessageCount: 0,
+        indexedSeq: -1,
+        leafEventId: null,
+      },
     });
+    if (!append) {
+      return true;
+    }
+    applyForwardIndex(db, params.sessionId, params.createdAt, append);
     return false;
   }
   if (watermark.needsRebuild) {
     return true;
   }
-  if (params.seq !== watermark.indexedSeq + 1) {
-    // Out-of-band writes bypassed the hook; reconcile recomputes the truth.
+  const append = prepareSessionTranscriptProjectionAppend({
+    ...params,
+    cursor: watermark,
+  });
+  if (!append) {
+    // Out-of-band writes, branch changes, and legacy/canonical transitions
+    // need the full visible-tree resolver rather than append-time inference.
     markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
     return true;
   }
-  if (
-    isSessionTranscriptLeafControl(params.event) ||
-    isSessionTranscriptSideAppendEntry(params.event)
-  ) {
-    // Leaf controls repoint the active branch and side appends attach off
-    // the main chain; the visible path must be re-resolved rather than
-    // guessed at append time.
-    markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
-    return true;
-  }
-  const isCanonicalEvent = isCanonicalSessionTranscriptEntry(params.event);
-  if (isCanonicalEvent && watermark.leafEventId === null && watermark.activeEventCount > 0) {
-    // A canonical tree supersedes legacy flat message rows. Re-resolve once
-    // instead of retaining rows that are no longer on the selected path.
-    markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
-    return true;
-  }
-  const treeEntry = parseSessionTranscriptTreeEntry(params.event);
-  if (
-    !isCanonicalEvent &&
-    watermark.leafEventId !== null &&
-    shouldProjectActiveEvent(params.event)
-  ) {
-    // A noncanonical row after a tracked tree cursor may be a flat fallback or
-    // an opaque append ancestor. Only the full resolver can decide visibility.
-    markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
-    return true;
-  }
-  if (treeEntry && treeEntry.parentId !== watermark.leafEventId) {
-    markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
-    return true;
-  }
-  applyForwardIndex(db, params, watermark);
+  applyForwardIndex(db, params.sessionId, params.createdAt, append);
   return false;
 }
 
 function applyForwardIndex(
   db: DatabaseSync,
-  params: {
-    sessionId: string;
-    seq: number;
-    event: unknown;
-    eventId: string | null;
-    createdAt: number;
-  },
-  watermark: SessionTranscriptProjectionState,
+  sessionId: string,
+  createdAt: number,
+  append: PreparedSessionTranscriptProjectionAppend,
 ): void {
-  const entry = extractTranscriptIndexEntry(params.event, params.createdAt);
-  if (entry) {
-    insertFtsRow(db, params.sessionId, entry);
+  if (append.ftsRow) {
+    insertFtsRow(db, sessionId, append.ftsRow);
   }
-  const projectsActiveEvent = shouldProjectActiveEvent(params.event);
-  const projectsMessage = projectsActiveEvent && hasTranscriptMessage(params.event);
-  if (projectsActiveEvent) {
-    insertActiveEventRow(db, {
-      activePosition: watermark.activeEventCount,
-      eventSeq: params.seq,
-      messagePosition: projectsMessage ? watermark.activeMessageCount : null,
-      sessionId: params.sessionId,
-    });
+  if (append.activeRow) {
+    insertActiveEventRow(db, { ...append.activeRow, sessionId });
   }
-  // Mirror scanSessionTranscriptTree's leaf advancement: canonical entries
-  // (parent-linked or parentless) become the tip the next append chains to;
-  // headers and unknown control rows leave the tip untouched.
-  const advancesLeaf = params.eventId !== null && isCanonicalSessionTranscriptEntry(params.event);
   writeWatermark(
     db,
-    params.sessionId,
+    sessionId,
     {
-      activeEventCount: watermark.activeEventCount + (projectsActiveEvent ? 1 : 0),
-      activeMessageCount: watermark.activeMessageCount + (projectsMessage ? 1 : 0),
-      indexedSeq: params.seq,
-      leafEventId: advancesLeaf ? params.eventId : watermark.leafEventId,
+      ...append.cursor,
       needsRebuild: false,
     },
-    params.createdAt,
+    createdAt,
   );
 }
 
@@ -329,6 +281,7 @@ function rebuildSessionTranscriptIndexInTransaction(
   const projection = buildSessionTranscriptProjection({
     rows,
     sessionId,
+    sourceTranscriptGeneration: null,
     sourceTranscriptUpdatedAt: null,
   });
   deleteFtsRows(db, sessionId);

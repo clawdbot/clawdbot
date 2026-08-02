@@ -67,7 +67,7 @@ export function searchSessionTranscripts(params: {
   };
   const database = openOpenClawAgentDatabase(databaseOptions);
   const dirtySessions = listSessionsNeedingTranscriptIndexReconcile(database.db);
-  if (dirtySessions.length > 0) {
+  if (dirtySessions.length > 0 && !isSessionTranscriptIndexReconcileRunning(databaseOptions)) {
     startSessionTranscriptIndexReconcile(databaseOptions);
   }
   const indexing =
