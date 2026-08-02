@@ -31,7 +31,7 @@ import {
   setQueryTokensForKey,
 } from "./query.ts";
 import type { UsageFilterState, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { renderSessionDetailPanel } from "./view-details.ts";
+import { renderSessionDetailPanel, usageDateKey } from "./view-details.ts";
 import { renderUsageHeatmap } from "./view-heatmap.ts";
 import {
   renderCostBreakdownCompact,
@@ -220,9 +220,7 @@ export function renderUsage(props: UsageProps) {
           if (!s.updatedAt) {
             return false;
           }
-          const d = new Date(s.updatedAt);
-          const sessionDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-          return selectedDaySet.has(sessionDate);
+          return selectedDaySet.has(usageDateKey(s.updatedAt, filters.timeZone));
         })
       : agentScopedSessions;
 
