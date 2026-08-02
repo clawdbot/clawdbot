@@ -38,7 +38,6 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
     "gateway_start",
     "subagent_delivery_target",
     "subagent_ended",
-    "subagent_progress",
   ],
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],

@@ -4,8 +4,8 @@ import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
-import { createAbortError } from "./abort-signal.js";
 import { hasInvalidLifecycleStartTimestamp } from "./agent-event-lifecycle.js";
+import { createAgentRunStaleLifecycleError } from "./agent-lifecycle-error.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Approval event phase for request/resolution transitions. */
@@ -84,6 +84,8 @@ type AgentRunContext = {
   sessionId?: string;
   /** Gateway lifecycle generation captured when the run was registered. */
   lifecycleGeneration?: string;
+  /** Producer-owned start captured from this run's accepted lifecycle event. */
+  lifecycleStartedAt?: number;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
@@ -194,7 +196,7 @@ export function assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration: st
   if (isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
     return;
   }
-  throw createAbortError("Agent run belongs to a stale gateway lifecycle");
+  throw createAgentRunStaleLifecycleError();
 }
 
 /** Captures immutable lifecycle ownership for one admitted execution. */
@@ -617,6 +619,19 @@ function enrichAgentEvent(
   if (hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
     return undefined;
   }
+  let data = event.data;
+  if (context && event.stream === "lifecycle") {
+    if (data.phase === "start") {
+      context.lifecycleStartedAt = data.startedAt as number;
+    } else if (
+      (data.phase === "end" || data.phase === "error") &&
+      data.startedAt === undefined &&
+      context.lifecycleStartedAt !== undefined
+    ) {
+      // Preserve this run's identity after a newer run takes over its session.
+      data = { ...data, startedAt: context.lifecycleStartedAt };
+    }
+  }
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
   state.seqByRun.set(event.runId, nextSeq);
   if (context) {
@@ -645,6 +660,7 @@ function enrichAgentEvent(
   const agentId = event.agentId ?? context?.agentId;
   const enriched: AgentEventRuntimePayload = {
     ...event,
+    data,
     sessionKey,
     ...(sessionId ? { sessionId } : {}),
     ...(agentId ? { agentId } : {}),

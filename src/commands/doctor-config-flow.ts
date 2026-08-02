@@ -162,6 +162,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     pendingChanges: false,
     fixHints: [],
   };
+  const explicitSetPaths: string[][] = [];
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const applyConfigMutation = (
@@ -213,11 +214,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
           entries: migratedEntries as NonNullable<OpenClawConfig["agents"]>["entries"],
         },
       },
-      changes: ["Persisted agents.entries with exactly one explicit default agent."],
+      changes: ["Prepared agents.entries with exactly one explicit default agent for persistence."],
     };
     applyConfigMutation(rosterRepair, {
       fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
     });
+    // Read-time normalization already exposes this roster in the runtime shape.
+    // Preserve doctor's write intent so the atomic writer does not restore the authored omission.
+    explicitSetPaths.push(["agents", "entries"]);
   }
   applyConfigMutation(materializeDefaultAgentRoles(state.candidate), {
     fixHint: `Run "${doctorFixCommand}" to persist explicit ambient agent targets.`,
@@ -341,14 +345,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
   });
 
-  const { repairStaleAgentModelRefs } =
-    await import("./doctor/shared/stale-agent-model-ref-repair.js");
-  const staleAgentModelRepair = repairStaleAgentModelRefs(state.candidate, { env: process.env });
-  applyConfigMutation(staleAgentModelRepair, {
-    fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
-    sanitize: true,
-    emitWarnings: true,
-  });
+  if (!shouldRepair) {
+    const { repairStaleAgentModelRefs } =
+      await import("./doctor/shared/stale-agent-model-ref-repair.js");
+    const staleAgentModelRepair = repairStaleAgentModelRefs(state.candidate, { env: process.env });
+    applyConfigMutation(staleAgentModelRepair, {
+      fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
+      sanitize: true,
+      emitWarnings: true,
+    });
+  }
 
   const { collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
@@ -474,7 +480,23 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       candidate: cfg,
     });
 
-  noteOpencodeProviderOverrides(cfg);
+  const configuredOpencodePluginIds = [
+    cfg.models?.providers?.opencode || cfg.models?.providers?.["opencode-zen"]
+      ? "opencode"
+      : undefined,
+    cfg.models?.providers?.["opencode-go"] ? "opencode-go" : undefined,
+  ].filter((pluginId): pluginId is string => pluginId !== undefined);
+  const activeOpencodePluginIds =
+    configuredOpencodePluginIds.length > 0
+      ? (await import("../plugins/providers.js")).resolveEnabledProviderPluginIds({
+          config: cfg,
+          onlyPluginIds: configuredOpencodePluginIds,
+        })
+      : [];
+  noteOpencodeProviderOverrides(cfg, {
+    opencodePluginActive: activeOpencodePluginIds.includes("opencode"),
+    opencodeGoPluginActive: activeOpencodePluginIds.includes("opencode-go"),
+  });
   noteImplicitFallbackClobberWarnings(cfg);
   noteSandboxOriginProxyWarning(cfg);
 
@@ -485,6 +507,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     sourceConfigValid: snapshot.valid,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
+    ...(finalized.shouldWriteConfig && explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
     ...(singleTopLevelIncludeWrite ? { skipWizardMetadataForIncludeWrite: true } : {}),
     ...(shouldRepairCronCodexModelRefsAfterConfigWrite
       ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }

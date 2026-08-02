@@ -5,6 +5,7 @@
  */
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatCliCommand } from "../cli/command-format.js";
+import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
@@ -496,6 +497,22 @@ function hasMissingToolResultFailure(err: unknown): boolean {
   return findErrorProperty(err, readMissingToolResultMarker) === true;
 }
 
+function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
+  return (
+    findErrorProperty(err, (candidate) =>
+      isAgentRunStaleLifecycleError(candidate) ? true : undefined,
+    ) === true
+  );
+}
+
+function hasDirectProviderFailureIdentity(err: unknown): boolean {
+  if (isFailoverError(err)) {
+    return true;
+  }
+  const signal = normalizeDirectErrorSignal(err);
+  return Boolean(signal.status || signal.code || signal.errorType || signal.provider);
+}
+
 /**
  * True when the error is a local runtime coordination/tool-execution error
  * rather than a provider/model failure. The model fallback chain must abort on
@@ -899,6 +916,13 @@ export function resolveModelFallbackError(
   if (err instanceof AgentHarnessSessionSupersededError) {
     return { kind: "coordination", error: err };
   }
+  const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);
+  if (
+    staleLifecycleFailure &&
+    (isAgentRunStaleLifecycleError(err) || !hasDirectProviderFailureIdentity(err))
+  ) {
+    return { kind: "coordination", error: err };
+  }
   // A direct takeover remains a coordination failure unless the dedicated
   // cleanup wrapper owns a preserved prompt error. Its message alone must not
   // reclassify session-state loss as a provider failure.
@@ -912,7 +936,8 @@ export function resolveModelFallbackError(
   if (
     hasSessionWriteLockContention(err) ||
     hasEmbeddedAttemptSessionTakeover(err) ||
-    hasMissingToolResultFailure(err)
+    hasMissingToolResultFailure(err) ||
+    staleLifecycleFailure
   ) {
     return { kind: "coordination", error: err };
   }

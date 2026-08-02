@@ -20,6 +20,16 @@ import {
 } from "./approval-renderers.js";
 export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-helpers.js";
 import type { ReplyPayload } from "./reply-payload.js";
+export {
+  approvalReactionDecisionSetsMatch,
+  extractApprovalReactionPromptBinding,
+  normalizeApprovalReactionDecision,
+  readApprovalReactionDecisionList,
+  readApprovalReactionDeliveredBinding,
+  readApprovalReactionDeliveryMetadata,
+  readApprovalReactionPresentationBinding,
+  type ApprovalReactionDeliveryBinding,
+} from "./approval-reaction-binding.js";
 
 type ApprovalKind = "exec" | "plugin";
 type KeyedStore<TValue> = {

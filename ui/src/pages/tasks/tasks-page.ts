@@ -28,8 +28,8 @@ import {
   normalizeTaskEventPayload,
   normalizeTasksCancelResult,
   normalizeTasksListResult,
-  type TaskSummary,
 } from "../../lib/tasks/data.ts";
+import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderTasks } from "./view.ts";

@@ -46,7 +46,7 @@ export type DurableFinalDeliveryRequirements = Partial<
 >;
 
 export type OutboundDurableDeliverySupport =
-  | { ok: true }
+  | { ok: true; automaticUnknownSendReconciliation: boolean }
   | {
       ok: false;
       reason: "missing_outbound_handler" | "capability_mismatch";

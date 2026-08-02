@@ -569,7 +569,8 @@ export async function approveNodePairing(
     const previousPairingGeneration = resolveNodePairingGeneration(device);
     const now = Math.max(Date.now(), (device.nodeSurface?.approvedAtMs ?? -1) + 1);
     device.nodeSurface = {
-      displayName: pending.displayName,
+      // Reapproval refreshes the node-declared surface without replacing the operator-owned name.
+      displayName: device.nodeSurface?.displayName ?? pending.displayName,
       version: pending.version,
       coreVersion: pending.coreVersion,
       uiVersion: pending.uiVersion,

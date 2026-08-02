@@ -20,6 +20,7 @@ import {
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
@@ -119,16 +120,6 @@ function mergeActionIntoArgsIfSupported(params: {
     "action" in schemaObj.properties,
   );
   return hasAction ? { ...args, action } : args;
-}
-
-function getErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message || String(err);
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  return String(err);
 }
 
 function resolveToolInputErrorStatus(err: unknown): number | null {
@@ -337,7 +328,7 @@ export async function invokeGatewayTool(params: {
         toolName,
         error: {
           type: "tool_error",
-          message: getErrorMessage(err) || "invalid tool arguments",
+          message: formatErrorMessage(err) || "invalid tool arguments",
         },
       };
     }

@@ -22,18 +22,21 @@ const prepareOptions = [
     brandId: "ollama",
     label: "Ollama",
     hint: "Connect to an Ollama server and select a cloud or local model",
+    actionLabel: "Choose connection",
   },
   {
     id: "llama-cpp",
     brandId: "llama-cpp",
     label: "Local model (llama.cpp)",
     hint: "Download and run a private GGUF model",
+    actionLabel: "Review download",
   },
   {
     id: "lmstudio",
     brandId: "lmstudio",
     label: "LM Studio",
     hint: "Connect to a running LM Studio server and use an already loaded model",
+    actionLabel: "Connect server",
     icon: "https://cdn.simpleicons.org/lmstudio",
     website: "https://lmstudio.ai/download",
   },
@@ -137,7 +140,7 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}settings/model-setup`);
       expect(response?.status()).toBe(200);
       const llamaCppRow = page.locator('[data-prepare-choice="llama-cpp"]');
-      await llamaCppRow.getByRole("button", { name: "Check & set up" }).waitFor();
+      await llamaCppRow.getByRole("button", { name: "Review download" }).waitFor();
       await expect
         .poll(() => llamaCppRow.locator('[data-provider-icon="llamacpp"]').count())
         .toBe(1);
@@ -154,7 +157,7 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
         });
       }
 
-      await llamaCppRow.getByRole("button", { name: "Check & set up" }).click();
+      await llamaCppRow.getByRole("button", { name: "Review download" }).click();
       const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
       expect(start.params).toMatchObject({ authChoice: "llama-cpp" });
       await page.getByRole("heading", { name: "Set up a local model" }).waitFor();
@@ -223,7 +226,8 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
       await page.setViewportSize({ height: 900, width: 1280 });
       await page.getByRole("button", { name: "Stay in settings" }).click();
       const currentConnection = page.locator(".model-setup__current");
-      await currentConnection.getByText(modelRef, { exact: true }).waitFor();
+      await currentConnection.getByText("llama.cpp", { exact: true }).waitFor();
+      await currentConnection.getByText("gemma-4-e4b-it-q4_k_m", { exact: true }).waitFor();
       await expect
         .poll(() => currentConnection.locator('[data-provider-icon="llamacpp"]').count())
         .toBe(1);

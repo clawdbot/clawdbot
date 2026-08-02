@@ -26,10 +26,10 @@ import {
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
-  hasSubagentRunEnded,
   isLiveUnendedSubagentRun,
   shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
+import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
 type SubagentListItem = {
   index: number;
@@ -144,25 +144,6 @@ function isActiveSubagentRun(
   return isLiveUnendedSubagentRun(entry) || pendingDescendantCount(entry.childSessionKey) > 0;
 }
 
-function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
-  const pendingDescendants = Math.max(0, options?.pendingDescendants ?? 0);
-  if (pendingDescendants > 0) {
-    const childLabel = pendingDescendants === 1 ? "child" : "children";
-    return `active (waiting on ${pendingDescendants} ${childLabel})`;
-  }
-  if (!hasSubagentRunEnded(entry)) {
-    return "running";
-  }
-  const status = entry.outcome?.status ?? "done";
-  if (status === "ok") {
-    return "done";
-  }
-  if (status === "error") {
-    return "failed";
-  }
-  return status;
-}
-
 function resolveModelRef(entry?: SessionEntry, fallbackModel?: string) {
   return resolveModelDisplayRef({
     runtimeProvider: entry?.modelProvider,
@@ -240,9 +221,7 @@ export function buildSubagentList(params: {
     const totalTokens = resolveTotalTokens(sessionEntry);
     const usageText = formatTokenUsageDisplay(sessionEntry);
     const pendingDescendants = pendingDescendantCount(entry.childSessionKey);
-    const status = resolveRunStatus(entry, {
-      pendingDescendants,
-    });
+    const status = resolveSubagentDisplayStatus(entry, pendingDescendants);
     const childSessions = childSessionsByController.get(entry.childSessionKey) ?? [];
     const runtime = formatDurationCompact(runtimeMs) ?? "n/a";
     const label = truncateLine(resolveSubagentLabel(entry), 48);
@@ -266,7 +245,7 @@ export function buildSubagentList(params: {
       model: resolveModelRef(sessionEntry, entry.model),
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
-      ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),
+      ...(entry.execution.endedAt ? { endedAt: entry.execution.endedAt } : {}),
     };
     index += 1;
     return view;
@@ -278,11 +257,14 @@ export function buildSubagentList(params: {
     .filter(
       (entry) =>
         !isActiveSubagentRun(entry, pendingDescendantCount) &&
-        Boolean(entry.endedAt) &&
-        (entry.endedAt ?? 0) >= recentCutoff,
+        Boolean(entry.execution.endedAt) &&
+        (entry.execution.endedAt ?? 0) >= recentCutoff,
     )
     .map((entry) =>
-      buildListEntry(entry, getSubagentSessionRuntimeMs(entry, entry.endedAt ?? now) ?? 0),
+      buildListEntry(
+        entry,
+        getSubagentSessionRuntimeMs(entry, entry.execution.endedAt ?? now) ?? 0,
+      ),
     );
   return {
     total: dedupedRuns.length,

@@ -49,6 +49,8 @@ const GEMINI_CLI_API_KEY_AUTH_ENV = [
 ];
 const GEMINI_CLI_PROFILE_AUTH_ENV = [...GEMINI_CLI_API_KEY_AUTH_ENV, "GEMINI_API_KEY"];
 const GEMINI_CLI_PROFILE_SETTINGS_ENV = ["GEMINI_CLI_SYSTEM_SETTINGS_PATH"];
+const GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE =
+  "Open Models settings and connect Google with an AI Studio API key, then select that profile for this model.";
 
 type GeminiAuthProfileCredential = {
   type: "api_key" | "oauth" | "token";
@@ -116,14 +118,14 @@ function throwUnstageableSelectedGeminiProfile(
   }
   if (!credential) {
     throw new Error(
-      "Gemini CLI auth profile was selected but no credential material was found. Re-authenticate with `openclaw models auth login --provider google-gemini-cli --force`.",
+      `Gemini CLI auth profile was selected but no credential material was found. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
     );
   }
   if (credential.provider !== GEMINI_CLI_PROVIDER_ID) {
     throwUnsupportedGeminiCredential(credential);
   }
   throw new Error(
-    "Gemini CLI execution supports google-gemini-cli OAuth or API-key auth profiles. Re-authenticate with `openclaw models auth login --provider google-gemini-cli --force`.",
+    `Gemini CLI execution requires a Google AI Studio API-key profile or a previously configured valid Gemini CLI OAuth profile. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
   );
 }
 
@@ -149,7 +151,7 @@ function requireGeminiOAuthCredential(
     !Number.isFinite(credential.expires)
   ) {
     throw new Error(
-      "Gemini CLI OAuth profile is missing usable token material. Re-authenticate with `openclaw models auth login --provider google-gemini-cli --force`.",
+      `Gemini CLI OAuth profile is incomplete and cannot be repaired by OpenClaw. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
     );
   }
 

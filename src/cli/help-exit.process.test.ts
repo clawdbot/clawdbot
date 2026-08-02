@@ -215,6 +215,10 @@ type CliProcessFailure = Error & {
   stdout?: string;
 };
 describe("CLI help process exit", () => {
+  it("disables esbuild worker IPC for source CLI children", () => {
+    expect(process.env.ESBUILD_WORKER_THREADS).toBe("0");
+  });
+
   it("exits promptly after root --help", async () => {
     // Keep this precomputed-help case off plugin discovery; plugin-sensitive root help is covered
     // separately, so the shared child timeout remains a deadlock guard rather than a startup SLO.
@@ -359,6 +363,13 @@ describe("JSON console style process output", () => {
     expect(output).toHaveProperty("gateway");
     expect(output).not.toHaveProperty("level");
     expect(output).not.toHaveProperty("message");
+  });
+
+  it("keeps config file output as one raw path", async () => {
+    const result = await runCliProcess({ args: ["config", "file"], config: loggingConfig });
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(`${result.fixture.configPath}\n`);
   });
 
   it("keeps typed recommendation machine output as a raw array", async () => {

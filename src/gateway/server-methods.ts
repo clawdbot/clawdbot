@@ -7,8 +7,11 @@ import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
-import { getActivePluginHttpRouteRegistry } from "../plugins/runtime.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { getActivePluginHttpRouteRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
@@ -941,15 +944,18 @@ function createRequestGatewayMethodRegistry(
       ([method]) => !pluginMethodNames.has(method) && !coreMethodNames.has(method),
     ),
   );
-  return createGatewayMethodRegistry([
-    ...coreDescriptors,
-    ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
-    ...createGatewayMethodDescriptorsFromHandlers({
-      handlers: auxHandlers,
-      owner: { kind: "aux", area: "gateway-extra" },
-      defaultScope: ADMIN_SCOPE,
-    }),
-  ]);
+  return createGatewayMethodRegistry(
+    [
+      ...coreDescriptors,
+      ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
+      ...createGatewayMethodDescriptorsFromHandlers({
+        handlers: auxHandlers,
+        owner: { kind: "aux", area: "gateway-extra" },
+        defaultScope: ADMIN_SCOPE,
+      }),
+    ],
+    gatewayPluginRegistry ?? undefined,
+  );
 }
 
 /** Authorizes and dispatches one gateway JSON-RPC-style request. */
@@ -959,8 +965,8 @@ export async function handleGatewayRequest(
   const { req, respond, client, isWebchatConnect, context, signal } = opts;
   // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
   // metadata newer than global runtime state still authorizes and dispatches correctly. When the
-  // attached snapshot does not own the method, rebuild from the gateway-pinned registry. Without
-  // a gateway pin, that registry follows active plugins so late methods remain reachable (#94127).
+  // attached snapshot does not own the method, rebuild from the process-root registry so late
+  // methods remain reachable (#94127).
   const methodRegistry =
     opts.methodRegistry?.getHandler(req.method) !== undefined
       ? opts.methodRegistry
@@ -1115,8 +1121,20 @@ export async function handleGatewayRequest(
   // The scope also carries caller identity into plugin-owned gateway methods.
   const invokeWithRequestScope = async () => {
     try {
+      const pluginRegistry =
+        (methodRegistry.pluginRegistry as
+          | NonNullable<ReturnType<typeof getActivePluginRegistry>>
+          | undefined) ??
+        getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+        getActivePluginRegistry() ??
+        undefined;
       await withPluginRuntimeGatewayRequestScope(
-        { context, client, isWebchatConnect },
+        {
+          context,
+          client,
+          isWebchatConnect,
+          ...(pluginRegistry ? { pluginRegistry } : {}),
+        },
         invokeHandler,
       );
     } catch (error) {

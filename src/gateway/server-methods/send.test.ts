@@ -140,6 +140,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
     config?: unknown;
     agentId?: string;
   }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
+  resolveAgentConfig: () => undefined,
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
 }));
@@ -3898,7 +3899,85 @@ describe("gateway send mirroring", () => {
     expect(firstRespondCall(respond)[0]).toBe(true);
     const actionCall = lastDispatchChannelMessageActionCall();
     expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
+    expect(actionCall).not.toHaveProperty("mediaAccess");
+    expect(actionCall).not.toHaveProperty("mediaReadFile");
     expect(actionCall?.gatewayClientScopes).toEqual(["operator.write"]);
+  });
+
+  it("passes reader-free workspace media access only to gateway send actions", async () => {
+    registerMessageActionPlugin({ registrySuffix: "message-action-workspace-media-access" });
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: { to: "123", message: "chart", mediaUrl: "chart.png" },
+        agentId: "work",
+        idempotencyKey: "idem-message-action-workspace-media-access",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    const actionCall = lastDispatchChannelMessageActionCall();
+    expect(actionCall?.mediaAccess).toMatchObject({
+      localRoots: expect.arrayContaining([TEST_AGENT_WORKSPACE]),
+      workspaceDir: TEST_AGENT_WORKSPACE,
+    });
+    expect(actionCall?.mediaAccess.localRoots).toBe(actionCall?.mediaLocalRoots);
+    expect(actionCall?.mediaAccess).not.toHaveProperty("readFile");
+    expect(actionCall).not.toHaveProperty("mediaReadFile");
+  });
+
+  it("uses signed sender group policy without granting gateway send host reads", async () => {
+    const plugin = registerMessageActionPlugin({
+      chatType: "group",
+      registrySuffix: "message-action-signed-sender-media-policy",
+    });
+    const resolveToolPolicy = vi.fn(({ senderId }: { senderId?: string | null }) =>
+      senderId === "blocked-sender" ? { deny: ["read"] } : undefined,
+    );
+    plugin.groups = { resolveToolPolicy };
+    const sessionKey = "agent:work:telegram:group:ops";
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: { to: "ops", message: "chart", mediaUrl: "chart.png" },
+        requesterSenderId: "forged-allowed-sender",
+        sessionKey,
+        agentId: "work",
+        idempotencyKey: "idem-message-action-signed-sender-media-policy",
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "work",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              requesterSenderId: "blocked-sender",
+            },
+          },
+        },
+      },
+      {
+        ...makeContext(),
+        getRuntimeConfig: () => ({ tools: { allow: ["read"] } }),
+      } as GatewayRequestContext,
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(resolveToolPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ groupId: "ops", senderId: "blocked-sender" }),
+    );
+    const actionCall = lastDispatchChannelMessageActionCall();
+    expect(actionCall?.requesterSenderId).toBe("blocked-sender");
+    expect(actionCall?.mediaAccess.workspaceDir).toBe(TEST_AGENT_WORKSPACE);
+    expect(actionCall?.mediaAccess).not.toHaveProperty("readFile");
+    expect(actionCall).not.toHaveProperty("mediaReadFile");
   });
 
   it("materializes buffer-only message.action sends on the gateway before plugin dispatch", async () => {

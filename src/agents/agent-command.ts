@@ -56,6 +56,7 @@ import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery-store.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
+import { measureAgentStartup } from "./startup-timing.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -386,53 +387,63 @@ async function agentCommandInternal(
         });
       }
 
-      const embeddedSessionState = await prepareEmbeddedSessionState({
-        cfg,
-        opts,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        sessionId,
-        storePath,
-        sessionAgentId,
-        lifecycleGeneration,
-        runId,
-        workspaceDir,
-        isNewSession,
-        isSubagentLaneTurn,
-        suppressVisibleSessionEffects,
-        thinkOnce,
-        thinkOverride,
-        persistedThinking,
-        verboseOverride,
-        persistedVerbose,
-        verboseDefault: agentCfg?.verboseDefault as VerboseLevel | undefined,
-        sessionStateActor,
-      });
+      const embeddedSessionState = await measureAgentStartup(
+        "session-state",
+        () =>
+          prepareEmbeddedSessionState({
+            cfg,
+            opts,
+            sessionEntry,
+            sessionStore,
+            sessionKey,
+            sessionId,
+            storePath,
+            sessionAgentId,
+            lifecycleGeneration,
+            runId,
+            workspaceDir,
+            isNewSession,
+            isSubagentLaneTurn,
+            suppressVisibleSessionEffects,
+            thinkOnce,
+            thinkOverride,
+            persistedThinking,
+            verboseOverride,
+            persistedVerbose,
+            verboseDefault: agentCfg?.verboseDefault as VerboseLevel | undefined,
+            sessionStateActor,
+          }),
+        { config: cfg },
+      );
       sessionEntry = embeddedSessionState.sessionEntry;
       const { requestedThinkLevel, runContext } = embeddedSessionState;
 
-      const modelSelection = await resolveEmbeddedModelSelection({
-        cfg,
-        opts,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        sessionId,
-        storePath,
-        sessionAgentId,
-        workspaceDir,
-        pluginsEnabled,
-        manifestMetadataSnapshot,
-        modelManifestContext,
-        configuredThinkingCatalog,
-        requestedThinkLevel,
-        thinkOverride,
-        thinkOnce,
-        isSubagentLane,
-        suppressVisibleSessionEffects,
-        runContext,
-      });
+      const modelSelection = await measureAgentStartup(
+        "model-selection",
+        () =>
+          resolveEmbeddedModelSelection({
+            cfg,
+            opts,
+            sessionEntry,
+            sessionStore,
+            sessionKey,
+            sessionId,
+            storePath,
+            sessionAgentId,
+            workspaceDir,
+            pluginsEnabled,
+            manifestMetadataSnapshot,
+            modelManifestContext,
+            configuredThinkingCatalog,
+            requestedThinkLevel,
+            thinkOverride,
+            thinkOnce,
+            isSubagentLane,
+            suppressVisibleSessionEffects,
+            runContext,
+          }),
+        { config: cfg },
+      );
       sessionEntry = modelSelection.sessionEntry;
       const embeddedAttempt = await runEmbeddedAgentAttempt({
         prepared,
@@ -546,7 +557,9 @@ export async function agentCommand(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  const resolvedDeps = await resolveAgentCommandDeps(deps);
+  const resolvedDeps = await measureAgentStartup("command-dependencies", () =>
+    resolveAgentCommandDeps(deps),
+  );
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
@@ -570,7 +583,9 @@ export async function agentCommand(
             allowModelOverride: opts.allowModelOverride ?? true,
           },
           prepare: async (preparedOpts) =>
-            await prepareAgentCommandExecution(preparedOpts, runtime),
+            await measureAgentStartup("command-prepare", () =>
+              prepareAgentCommandExecution(preparedOpts, runtime),
+            ),
           run: async (prepared) =>
             await agentCommandInternal(prepared, prepared.opts, runtime, resolvedDeps),
         }),

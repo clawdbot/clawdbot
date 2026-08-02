@@ -22,6 +22,7 @@ const prepareOptions = [
     brandId: "lmstudio",
     label: "LM Studio",
     hint: "Connect to a running LM Studio server and use an already loaded model",
+    actionLabel: "Connect server",
     icon: "https://cdn.simpleicons.org/lmstudio",
     website: "https://lmstudio.ai/download",
   },
@@ -138,7 +139,7 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}settings/model-setup`);
       expect(response?.status()).toBe(200);
       const lmStudioRow = page.locator('[data-prepare-choice="lmstudio"]');
-      await lmStudioRow.getByRole("button", { name: "Check & set up" }).waitFor();
+      await lmStudioRow.getByRole("button", { name: "Connect server" }).waitFor();
       await expect
         .poll(() => lmStudioRow.locator('[data-provider-icon="lmstudio"]').count())
         .toBe(1);
@@ -152,7 +153,7 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
         });
       }
 
-      await lmStudioRow.getByRole("button", { name: "Check & set up" }).click();
+      await lmStudioRow.getByRole("button", { name: "Connect server" }).click();
       const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
       expect(start.params).toMatchObject({ authChoice: "lmstudio" });
       await expect
@@ -228,7 +229,8 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
       await page.setViewportSize({ height: 900, width: 1280 });
       await page.getByRole("button", { name: "Stay in settings" }).click();
       const currentConnection = page.locator(".model-setup__current");
-      await currentConnection.getByText(modelRef, { exact: true }).waitFor();
+      await currentConnection.getByText("LM Studio", { exact: true }).waitFor();
+      await currentConnection.getByText("qwen3-8b-instruct", { exact: true }).waitFor();
       await expect
         .poll(() => currentConnection.locator('[data-provider-icon="lmstudio"]').count())
         .toBe(1);

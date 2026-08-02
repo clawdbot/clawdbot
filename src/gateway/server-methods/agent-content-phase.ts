@@ -29,11 +29,11 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   MediaOffloadError,
   logAttachmentFailure,
   parseMessageWithAttachments,
-  resolveChatAttachmentMaxBytes,
   type ChatAttachment,
 } from "../chat-attachments.js";
 import {

@@ -200,7 +200,11 @@ function ensureControllerOwnsRun(params: {
 }
 
 function isFinishedForSteerControl(entry: SubagentRunRecord, hasPendingDescendants: boolean) {
-  return Boolean(entry.endedAt) && entry.pauseReason !== "sessions_yield" && !hasPendingDescendants;
+  return (
+    Boolean(entry.execution.endedAt) &&
+    entry.pauseReason !== "sessions_yield" &&
+    !hasPendingDescendants
+  );
 }
 
 type SubagentKillTargetState =
@@ -233,7 +237,7 @@ function resolveSubagentKillTargetState(
   if (terminal) {
     return { state: "terminal", task: terminal };
   }
-  return typeof entry.endedAt === "number" &&
+  return typeof entry.execution.endedAt === "number" &&
     entry.pauseReason !== "sessions_yield" &&
     (entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
       entry.suppressAnnounceReason === "steer-restart")
@@ -305,7 +309,7 @@ async function killSubagentRun(params: {
     }
     return { killed: false, targetState: initialTargetState };
   }
-  if (params.entry.endedAt && params.entry.pauseReason !== "sessions_yield") {
+  if (params.entry.execution.endedAt && params.entry.pauseReason !== "sessions_yield") {
     return { killed: false };
   }
   const childSessionKey = params.entry.childSessionKey;
@@ -407,7 +411,7 @@ async function killSubagentRunTree(params: {
     params.seenChildSessionKeys.add(childKey);
     const entry = params.controllerSessionKey ? run : latest;
 
-    if (!entry.endedAt || entry.pauseReason === "sessions_yield") {
+    if (!entry.execution.endedAt || entry.pauseReason === "sessions_yield") {
       const stopResult = await killSubagentRun({
         cfg: params.cfg,
         entry,

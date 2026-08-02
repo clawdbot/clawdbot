@@ -2,15 +2,17 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import {
-  cleanStaleLockFiles,
   resolveSessionWriteLockStaleMs,
-  type SessionLockInspection,
-  type SessionLockOwnerProcessArgsReader,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
+import {
+  cleanStaleSessionLockFiles,
+  type SessionLockInspection,
+  type SessionLockOwnerProcessArgsReader,
+} from "./doctor-session-lock-files.js";
 
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
 const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old", "hold-exceeded"]);
@@ -62,7 +64,7 @@ export async function detectStaleSessionLocks(params?: {
   const sessionDirs = await resolveAgentSessionDirs(resolveStateDir(env));
   const staleLocks: SessionLockInspection[] = [];
   for (const sessionsDir of sessionDirs) {
-    const result = await cleanStaleLockFiles({
+    const result = await cleanStaleSessionLockFiles({
       sessionsDir,
       staleMs,
       removeStale: false,
@@ -126,7 +128,7 @@ export async function noteSessionLockHealth(params?: {
 
   const allLocks: SessionLockInspection[] = [];
   for (const sessionsDir of sessionDirs) {
-    const result = await cleanStaleLockFiles({
+    const result = await cleanStaleSessionLockFiles({
       sessionsDir,
       staleMs,
       removeStale: shouldRepair,

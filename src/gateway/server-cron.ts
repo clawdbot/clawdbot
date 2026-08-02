@@ -84,6 +84,7 @@ import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 import {
   dispatchGatewayCronFinishedNotifications,
+  sendGatewayCronWebhook,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
 import {
@@ -846,6 +847,16 @@ export function buildGatewayCronService(params: {
         };
       }
     },
+    sendCronWebhook: async ({ job, event, abortSignal, deadlineAtMs, onDeliveryAccepted }) => {
+      await sendGatewayCronWebhook({
+        job,
+        event,
+        abortSignal,
+        onDeliveryAccepted,
+        ...(deadlineAtMs !== undefined ? { deadlineAtMs } : {}),
+        webhookToken: params.cfg.cron?.webhookToken,
+      });
+    },
     runScriptJob: async ({ job, streamBatch, abortSignal }) => {
       if (!scriptRuntime || job.payload.kind !== "script") {
         return { status: "error", error: "cron script payload executor is unavailable" };
@@ -987,7 +998,7 @@ export function buildGatewayCronService(params: {
         "cron: isolated agent setup timed out before runner start; backing off job without gateway restart",
       );
     },
-    sendCronFailureAlert: async ({ job, text, runAtMs, channel, to, mode, accountId }) =>
+    sendCronFailureAlert: async ({ job, text, runAtMs, channel, to, mode, accountId, threadId }) =>
       await sendGatewayCronFailureAlert({
         deps: params.deps,
         logger: cronLogger,
@@ -1000,6 +1011,7 @@ export function buildGatewayCronService(params: {
         to,
         mode,
         accountId,
+        threadId,
       }),
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {

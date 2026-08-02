@@ -1182,6 +1182,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     currentTs: string;
     channelsConfig?: Parameters<typeof createInboundSlackCtx>[0]["channelsConfig"];
     allowFrom?: string[];
+    outboundOnlySessionKey?: string;
     resolveChannelName?: (channelId: string) => Promise<{
       name?: string;
       type?: SlackMessageEvent["channel_type"];
@@ -1192,6 +1193,16 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   async function prepareThreadContextAllowlistCase(params: ThreadContextAllowlistCaseParams) {
     const { storePath } = storeFixture.makeTmpStorePath();
+    if (params.outboundOnlySessionKey) {
+      const now = Date.now();
+      await seedSessionEntries(storePath, {
+        [params.outboundOnlySessionKey]: {
+          sessionId: "outbound-only-thread-session",
+          updatedAt: now,
+          sessionStartedAt: now,
+        },
+      });
+    }
     const historyUser = params.historyUser ?? params.user;
     const replies = vi
       .fn()
@@ -1257,7 +1268,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     replies: ReturnType<typeof vi.fn>,
     starterText: string,
     followUpText: string,
-    options?: { expectStarterBody?: boolean },
+    options?: { expectStarterBody?: boolean; expectAssistantHistory?: boolean },
   ) {
     assertPrepared(prepared);
     if (options?.expectStarterBody === false) {
@@ -1267,7 +1278,12 @@ describe("slack prepareSlackMessage inbound contract", () => {
     }
     expect(prepared.ctxPayload.ThreadHistoryBody).toContain(starterText);
     expect(prepared.ctxPayload.ThreadHistoryBody).toContain(followUpText);
-    expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
+    if (options?.expectAssistantHistory) {
+      expect(prepared.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
+      expect(prepared.ctxPayload.ThreadHistoryBody).toContain("Bot (this assistant) (assistant)");
+    } else {
+      expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
+    }
     expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
   }
@@ -2295,6 +2311,50 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(channelMetadata).toContain("Do dangerous things");
   });
 
+  it("records a human workspace and channel title for session display", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    slackCtx.teamId = "T0BDK6HMPS7";
+    slackCtx.installationIdentity = {
+      kind: "workspace",
+      teamId: "T0BDK6HMPS7",
+      teamName: "Local Claw",
+    } as SlackMonitorContext["installationIdentity"];
+    slackCtx.resolveChannelName = async () => ({ name: "channel-name", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({ channel: "C0BDN50FL2Z", channel_type: "channel" }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.GroupSubject).toBe("Local Claw #channel-name");
+  });
+
+  it("records explicit stable Slack ids when channel metadata is unavailable", async () => {
+    const { account, ctx } = createMissingChannelInfoBotCtx();
+    ctx.teamId = "T0BDK6HMPS7";
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "C0BDN50FL2Z",
+        channel_type: "channel",
+        user: "U1",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.GroupSubject).toBe(
+      "Slack Channel (Workspace ID: T0BDK6HMPS7, Channel ID: C0BDN50FL2Z)",
+    );
+  });
+
   it("classifies D-prefix DMs correctly even when channel_type is wrong", async () => {
     const prepared = await prepareMessageWith(
       createDmScopeMainSlackCtx(),
@@ -2873,9 +2933,18 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       followUpTs: "400.800",
       currentTs: "401.000",
       allowFrom: ["U4"],
+      outboundOnlySessionKey: "agent:main:slack:group:g400:thread:400.000",
     });
 
-    expectThreadContextAllowsHumanHistory(prepared, replies, "starter from mpim", "mpim follow-up");
+    expectThreadContextAllowsHumanHistory(
+      prepared,
+      replies,
+      "starter from mpim",
+      "mpim follow-up",
+      {
+        expectAssistantHistory: true,
+      },
+    );
   });
 
   it("skips loading thread history when thread session already exists in store (bloat fix)", async () => {

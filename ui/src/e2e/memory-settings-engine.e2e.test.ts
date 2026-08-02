@@ -157,6 +157,93 @@ describeControlUiE2e("Control UI memory engine settings mocked Gateway E2E", () 
     }
   });
 
+  it("keeps a committed add-on enabled and makes a failed config refresh visible", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    const activeMemory = {
+      id: "active-memory",
+      name: "Active memory",
+      installed: true,
+      enabled: false,
+      state: "disabled",
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": configResponse("memory-lancedb", "memory-refresh-hash-1"),
+        "plugins.list": {
+          plugins: [...memoryPlugins, activeMemory],
+          diagnostics: [],
+          mutationAllowed: true,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}settings/memory/settings`);
+      const toggle = page.getByRole("switch", { name: "Enable or disable Active memory" });
+      await toggle.waitFor();
+      const initialConfigReads = (await gateway.getRequests("config.get")).length;
+      const initialCatalogReads = (await gateway.getRequests("plugins.list")).length;
+      await gateway.deferNext("plugins.setEnabled");
+      await gateway.deferNext("config.get");
+      await page
+        .locator("wa-switch.settings-toggle")
+        .filter({ hasText: "Enable or disable Active memory" })
+        .click();
+
+      const mutation = await gateway.waitForRequest("plugins.setEnabled");
+      expect(mutation.params).toEqual({ pluginId: "active-memory", enabled: true });
+      const committed = { ...activeMemory, enabled: true, state: "enabled" };
+      await gateway.setMethodResponse("plugins.list", {
+        plugins: [...memoryPlugins, committed],
+        diagnostics: [],
+        mutationAllowed: true,
+      });
+      await gateway.resolveDeferred("plugins.setEnabled", {
+        ok: true,
+        plugin: committed,
+        restartRequired: false,
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("config.get")).length)
+        .toBeGreaterThan(initialConfigReads);
+      await gateway.rejectDeferred("config.get", {
+        code: "UNAVAILABLE",
+        message: "authoritative snapshot unavailable",
+      });
+
+      await expect
+        .poll(async () => (await gateway.getRequests("plugins.list")).length)
+        .toBeGreaterThan(initialCatalogReads);
+      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
+      await page.getByText("Needs attention", { exact: true }).first().waitFor();
+      await page
+        .getByText(
+          "Could not refresh Control UI configuration: GatewayRequestError: authoritative snapshot unavailable",
+        )
+        .waitFor();
+      expect(await page.getByText("Could not update Active memory").count()).toBe(0);
+      expect(pageErrors).toEqual([]);
+
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page.locator("openclaw-memory-settings").screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, "03-addon-committed-refresh-warning.png"),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps a missing default engine labelled, first, and selected as unavailable", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",

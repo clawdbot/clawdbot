@@ -20,6 +20,7 @@ export type { ModelAuthMode } from "./model-auth-model.js";
 export {
   canUseProfileAsProviderEntryApiKey,
   getCustomProviderApiKey,
+  hasSyntheticLocalProviderAuthConfig,
   hasUsableCustomProviderApiKey,
   resolveProviderEntryApiKeyBinding,
   resolveProviderEntryApiKeyProfileReference,
@@ -32,7 +33,6 @@ export type { ProviderCredentialPrecedence } from "./model-auth-provider.js";
 export {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
-  hasSyntheticLocalProviderAuthConfig,
 } from "./model-auth-runtime.js";
 export type { RuntimeProviderAuthLookup } from "./model-auth-runtime.js";
 export {

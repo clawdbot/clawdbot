@@ -99,6 +99,30 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["run"]).toHaveBeenCalledWith("demo", "force", { payload });
   });
 
+  it("preserves system-owned removal authority across lazy cron loading", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    await lazy.cron.remove("heartbeat-monitor", { systemOwned: true });
+
+    expect(cron["remove"]).toHaveBeenCalledExactlyOnceWith("heartbeat-monitor", {
+      systemOwned: true,
+    });
+  });
+
+  it("prepares a lazy scheduler before an operator wake without starting it", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    await lazy.cron.prepareWake?.();
+
+    expect(lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
+    expect(cron["start"]).not.toHaveBeenCalled();
+    expect(cron["wake"]).toHaveBeenCalledExactlyOnceWith({ mode: "now", text: "ping" });
+  });
+
   it("starts the loaded cron service once", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));

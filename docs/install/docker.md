@@ -8,7 +8,7 @@ title: "Docker"
 
 Docker is **optional**. Use it for an isolated, throwaway gateway environment or a host without local installs. If you already develop on your own machine, use the normal install flow instead.
 
-The default sandbox backend uses Docker when `agents.defaults.sandbox` is enabled, but sandboxing is off by default and does not require the gateway itself to run in Docker. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
+The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
 Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.
 

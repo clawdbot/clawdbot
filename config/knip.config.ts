@@ -21,6 +21,8 @@ const repositoryScriptEntries = [
   "scripts/check-package-dist-imports.mjs!",
   "scripts/dev/ios-node-e2e.ts!",
   "scripts/diffs-shiki-curated.ts!",
+  // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
+  "scripts/docker-e2e.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs!",
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs!",
@@ -169,7 +171,6 @@ const rootEntries = [
   "apps/android/app/src/main/assets/katex/renderer.js!",
   "apps/linux/ui/main.js!",
   "apps/linux/ui/quickchat.js!",
-  "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
@@ -265,6 +266,8 @@ const rootToolingAndWorkspaceDependencies = [
   "ipaddr.js",
   "jscpd",
   "lit",
+  // Runtime postbuild resolves this build input from its caller-selected root.
+  "marked",
   "oxlint",
   "oxlint-tsgolint",
   "signal-utils",
@@ -359,7 +362,6 @@ const config = {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
-    "src/boards/board-layout.ts": ["types"],
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
     // Test and E2E callers reach these hooks through runtime.test-support.ts;
@@ -368,21 +370,24 @@ const config = {
     "src/gateway/board-view-ticket.ts": ["exports"],
     // Focused startup tests consume this explicit seam; production imports only the bootstrap.
     "src/gateway/server-startup-bootstrap.ts": ["exports"],
+    // Registry facades retain direct registration/reset compatibility seams used by focused
+    // tests; the full-tree scan still audits every named export against those consumers.
+    "src/agents/harness/registry.ts": ["exports"],
+    "src/context-engine/registry.ts": ["exports", "types"],
+    "src/plugins/compaction-provider.ts": ["exports"],
+    "src/plugins/interactive-registry.ts": ["exports"],
+    "src/plugins/memory-state.ts": ["exports", "types"],
+    "src/plugins/session-discussion-registry.ts": ["exports"],
+    "src/tasks/detached-task-runtime-state.ts": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
-    // GatewayBoardProvider and boardExists are constructed/asserted by the
-    // focused Control UI provider tests, not by a separate production module.
-    "ui/src/lib/board/provider.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
     // Focused tests consume these diagnostic/test seams; production code uses
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],
-    // The resolver's executable-path validation is covered through focused tests;
-    // production imports only the narrower op resolver.
-    "extensions/onepassword/onepassword-op-path.js": ["exports"],
     // Focused CLI tests exercise plan construction through this explicit test seam.
     "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are

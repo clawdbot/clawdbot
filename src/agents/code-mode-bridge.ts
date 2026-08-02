@@ -1,19 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatErrorMessage } from "../infra/errors.js";
 import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
-import {
-  errorMessage,
-  type PendingBridgeRequest,
-  type SettledBridgeRequest,
-} from "./code-mode-runtime.js";
+import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { stableStringify } from "./stable-stringify.js";
 import { getSwarmRunByLaunchReplayKey, initSubagentRegistry } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -538,7 +535,7 @@ export async function runBridgeRequest(params: {
     }
     return { id: params.request.id, ok: true, value: toCodeModeJsonSafe(value) };
   } catch (error) {
-    return { id: params.request.id, ok: false, error: errorMessage(error) };
+    return { id: params.request.id, ok: false, error: formatErrorMessage(error) };
   }
 }
 

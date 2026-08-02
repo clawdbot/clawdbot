@@ -66,8 +66,16 @@ import {
 
 const REQUESTER = "agent:main:main";
 
-function makeSettledChild(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
+type SettledChildOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunRecord["execution"]["outcome"];
+  execution?: SubagentRunRecord["execution"];
+};
+
+function makeSettledChild(overrides: SettledChildOverrides): SubagentRunRecord {
   const runId = overrides.runId ?? "run-child";
+  const { startedAt = 2_000, endedAt = 3_000, outcome, execution, ...recordOverrides } = overrides;
   return {
     runId,
     childSessionKey: overrides.childSessionKey ?? `agent:main:subagent:${runId}`,
@@ -76,12 +84,11 @@ function makeSettledChild(overrides: Partial<SubagentRunRecord>): SubagentRunRec
     task: "investigate",
     cleanup: "keep",
     createdAt: 1_000,
-    startedAt: 2_000,
-    endedAt: 3_000,
+    execution: execution ?? { status: "terminal", startedAt, endedAt, outcome },
     expectsCompletionMessage: true,
     delivery: { status: "delivered" },
     requesterSettleWake: { status: "pending", attemptCount: 0 },
-    ...overrides,
+    ...recordOverrides,
   };
 }
 
@@ -175,6 +182,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(call.targetRequesterSessionKey).toBe(REQUESTER);
     expect(call.requesterIsSubagent).toBe(false);
     expect(call.expectsCompletionMessage).toBe(false);
+    expect(call.requireDirectDelivery).toBe(true);
     expect(call.directIdempotencyKey).toBe(`announce:requester-settle:${REQUESTER}:run-a,run-b`);
     const message = String(call.triggerMessage);
     expect(message).toContain("settled");

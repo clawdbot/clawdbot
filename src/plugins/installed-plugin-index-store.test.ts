@@ -52,7 +52,6 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
         startup: {
           sidecar: false,
           memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
           agentHarnesses: [],
         },
         compat: [],
@@ -139,8 +138,6 @@ function dropStartupConfigPaths(
     startup: {
       sidecar: plugin.startup.sidecar,
       memory: plugin.startup.memory,
-      deferConfiguredChannelFullLoadUntilAfterListen:
-        plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen,
       agentHarnesses: plugin.startup.agentHarnesses,
     },
   };
@@ -230,6 +227,31 @@ describe("installed plugin index persistence", () => {
     expectPluginFields(persisted, "demo", { packageBuild: { bundledDist: false } });
   });
 
+  it("strips retired startup fields from persisted indexes", async () => {
+    const stateDir = makeTempDir();
+    const index = createIndex();
+    const plugin = index.plugins[0];
+    if (!plugin) {
+      throw new Error("Expected demo plugin fixture");
+    }
+    insertPersistedIndexRow(stateDir, {
+      pluginsJson: JSON.stringify([
+        {
+          ...plugin,
+          startup: {
+            ...plugin.startup,
+            deferConfiguredChannelFullLoadUntilAfterListen: true,
+          },
+        },
+      ]),
+    });
+
+    const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+    expect(persisted.plugins[0]?.startup).not.toHaveProperty(
+      "deferConfiguredChannelFullLoadUntilAfterListen",
+    );
+  });
+
   it("does not repair shared state schema while reading the index", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
@@ -282,7 +304,6 @@ describe("installed plugin index persistence", () => {
           startup: {
             sidecar: true,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
             configPaths: ["browser"],
           },
@@ -312,7 +333,6 @@ describe("installed plugin index persistence", () => {
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           contributions: {
@@ -429,6 +449,15 @@ describe("installed plugin index persistence", () => {
     insertPersistedIndexRow(stateDir, { version: 999 });
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
+  });
+
+  it("leaves retired JSON index files to the doctor migration owner", async () => {
+    const stateDir = makeTempDir();
+    const filePath = path.join(stateDir, "installs.json");
+    fs.writeFileSync(filePath, JSON.stringify(createIndex()), "utf8");
+
+    await expect(readPersistedInstalledPluginIndex({ filePath })).resolves.toBeNull();
+    await expect(readPersistedInstalledPluginIndexInstallRecords({ filePath })).resolves.toBeNull();
   });
 
   it("rejects pre-migration persisted indexes so update can rebuild them", async () => {

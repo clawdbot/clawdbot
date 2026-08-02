@@ -134,7 +134,7 @@ export function createSubagentRegistryRestorer(config: {
       startSweeper();
       const restoredSessionCache: SubagentSessionStoreCache = new Map();
       for (const [runId, entry] of runs) {
-        if (entry.collect && entry.execution?.status === "queued") {
+        if (entry.collect && entry.execution.status === "queued") {
           const launch = entry.queuedLaunch;
           if (!launch) {
             void failAndCleanupRestoredQueuedRun(
@@ -159,7 +159,7 @@ export function createSubagentRegistryRestorer(config: {
             runId,
             maxConcurrent: currentSwarmConfig.maxConcurrent,
             activeRunIds: groupRuns
-              .filter((candidate) => candidate.execution?.status === "running")
+              .filter((candidate) => candidate.execution.status === "running")
               .map((candidate) => candidate.schedulerSlotId ?? candidate.runId),
             start: async () => {
               await runWithGatewayIndependentRootWorkAdmission(async () => {

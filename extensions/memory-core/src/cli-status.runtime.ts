@@ -552,7 +552,15 @@ export async function runMemoryStatus(
         lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
       }
       if (!opts.fix) {
-        lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
+        // Only a subset of audit issues are repaired by `--fix`; a missing qmd
+        // index needs a reindex instead, so each hint is gated on the matching
+        // issue actually being present.
+        if (audit.issues.some((issue) => issue.fixable)) {
+          lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
+        }
+        if (audit.issues.some((issue) => issue.code === "qmd-index-missing")) {
+          lines.push(`  ${muted(`Fix: openclaw memory index --agent ${agentId}`)}`);
+        }
       }
     }
     if (dreamingAudit?.issues.length) {
@@ -562,7 +570,7 @@ export async function runMemoryStatus(
       for (const issue of dreamingAudit.issues) {
         lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
       }
-      if (!opts.fix) {
+      if (!opts.fix && dreamingAudit.issues.some((issue) => issue.fixable)) {
         lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
       }
     }

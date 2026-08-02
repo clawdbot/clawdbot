@@ -8,7 +8,6 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { prependAgentSteeringPrompt } from "./agent-steering-queue.js";
-import type { AgentRunSessionTarget } from "./run-session-target.js";
 import {
   getDeliveryAttemptCount,
   getDeliveryLastAttemptAt,
@@ -268,7 +267,7 @@ function resumeSubagentRun(runId: string) {
       entry.delivery?.status === "failed");
   if (
     entry.requesterSettleWake &&
-    typeof entry.endedAt === "number" &&
+    typeof entry.execution.endedAt === "number" &&
     !yieldedWakeWaitingForDelivery
   ) {
     resumeRequesterSettleWake(runId, entry);
@@ -277,7 +276,7 @@ function resumeSubagentRun(runId: string) {
   if (entry.cleanupCompletedAt) {
     return;
   }
-  if (typeof entry.endedAt === "number" && isDeliverySuspended(entry)) {
+  if (typeof entry.execution.endedAt === "number" && isDeliverySuspended(entry)) {
     return;
   }
   // Yielded runs stay paused until explicitly steered, except orchestrators
@@ -292,8 +291,8 @@ function resumeSubagentRun(runId: string) {
   }
   if (
     entry.expectsCompletionMessage !== true &&
-    typeof entry.endedAt === "number" &&
-    Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
+    typeof entry.execution.endedAt === "number" &&
+    Date.now() - entry.execution.endedAt > ANNOUNCE_EXPIRY_MS
   ) {
     finalizeResumedAnnounceGiveUpInBackground(runId, entry, "expiry");
     return;
@@ -310,7 +309,7 @@ function resumeSubagentRun(runId: string) {
     return;
   }
 
-  if (typeof entry.endedAt === "number" && entry.endedAt > 0) {
+  if (typeof entry.execution.endedAt === "number" && entry.execution.endedAt > 0) {
     if (entry.killReconciliation) {
       // Restored kills remain reconciliation tombstones; only the sweeper may
       // accept late provider completion or stabilize their task cancellation.
@@ -425,6 +424,7 @@ const subagentListener = createSubagentRegistryListener({
 
 const subagentRunManager = createSubagentRunManager({
   runs: subagentRuns,
+  getRunsForChildSession: getSubagentRunsForChildSession,
   resumedRuns,
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
@@ -473,7 +473,7 @@ configureSubagentRegistrySteerRuntime({
       !entry ||
       entry.collect !== true ||
       entry.collectorCompletion ||
-      typeof entry.endedAt === "number"
+      typeof entry.execution.endedAt === "number"
     ) {
       return false;
     }
@@ -492,41 +492,13 @@ configureSubagentRegistrySteerRuntime({
   },
 });
 
-export function markSubagentRunForSteerRestart(runId: string) {
-  return subagentRunManager.markSubagentRunForSteerRestart(runId);
-}
-
-export function clearSubagentRunSteerRestart(runId: string) {
-  return subagentRunManager.clearSubagentRunSteerRestart(runId);
-}
-
-export function replaceSubagentRunAfterSteer(params: {
-  previousRunId: string;
-  nextRunId: string;
-  fallback?: SubagentRunRecord;
-  runTimeoutSeconds?: number;
-  preserveFrozenResultFallback?: boolean;
-  transcriptTarget?: AgentRunSessionTarget;
-  task?: string;
-}) {
-  return subagentRunManager.replaceSubagentRunAfterSteer(params);
-}
-
-export function registerSubagentRun(params: RegisterSubagentRunParams) {
-  subagentRunManager.registerSubagentRun(params);
-}
-
-export function startQueuedSubagentRun(runId: string, gatewayRunId?: string) {
-  return subagentRunManager.startQueuedSubagentRun(runId, gatewayRunId);
-}
-
-function failQueuedSubagentRun(runId: string, error: string) {
-  return subagentRunManager.failQueuedSubagentRun(runId, error);
-}
-
-export function settleFailedQueuedSubagentLaunch(runId: string, error: string) {
-  return subagentRunManager.settleFailedQueuedSubagentLaunch(runId, error);
-}
+export const markSubagentRunForSteerRestart = subagentRunManager.markSubagentRunForSteerRestart;
+export const clearSubagentRunSteerRestart = subagentRunManager.clearSubagentRunSteerRestart;
+export const replaceSubagentRunAfterSteer = subagentRunManager.replaceSubagentRunAfterSteer;
+export const registerSubagentRun: (params: RegisterSubagentRunParams) => void =
+  subagentRunManager.registerSubagentRun;
+export const startQueuedSubagentRun = subagentRunManager.startQueuedSubagentRun;
+export const settleFailedQueuedSubagentLaunch = subagentRunManager.settleFailedQueuedSubagentLaunch;
 
 function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   clearScheduledResumeTimers();
@@ -551,7 +523,7 @@ function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
 }
 
 const testing = {
-  failQueuedSubagentRun,
+  failQueuedSubagentRun: subagentRunManager.failQueuedSubagentRun,
   async sweepOnceForTests() {
     await subagentSweeper.sweepOnce();
   },
@@ -567,18 +539,7 @@ function addSubagentRunForTests(entry: SubagentRunRecord) {
   subagentRuns.set(entry.runId, entry);
 }
 
-function releaseSubagentRun(runId: string) {
-  subagentRunManager.releaseSubagentRun(runId);
-}
-
-export function markSubagentRunTerminated(params: {
-  runId?: string;
-  childSessionKey?: string;
-  reason?: string;
-  suppressTaskDelivery?: boolean;
-}): number {
-  return subagentRunManager.markSubagentRunTerminated(params);
-}
+export const markSubagentRunTerminated = subagentRunManager.markSubagentRunTerminated;
 
 export { prependAgentSteeringPrompt };
 
@@ -633,7 +594,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[SUBAGENT_REGISTRY_TEST_HANDLE] = {
     addSubagentRunForTests,
     finalizeInterruptedSubagentRun: completionRuntime.finalizeInterruptedSubagentRun,
-    releaseSubagentRun,
+    releaseSubagentRun: subagentRunManager.releaseSubagentRun,
     resetSubagentRegistryForTests,
     testing,
   };

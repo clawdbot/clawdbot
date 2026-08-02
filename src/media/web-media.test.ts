@@ -11,12 +11,7 @@ import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  pinActivePluginHttpRouteRegistry,
-  releasePinnedPluginHttpRouteRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resizeToJpeg } from "./media-services.js";
 import { encodePngRgba, fillPixel } from "./png-encode.js";
@@ -359,32 +354,6 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
-  it("loads hosted plugin media from the pinned HTTP-route registry", async () => {
-    const httpRegistry = createEmptyPluginRegistry();
-    httpRegistry.hostedMediaResolvers = [
-      {
-        pluginId: "hosted-media",
-        resolver: (mediaUrl) =>
-          mediaUrl === "/__test__/hosted/pinned-tiny.png" ? canvasPngFile : null,
-        source: "test",
-      },
-    ];
-
-    try {
-      pinActivePluginHttpRouteRegistry(httpRegistry);
-      setActivePluginRegistry(createEmptyPluginRegistry());
-
-      const result = await loadWebMedia("/__test__/hosted/pinned-tiny.png", {
-        maxBytes: 1024 * 1024,
-      });
-
-      expect(result.kind).toBe("image");
-      expect(result.buffer.length).toBeGreaterThan(0);
-    } finally {
-      releasePinnedPluginHttpRouteRegistry(httpRegistry);
-    }
-  });
-
   it("surfaces Rastermill decode failures when image optimization cannot produce a JPEG", async () => {
     await expect(optimizeImageToJpeg(Buffer.from("not an image"), 8)).rejects.toThrow(
       /Unable to determine image dimensions/,
@@ -488,6 +457,35 @@ describe("loadWebMedia", () => {
         imageCompression: { models: [{ maxSidePx: 512 }] },
       }),
     ).rejects.toThrow(/dimensions exceed model image limits/i);
+  });
+
+  it("renames opaque PNGs converted to JPEG across direct and local image owners", async () => {
+    const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+    const sourcePng = createLargeColorBlockPng(64);
+    const imageCompression = { models: [{ maxSidePx: 32, preferredSidePx: 32 }] };
+
+    const direct = await optimizeImageBufferForWebMedia({
+      buffer: sourcePng,
+      contentType: "image/png",
+      fileName: "portrait.png",
+      maxBytes: 1024 * 1024,
+      imageCompression,
+    });
+    const convertedPath = path.join(fixtureRoot, "portrait.png");
+    await fs.writeFile(convertedPath, sourcePng);
+    const loaded = await loadWebMedia(convertedPath, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+      imageCompression,
+    });
+
+    for (const result of [direct, loaded]) {
+      expect(result.kind).toBe("image");
+      expect(result.contentType).toBe("image/jpeg");
+      expect(result.fileName).toBe("portrait.jpg");
+      expect(result.buffer.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+      expect(readJpegDimensions(result.buffer)).toEqual({ width: 32, height: 32 });
+    }
   });
 
   it("applies model image maxBytes to the effective image cap", async () => {

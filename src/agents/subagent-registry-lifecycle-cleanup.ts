@@ -71,7 +71,7 @@ export function createSubagentRegistryLifecycleCleanup(
     entry.expectsCompletionMessage === true &&
     entry.cleanup === "keep" &&
     entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
-    entry.outcome?.status === "ok";
+    entry.execution.outcome?.status === "ok";
 
   const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
     runId: string;
@@ -131,7 +131,7 @@ export function createSubagentRegistryLifecycleCleanup(
       if (excludeRunId && runId === excludeRunId) {
         continue;
       }
-      if (typeof entry.endedAt !== "number") {
+      if (typeof entry.execution.endedAt !== "number") {
         continue;
       }
       if (entry.cleanupCompletedAt || entry.cleanupHandled) {
@@ -143,7 +143,7 @@ export function createSubagentRegistryLifecycleCleanup(
       if (params.suppressAnnounceForSteerRestart(entry)) {
         continue;
       }
-      const endedAgo = now - (entry.endedAt ?? now);
+      const endedAgo = now - (entry.execution.endedAt ?? now);
       if (entry.expectsCompletionMessage !== true && endedAgo > ANNOUNCE_EXPIRY_MS) {
         if (!beginSubagentCleanup(runId)) {
           continue;
@@ -508,10 +508,15 @@ export function createSubagentRegistryLifecycleCleanup(
         recordAnnounceDeliveryResult(entry, delivery);
         if (delivery.delivered) {
           const deliveryState = ensureDeliveryState(entry);
-          if (deliveryState.lastError !== undefined) {
-            deliveryState.lastError = undefined;
-            params.persist(runId);
-          }
+          deliveryState.status = "delivered";
+          deliveryState.announcedAt = deliveryState.deliveredAt ?? Date.now();
+          deliveryState.lastError = undefined;
+          deliveryState.suspendedAt = undefined;
+          deliveryState.suspendedReason = undefined;
+          // Identified platform delivery precedes best-effort transcript
+          // mirroring; task ownership must become durable at that same edge.
+          params.persist(runId);
+          safeSetSubagentTaskDeliveryStatus({ entry, deliveryStatus: "delivered" });
           latestDeliveryError = undefined;
           return;
         }

@@ -365,6 +365,59 @@ describe("telegram thread bindings", () => {
     expect(reloaded.getByConversationId("8460800771")).toBeUndefined();
   });
 
+  it("persists only the changed binding without scanning or rewriting its siblings", async () => {
+    const manager = createTelegramThreadBindingManager({
+      accountId: "row-writes",
+      persist: true,
+      enableSweeper: false,
+    });
+    const entries = vi.spyOn(threadBindingStore, "entries");
+    const register = vi.spyOn(threadBindingStore, "register");
+    const remove = vi.spyOn(threadBindingStore, "delete");
+
+    const first = await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:subagent:first-row",
+      targetKind: "subagent",
+      conversation: {
+        channel: "telegram",
+        accountId: "row-writes",
+        conversationId: "first-thread",
+      },
+    });
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(entries).not.toHaveBeenCalled();
+
+    register.mockClear();
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:subagent:second-row",
+      targetKind: "subagent",
+      conversation: {
+        channel: "telegram",
+        accountId: "row-writes",
+        conversationId: "second-thread",
+      },
+    });
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(register.mock.calls[0]?.[1].conversationId).toBe("second-thread");
+    expect(entries).not.toHaveBeenCalled();
+
+    register.mockClear();
+    manager.touchConversation("first-thread");
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(register.mock.calls[0]?.[1].conversationId).toBe("first-thread");
+    expect(entries).not.toHaveBeenCalled();
+
+    register.mockClear();
+    await getSessionBindingService().unbind({
+      bindingId: first.bindingId,
+      reason: "test-row-delete",
+    });
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(register).not.toHaveBeenCalled();
+    expect(entries).not.toHaveBeenCalled();
+    expect(manager.getByConversationId("second-thread")).toBeDefined();
+  });
+
   it("persists bindings with json-clean metadata", async () => {
     createTelegramThreadBindingManager({
       accountId: "metadata",
