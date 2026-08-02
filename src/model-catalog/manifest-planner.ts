@@ -71,36 +71,12 @@ function mergeRemoteModelWithTrustedTransport(
   remoteModel: ModelCatalogModel,
   trustedModel: ModelCatalogModel | undefined,
 ): ModelCatalogModel {
-  const protectedLifecycleModel =
-    trustedModel?.status === "deprecated" || trustedModel?.status === "disabled"
-      ? trustedModel
-      : undefined;
-  const {
-    status: _remoteStatus,
-    statusReason: _remoteStatusReason,
-    replaces: _remoteReplaces,
-    replacedBy: _remoteReplacedBy,
-    ...remoteModelWithoutLifecycle
-  } = remoteModel;
   // Spread keeps an untrusted own `__proto__` key as data instead of invoking
-  // Object.prototype's setter. Trusted transport always wins; only terminal
-  // manifest lifecycles resist stale remote revival or replacement metadata.
+  // Object.prototype's setter while trusted transport fields win explicitly.
   return {
-    ...(protectedLifecycleModel ? remoteModelWithoutLifecycle : remoteModel),
+    ...remoteModel,
     ...(trustedModel?.baseUrl ? { baseUrl: trustedModel.baseUrl } : {}),
     ...(trustedModel?.headers ? { headers: trustedModel.headers } : {}),
-    ...(protectedLifecycleModel?.status !== undefined
-      ? { status: protectedLifecycleModel.status }
-      : {}),
-    ...(protectedLifecycleModel?.statusReason !== undefined
-      ? { statusReason: protectedLifecycleModel.statusReason }
-      : {}),
-    ...(protectedLifecycleModel?.replaces !== undefined
-      ? { replaces: protectedLifecycleModel.replaces }
-      : {}),
-    ...(protectedLifecycleModel?.replacedBy !== undefined
-      ? { replacedBy: protectedLifecycleModel.replacedBy }
-      : {}),
   };
 }
 
