@@ -97,8 +97,8 @@ hosted in NVIDIA's catalog when their context, latency, or behavior fits better.
 ## Bundled fallback catalog
 
 The selectable bundled rows snapshot NVIDIA's featured-model catalog. Deprecated
-compatibility rows remain resolvable by exact reference but stay out of model
-pickers.
+compatibility rows keep existing exact model references recognizable but stay
+out of model pickers.
 
 | Model ref                                  | Name                  | Context   | Max output |
 | ------------------------------------------ | --------------------- | --------- | ---------- |
@@ -110,10 +110,12 @@ pickers.
 | `nvidia/deepseek-ai/deepseek-v4-pro`       | DeepSeek V4 Pro       | 262,144   | 16,384     |
 
 The full compatibility catalog also retains these shipped refs for existing
-configurations: `nvidia/qwen/qwen3.5-397b-a17b`, `nvidia/moonshotai/kimi-k2.5`,
-`nvidia/z-ai/glm-5.1`, `nvidia/z-ai/glm5`, and `nvidia/minimaxai/minimax-m2.7`.
-They remain available by exact reference but never appear in onboarding or model
-pickers.
+configurations and migration: `nvidia/qwen/qwen3.5-397b-a17b`,
+`nvidia/moonshotai/kimi-k2.5`, `nvidia/z-ai/glm-5.1`, `nvidia/z-ai/glm5`, and
+`nvidia/minimaxai/minimax-m2.7`. These references never appear in onboarding or
+model pickers. NVIDIA has retired the Qwen endpoint, so requests using its model
+reference no longer work. Migrate existing Qwen configurations to an active
+model.
 
 ## Advanced configuration
 
