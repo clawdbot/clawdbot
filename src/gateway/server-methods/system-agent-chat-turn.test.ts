@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import {
   buildSystemAgentChatResult,
   getSystemAgentChatInputError,
@@ -12,7 +11,7 @@ function makeEngine() {
   return {
     answerWizard,
     handle,
-    engine: { answerWizard, handle } as unknown as SystemAgentChatEngine,
+    engine: { answerWizard, handle },
   };
 }
 

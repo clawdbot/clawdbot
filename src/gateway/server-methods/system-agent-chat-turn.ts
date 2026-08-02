@@ -5,6 +5,7 @@ import type {
 import type { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 
 type SystemAgentChatReply = Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
+type SystemAgentChatEngineInput = Pick<SystemAgentChatEngine, "answerWizard" | "handle">;
 
 export function getSystemAgentChatInputError(params: SystemAgentChatParams): string | undefined {
   if (params.message !== undefined && params.wizardAnswer !== undefined) {
@@ -20,7 +21,7 @@ export function getSystemAgentChatInputError(params: SystemAgentChatParams): str
 }
 
 export async function runSystemAgentChatInput(params: {
-  engine: SystemAgentChatEngine;
+  engine: SystemAgentChatEngineInput;
   input: SystemAgentChatParams;
 }): Promise<SystemAgentChatReply | undefined> {
   if (params.input.wizardAnswer !== undefined) {
