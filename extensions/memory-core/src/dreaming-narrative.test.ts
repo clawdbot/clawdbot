@@ -962,7 +962,7 @@ describe("runDreamNarrative", () => {
       "agent:main:dreaming-narrative-light-1": {
         sessionId: "orphan",
         sessionFile: orphanPath,
-        updatedAt,
+        updatedAt: updatedAt - 600_000,
       },
       "agent:main:kept-session": {
         sessionId: "still-live",
@@ -1020,7 +1020,7 @@ describe("runDreamNarrative", () => {
 
     const updatedStore = readSessionStoreEntries(storePath) as Record<string, unknown>;
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
-    expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-corrupt-normal");
+    expect(updatedStore).toHaveProperty("agent:main:dreaming-narrative-corrupt-normal");
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
     expect(loadTranscriptEventsSync({ agentId: "main", sessionId: "orphan", storePath })).toEqual(
@@ -1052,7 +1052,7 @@ describe("runDreamNarrative", () => {
       "agent:main:dreaming-narrative-deep-orphan": {
         sessionId: "orphan-dreaming",
         sessionFile: orphanTranscript,
-        updatedAt,
+        updatedAt: updatedAt - 600_000,
       },
       "agent:main:dreaming-narrative-deep-live": {
         sessionId: "live-dreaming",

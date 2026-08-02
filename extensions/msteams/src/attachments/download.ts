@@ -18,6 +18,7 @@ import {
   isDownloadableAttachment,
   isRecord,
   isUrlAllowed,
+  isRedirectStatus,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
@@ -128,10 +129,6 @@ function scopeCandidatesForUrl(url: string): string[] {
   } catch {
     return ["https://api.botframework.com", "https://graph.microsoft.com"];
   }
-}
-
-function isRedirectStatus(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
 async function resolveInlineDataImageMime(inline: {

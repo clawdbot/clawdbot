@@ -465,20 +465,37 @@ describe("gateway agent handler", () => {
     );
 
     const call = await waitForAgentCommandCall<{
+      onActiveModelSelected?: (selection: { provider: string; model: string }) => Promise<void>;
       trustedInternalHandoff?: {
         kind: string;
         sourceSessionKey: string;
         sourceSessionId?: string;
         targetSessionKey: string;
         targetSessionId: string;
+        provider: string;
+        model: string;
       };
     }>();
+    const trustedInternalHandoff = expectDefined(
+      call.trustedInternalHandoff,
+      "trusted completion handoff test invariant",
+    );
+    await expectDefined(
+      call.onActiveModelSelected,
+      "model-selection callback test invariant",
+    )({
+      provider: "anthropic",
+      model: "sonnet-4.6",
+    });
+    expect(call.trustedInternalHandoff).toBe(trustedInternalHandoff);
     expect(call.trustedInternalHandoff).toMatchObject({
       kind: "subagent-completion",
       sourceSessionKey: "agent:main:subagent:child",
       sourceSessionId: "child-session-id",
       targetSessionKey: "agent:main:main",
       targetSessionId: "existing-session-id",
+      provider: "anthropic",
+      model: "sonnet-4.6",
     });
   });
 

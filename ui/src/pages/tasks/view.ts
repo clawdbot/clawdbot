@@ -16,9 +16,8 @@ import {
   taskStatusLabel,
   taskTimestampMs,
   taskTitle,
-  type TaskStatus,
-  type TaskSummary,
 } from "../../lib/tasks/data.ts";
+import type { TaskStatus, TaskSummary } from "../../lib/tasks/task-summary.ts";
 
 type TasksProps = {
   basePath: string;
