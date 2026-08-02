@@ -1,4 +1,4 @@
-// Whatsapp tests cover auto reply.web auto reply.last route plugin behavior.
+// WhatsApp web auto-reply routing behavior.
 import "./test-helpers.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -115,7 +115,7 @@ function buildInboundMessage(params: {
   });
 }
 
-describe("web auto-reply last-route", () => {
+describe("web auto-reply routing", () => {
   installWebAutoReplyUnitTestHooks();
 
   beforeEach(() => {

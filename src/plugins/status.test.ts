@@ -64,6 +64,8 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+    loadOpenClawPluginsMock({ ...options, activate: false }),
   resolveCompatibleRuntimePluginRegistry: (...args: unknown[]) =>
     resolveCompatibleRuntimePluginRegistryMock(...args),
 }));

@@ -123,6 +123,7 @@ export async function createGatewayRuntimeState(params: {
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
   getPluginRouteRegistry?: () => PluginRegistry;
+  isStartupPluginRuntimeReady?: () => boolean;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   deps: CliDeps;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
@@ -322,6 +323,7 @@ export async function createGatewayRuntimeState(params: {
       rateLimiter: params.rateLimiter,
       getReadiness: params.getReadiness,
       getRuntimeConfig: loadRuntimeConfig,
+      isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
       isTerminalEnabled: params.isTerminalEnabled,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
     });

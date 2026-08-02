@@ -16,7 +16,10 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
@@ -24,6 +27,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
+import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
@@ -43,6 +47,7 @@ const ACP_BACKEND_READY_POLL_MS = 50;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 0;
+const AGENT_RUNTIME_PLUGIN_PREWARM_RETRY_DELAY_MS = 250;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 type Awaitable<T> = T | Promise<T>;
@@ -309,58 +314,57 @@ function scheduleAgentRuntimePluginPrewarm(params: {
   waitForPostReadyWork?: () => Promise<void>;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let idleTask: GatewayIdleTaskHandle | undefined;
   const isStopped = () => stopped;
-  timer = setTimeout(
-    () => {
-      timer = undefined;
-      void (async () => {
-        await params.waitForPostReadyWork?.();
-        if (isStopped()) {
-          return;
-        }
-        await runWithGatewayIndependentRootWorkAdmission(async () => {
-          await measureStartup(
-            params.startupTrace,
-            "post-ready.agent-runtime-plugins",
-            async () => {
-              if (isStopped()) {
-                return;
-              }
-              const started = performance.now();
-              const { loadAgentRuntimePluginRegistryHandle } =
-                await import("../agents/runtime-plugins.js");
-              const cfg = params.getConfig();
-              if (isStopped()) {
-                return;
-              }
-              loadAgentRuntimePluginRegistryHandle({
-                config: cfg,
-                workspaceDir: params.workspaceDir,
-                allowGatewaySubagentBinding: true,
-              });
-              if (!isStopped()) {
-                params.log.info(
-                  `agent runtime plugins pre-warmed in ${(performance.now() - started).toFixed(0)}ms`,
-                );
-              }
-            },
-          );
+  const scheduledAt = performance.now();
+  const delayMs = Math.max(0, params.delayMs ?? AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS);
+  void (async () => {
+    await params.waitForPostReadyWork?.();
+    if (isStopped()) {
+      return;
+    }
+    idleTask = scheduleGatewayIdleTask({
+      // The readiness barrier and configured delay overlap; do not turn two startup windows
+      // into one additive delay before the first agent request can use the warm registry.
+      delayMs: Math.max(0, delayMs - (performance.now() - scheduledAt)),
+      retryDelayMs: AGENT_RUNTIME_PLUGIN_PREWARM_RETRY_DELAY_MS,
+      isClosing: isStopped,
+      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+      run: async () => {
+        await measureStartup(params.startupTrace, "post-ready.agent-runtime-plugins", async () => {
+          if (isStopped()) {
+            return;
+          }
+          const started = performance.now();
+          const { loadAgentRuntimePluginRegistryHandle } =
+            await import("../agents/runtime-plugins.js");
+          const cfg = params.getConfig();
+          if (isStopped()) {
+            return;
+          }
+          loadAgentRuntimePluginRegistryHandle({
+            config: cfg,
+            workspaceDir: params.workspaceDir,
+            allowGatewaySubagentBinding: true,
+          });
+          if (!isStopped()) {
+            params.log.info(
+              `agent runtime plugins pre-warmed in ${(performance.now() - started).toFixed(0)}ms`,
+            );
+          }
         });
-      })().catch((err: unknown) => {
-        params.log.warn(`agent runtime plugin pre-warm failed: ${String(err)}`);
-      });
-    },
-    Math.max(0, params.delayMs ?? AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS),
-  );
-  timer.unref?.();
+      },
+      log: params.log,
+      errorMessage: "agent runtime plugin pre-warm failed",
+    });
+  })().catch((err: unknown) => {
+    params.log.warn(`agent runtime plugin pre-warm failed: ${String(err)}`);
+  });
   return {
     stop: () => {
       stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      idleTask?.stop();
+      idleTask = undefined;
     },
   };
 }

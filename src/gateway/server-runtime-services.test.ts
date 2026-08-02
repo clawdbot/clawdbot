@@ -500,6 +500,34 @@ describe("server-runtime-services", () => {
     await waitForFast(() => expect(run).toHaveBeenCalledOnce());
   });
 
+  it("rechecks request work after joining the admitted root set", async () => {
+    vi.useFakeTimers();
+    const run = vi.fn(async () => undefined);
+    const isBusy = vi
+      .fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+
+    scheduleGatewayIdleTask({
+      delayMs: 25,
+      retryDelayMs: 50,
+      isClosing: () => false,
+      isBusy,
+      run,
+      log: createLog(),
+      errorMessage: "idle task failed",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(49);
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await waitForFast(() => expect(run).toHaveBeenCalledOnce());
+    expect(isBusy).toHaveBeenCalledTimes(4);
+  });
+
   it("cancels a scheduled idle task before its delay elapses", async () => {
     vi.useFakeTimers();
     const run = vi.fn(async () => undefined);
