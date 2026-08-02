@@ -216,4 +216,70 @@ describe("flushPendingToolResultsAfterIdle", () => {
       "toolResult",
     ]);
   });
+
+  it("settlement barrier awaits a real result that lands in a later event-loop turn", async () => {
+    // The result lands in the second check phase (nested setImmediate). A
+    // one-tick setImmediate defer would flush in the first check phase, before
+    // this result arrives, and inject a synthetic error: the defer's setImmediate
+    // is registered after the outer result setImmediate, so the first check
+    // phase runs the outer callback (scheduling the inner one), and the second
+    // check phase runs the defer's flush before the inner result append.
+    // await Promise.resolve() only drains microtasks in the current turn, so it
+    // cannot reproduce this race. The settlement barrier waits for the
+    // guard-owned delete(id) signal, so the real result wins.
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const agent = { waitForIdle: async () => {} };
+
+    appendMessage(assistantToolCall("call_slow_http"));
+
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 1_000,
+    });
+
+    // Land the real result two check phases later, simulating an in-flight HTTP
+    // response that settles after the event loop advances past the first turn.
+    setImmediate(() => {
+      setImmediate(() => {
+        appendMessage(toolResult("call_slow_http", "slow http output"));
+      });
+    });
+    await flushPromise;
+
+    const messages = getMessages(sm);
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expect((messages[1] as { isError?: boolean }).isError).not.toBe(true);
+    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toBe(
+      "slow http output",
+    );
+  });
+
+  it("flushes synthetic when a pending result never settles within the timeout", async () => {
+    // Fail-safe: if the real result never lands, the settlement barrier times
+    // out and the guard still synthesizes a missing result so the transcript
+    // stays structurally valid for provider replay.
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    vi.useFakeTimers();
+    const agent = { waitForIdle: async () => {} };
+
+    appendMessage(assistantToolCall("call_never_settles"));
+
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 30,
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    await flushPromise;
+
+    const messages = getMessages(sm);
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expect((messages[1] as { isError?: boolean }).isError).toBe(true);
+    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
+      "missing tool result",
+    );
+  });
 });

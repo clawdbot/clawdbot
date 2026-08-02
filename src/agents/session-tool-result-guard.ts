@@ -628,6 +628,12 @@ export function installSessionToolResultGuard(
 ): {
   flushPendingToolResults: () => void;
   clearPendingToolResults: () => void;
+  /**
+   * Await the runner-owned completion of pending tool-result writes (each
+   * tracked id being deleted as its real result lands) or return after the
+   * timeout so the caller may flush the remainder synthetically.
+   */
+  waitForPendingToolResultSettlement: (timeoutMs: number) => Promise<void>;
   clearNextUserMessagePersistenceSuppression: () => void;
   getPendingIds: () => string[];
 } {
@@ -927,6 +933,7 @@ export function installSessionToolResultGuard(
   return {
     flushPendingToolResults,
     clearPendingToolResults,
+    waitForPendingToolResultSettlement: pendingState.waitForSettlement,
     clearNextUserMessagePersistenceSuppression: () => {
       suppressNextUserMessagePersistence = false;
     },

@@ -10,6 +10,13 @@ type IdleAwareAgent = {
 type ToolResultFlushManager = {
   flushPendingToolResults?: (() => void) | undefined;
   clearPendingToolResults?: (() => void) | undefined;
+  /**
+   * Optional settlement barrier owned by the tool-result guard: awaits the
+   * runner-owned completion of pending tool-result writes (each tracked id
+   * being deleted as its real result lands) or returns after the timeout so
+   * the caller can flush the remainder synthetically.
+   */
+  waitForPendingToolResultSettlement?: ((timeoutMs: number) => Promise<void>) | undefined;
 };
 
 const DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
@@ -53,10 +60,18 @@ export async function flushPendingToolResultsAfterIdle(opts: {
 }): Promise<void> {
   const isImmediateTimeout = opts.timeoutMs !== undefined && opts.timeoutMs <= 0;
   if (!isImmediateTimeout) {
-    await waitForAgentIdleBestEffort(
-      opts.agent,
-      opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,
-    );
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS;
+    const idleTimedOut = await waitForAgentIdleBestEffort(opts.agent, timeoutMs);
+    // Settlement barrier: await the runner-owned tool-result write completion
+    // (each pending id being deleted as its real result lands) rather than a
+    // fixed event-loop tick count. A real in-flight HTTP result that settles
+    // after the agent reports idle wins over the synthetic flush; a result
+    // that never settles is still flushed once the timeout elapses.
+    // Skipped when idle itself timed out (agent stuck) so cleanup does not
+    // double-wait before the fail-safe synthetic flush.
+    if (!idleTimedOut) {
+      await opts.sessionManager?.waitForPendingToolResultSettlement?.(timeoutMs);
+    }
   }
   opts.sessionManager?.flushPendingToolResults?.();
 }
