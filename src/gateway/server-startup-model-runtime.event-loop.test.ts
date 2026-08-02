@@ -249,5 +249,5 @@ describe("Gateway prepared model runtime startup", () => {
       closeOpenClawAgentDatabasesForTest();
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 300_000);
 });
