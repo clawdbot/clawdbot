@@ -81,10 +81,11 @@ vi.mock("openclaw/plugin-sdk/logging-core", () => ({
   })),
 }));
 
-function mockGeneratedPngResponse() {
+function mockGeneratedPngResponse(usage?: Record<string, unknown>) {
   const response = {
     json: async () => ({
       data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+      ...(usage === undefined ? {} : { usage }),
     }),
   };
   postJsonRequestMock.mockResolvedValue({
@@ -675,6 +676,110 @@ describe("openai image generation provider", () => {
       size: "3840x2160",
     });
     expect(result.images).toHaveLength(1);
+  });
+
+  it.each([
+    { name: "generation", inputImages: undefined },
+    {
+      name: "multipart edit",
+      inputImages: [{ buffer: Buffer.from("reference-image"), mimeType: "image/png" }],
+    },
+  ])("preserves bounded token usage for direct $name responses", async ({ inputImages }) => {
+    mockGeneratedPngResponse({
+      input_tokens: 41,
+      output_tokens: 92,
+      total_tokens: 133,
+      input_tokens_details: {
+        text_tokens: 0,
+        image_tokens: 34,
+        cached_tokens: 7,
+        cache_write_tokens: 0,
+      },
+      output_tokens_details: { image_tokens: 92, text_tokens: 0 },
+    });
+
+    const result = await buildOpenAIImageGenerationProvider().generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Draw an image with auditable token accounting",
+      cfg: {},
+      ...(inputImages ? { inputImages } : {}),
+    });
+
+    expect(result.metadata).toEqual({
+      usage: {
+        input_tokens: 41,
+        output_tokens: 92,
+        total_tokens: 133,
+        input_tokens_details: {
+          text_tokens: 0,
+          image_tokens: 34,
+        },
+        output_tokens_details: { image_tokens: 92, text_tokens: 0 },
+      },
+    });
+  });
+
+  it("merges zero-valued image usage with existing normalized-size metadata", async () => {
+    mockGeneratedPngResponse({
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      input_tokens_details: { text_tokens: 0, image_tokens: 0, cached_tokens: 0 },
+      output_tokens_details: { image_tokens: 0, text_tokens: 0 },
+    });
+
+    const result = await buildOpenAIImageGenerationProvider().generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Draw an image with zero token usage",
+      cfg: {},
+      size: "2048x1152",
+    });
+
+    expect(result.metadata).toEqual({
+      requestedSize: "2048x1152",
+      normalizedSize: "1536x1024",
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        input_tokens_details: { text_tokens: 0, image_tokens: 0 },
+        output_tokens_details: { image_tokens: 0, text_tokens: 0 },
+      },
+    });
+  });
+
+  it("drops unsafe counts and unknown provider fields from image-usage metadata", async () => {
+    mockGeneratedPngResponse({
+      input_tokens: -1,
+      output_tokens: 1.5,
+      total_tokens: Number.MAX_SAFE_INTEGER + 1,
+      unbounded_provider_metadata: "x".repeat(4_096),
+      input_tokens_details: {
+        image_tokens: 9,
+        text_tokens: 0,
+        cached_tokens: 2,
+        cache_write_tokens: -1,
+        unbounded_provider_metadata: "x".repeat(4_096),
+      },
+      output_tokens_details: { image_tokens: 3, text_tokens: 0 },
+    });
+
+    const result = await buildOpenAIImageGenerationProvider().generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Draw an image without leaking provider metadata",
+      cfg: {},
+    });
+
+    expect(result.metadata).toEqual({
+      usage: {
+        input_tokens_details: { image_tokens: 9, text_tokens: 0 },
+        output_tokens_details: { image_tokens: 3, text_tokens: 0 },
+      },
+    });
+    expect(JSON.stringify(result.metadata).length).toBeLessThan(256);
   });
 
   it("normalizes legacy gpt-image-1 sizes before native OpenAI generation", async () => {

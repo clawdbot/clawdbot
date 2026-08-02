@@ -35,6 +35,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord, asSafeIntegerInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   canonicalizeCodexResponsesBaseUrl,
@@ -127,6 +128,35 @@ function resolveOpenAIImageCount(count: number | undefined): number {
     return 1;
   }
   return Math.max(1, Math.min(OPENAI_MAX_IMAGE_RESULTS, Math.trunc(count)));
+}
+
+function resolveOpenAIImageUsage(payload: unknown): Record<string, unknown> | undefined {
+  const usage = asOptionalRecord(asOptionalRecord(payload)?.usage);
+  if (!usage) {
+    return undefined;
+  }
+
+  const projectTokenCounts = (record: Record<string, unknown>, fields: readonly string[]) =>
+    Object.fromEntries(
+      fields.flatMap((field) => {
+        const count = asSafeIntegerInRange(record[field], { min: 0 });
+        return count === undefined ? [] : [[field, count]];
+      }),
+    );
+  const fields = ["input_tokens", "output_tokens", "total_tokens"];
+  const counts: Record<string, number | Record<string, number>> = projectTokenCounts(usage, fields);
+  const detailFields = ["text_tokens", "image_tokens"];
+  for (const field of ["input_tokens_details", "output_tokens_details"]) {
+    const details = asOptionalRecord(usage[field]);
+    if (!details) {
+      continue;
+    }
+    const normalizedDetails = projectTokenCounts(details, detailFields);
+    if (Object.keys(normalizedDetails).length > 0) {
+      counts[field] = normalizedDetails;
+    }
+  }
+  return Object.keys(counts).length > 0 ? counts : undefined;
 }
 
 function isPublicOpenAIImageBaseUrl(baseUrl: string): boolean {
@@ -1095,10 +1125,15 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           );
         }
 
+        const usage = resolveOpenAIImageUsage(data);
+        const metadata = {
+          ...sizeResolution.metadata,
+          ...(usage ? { usage } : {}),
+        };
         return {
           images,
           model,
-          ...(sizeResolution.metadata ? { metadata: sizeResolution.metadata } : {}),
+          ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
         };
       } finally {
         await release();
