@@ -3,12 +3,13 @@ import {
   createChannelMessageReplyPipeline,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { logInfo } from "openclaw/plugin-sdk/logging-core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { info, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
@@ -135,11 +136,12 @@ export function createDiscordMessageReplyRuntime(params: {
           typingLatencyLogged = true;
           const now = Date.now();
           const messageTimestampMs = resolveTimestampMs(message.timestamp) ?? 0;
-          // Console (journald-visible) on purpose: the pino child logger only
-          // reaches the file log, which is where this line went unnoticed.
+          // logInfo is the always-on console emitter (journald-visible). NOT the
+          // runtime-env `info`, which is a theme FORMATTER that discards its
+          // output — that identifier mixup silenced this metric once already.
           const sinceMessage =
             messageTimestampMs > 0 ? ` sinceMessageMs=${now - messageTimestampMs}` : "";
-          info(
+          logInfo(
             `[discord] inbound→typing latency channel=${typingChannelId}${sinceMessage} ` +
               `sinceDispatchMs=${now - params.dispatchStartedAt}`,
           );
