@@ -420,7 +420,7 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
     let body = "";
     for (let index = introducerLength; index < value.length - 1; index += 1) {
       const code = value.charCodeAt(index);
-      if (code <= 0x1f || code === 0x7f) {
+      if (code === 0x09) {
         continue;
       }
       body += value.charAt(index);

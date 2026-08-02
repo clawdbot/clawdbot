@@ -356,6 +356,14 @@ describe("terminal ansi helpers", () => {
     const reset = truncateToVisibleWidth("\x1b[31mA\x1b[0\tmB", 1);
     expect(reset).toBe("\x1b[31mA\x1b[0m");
     expect(visibleWidth(reset)).toBe(1);
+
+    const resetWithLineFeed = truncateToVisibleWidth("\x1b[31mA\x1b[0\t\nmB", 1);
+    expect(resetWithLineFeed).toBe("\x1b[31mA\x1b[0\nm");
+    expect(visibleWidth(resetWithLineFeed)).toBe(1);
+
+    const resetWithIndependentControls = truncateToVisibleWidth("\x1b[31mA\x1b[0\x07\r\x7fmB", 1);
+    expect(resetWithIndependentControls).toBe("\x1b[31mA\x1b[0\x07\r\x7fm");
+    expect(visibleWidth(resetWithIndependentControls)).toBe(1);
   });
 
   it("reuses the ANSI scanner across truncation calls", () => {

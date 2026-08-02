@@ -558,6 +558,51 @@ describe("subagent registry seam flow", () => {
     expect(mocks.callGateway).toHaveBeenCalledTimes(3);
   });
 
+  it("retries exhausted failed-spawn cleanup after bounded cooldown recovery", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-spawn-exhausted-retry-child";
+    const runId = "failed-spawn-exhausted-retry-run";
+    mocks.loadSessionStore.mockReturnValue(createSessionStore({}, childSessionKey));
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": new Error("delete failed"),
+    });
+
+    expect(quarantineFailedSpawn({ runId, childSessionKey })).toBe("recorded");
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await mod.testing.sweepOnceForTests();
+      vi.advanceTimersByTime(1);
+    }
+
+    const exhaustedEntry = expectDefined(
+      mod.getSubagentRunByRunId(runId),
+      "exhausted retry quarantine run",
+    );
+    expect(exhaustedEntry).toMatchObject({
+      spawnFailureCleanup: {
+        status: "exhausted",
+        attempts: 3,
+      },
+    });
+    expect(exhaustedEntry.cleanupCompletedAt).toBeUndefined();
+    expect(mod.countActiveRunsForSession("agent:main:main", { collect: false })).toBe(1);
+
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": { ok: true },
+    });
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      spawnFailureCleanup: {
+        status: "deleted",
+        attempts: 1,
+      },
+      cleanupHandled: true,
+    });
+    expect(mod.countActiveRunsForSession("agent:main:main", { collect: false })).toBe(0);
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
+    ).toHaveLength(4);
+  });
+
   it("releases failed-spawn quarantine only after deletion proof", async () => {
     const childSessionKey = "agent:worker:subagent:failed-spawn-deleted-child";
     const runId = "failed-spawn-deleted-run";
@@ -1005,6 +1050,63 @@ describe("subagent registry seam flow", () => {
         reason: "delete",
       }),
     );
+  });
+
+  it("does not retry exhausted failed-spawn cleanup against a replacement identity", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-spawn-exhausted-replaced-child";
+    const runId = "failed-spawn-exhausted-replaced-run";
+    const sessionIdentity = {
+      expectedSessionId: "original-provisional-session",
+      expectedLifecycleRevision: "original-provisional-lifecycle",
+    };
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          sessionId: "replacement-session",
+          lifecycleRevision: "replacement-lifecycle",
+          updatedAt: Date.now(),
+          status: "running",
+        },
+        childSessionKey,
+      ),
+    );
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": new Error("must not delete replacement"),
+    });
+
+    expect(
+      mod.quarantineFailedSubagentSpawn({
+        runId,
+        childSessionKey,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterAgentId: "main",
+        task: "exhausted failed spawn with reused key",
+        cleanup: "delete",
+        agentId: "worker",
+        reason: "ambiguous dispatch failure",
+        sessionIdentity,
+      }),
+    ).toBe("recorded");
+    const entry = expectDefined(mod.getSubagentRunByRunId(runId), "exhausted quarantine run");
+    entry.spawnFailureCleanup!.status = "exhausted";
+    entry.spawnFailureCleanup!.attempts = entry.spawnFailureCleanup!.maxAttempts;
+    entry.spawnFailureCleanup!.nextAttemptAt = Date.now();
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      spawnFailureCleanup: {
+        status: "replaced",
+        attempts: 3,
+        sessionIdentity,
+      },
+      cleanupHandled: true,
+    });
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
+    ).toHaveLength(0);
   });
 
   it("archives replaced failed-spawn cleanup records without deleting the replacement session", async () => {

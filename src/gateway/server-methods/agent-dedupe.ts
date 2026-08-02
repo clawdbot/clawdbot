@@ -1,11 +1,14 @@
-import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { DEDUPE_TTL_MS } from "../server-constants.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import type { GatewayRequestContext } from "./types.js";
 
-type ReservedSubagentDedupeReservation = {
+export type ReservedSubagentDedupeReservation = {
   acceptedAt: number;
   dedupeKeys: string[];
   expiresAtMs: number;
@@ -15,6 +18,11 @@ type ReservedSubagentDedupeReservation = {
   runId: string;
   sessionKey: string;
   status: "accepted";
+};
+
+export type ReservedSubagentDedupeReservationState = {
+  expired: boolean;
+  reservation: ReservedSubagentDedupeReservation;
 };
 
 const activeReservedSubagentDedupeEntries = new WeakSet<DedupeEntry>();
@@ -51,19 +59,34 @@ export function readGatewayDedupeEntry(params: {
 export function readReservedSubagentDedupeReservation(
   entry: ReturnType<typeof readGatewayDedupeEntry>,
 ): ReservedSubagentDedupeReservation | undefined {
+  const state = readReservedSubagentDedupeReservationState(entry);
+  return state && !state.expired ? state.reservation : undefined;
+}
+
+export function readReservedSubagentDedupeReservationState(
+  entry: ReturnType<typeof readGatewayDedupeEntry>,
+): ReservedSubagentDedupeReservationState | undefined {
   if (!entry?.ok || !entry.payload || typeof entry.payload !== "object") {
     return undefined;
   }
   const payload = entry.payload as Partial<ReservedSubagentDedupeReservation>;
-  return payload.status === "accepted" &&
+  const expiresAtMs = asDateTimestampMs(payload.expiresAtMs);
+  if (
+    payload.status === "accepted" &&
     typeof payload.runId === "string" &&
     typeof payload.sessionKey === "string" &&
     typeof payload.pluginRuntimeOwnerId === "string" &&
     typeof payload.reservedSubagentClaimToken === "string" &&
-    isFutureDateTimestampMs(payload.expiresAtMs, { nowMs: Date.now() }) &&
+    expiresAtMs !== undefined &&
     payload.reservationId === payload.reservedSubagentClaimToken
-    ? (payload as ReservedSubagentDedupeReservation)
-    : undefined;
+  ) {
+    const reservation = { ...payload, expiresAtMs } as ReservedSubagentDedupeReservation;
+    return {
+      expired: !isFutureDateTimestampMs(expiresAtMs, { nowMs: Date.now() }),
+      reservation,
+    };
+  }
+  return undefined;
 }
 
 export function isReservedSubagentDedupeReservationAuthorized(params: {

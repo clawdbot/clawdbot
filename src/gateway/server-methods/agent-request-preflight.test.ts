@@ -482,6 +482,87 @@ describe("reserved subagent admission TTL", () => {
     );
     release();
   });
+
+  it("adopts a real expired reservation so final admission times out instead of in-flight", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-01T00:00:00Z"));
+    const dedupe = new Map();
+    const claimToken = "reserved-real-final-claim-token";
+    const runId = "reserved-real-final-expired-run";
+    const sessionKey = "agent:worker:subagent:reserved-real-final-expired-child";
+    const release = reserveReservedSubagentDedupeEntry({
+      dedupe,
+      runId,
+      sessionKey,
+      pluginRuntimeOwnerId: "agentic-os",
+      claimToken,
+    });
+    vi.advanceTimersByTime(DEDUPE_TTL_MS + 1);
+
+    const respond = vi.fn();
+    const request = attachReservedSubagentClaimToken(
+      {
+        message: "run expired reserved child",
+        sessionKey,
+        idempotencyKey: runId,
+      },
+      claimToken,
+    );
+    const dedupeLifecycle = createAgentDedupeLifecycle({
+      cfg: {},
+      request,
+      runId,
+      lifecycleGeneration: "generation",
+      agentDedupeKeys: [`agent:${runId}`],
+      suppressVisibleSessionEffects: false,
+      context: { dedupe } as never,
+      client: { internal: { pluginRuntimeOwnerId: "agentic-os" } },
+      respond,
+    } as never);
+
+    dedupeLifecycle.reserve(sessionKey);
+    expect(dedupeLifecycle.reservationId).toBe(claimToken);
+
+    const controller = createAgentAdmissionController({
+      cfg: {},
+      runId,
+      lifecycleGeneration: "generation",
+      agentDedupeKeys: [`agent:${runId}`],
+      preAcceptedReservedSessionKey: sessionKey,
+      context: { dedupe } as never,
+      respond,
+      dedupeLifecycle,
+      getRequestedSessionKey: () => sessionKey,
+      getResolvedSessionKey: () => sessionKey,
+      getResolvedSessionId: () => "reserved-session",
+      getResolvedSessionAgentId: () => "worker",
+      getAgentId: () => "worker",
+      getCfgForAgent: () => ({}),
+      getSessionPersisted: () => false,
+      getSupersededSessionId: () => undefined,
+      setAdmittedSessionId: vi.fn(),
+    });
+
+    controller.assertAllowed();
+    expect(controller.respondToOutcome()).toBe(true);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "timeout",
+        providerStarted: false,
+      }),
+      undefined,
+      expect.objectContaining({ cached: true, runId }),
+    );
+    expect(respond).not.toHaveBeenCalledWith(
+      true,
+      { runId, status: "in_flight" },
+      undefined,
+      expect.anything(),
+    );
+    release();
+  });
 });
 
 describe("reserved subagent Gateway admission", () => {
@@ -782,6 +863,42 @@ describe("reserved subagent Gateway admission", () => {
       undefined,
       expect.objectContaining({ cached: true, runId }),
     );
+  });
+
+  it("preserves a replacement entry when clearing an unaccepted adopted reservation", () => {
+    const context = createContext();
+    const release = reserveReservedSubagentDedupeEntry({
+      dedupe: context.dedupe,
+      runId,
+      sessionKey,
+      pluginRuntimeOwnerId,
+      claimToken,
+    });
+    const request = attachReservedSubagentClaimToken(createRequest(), claimToken);
+    const lifecycle = createAgentDedupeLifecycle({
+      cfg: {},
+      request,
+      runId,
+      lifecycleGeneration: "generation",
+      agentDedupeKeys: [`agent:${runId}`],
+      suppressVisibleSessionEffects: false,
+      context,
+      client: { internal: { pluginRuntimeOwnerId } },
+      respond: vi.fn(),
+    } as never);
+    lifecycle.reserve(sessionKey);
+
+    const replacement = {
+      ts: Date.now(),
+      ok: false,
+      payload: { runId, status: "error", summary: "replacement failed" },
+    };
+    context.dedupe.set(`agent:${runId}`, replacement);
+
+    lifecycle.clearUnaccepted();
+
+    expect(context.dedupe.get(`agent:${runId}`)).toBe(replacement);
+    release();
   });
 });
 

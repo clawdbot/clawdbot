@@ -14,6 +14,7 @@ import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup
 import { resolveProvisionalSessionCleanupProof } from "./subagent-spawn-cleanup.js";
 
 const SESSION_RUN_TTL_MS = 5 * 60_000;
+const FAILED_SPAWN_CLEANUP_RETRY_COOLDOWN_MS = 5 * 60_000;
 
 type ReconcileSpawnFailureCleanupParams = {
   runId: string;
@@ -69,6 +70,10 @@ function markSpawnFailureCleanupGone(
   params.clearPendingLifecycleError(runId);
   params.clearPendingLifecycleTimeout(runId);
   entry.archiveAtMs ??= now + SESSION_RUN_TTL_MS;
+}
+
+function failedSpawnCleanupRetryCooldownMs(): number {
+  return isFastTestRuntimeEnv() ? 1 : FAILED_SPAWN_CLEANUP_RETRY_COOLDOWN_MS;
 }
 
 export async function reconcileSpawnFailureCleanup(
@@ -157,11 +162,15 @@ export async function reconcileSpawnFailureCleanup(
     markSpawnFailureCleanupDeleted(params);
     return true;
   }
-  if (cleanup.status === "exhausted" || cleanup.status === "deleted") {
+  if (cleanup.status === "deleted") {
     return false;
   }
   if (typeof cleanup.nextAttemptAt === "number" && cleanup.nextAttemptAt > now) {
     return false;
+  }
+  if (cleanup.status === "exhausted") {
+    cleanup.status = "pending";
+    cleanup.attempts = 0;
   }
   cleanup.attempts += 1;
   cleanup.lastAttemptAt = now;
@@ -173,7 +182,7 @@ export async function reconcileSpawnFailureCleanup(
     cleanup.lastError = error instanceof Error ? error.message : String(error);
     if (cleanup.attempts >= cleanup.maxAttempts) {
       cleanup.status = "exhausted";
-      cleanup.nextAttemptAt = undefined;
+      cleanup.nextAttemptAt = now + failedSpawnCleanupRetryCooldownMs();
       params.warn("failed-spawn cleanup exhausted; retaining active quarantine", {
         runId,
         childSessionKey: entry.childSessionKey,
