@@ -1,6 +1,7 @@
 // Slack tests cover send.blocks plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -510,13 +511,15 @@ describe("sendMessageSlack blocks", () => {
       blocks,
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(6);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(11);
     const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
       postedMessage(client, index),
     );
     expect(posts.every((post) => post.blocks === undefined)).toBe(true);
     expect(posts.every((post) => post.mrkdwn === false)).toBe(true);
-    expect(posts.every((post) => String(post.text).length <= SLACK_TEXT_LIMIT)).toBe(true);
+    expect(
+      posts.every((post) => String(post.text).length <= SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT),
+    ).toBe(true);
     expect(posts.map((post) => post.text).join("")).toBe(`${caption} (table)\nAccount\nAcme`);
   });
 
@@ -535,11 +538,13 @@ describe("sendMessageSlack blocks", () => {
       authoredTextPlacement: "none",
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(10);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(20);
     const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
       postedMessage(client, index),
     );
-    expect(posts.every((post) => String(post.text).length <= SLACK_TEXT_LIMIT)).toBe(true);
+    expect(
+      posts.every((post) => String(post.text).length <= SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT),
+    ).toBe(true);
     expect(posts.every((post) => post.mrkdwn === false)).toBe(true);
     expect(posts.flatMap((post) => post.blocks as unknown[])).toEqual(blocks);
   });
@@ -889,16 +894,24 @@ describe("sendMessageSlack blocks", () => {
       onPlatformSendDispatch,
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(4);
     expect(postedMessage(client, 0).blocks).toEqual(blocks);
     expect(postedMessage(client, 0).text).toBe(
       ["Large pipeline (table)", header, ...accounts].join("\n"),
     );
     expect(postedMessage(client, 0).mrkdwn).toBe(false);
-    const fallbackPosts = [postedMessage(client, 1), postedMessage(client, 2)];
+    const fallbackPosts = [
+      postedMessage(client, 1),
+      postedMessage(client, 2),
+      postedMessage(client, 3),
+    ];
     expect(fallbackPosts.every((post) => post.blocks === undefined)).toBe(true);
     expect(fallbackPosts.every((post) => post.mrkdwn === false)).toBe(true);
-    expect(fallbackPosts.every((post) => String(post.text).length <= SLACK_TEXT_LIMIT)).toBe(true);
+    expect(
+      fallbackPosts.every(
+        (post) => String(post.text).length <= SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
+      ),
+    ).toBe(true);
     const deliveredText = fallbackPosts.map((post) => post.text).join("");
     expect(deliveredText).toBe(["Large pipeline (table)", header, ...accounts].join("\n"));
     expect(deliveredText).toContain("<@U123>");
@@ -910,7 +923,9 @@ describe("sendMessageSlack blocks", () => {
     client.chat.postMessage
       .mockRejectedValueOnce({ data: { error: "invalid_blocks" } })
       .mockResolvedValueOnce({ channel: "C123", ts: "171234.568" })
-      .mockResolvedValueOnce({ channel: "C123", ts: "171234.569" });
+      .mockResolvedValueOnce({ channel: "C123", ts: "171234.569" })
+      .mockResolvedValueOnce({ channel: "C123", ts: "171234.570" })
+      .mockResolvedValueOnce({ channel: "C123", ts: "171234.571" });
     const caption = "c".repeat(12_000);
     const blocks = [
       {
@@ -931,32 +946,60 @@ describe("sendMessageSlack blocks", () => {
       onDeliveryResult,
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
-    const fallbackPosts = [postedMessage(client, 1), postedMessage(client, 2)];
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(5);
+    const fallbackPosts = [
+      postedMessage(client, 1),
+      postedMessage(client, 2),
+      postedMessage(client, 3),
+      postedMessage(client, 4),
+    ];
     expect(fallbackPosts.every((post) => post.blocks === undefined)).toBe(true);
     expect(fallbackPosts.every((post) => post.mrkdwn === false)).toBe(true);
-    expect(fallbackPosts.every((post) => String(post.text).length <= SLACK_TEXT_LIMIT)).toBe(true);
+    expect(
+      fallbackPosts.every(
+        (post) => String(post.text).length <= SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
+      ),
+    ).toBe(true);
     expect(fallbackPosts.map((post) => post.text).join("")).toBe(expectedText);
     expect(fallbackPosts.map((post) => post.metadata)).toEqual([
       expect.objectContaining({
         event_payload: expect.objectContaining({
-          openclaw_delivery_part_count: 2,
+          openclaw_delivery_part_count: 4,
           openclaw_delivery_part_index: 0,
         }),
       }),
       expect.objectContaining({
         event_payload: expect.objectContaining({
-          openclaw_delivery_part_count: 2,
+          openclaw_delivery_part_count: 4,
           openclaw_delivery_part_index: 1,
+        }),
+      }),
+      expect.objectContaining({
+        event_payload: expect.objectContaining({
+          openclaw_delivery_part_count: 4,
+          openclaw_delivery_part_index: 2,
+        }),
+      }),
+      expect.objectContaining({
+        event_payload: expect.objectContaining({
+          openclaw_delivery_part_count: 4,
+          openclaw_delivery_part_index: 3,
         }),
       }),
     ]);
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
       "171234.568",
       "171234.569",
+      "171234.570",
+      "171234.571",
     ]);
-    expect(result.messageId).toBe("171234.569");
-    expect(result.receipt.platformMessageIds).toEqual(["171234.568", "171234.569"]);
+    expect(result.messageId).toBe("171234.571");
+    expect(result.receipt.platformMessageIds).toEqual([
+      "171234.568",
+      "171234.569",
+      "171234.570",
+      "171234.571",
+    ]);
   });
 
   it("batches more than 50 ordered fallback blocks across Web API posts", async () => {
@@ -993,17 +1036,21 @@ describe("sendMessageSlack blocks", () => {
       onPlatformSendDispatch,
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(4);
     expect(postedMessage(client, 0).blocks).toEqual(blocks);
     const fallbackPosts = client.chat.postMessage.mock.calls
       .slice(1)
       .map((_call, index) => postedMessage(client, index + 1));
-    expect(fallbackPosts).toHaveLength(2);
+    expect(fallbackPosts).toHaveLength(3);
     expect(fallbackPosts.every((post) => (post.blocks as unknown[]).length <= 50)).toBe(true);
     const firstFallbackBlocks = fallbackPosts[0]?.blocks as Array<{ type?: string }> | undefined;
     expect(firstFallbackBlocks?.[48]?.type).toBe("actions");
     expect(fallbackPosts.every((post) => post.mrkdwn === false)).toBe(true);
-    expect(fallbackPosts.every((post) => String(post.text).length <= 40_000)).toBe(true);
+    expect(
+      fallbackPosts.every(
+        (post) => String(post.text).length <= SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
+      ),
+    ).toBe(true);
     const fallbackSectionText = fallbackPosts
       .flatMap((post) => post.blocks as Array<{ text?: { type?: string; text?: string } }>)
       .flatMap((block) =>

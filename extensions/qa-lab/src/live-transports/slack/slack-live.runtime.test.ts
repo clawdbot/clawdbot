@@ -1224,7 +1224,7 @@ describe("Slack live QA runtime helpers", () => {
       timeoutMs: 0,
     });
 
-    expect(postMessage).toHaveBeenCalledTimes(2);
+    expect(postMessage).toHaveBeenCalledTimes(3);
     const fallbackRequests = postMessage.mock.calls.map(([request]) => request);
     expect(fallbackRequests.every((request) => !Object.hasOwn(request, "blocks"))).toBe(true);
     expect(fallbackRequests.every((request) => request.mrkdwn === false)).toBe(true);
@@ -1232,7 +1232,11 @@ describe("Slack live QA runtime helpers", () => {
     expect(fallbackText).toHaveLength(probe.fallbackText.length);
     expect(fallbackText.split("\n")).toContain(probe.firstRowText);
     expect(fallbackText.split("\n")).toContain(probe.finalRowText);
-    expect(storedPayloads.map((payload) => payload.ts)).toEqual(["2.000001", "2.000002"]);
+    expect(storedPayloads.map((payload) => payload.ts)).toEqual([
+      "2.000001",
+      "2.000002",
+      "2.000003",
+    ]);
     expect(
       storedPayloads
         .map((payload) =>
@@ -1240,11 +1244,11 @@ describe("Slack live QA runtime helpers", () => {
         )
         .join(""),
     ).toBe(fallbackText.replace(/\s+/gu, " "));
-    expect(result.message).toMatchObject({ ts: "2.000002", user: "U999999999" });
+    expect(result.message).toMatchObject({ ts: "2.000003", user: "U999999999" });
     expect(result.details).toContain("first API failure=invalid_blocks");
-    expect(result.details).toContain("API attempts=3");
+    expect(result.details).toContain("API attempts=4");
     expect(result.details).toContain("fallback formatting disabled=true");
-    expect(result.details).toContain("fallback chunks=2");
+    expect(result.details).toContain("fallback chunks=3");
     expect(result.details).toContain("first row=present");
     expect(result.details).toContain("final row=present");
     expect(result.details).toContain("complete delivery=true");
@@ -1284,6 +1288,7 @@ describe("Slack live QA runtime helpers", () => {
           conversations: {
             history: vi.fn(async () => ({
               messages: [
+                { text: "", ts: "2.000003", user: "U999999999" },
                 { text: "", ts: "2.000002", user: "U999999999" },
                 { text: malformedReadback, ts: "2.000001", user: "U999999999" },
               ],

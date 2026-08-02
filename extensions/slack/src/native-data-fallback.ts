@@ -2,7 +2,7 @@ import type { Block, KnownBlock } from "@slack/web-api";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { renderSlackBlockFallbackText } from "./blocks-fallback.js";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
-import { SLACK_MESSAGE_TEXT_HARD_LIMIT } from "./limits.js";
+import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import {
   buildSlackNativeDataAccessibilityText,
   appendSlackNativeDataPlainTextFallback,
@@ -159,6 +159,7 @@ export function buildSlackNativeDataDeliveryPlan(params: {
 }): SlackNativeDataDeliveryPlan {
   const baseText = params.baseText?.trim() ?? "";
   const textLimit = Math.min(
+    SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
     SLACK_MESSAGE_TEXT_HARD_LIMIT,
     Math.max(1, Math.floor(params.textLimit ?? SLACK_MESSAGE_TEXT_HARD_LIMIT)),
   );

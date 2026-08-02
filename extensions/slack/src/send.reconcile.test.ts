@@ -188,6 +188,12 @@ describe("reconcileSlackUnknownSend", () => {
         channel: "C123",
         ts: "1782584647.000003",
         message: {},
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        channel: "C123",
+        ts: "1782584647.000004",
+        message: {},
       });
     const metadata = {
       event_type: "assistant_thread_context",
@@ -228,14 +234,15 @@ describe("reconcileSlackUnknownSend", () => {
 
     expect(rejectedMetadata.event_payload.openclaw_delivery_part_count).toBe(1);
     expect(fallbackMetadata.map((part) => part.event_payload.openclaw_delivery_part_index)).toEqual(
-      [0, 1, 2],
+      [0, 1, 2, 3],
     );
     expect(fallbackMetadata.map((part) => part.event_payload.openclaw_delivery_part_count)).toEqual(
-      [3, 3, 3],
+      [4, 4, 4, 4],
     );
     expect(fallbackMetadata[0]?.event_payload).toMatchObject({ team_id: "T123" });
     expect(fallbackMetadata[1]?.event_payload).not.toHaveProperty("team_id");
     expect(fallbackMetadata[2]?.event_payload).not.toHaveProperty("team_id");
+    expect(fallbackMetadata[3]?.event_payload).not.toHaveProperty("team_id");
     expect(
       new Set(fallbackMetadata.map((part) => part.event_payload.openclaw_delivery_id)).size,
     ).toBe(1);
@@ -243,9 +250,11 @@ describe("reconcileSlackUnknownSend", () => {
       "1782584647.000001",
       "1782584647.000002",
       "1782584647.000003",
+      "1782584647.000004",
     ]);
     client.conversations.history.mockResolvedValueOnce({
       messages: [
+        { ts: "1782584647.000004", metadata: fallbackMetadata[3] },
         { ts: "1782584647.000003", metadata: fallbackMetadata[2] },
         { ts: "1782584647.000002", metadata: fallbackMetadata[1] },
         { ts: "1782584647.000001", metadata: fallbackMetadata[0] },
@@ -259,6 +268,7 @@ describe("reconcileSlackUnknownSend", () => {
         "1782584647.000001",
         "1782584647.000002",
         "1782584647.000003",
+        "1782584647.000004",
       ]);
     }
   });
