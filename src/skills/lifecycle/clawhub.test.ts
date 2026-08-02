@@ -2216,6 +2216,58 @@ describe("skills-clawhub", () => {
     expect(installPackageDirMock).toHaveBeenCalledTimes(1);
   });
 
+  it("requires a one-time force for tracked skills without recorded digests, then verifies digests", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-predigest-update-");
+    const skillDir = await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "weather",
+      installedVersion: "0.9.0",
+    });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Weather\n", "utf8");
+    pathExistsMock.mockImplementation(
+      async (input: string) => input === skillDir || input.endsWith("SKILL.md"),
+    );
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValue({
+      ok: true,
+      slug: "weather",
+      installKind: "archive",
+      archive: {
+        version: "1.0.0",
+        downloadUrl: "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
+      },
+    });
+    installPackageDirMock.mockImplementation(async (params: { targetDir: string }) => {
+      await fs.mkdir(params.targetDir, { recursive: true });
+      await fs.writeFile(path.join(params.targetDir, "SKILL.md"), "# Weather\n", "utf8");
+      return { ok: true, targetDir: params.targetDir };
+    });
+
+    const refused = await updateSkillsFromClawHub({ workspaceDir, slug: "weather" });
+    expect(refused).toEqual([
+      {
+        ok: false,
+        error:
+          'Skill "weather" has no complete installed-file digest. Updating replaces the installed skill directory; re-run with --force to update it anyway.',
+      },
+    ]);
+
+    const forced = await updateSkillsFromClawHub({ workspaceDir, slug: "weather", force: true });
+    expect(forced).toEqual([
+      expect.objectContaining({ ok: true, slug: "weather", version: "1.0.0" }),
+    ]);
+    const lock = JSON.parse(
+      await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
+    ) as { skills: Record<string, { skillFile?: unknown; fileTreeSha256?: unknown }> };
+    expect(lock.skills.weather.skillFile).toMatchObject({ path: "SKILL.md" });
+    expect(lock.skills.weather.fileTreeSha256).toBe(`sha256:${"a".repeat(64)}`);
+
+    const verified = await updateSkillsFromClawHub({ workspaceDir, slug: "weather" });
+    expect(verified).toEqual([
+      expect.objectContaining({ ok: true, slug: "weather", version: "1.0.0" }),
+    ]);
+    expect(installPackageDirMock).toHaveBeenCalledTimes(2);
+  });
+
   it("updates an unmodified ClawHub skill without requiring force", async () => {
     const workspaceDir = await tempDirs.make("openclaw-clean-update-");
     const skillDir = await writeClawHubOriginFixture({
