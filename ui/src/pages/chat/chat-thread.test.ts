@@ -3911,6 +3911,63 @@ describe("expansion-state render dependencies", () => {
       expect(staleTools.get(toolCardId)).toBe(false);
       expect(currentUsers.size).toBe(1);
       expect(staleUsers.size).toBe(0);
+
+      const toolVisibilitySession = "tool-visibility-session";
+      const toolVisibilityProps = {
+        ...props,
+        paneId: "tool-visibility-pane",
+        sessionKey: toolVisibilitySession,
+        messages: [
+          { role: "user", content: "tool visibility prompt", timestamp: 1 },
+          {
+            role: "toolResult",
+            toolCallId: "expanded-tool",
+            toolName: "browser.open",
+            content: "Expanded tool result",
+            timestamp: 2,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "collapsed-tool",
+            toolName: "browser.open",
+            content: "Collapsed tool result",
+            timestamp: 3,
+          },
+        ],
+      };
+      const toolVisibilityController = new ChatTranscriptController(host);
+      const toolVisibilityPane = document.createElement("div");
+      document.body.append(toolVisibilityPane);
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      const visibilityState = getExpandedToolCards(toolVisibilitySession);
+      const visibilityIds = [...visibilityState.keys()].filter((key) => key.startsWith("toolmsg:"));
+      const expandedToolId = expectDefined(visibilityIds[0], "expanded standalone tool disclosure");
+      const collapsedToolId = expectDefined(
+        visibilityIds[1],
+        "collapsed standalone tool disclosure",
+      );
+      setExpansionState(visibilityState, expandedToolId, true);
+      setExpansionState(visibilityState, collapsedToolId, false);
+
+      render(
+        toolVisibilityController.render({ ...toolVisibilityProps, showToolCalls: false }),
+        toolVisibilityPane,
+      );
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+
+      expect(visibilityState.get(expandedToolId)).toBe(true);
+      expect(visibilityState.get(collapsedToolId)).toBe(false);
+      render(
+        toolVisibilityController.render({
+          ...toolVisibilityProps,
+          messages: toolVisibilityProps.messages.filter(
+            (message) => !("toolCallId" in message && message.toolCallId === "expanded-tool"),
+          ),
+        }),
+        toolVisibilityPane,
+      );
+      expect(visibilityState.has(expandedToolId)).toBe(false);
+      expect(visibilityState.get(collapsedToolId)).toBe(false);
       resetChatThreadPresentationState();
     } finally {
       try {

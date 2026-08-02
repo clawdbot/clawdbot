@@ -1495,7 +1495,7 @@ function renderChatThreadContents(
     props.sessionKey,
     chatItems,
     Boolean(props.autoExpandToolCalls),
-    searchFiltering,
+    searchFiltering || !props.showToolCalls,
   );
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
   const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
