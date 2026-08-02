@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import { getFreePort } from "./lib/gateway-bench-probes.ts";
@@ -39,6 +39,7 @@ type MetricSummary = {
 
 type TimedProbe = {
   atMs: number;
+  error: string | null;
   latencyMs: number;
   ok: boolean;
 };
@@ -52,10 +53,20 @@ type ReadyProbe = TimedProbe & {
   utilization: number | null;
 };
 
+type ControlUiProbe = TimedProbe & {
+  status: number;
+};
+
+type GatewaySample = {
+  controlUi: ControlUiProbe;
+  readyz: ReadyProbe;
+  sessionsList: TimedProbe;
+};
+
 type GatewayRpc = <T>(method: string, params: unknown, timeoutMs?: number) => Promise<T>;
 
 type BenchmarkRun = {
-  controlUi: TimedProbe[];
+  controlUi: ControlUiProbe[];
   durationMs: number;
   readyz: ReadyProbe[];
   sessionsList: TimedProbe[];
@@ -164,7 +175,7 @@ function printUsage(): void {
 
 Usage:
   pnpm test:gateway:concurrency -- [options]
-  node --import tsx scripts/bench-gateway-concurrency.ts [options]
+  node scripts/bench-gateway-concurrency.ts [options]
 
 Options:
   --concurrency <n>  Concurrent synthetic streaming turns (default: ${DEFAULT_CONCURRENCY})
@@ -262,6 +273,29 @@ async function requestHttp(params: {
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function describeProbeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.slice(0, 500);
+}
+
+function formatProbeResult(name: string, probe: TimedProbe & { status?: number }): string {
+  const status = probe.status === undefined ? (probe.ok ? "ok" : "failed") : probe.status;
+  return `${name}(ok=${probe.ok} status=${status} error=${probe.error ? JSON.stringify(probe.error) : "none"} latencyMs=${probe.latencyMs.toFixed(1)})`;
+}
+
+function assertBaselineProbes(baseline: GatewaySample): void {
+  if (baseline.readyz.ok && baseline.sessionsList.ok && baseline.controlUi.ok) {
+    return;
+  }
+  throw new Error(
+    `gateway probes did not pass before concurrent load: ${[
+      formatProbeResult("readyz", baseline.readyz),
+      formatProbeResult("sessionsList", baseline.sessionsList),
+      formatProbeResult("controlUi", baseline.controlUi),
+    ].join("; ")}`,
+  );
 }
 
 function captureChildOutput(child: ChildProcessWithoutNullStreams): () => string {
@@ -425,7 +459,8 @@ async function sampleGateway(params: {
   port: number;
   rpc: GatewayRpc;
   runStartedAt: number;
-}): Promise<{ controlUi: TimedProbe; readyz: ReadyProbe; sessionsList: TimedProbe }> {
+  serial?: boolean;
+}): Promise<GatewaySample> {
   const atMs = performance.now() - params.runStartedAt;
   const safeHttpProbe = async (pathValue: string, accept: string) => {
     const startedAt = performance.now();
@@ -437,30 +472,38 @@ async function sampleGateway(params: {
           path: pathValue,
           port: params.port,
         })),
+        error: null,
         ok: true,
       };
-    } catch {
+    } catch (error) {
       return {
         body: "",
+        error: describeProbeError(error),
         latencyMs: performance.now() - startedAt,
         ok: false,
         status: 0,
       };
     }
   };
-  const [readyz, controlUi, sessions] = await Promise.all([
-    safeHttpProbe("/readyz", "application/json"),
-    safeHttpProbe("/", "text/html"),
-    (async () => {
-      const startedAt = performance.now();
-      try {
-        const payload = await params.rpc("sessions.list", {}, HTTP_TIMEOUT_MS);
-        return { latencyMs: performance.now() - startedAt, ok: true, payload };
-      } catch {
-        return { latencyMs: performance.now() - startedAt, ok: false, payload: null };
-      }
-    })(),
-  ]);
+  const probeReadyz = () => safeHttpProbe("/readyz", "application/json");
+  const probeControlUi = () => safeHttpProbe("/", "text/html");
+  const probeSessions = async () => {
+    const startedAt = performance.now();
+    try {
+      const payload = await params.rpc("sessions.list", {}, HTTP_TIMEOUT_MS);
+      return { error: null, latencyMs: performance.now() - startedAt, ok: true, payload };
+    } catch (error) {
+      return {
+        error: describeProbeError(error),
+        latencyMs: performance.now() - startedAt,
+        ok: false,
+        payload: null,
+      };
+    }
+  };
+  const [readyz, controlUi, sessions] = params.serial
+    ? [await probeReadyz(), await probeControlUi(), await probeSessions()]
+    : await Promise.all([probeReadyz(), probeControlUi(), probeSessions()]);
   const readyBody = (() => {
     if (readyz.status !== 200) {
       return {};
@@ -475,11 +518,18 @@ async function sampleGateway(params: {
   return {
     controlUi: {
       atMs,
+      error:
+        controlUi.error ??
+        (controlUi.status === 200 && !controlUi.body.includes("<html")
+          ? "response body did not contain <html"
+          : null),
       latencyMs: controlUi.latencyMs,
       ok: controlUi.ok && controlUi.status === 200 && controlUi.body.includes("<html"),
+      status: controlUi.status,
     },
     readyz: {
       atMs,
+      error: readyz.error,
       latencyMs: readyz.latencyMs,
       ok: readyz.ok && readyz.status === 200,
       status: readyz.status,
@@ -489,7 +539,12 @@ async function sampleGateway(params: {
       utilization: numberOrNull(eventLoop?.utilization),
       cpuCoreRatio: numberOrNull(eventLoop?.cpuCoreRatio),
     },
-    sessionsList: { atMs, latencyMs: sessions.latencyMs, ok: sessions.ok },
+    sessionsList: {
+      atMs,
+      error: sessions.error,
+      latencyMs: sessions.latencyMs,
+      ok: sessions.ok,
+    },
   };
 }
 
@@ -553,12 +608,11 @@ async function runGatewaySample(options: {
       port,
       rpc,
       runStartedAt,
+      serial: true,
     });
-    if (!baseline.readyz.ok || !baseline.sessionsList.ok || !baseline.controlUi.ok) {
-      throw new Error("gateway probes did not pass before concurrent load");
-    }
+    assertBaselineProbes(baseline);
 
-    const controlUi: TimedProbe[] = [];
+    const controlUi: ControlUiProbe[] = [];
     const readyz: ReadyProbe[] = [];
     const sessionsList: TimedProbe[] = [];
     let turnsDone = false;
@@ -700,7 +754,9 @@ async function main(): Promise<void> {
 
 export const testing = {
   parseOptions,
+  assertBaselineProbes,
   runTurn,
+  sampleGateway,
   summarizeNumbers,
   summarizeRuns,
 };

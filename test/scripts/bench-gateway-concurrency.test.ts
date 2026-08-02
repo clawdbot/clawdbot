@@ -1,5 +1,6 @@
 // Gateway concurrency benchmark tests cover CLI parsing and bounded percentile summaries.
 import { spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
@@ -74,12 +75,65 @@ describe("gateway concurrency benchmark script", () => {
     expect(wait?.timeoutMs).toBeLessThanOrEqual(2_000);
   });
 
+  it("preserves HTTP and RPC failures in baseline probe diagnostics", async () => {
+    const probeOrder: string[] = [];
+    const server = createServer((req, res) => {
+      probeOrder.push(req.url ?? "missing-url");
+      res.statusCode = req.url === "/readyz" ? 503 : 200;
+      res.end(req.url === "/readyz" ? '{"status":"starting"}' : "not html");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      server.close();
+      throw new Error("expected HTTP test server address");
+    }
+    try {
+      const sample = await testing.sampleGateway({
+        deadlineAt: performance.now() + 5_000,
+        port: address.port,
+        rpc: async () => {
+          probeOrder.push("sessions.list");
+          throw new Error("sessions.list failed: unauthorized");
+        },
+        runStartedAt: performance.now(),
+        serial: true,
+      });
+
+      expect(probeOrder).toEqual(["/readyz", "/", "sessions.list"]);
+      expect(sample.readyz).toMatchObject({ error: null, ok: false, status: 503 });
+      expect(sample.controlUi).toMatchObject({
+        error: "response body did not contain <html",
+        ok: false,
+        status: 200,
+      });
+      expect(sample.sessionsList).toMatchObject({
+        error: "sessions.list failed: unauthorized",
+        ok: false,
+      });
+      expect(() => testing.assertBaselineProbes(sample)).toThrow(
+        /readyz\(ok=false status=503 error=none .*sessionsList\(ok=false status=failed error="sessions\.list failed: unauthorized" .*controlUi\(ok=false status=200 error="response body did not contain <html"/u,
+      );
+    } finally {
+      server.close();
+    }
+  });
+
+  it("loads through native Node TypeScript stripping", () => {
+    const result = spawnSync(process.execPath, ["scripts/bench-gateway-concurrency.ts", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("OpenClaw Gateway concurrency benchmark");
+  });
+
   it("ends CLI failures with the required wrapper marker", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-gateway-concurrency.ts", "--wat"],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
+    const result = spawnSync(process.execPath, ["scripts/bench-gateway-concurrency.ts", "--wat"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
 
     expect(result.status).toBe(1);
     expect(result.stderr.trim().split("\n").at(-1)).toBe(

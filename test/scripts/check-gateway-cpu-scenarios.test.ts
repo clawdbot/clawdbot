@@ -186,7 +186,7 @@ describe("gateway CPU scenario guard", () => {
     expect(calls.map((call) => call.args[0])).toEqual([
       "scripts/ensure-cli-startup-build.mjs",
       "--import",
-      "--import",
+      "scripts/bench-gateway-concurrency.ts",
     ]);
     expect(calls[1]?.args).toContain("scripts/bench-gateway-startup.ts");
     expect(calls[2]?.args).toContain("scripts/bench-gateway-concurrency.ts");
