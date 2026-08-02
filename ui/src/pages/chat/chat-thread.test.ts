@@ -3899,7 +3899,9 @@ describe("expansion-state render dependencies", () => {
       expect(getExpansionStateVersion(currentUsers)).toBe(previousUserVersion);
       const toolCardId = expectDefined(currentTools.keys().next().value, "retained tool card");
       expectDefined(
-        retainedPane.querySelector<HTMLButtonElement>(".chat-user-message-disclosure__toggle"),
+        retainedPane.querySelector<HTMLButtonElement>(
+          ".chat-group.user .chat-message-disclosure__toggle",
+        ),
         "mounted user disclosure",
       ).click();
       expectDefined(
