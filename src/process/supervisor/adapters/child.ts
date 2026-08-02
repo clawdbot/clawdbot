@@ -495,6 +495,7 @@ export async function createChildAdapter(params: {
   return {
     pid: child.pid ?? undefined,
     stdin,
+    oomScoreAdjusted: preparedSpawn.wrapped,
     onStdout,
     onStderr,
     wait,

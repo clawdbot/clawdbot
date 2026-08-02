@@ -442,10 +442,16 @@ function classifyExecFailureKind(params: {
   return "aborted";
 }
 
+function isSigkillSignal(signal: NodeJS.Signals | number | null): boolean {
+  return signal === "SIGKILL" || signal === 9;
+}
+
 /** Formats a user-facing reason for a failed exec process exit. */
 function formatExecFailureReason(params: {
   failureKind: ExecExitFailureKind;
+  exitReason: TerminationReason;
   exitSignal: NodeJS.Signals | number | null;
+  oomScoreAdjusted?: boolean;
   timeoutSec: number | null | undefined;
 }): string {
   switch (params.failureKind) {
@@ -465,8 +471,17 @@ function formatExecFailureReason(params: {
         "Command timed out waiting for output.",
         params.failureKind,
       );
-    case "signal":
-      return `Command aborted by signal ${params.exitSignal}`;
+    case "signal": {
+      const signalReason = `Command aborted by signal ${params.exitSignal}`;
+      if (
+        params.exitReason !== "signal" ||
+        !params.oomScoreAdjusted ||
+        !isSigkillSignal(params.exitSignal)
+      ) {
+        return signalReason;
+      }
+      return `${signalReason}\n\nOpenClaw configured this Linux child as a preferred OOM victim. This does not prove memory pressure caused the SIGKILL. Narrow the command or adjust memory, concurrency, or resource limits. Set OPENCLAW_CHILD_OOM_SCORE_ADJ=0 to disable this preference.`;
+    }
     case "aborted":
       return "Command aborted before exit code was captured";
   }
@@ -506,7 +521,9 @@ function buildExecExitOutcome(params: {
   });
   const reason = formatExecFailureReason({
     failureKind,
+    exitReason: params.exit.reason,
     exitSignal: params.exit.exitSignal,
+    oomScoreAdjusted: params.exit.oomScoreAdjusted,
     timeoutSec: params.timeoutSec,
   });
   return {

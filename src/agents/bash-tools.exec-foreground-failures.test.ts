@@ -9,7 +9,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ProcessSupervisor } from "../process/supervisor/index.js";
-import type { SpawnInput } from "../process/supervisor/types.js";
+import type { SpawnInput, TerminationReason } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -70,6 +70,30 @@ function mockSuccessfulSpawn(stdout = "ok\n") {
       exitSignal: null,
       durationMs: 1,
       stdout,
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    })),
+    cancel: vi.fn(),
+  }));
+}
+
+function mockSignalSpawn(params: {
+  exitSignal: NodeJS.Signals | number;
+  oomScoreAdjusted: boolean;
+  reason?: TerminationReason;
+}) {
+  supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+    runId: input.runId ?? "call-signal",
+    pid: 1234,
+    startedAtMs: Date.now(),
+    wait: vi.fn(async () => ({
+      reason: params.reason ?? ("signal" as const),
+      exitCode: null,
+      exitSignal: params.exitSignal,
+      oomScoreAdjusted: params.oomScoreAdjusted,
+      durationMs: 1,
+      stdout: "",
       stderr: "",
       timedOut: false,
       noOutputTimedOut: false,
@@ -215,6 +239,7 @@ describe("exec foreground failures", () => {
         reason: "overall-timeout" as const,
         exitCode: null,
         exitSignal: "SIGKILL" as NodeJS.Signals,
+        oomScoreAdjusted: true,
         durationMs: input.timeoutMs ?? 50,
         stdout: "",
         stderr: "",
@@ -237,6 +262,7 @@ describe("exec foreground failures", () => {
     expect(text).toContain("Verify the resulting state before retrying");
     expect(text).toContain("Do not automatically rerun non-idempotent commands");
     expect(text).toContain("known to be safe to retry");
+    expect(text).not.toContain("preferred OOM victim");
     const details = requireFailedDetails(result.details);
     expect(details.exitCode).toBeNull();
     expect(details.exitSignal).toBe("SIGKILL");
@@ -248,6 +274,73 @@ describe("exec foreground failures", () => {
     expect(details.durationMs).toBeTypeOf("number");
     expect(details.durationMs).toBeGreaterThanOrEqual(0);
   });
+
+  it.each([
+    { name: "child SIGKILL", pty: false, exitSignal: "SIGKILL" as NodeJS.Signals },
+    { name: "PTY signal 9", pty: true, exitSignal: 9 },
+  ])("adds cautious Linux OOM guidance for an adjusted $name", async ({ pty, exitSignal }) => {
+    mockSignalSpawn({ exitSignal, oomScoreAdjusted: true });
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+    });
+
+    const result = await tool.execute(`call-oom-${exitSignal}`, {
+      command: "find . -type f",
+      host: "gateway",
+      pty,
+    });
+
+    expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe(pty ? "pty" : "child");
+    const text = requireTextContent(result);
+    expect(text).toContain(`Command aborted by signal ${exitSignal}`);
+    expect(text).toContain("configured this Linux child as a preferred OOM victim");
+    expect(text).toContain("does not prove memory pressure caused the SIGKILL");
+    expect(text).toContain("adjust memory, concurrency, or resource limits");
+    expect(text).toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ=0");
+  });
+
+  it.each([
+    {
+      name: "unadjusted SIGKILL",
+      exitSignal: "SIGKILL" as NodeJS.Signals,
+      oomScoreAdjusted: false,
+      reason: "signal" as const,
+    },
+    {
+      name: "adjusted non-SIGKILL signal",
+      exitSignal: "SIGTERM" as NodeJS.Signals,
+      oomScoreAdjusted: true,
+      reason: "signal" as const,
+    },
+    {
+      name: "adjusted manual cancellation",
+      exitSignal: "SIGKILL" as NodeJS.Signals,
+      oomScoreAdjusted: true,
+      reason: "manual-cancel" as const,
+    },
+  ])(
+    "preserves the generic signal message for $name",
+    async ({ exitSignal, oomScoreAdjusted, reason }) => {
+      mockSignalSpawn({ exitSignal, oomScoreAdjusted, reason });
+      const tool = createExecTool({
+        security: "full",
+        ask: "off",
+        allowBackground: false,
+      });
+
+      const result = await tool.execute(`call-generic-${reason}-${exitSignal}`, {
+        command: "sleep 10",
+        host: "gateway",
+      });
+
+      const text = requireTextContent(result);
+      expect(text).toContain(`Command aborted by signal ${exitSignal}`);
+      expect(text).not.toContain("preferred OOM victim");
+      expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ=0");
+    },
+  );
 
   it("rejects invalid host values before launching a command", async () => {
     const tool = createExecTool({
