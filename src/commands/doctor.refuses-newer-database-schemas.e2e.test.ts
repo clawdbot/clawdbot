@@ -9,6 +9,8 @@ import {
   createDoctorRuntime,
   mockDoctorConfigSnapshot,
   readConfigFileSnapshot,
+  resolveOpenClawPackageRoot,
+  runCommandWithTimeout,
   runGatewayUpdate,
 } from "./doctor.e2e-harness.js";
 
@@ -21,7 +23,33 @@ describe("doctor database schema preflight", () => {
     vi.clearAllMocks();
   });
 
-  it("refuses a newer state schema before update and config repair flows", async () => {
+  it("lets a successful interactive update replace the stale doctor", async () => {
+    writeStateSchemaVersion(OPENCLAW_STATE_SCHEMA_VERSION + 1);
+    mockDoctorConfigSnapshot();
+    mockInteractiveGitUpdate("ok");
+
+    await expect(doctorCommand(createDoctorRuntime())).resolves.toBeUndefined();
+
+    expect(runGatewayUpdate).toHaveBeenCalledOnce();
+    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("refuses after an interactive update does not handle doctor", async () => {
+    writeStateSchemaVersion(OPENCLAW_STATE_SCHEMA_VERSION + 1);
+    mockDoctorConfigSnapshot();
+    mockInteractiveGitUpdate("skipped");
+
+    await expect(doctorCommand(createDoctorRuntime())).rejects.toThrow(
+      /Doctor refused to continue.*database schema.*newer than this build/iu,
+    );
+
+    expect(runGatewayUpdate).toHaveBeenCalledOnce();
+    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("refuses before config repair flows when updates are disabled", async () => {
     writeStateSchemaVersion(OPENCLAW_STATE_SCHEMA_VERSION + 1);
     mockDoctorConfigSnapshot();
 
@@ -34,6 +62,25 @@ describe("doctor database schema preflight", () => {
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 });
+
+function mockInteractiveGitUpdate(status: "ok" | "skipped"): void {
+  delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  resolveOpenClawPackageRoot.mockResolvedValue("/repo");
+  runCommandWithTimeout.mockResolvedValue({
+    stdout: "/repo\n",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+  });
+  runGatewayUpdate.mockResolvedValue({
+    status,
+    mode: "git",
+    root: "/repo",
+    steps: [],
+    durationMs: 0,
+  });
+}
 
 function writeStateSchemaVersion(version: number): void {
   const statePath = resolveOpenClawStateSqlitePath(process.env);

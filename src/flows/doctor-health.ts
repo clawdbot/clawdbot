@@ -49,11 +49,6 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
   // Preserve the entry fact so doctor can report that automatic initialization.
   const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
   intro("OpenClaw doctor");
-  await assertDoctorDatabaseSchemasCompatible();
-  if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
-    const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
-    assertConfigWriteAllowedInCurrentMode();
-  }
 
   const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
   const prompter = createDoctorPrompter({ runtime: effectiveRuntime, options });
@@ -75,6 +70,14 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
   });
   if (updateResult.handled) {
     return;
+  }
+
+  // A stale source checkout may update itself, but no diagnostic or repair may
+  // touch state until the surviving build proves it understands every database.
+  await assertDoctorDatabaseSchemasCompatible();
+  if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
+    const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
+    assertConfigWriteAllowedInCurrentMode();
   }
 
   // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
