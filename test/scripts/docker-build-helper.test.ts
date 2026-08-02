@@ -1711,7 +1711,7 @@ docker_e2e_docker_run_cmd run demo
     }
   });
 
-  it("keeps package-backed Docker runs bounded without the shared timeout helper", () => {
+  it("keeps package-backed Docker runs bounded when the package helper is sourced directly", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-timeout-required-"));
 
     try {
@@ -1729,14 +1729,10 @@ dirname() {
   /usr/bin/dirname "$@"
 }
 
-docker_e2e_docker_cmd() {
-  return 0
-}
-
 docker() {
   printf "%s\\n" "$*" >"$TMPDIR/docker-seen"
 }
-export -f docker_e2e_docker_cmd docker
+export -f docker
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
@@ -1747,7 +1743,7 @@ set -e
 
 stderr="$(<"$TMPDIR/stderr")"
 [[ "$status" = "127" ]]
-[[ "$stderr" = *"timeout command not found; cannot bound Docker run after 11s"* ]]
+[[ "$stderr" = *"timeout command not found; cannot bound Docker command after 11s"* ]]
 [[ ! -e "$TMPDIR/docker-seen" ]]
 `;
 
@@ -1772,14 +1768,10 @@ dirname() {
   /usr/bin/dirname "$@"
 }
 
-docker_e2e_docker_cmd() {
-  return 0
-}
-
 docker() {
   printf invoked >"$TMPDIR/docker-seen"
 }
-export -f docker_e2e_docker_cmd docker
+export -f docker
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
@@ -1799,7 +1791,7 @@ set -e
     }
   });
 
-  it("uses gtimeout for package-backed Docker runs without the shared timeout helper", () => {
+  it("uses gtimeout for package-backed Docker runs sourced through the package helper", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-gtimeout-"));
 
     try {
@@ -1834,14 +1826,10 @@ dirname() {
   /usr/bin/dirname "$@"
 }
 
-docker_e2e_docker_cmd() {
-  return 0
-}
-
 docker() {
   printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
 }
-export -f docker_e2e_docker_cmd docker
+export -f docker
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
@@ -1857,7 +1845,7 @@ docker_e2e_docker_run_cmd run demo
     }
   });
 
-  it("diagnoses rejected resource limits in the package-backed fallback", () => {
+  it("diagnoses rejected resource limits through the canonical package helper", () => {
     const workDir = tempDirs.make("openclaw-docker-package-diagnostic-");
 
     try {
@@ -1877,10 +1865,6 @@ timeout() {
   fi
   shift 2
   "$@"
-}
-
-docker_e2e_docker_cmd() {
-  return 0
 }
 
 docker() {
@@ -2762,7 +2746,7 @@ fi
     expect(publishedRunner).not.toContain('cat "$log_file"');
   });
 
-  it("keeps the harness run wrapper available with pre-sourced Docker command helpers", () => {
+  it("keeps both harness run wrappers available when the package helper is sourced directly", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-helper-guard-"));
 
     try {
@@ -2792,22 +2776,16 @@ SH
 chmod +x "$TMPDIR/bin/timeout"
 export PATH="$TMPDIR/bin:$PATH"
 
-docker_e2e_docker_cmd() {
-  printf "%s\\n" "$*" >"$TMPDIR/docker-cmd-seen"
-}
-
 docker() {
-  printf "%s\\n" "$*" >"$TMPDIR/docker-run-seen"
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-run-seen"
 }
 export -f docker
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 docker_e2e_run_with_harness image-name bash -lc true
-test -f "$TMPDIR/docker-run-seen"
-
 docker_e2e_run_detached_with_harness image-name
-test -f "$TMPDIR/docker-cmd-seen"
+[[ $(wc -l <"$TMPDIR/docker-run-seen") -eq 2 ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
@@ -2969,6 +2947,12 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
     expectTextToIncludeAll(runner, [
       "docker_e2e_print_log /tmp/openclaw-codex-plugin-pack.log",
+      "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+      'CODEX_PLUGIN_SPEC="npm:${CODEX_PLUGIN_REGISTRY_PACKAGE}@${CODEX_PLUGIN_REGISTRY_VERSION}"',
+      'export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_port_file")"',
+      "trap cleanup_scenario EXIT",
+      'openclaw_e2e_stop_process "${registry_pid:-}"',
+      'if [ "$status" -ne 0 ] && [ "$debug_logs_dumped" -eq 0 ]; then',
       "assert-agent-error",
       "assert-followthrough",
       "followthrough-turn.mjs",
@@ -2979,8 +2963,20 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       '--timeout "$AGENT_TURN_TIMEOUT_SECONDS"',
     ]);
     expect(runner).not.toContain("cat /tmp/openclaw-codex-plugin-pack.log");
+    expect(runner).not.toContain('CODEX_PLUGIN_SPEC="npm-pack:$container_path"');
+    expect(runner).not.toContain("trap 'openclaw_e2e_stop_process \"${registry_pid:-}\"' EXIT");
     expect(runner).not.toContain("final=false");
     expect(runner).not.toContain("--timeout 420");
+  });
+
+  it("prints the OpenAI chat-tools gateway log when startup exits early", () => {
+    const scenario = readFileSync(OPENAI_CHAT_TOOLS_SCENARIO_PATH, "utf8");
+
+    expectTextToIncludeAll(scenario, [
+      'if ! kill -0 "$gateway_pid" 2>/dev/null',
+      'echo "gateway exited before listening" >&2',
+      'openclaw_e2e_print_log "$GATEWAY_LOG" >&2',
+    ]);
   });
 
   it("writes the packaged Codex follow-through result independently of stdout logs", () => {
@@ -4413,7 +4409,7 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
       scenario.match(/unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH/gu),
     ).toHaveLength(1);
     expect(scenario.match(/export USERPROFILE="\$account_home"/gu)).toHaveLength(1);
-    expect(scenario.match(/^  use_default_service_identity$/gmu)).toHaveLength(3);
+    expect(scenario.match(/^ {2}use_default_service_identity$/gmu)).toHaveLength(3);
     expect(scenario).not.toMatch(/^\s*if ! timeout "\$command_timeout"/mu);
   });
 

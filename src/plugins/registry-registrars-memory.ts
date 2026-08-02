@@ -1,13 +1,3 @@
-import {
-  getRegisteredMemoryEmbeddingProvider,
-  registerMemoryEmbeddingProvider as registerGlobalMemoryEmbeddingProvider,
-} from "./memory-embedding-providers.js";
-import {
-  registerMemoryCapability as registerGlobalMemoryCapability,
-  registerMemoryCorpusSupplement as registerGlobalMemoryCorpusSupplement,
-  registerMemoryPromptPreparation as registerGlobalMemoryPromptPreparation,
-  registerMemoryPromptSupplement as registerGlobalMemoryPromptSupplement,
-} from "./memory-state.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import { hasKind } from "./slots.js";
@@ -37,7 +27,7 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     capability: Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0],
   ) => {
     if (requireMemorySlot(record, "capability")) {
-      registerGlobalMemoryCapability(record.id, capability);
+      registry.memoryCapabilities.push({ pluginId: record.id, capability });
     }
   };
 
@@ -54,7 +44,10 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    registerGlobalMemoryPromptSupplement(record.id, builder);
+    registry.memoryPromptSupplements = registry.memoryPromptSupplements.filter(
+      (entry) => entry.pluginId !== record.id,
+    );
+    registry.memoryPromptSupplements.push({ pluginId: record.id, builder });
   };
 
   const registerMemoryPromptPreparation = (
@@ -70,14 +63,20 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    registerGlobalMemoryPromptPreparation(record.id, prepare);
+    registry.memoryPromptPreparations = registry.memoryPromptPreparations.filter(
+      (entry) => entry.pluginId !== record.id,
+    );
+    registry.memoryPromptPreparations.push({ pluginId: record.id, prepare });
   };
 
   const registerMemoryCorpusSupplement = (
     record: PluginRecord,
     supplement: Parameters<OpenClawPluginApi["registerMemoryCorpusSupplement"]>[0],
   ) => {
-    registerGlobalMemoryCorpusSupplement(record.id, supplement);
+    registry.memoryCorpusSupplements = registry.memoryCorpusSupplements.filter(
+      (entry) => entry.pluginId !== record.id,
+    );
+    registry.memoryCorpusSupplements.push({ pluginId: record.id, supplement });
   };
 
   const registerMemoryEmbeddingProvider = (
@@ -97,9 +96,11 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    const existing = getRegisteredMemoryEmbeddingProvider(adapter.id);
+    const existing = registry.memoryEmbeddingProviders.find(
+      (entry) => entry.provider.id === adapter.id,
+    );
     if (existing) {
-      const ownerDetail = existing.ownerPluginId ? ` (owner: ${existing.ownerPluginId})` : "";
+      const ownerDetail = existing.pluginId ? ` (owner: ${existing.pluginId})` : "";
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -108,7 +109,6 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    registerGlobalMemoryEmbeddingProvider(adapter, { ownerPluginId: record.id });
     registry.memoryEmbeddingProviders.push({
       pluginId: record.id,
       pluginName: record.name,

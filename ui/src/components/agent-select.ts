@@ -7,7 +7,7 @@ import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
@@ -46,7 +46,7 @@ export function renderAgentSelectAvatar(
     >`;
   }
   const text = option.agent ? resolveAgentTextAvatar(option.agent, identity) : null;
-  const fallback = (option.label[0] ?? "?").toUpperCase();
+  const fallback = deriveAvatarInitial(option.label) || "?";
   return html`
     <span
       class="agent-select__avatar agent-select__avatar--text"

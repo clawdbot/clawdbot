@@ -40,6 +40,7 @@ import { assertValidParams } from "./validation.js";
 
 type ChatAbortLifecycle = {
   onAuthorizedAfterQueuedAbort?: () => boolean;
+  excludeRunIds?: ReadonlySet<string>;
 };
 
 export async function handleChatAbortRequestWithLifecycle(
@@ -118,6 +119,7 @@ export async function handleChatAbortRequestWithLifecycle(
       stopReason: "rpc",
       requester,
       preserveSideRuns,
+      excludeRunIds: lifecycle.excludeRunIds,
       onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
     });
     if (res.unauthorized) {

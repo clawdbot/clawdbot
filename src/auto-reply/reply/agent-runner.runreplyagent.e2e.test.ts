@@ -42,6 +42,7 @@ import {
 } from "./reply-operation-run-state.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
+import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -437,6 +438,43 @@ function requireBuiltChannelSourceTurnId(
 }
 
 describe("runReplyAgent active steering", () => {
+  it("keeps the continuing Telegram task's typing alive after an accepted steer", async () => {
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    const taskTyping = createMockTypingController({ isActive: vi.fn(() => true) });
+    bindReplyOperationTyping(active, taskTyping);
+    const { run, typing } = createMinimalRun({
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "123",
+        NativeChannelId: "123",
+        MessageSid: "steer-telegram",
+      },
+      runOverrides: { agentId: "main", messageProvider: "telegram" },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(taskTyping.startTypingLoop).toHaveBeenCalledOnce();
+    expect(taskTyping.cleanup).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+
+    active.complete();
+
+    expect(taskTyping.cleanup).toHaveBeenCalledOnce();
+  });
+
   it("dispatches a declined steer once with its source-turn identity", async () => {
     const runState: ReplyOperationRunState = {};
     state.beforeAgentReplyHasHooksMock.mockImplementation(
@@ -843,7 +881,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const sessionStore = {
       main: {
         sessionId: "pre-compact-session",
-        sessionFile: "/tmp/pre-compact.jsonl",
+        sessionFile: "main",
         updatedAt: Date.now(),
       },
     };
@@ -869,7 +907,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     active.updateSessionId("post-compact-session");
     sessionStore.main = {
       sessionId: "post-compact-session",
-      sessionFile: "/tmp/post-compact.jsonl",
+      sessionFile: "main",
       updatedAt: Date.now(),
     };
     active.complete();
@@ -878,7 +916,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
     expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
-    expect((call as AgentRunParams).sessionFile).toBe("/tmp/post-compact.jsonl");
+    expect((call as AgentRunParams).sessionFile).toBe("main");
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
@@ -1939,7 +1977,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "visible final",
+      context: { channel: "webchat" },
+      intentId: expect.any(String),
+      createdAt: expect.any(Number),
+    });
     expect(stored.restartRecoverySourceIngress).toBe("control-ui");
     expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
   });
@@ -2529,7 +2573,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(await readStoredMainSession(storePath)).toMatchObject({
-      pendingFinalDelivery: { kind: "transport-only" },
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "model reply",
+        context: { channel: "discord" },
+        intentId: expect.any(String),
+        createdAt: expect.any(Number),
+      },
       restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoverySourceIngress: "channel",
     });

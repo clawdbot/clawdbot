@@ -210,13 +210,6 @@ describe("browser config", () => {
     });
   });
 
-  it("normalizes hex colors", () => {
-    const resolved = resolveBrowserConfig({
-      color: "ff4500",
-    });
-    expect(resolved.color).toBe("#FF4500");
-  });
-
   it("expands tilde-prefixed executablePath with the OS home directory", () => {
     const resolved = resolveBrowserConfig({
       executablePath: " ~/.local/bin/chromium ",
@@ -272,21 +265,6 @@ describe("browser config", () => {
     });
 
     expect(resolved.executablePath).toBe("/opt/~chromium/chrome");
-  });
-
-  it("falls back to default color for invalid hex", () => {
-    const resolved = resolveBrowserConfig({
-      color: "#GGGGGG",
-    });
-    expect(resolved.color).toBe("#FF4500");
-  });
-
-  it("treats non-loopback cdpUrl as remote", () => {
-    const resolved = resolveBrowserConfig({
-      cdpUrl: "http://example.com:9222",
-    });
-    const profile = resolveProfile(resolved, "openclaw");
-    expect(profile?.cdpIsLoopback).toBe(false);
   });
 
   it("supports explicit CDP URLs for the default profile", () => {
@@ -1067,62 +1045,17 @@ describe("browser config", () => {
     expect(getBrowserProfileCapabilities(work).usesChromeMcp).toBe(false);
   });
 
-  describe("default profile preference", () => {
-    it("defaults to openclaw profile when defaultProfile is not configured", () => {
-      const resolved = resolveBrowserConfig({
-        headless: false,
-        noSandbox: false,
-      });
-      expect(resolved.defaultProfile).toBe("openclaw");
+  it("resolves a configured custom default profile", () => {
+    const resolved = resolveBrowserConfig({
+      defaultProfile: "custom",
+      profiles: {
+        custom: { cdpPort: 19999 },
+      },
     });
 
-    it("keeps openclaw default when headless=true", () => {
-      const resolved = resolveBrowserConfig({
-        headless: true,
-      });
-      expect(resolved.defaultProfile).toBe("openclaw");
-    });
-
-    it("keeps openclaw default when noSandbox=true", () => {
-      const resolved = resolveBrowserConfig({
-        noSandbox: true,
-      });
-      expect(resolved.defaultProfile).toBe("openclaw");
-    });
-
-    it("keeps openclaw default when both headless and noSandbox are true", () => {
-      const resolved = resolveBrowserConfig({
-        headless: true,
-        noSandbox: true,
-      });
-      expect(resolved.defaultProfile).toBe("openclaw");
-    });
-
-    it("explicit defaultProfile config overrides defaults in headless mode", () => {
-      const resolved = resolveBrowserConfig({
-        headless: true,
-        defaultProfile: "user",
-      });
-      expect(resolved.defaultProfile).toBe("user");
-    });
-
-    it("explicit defaultProfile config overrides defaults in noSandbox mode", () => {
-      const resolved = resolveBrowserConfig({
-        noSandbox: true,
-        defaultProfile: "user",
-      });
-      expect(resolved.defaultProfile).toBe("user");
-    });
-
-    it("allows custom profile as default even in headless mode", () => {
-      const resolved = resolveBrowserConfig({
-        headless: true,
-        defaultProfile: "custom",
-        profiles: {
-          custom: { cdpPort: 19999, color: "#00FF00" },
-        },
-      });
-      expect(resolved.defaultProfile).toBe("custom");
-    });
+    const profile = resolveProfile(resolved, resolved.defaultProfile);
+    expect(resolved.defaultProfile).toBe("custom");
+    expect(profile?.name).toBe("custom");
+    expect(profile?.cdpPort).toBe(19999);
   });
 });

@@ -34,7 +34,11 @@ import { safeEqualSecret } from "../security/secret-equal.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
+import {
+  createGatewayByteStream,
+  resolveByteResponse,
+  writeByteHeaders,
+} from "./http-byte-range.js";
 import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
 import {
   authorizeGatewayHttpRequestOrReply,
@@ -1459,6 +1463,8 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
+  const respondNotFound = () => sendStatus(res, 404, "not found");
+  let byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
 
   let responseContentType = record.original.contentType || "application/octet-stream";
   let responseFilename = record.original.filename;
@@ -1472,17 +1478,21 @@ export async function handleManagedOutgoingMediaHttpRequest(
       sourceStat: opened.stat,
       mimeType: responseContentType,
       kind: mediaKind,
+    }).catch(async (error: unknown) => {
+      await byteStream.close();
+      throw error;
     });
     if (playback.kind === "preparing") {
-      await opened.handle.close().catch(() => {});
+      await byteStream.close();
       sendJson(res, 202, { status: "preparing" });
       return true;
     }
     if (playback.kind === "transcoded") {
       const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(() => null);
       if (transcoded) {
-        await opened.handle.close().catch(() => {});
+        await byteStream.close();
         opened = transcoded;
+        byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
         responseContentType = playback.contentType;
         responseFilename = replacePlaybackFileExtension(
           responseFilename ?? "generated-media",
@@ -1492,14 +1502,6 @@ export async function handleManagedOutgoingMediaHttpRequest(
     }
   }
 
-  let handleClosed = false;
-  const closeOpenedHandle = async () => {
-    if (handleClosed) {
-      return;
-    }
-    handleClosed = true;
-    await opened.handle.close().catch(() => {});
-  };
   res.setHeader("content-type", responseContentType);
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");
@@ -1516,37 +1518,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
   const byteResponse = resolveByteResponse({
     file: opened.stat,
     method: req.method,
-    rangeHeader: req.headers.range,
-    ifRangeHeader: req.headers["if-range"],
+    request: req,
   });
   writeByteHeaders(res, byteResponse);
-  if (req.method === "HEAD" || byteResponse.kind === "unsatisfiable" || opened.stat.size === 0) {
-    await closeOpenedHandle();
-    res.end();
-    return true;
-  }
-
   // Stream from the verified descriptor so a path swap cannot bypass fs-safe after validation.
-  const stream = opened.handle.createReadStream({
-    start: byteResponse.kind === "partial" ? byteResponse.range.start : 0,
-    end: byteResponse.kind === "partial" ? byteResponse.range.end : opened.stat.size - 1,
-    autoClose: false,
-  });
-  const finishClose = () => {
-    void closeOpenedHandle();
-  };
-  stream.once("end", finishClose);
-  stream.once("close", finishClose);
-  stream.once("error", () => {
-    void closeOpenedHandle();
-    if (!res.headersSent) {
-      sendStatus(res, 404, "not found");
-    } else {
-      res.destroy();
-    }
-  });
-  res.once("close", finishClose);
-  stream.pipe(res);
+  await byteStream.pipe(byteResponse, req.method);
   return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -32,7 +32,7 @@ import type {
   GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 import {
-  resolveFreshestSessionStoreMatchFromStoreKeys,
+  resolveCanonicalSessionStoreMatchFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
@@ -117,7 +117,7 @@ export function resolveSessionSharingTarget(params: {
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
-  const match = resolveFreshestSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
+  const match = resolveCanonicalSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
   return match
     ? {
         agentId: target.agentId,

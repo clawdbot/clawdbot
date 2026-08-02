@@ -462,6 +462,100 @@ describe("startWhatsAppQaDriverSession", () => {
     await session.close();
   });
 
+  it.each([
+    ...[
+      { name: "captionless video note", message: { ptvMessage: {} } },
+      {
+        name: "ephemeral captionless video note",
+        message: { ephemeralMessage: { message: { ptvMessage: {} } } },
+      },
+      {
+        name: "edited captionless video note",
+        message: { editedMessage: { message: { ptvMessage: {} } } },
+      },
+    ].map(({ name, message }) => ({
+      name,
+      message,
+      expected: { kind: "media", mediaType: "video/mp4", text: "" },
+    })),
+    ...[
+      "pollCreationMessage",
+      "pollCreationMessageV2",
+      "pollCreationMessageV3",
+      "pollCreationMessageV5",
+    ].flatMap((pollKey) => {
+      const poll = {
+        [pollKey]: {
+          name: "Choose a time",
+          options: [{ optionName: "Morning" }, { optionName: "Afternoon" }],
+        },
+      };
+      const expected = {
+        kind: "poll",
+        poll: { question: "Choose a time", options: ["Morning", "Afternoon"] },
+      };
+      return [
+        { name: pollKey, message: poll, expected },
+        {
+          name: `ephemeral ${pollKey}`,
+          message: { ephemeralMessage: { message: poll } },
+          expected,
+        },
+      ];
+    }),
+    ...["pollCreationMessageV3", "pollCreationMessageV5"].flatMap((pollKey) => {
+      const poll = {
+        [pollKey]: {
+          name: "Choose a time",
+          options: [{ optionName: "Morning" }, { optionName: "Afternoon" }],
+        },
+      };
+      const wrappedPoll = { pollCreationMessageV4: { message: poll } };
+      const expected = {
+        kind: "poll",
+        poll: { question: "Choose a time", options: ["Morning", "Afternoon"] },
+      };
+      return [
+        { name: `future-proof version-4 ${pollKey}`, message: wrappedPoll, expected },
+        {
+          name: `ephemeral future-proof version-4 ${pollKey}`,
+          message: { ephemeralMessage: { message: wrappedPoll } },
+          expected,
+        },
+        { name: `edited ${pollKey}`, message: { editedMessage: { message: poll } }, expected },
+      ];
+    }),
+  ])("resolves live ingress waiters for $name", async ({ message, expected }) => {
+    const sock = createMockSocket();
+    mocks.createWaSocket.mockResolvedValue(sock);
+    mocks.waitForWaConnection.mockResolvedValue(undefined);
+    mocks.jidToE164.mockReturnValue("+15551234567");
+
+    const session = await startWhatsAppQaDriverSession({
+      authDir: "/tmp/openclaw-whatsapp-auth",
+    });
+
+    try {
+      const observed = session.waitForMessage({
+        timeoutMs: 150,
+        match: (candidate) => candidate.kind === expected.kind,
+      });
+      sock.ev.emit("messages.upsert", {
+        messages: [
+          {
+            key: { fromMe: false, id: "observed-message", remoteJid: "12345@lid" },
+            message,
+          } as WAMessage,
+        ],
+      });
+
+      await expect(observed).resolves.toMatchObject(expected);
+      expect(session.getObservedMessages()).toHaveLength(1);
+    } finally {
+      await session.close();
+    }
+  });
+
   it("uses canonical WhatsApp media MIME defaults when Baileys omits MIME", async () => {
     const sock = createMockSocket();
     mocks.createWaSocket.mockResolvedValue(sock);

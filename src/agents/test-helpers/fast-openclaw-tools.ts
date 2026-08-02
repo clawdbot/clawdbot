@@ -25,7 +25,7 @@ function stubActionTool(name: string, actions: string[]) {
 const coreTools = [
   stubActionTool("canvas", ["create", "read"]),
   stubActionTool("nodes", ["list", "invoke"]),
-  stubActionTool("cron", ["schedule", "cancel"]),
+  stubActionTool("automations", ["schedule", "cancel"]),
   stubActionTool("message", ["send", "reply"]),
   stubTool("heartbeat_respond"),
   stubActionTool("gateway", ["config.get", "config.schema.lookup"]),

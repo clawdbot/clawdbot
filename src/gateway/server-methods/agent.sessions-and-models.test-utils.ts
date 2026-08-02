@@ -377,8 +377,6 @@ describe("gateway agent handler", () => {
         useTestStateDir(root);
         resetTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
-        // Route through the harness helper so the ensureRuntimePluginsLoaded
-        // pin survives this wholesale deps override.
         const persistSubagentRunsToDiskOrThrow = vi.fn(() => {
           throw new Error("disk full");
         });

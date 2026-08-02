@@ -67,6 +67,7 @@ import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-ackn
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
+import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 import { isSkillsMachineOutput } from "./skills-output-mode.js";
 
@@ -1285,6 +1286,8 @@ export function registerSkillsCli(program: Command) {
         }
       },
     );
+
+  applyParentDefaultHelpAction(workshop);
 
   skills
     .command("list")

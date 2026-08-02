@@ -390,7 +390,7 @@ describe("parseSystemAgentOperation", () => {
           },
         },
       ),
-    ).rejects.toThrow("Exit OpenClaw and run `openclaw onboard`");
+    ).rejects.toThrow("`openclaw onboard` on the machine running OpenClaw");
 
     expect(applySetup).not.toHaveBeenCalled();
   });

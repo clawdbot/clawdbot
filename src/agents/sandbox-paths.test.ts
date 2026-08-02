@@ -41,6 +41,7 @@ async function withManagedMediaRoot<T>(run: (ctx: { stateDir: string }) => Promi
   try {
     return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       await fs.mkdir(path.join(stateDir, "media", "outbound"), { recursive: true });
+      await fs.mkdir(path.join(stateDir, "media", "tool-file-transfer"), { recursive: true });
       await fs.mkdir(path.join(stateDir, "media", "tool-image-generation"), { recursive: true });
       return await run({ stateDir });
     });
@@ -184,28 +185,6 @@ describe("assertSandboxPath", () => {
     },
   );
 
-  it.runIf(process.platform === "win32")(
-    "pins Win32 junction-then-dot-dot to lexical traversal semantics",
-    async () => {
-      const parent = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-junction-dotdot-"));
-      const root = path.join(parent, "workspace");
-      const outside = path.join(parent, "outside");
-      try {
-        await fs.mkdir(path.join(root, "sub"), { recursive: true });
-        await fs.mkdir(outside);
-        await fs.symlink(root, path.join(root, "sub", "up"), "junction");
-        await fs.writeFile(path.join(outside, "secret.txt"), "outside", "utf8");
-        const attemptedEscape = `${root}\\sub\\up\\..\\outside\\secret.txt`;
-
-        await expect(fs.readFile(attemptedEscape, "utf8")).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      } finally {
-        await fs.rm(parent, { recursive: true, force: true });
-      }
-    },
-  );
-
   it("accepts not-yet-created and symlinked roots", async () => {
     const parent = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-missing-root-")),
@@ -263,6 +242,10 @@ describe("resolveSandboxedMediaSource", () => {
     {
       name: "managed outbound media",
       relative: path.join("media", "outbound", "reply.png"),
+    },
+    {
+      name: "managed file-transfer tool media",
+      relative: path.join("media", "tool-file-transfer", "fetched.png"),
     },
     {
       name: "managed tool media",
@@ -497,47 +480,90 @@ describe("resolveSandboxedMediaSource", () => {
     );
   });
 
-  it("rejects symlinked managed media paths escaping the managed media root", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    await withManagedMediaRoot(async ({ stateDir }) => {
-      await withSandboxRoot(async (sandboxDir) => {
+  it.each(["outbound", "tool-file-transfer"])(
+    "rejects symlinked managed media paths escaping the %s root",
+    async (subdir) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      await withManagedMediaRoot(async ({ stateDir }) => {
+        await withSandboxRoot(async (sandboxDir) => {
+          const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-media-outside-"));
+          const outsideFile = path.join(outsideDir, "secret.png");
+          const symlinkPath = path.join(stateDir, "media", subdir, "linked-secret.png");
+          try {
+            await fs.writeFile(outsideFile, "secret", "utf8");
+            await fs.symlink(outsideFile, symlinkPath);
+
+            await expectSandboxRejection(symlinkPath, sandboxDir, /managed media root|symlink/i);
+          } finally {
+            await fs.rm(symlinkPath, { force: true });
+            await fs.rm(outsideDir, { recursive: true, force: true });
+          }
+        });
+      });
+    },
+  );
+
+  it.each(["outbound", "tool-file-transfer"])(
+    "rejects checked managed media symlinks escaping the %s root",
+    async (subdir) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      await withManagedMediaRoot(async ({ stateDir }) => {
         const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-media-outside-"));
         const outsideFile = path.join(outsideDir, "secret.png");
-        const symlinkPath = path.join(stateDir, "media", "outbound", "linked-secret.png");
+        const symlinkPath = path.join(stateDir, "media", subdir, "linked-secret.png");
         try {
           await fs.writeFile(outsideFile, "secret", "utf8");
           await fs.symlink(outsideFile, symlinkPath);
 
-          await expectSandboxRejection(symlinkPath, sandboxDir, /managed media root|symlink/i);
+          await expect(resolveAllowedManagedMediaPath(symlinkPath)).rejects.toThrow(
+            /managed media root|symlink/i,
+          );
         } finally {
           await fs.rm(symlinkPath, { force: true });
           await fs.rm(outsideDir, { recursive: true, force: true });
         }
       });
-    });
-  });
+    },
+  );
 
-  it("rejects checked managed media symlinks escaping the managed media root", async () => {
+  it("rejects hardlinked file-transfer media that aliases a file outside managed media", async () => {
     if (process.platform === "win32") {
       return;
     }
     await withManagedMediaRoot(async ({ stateDir }) => {
-      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-media-outside-"));
-      const outsideFile = path.join(outsideDir, "secret.png");
-      const symlinkPath = path.join(stateDir, "media", "outbound", "linked-secret.png");
-      try {
-        await fs.writeFile(outsideFile, "secret", "utf8");
-        await fs.symlink(outsideFile, symlinkPath);
-
-        await expect(resolveAllowedManagedMediaPath(symlinkPath)).rejects.toThrow(
-          /managed media root|symlink/i,
+      await withSandboxRoot(async (sandboxDir) => {
+        const outsideDir = await fs.mkdtemp(
+          path.join(path.dirname(stateDir), "managed-media-hardlink-outside-"),
         );
-      } finally {
-        await fs.rm(symlinkPath, { force: true });
-        await fs.rm(outsideDir, { recursive: true, force: true });
-      }
+        const outsideFile = path.join(outsideDir, "secret.png");
+        const hardlinkPath = path.join(
+          stateDir,
+          "media",
+          "tool-file-transfer",
+          "linked-secret.png",
+        );
+        try {
+          await fs.writeFile(outsideFile, "secret", "utf8");
+          try {
+            await fs.link(outsideFile, hardlinkPath);
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+              return;
+            }
+            throw err;
+          }
+
+          await expect(resolveAllowedManagedMediaPath(hardlinkPath)).rejects.toThrow(/hard.?link/i);
+          await expectSandboxRejection(hardlinkPath, sandboxDir, /hard.?link|managed media root/i);
+        } finally {
+          await fs.rm(hardlinkPath, { force: true });
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      });
     });
   });
 

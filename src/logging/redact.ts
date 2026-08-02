@@ -1,5 +1,4 @@
 import {
-  CREDENTIAL_STYLE_HEADER_REDACT_PATTERN,
   findStructuredAuthParamRanges,
   HTTP_AUTH_HEADER_BOUNDARY_PATTERN,
   HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN,
@@ -10,6 +9,7 @@ import {
   HTTP_AUTH_SERIALIZED_QUOTE_PATTERN,
   redactStructuredAuthHeaders,
 } from "@openclaw/acp-core";
+import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { expectDefined } from "@openclaw/normalization-core";
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -159,12 +159,27 @@ const AWS_SECRET_ACCESS_KEY_VALUE_PATTERN = String.raw`(?=[A-Za-z0-9/+=]{40}(?![
 const AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN = String.raw`/${AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY}(${AWS_SECRET_ACCESS_KEY_VALUE_PATTERN})(?!_)/g`;
 const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
+const CREDENTIAL_STYLE_HEADER_KEYS = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token";
+const GATEWAY_SECURITY_HEADER_KEYS =
+  "X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token";
+// Colons identify HTTP headers. Equals assignments may be form bodies, so stop only before an
+// actual following `&key=` pair; otherwise opaque credential punctuation stays fully masked.
+const LOG_HEADER_BOUNDARY_PATTERN = String.raw`(^|[^A-Za-z0-9_?&-]|\\{1,64}[rn])`;
+const CREDENTIAL_STYLE_COLON_HEADER_REDACT_PATTERN = String.raw`${LOG_HEADER_BOUNDARY_PATTERN}(?:${CREDENTIAL_STYLE_HEADER_KEYS})${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*:${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}([^\s\\"',;]+)`;
+const CREDENTIAL_STYLE_EQUALS_ASSIGNMENT_REDACT_PATTERN = String.raw`${LOG_HEADER_BOUNDARY_PATTERN}(?:${CREDENTIAL_STYLE_HEADER_KEYS})${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*=${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}([^\s\\"',;]+)`;
+const GATEWAY_SECURITY_COLON_HEADER_REDACT_PATTERN = String.raw`${LOG_HEADER_BOUNDARY_PATTERN}(?:${GATEWAY_SECURITY_HEADER_KEYS})\s*:\s*([^\s"',;]+)`;
+const GATEWAY_SECURITY_EQUALS_ASSIGNMENT_REDACT_PATTERN = String.raw`${LOG_HEADER_BOUNDARY_PATTERN}(?:${GATEWAY_SECURITY_HEADER_KEYS})\s*=\s*([^\s"',;]+)`;
+const FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES = new Set([
+  CREDENTIAL_STYLE_EQUALS_ASSIGNMENT_REDACT_PATTERN,
+  GATEWAY_SECURITY_EQUALS_ASSIGNMENT_REDACT_PATTERN,
+]);
 const HTTP_AUTH_HEADER_REDACT_PATTERNS = [
   String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}${HTTP_AUTH_SCHEME_PATTERN}${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`,
   String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})[ \t]*(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
   String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic|Bot)(?=${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}))${HTTP_AUTH_SCHEME_PATTERN}${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`,
   String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic|Bot)(?=${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}))(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})[ \t]*(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
-  CREDENTIAL_STYLE_HEADER_REDACT_PATTERN,
+  CREDENTIAL_STYLE_COLON_HEADER_REDACT_PATTERN,
+  CREDENTIAL_STYLE_EQUALS_ASSIGNMENT_REDACT_PATTERN,
 ] as const;
 const AUTHORIZATION_BEARER_REDACT_PATTERN = String.raw`Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Bearer${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`;
 const AUTHORIZATION_BASIC_REDACT_PATTERN = String.raw`Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Basic${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`;
@@ -190,15 +205,15 @@ const shellReferencePreservingPatterns = new WeakSet<RegExp>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
 const chunkUnsafePatterns = new WeakSet<RegExp>();
+const formAwareEqualsAssignmentPatterns = new WeakSet<RegExp>();
 
 const DEFAULT_REDACT_PATTERNS: string[] = [
   // ENV-style assignments. Keep this case-sensitive so diagnostics like
   // `Unrecognized key: "llm"` do not lose the actual config key.
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
-  // URL query parameters. Keep this separate from ENV-style assignments so
-  // lower-case URL secrets stay redacted without hiding config-key diagnostics.
-  String.raw`/[?&](?:${AUTH_QUERY_KEYS}|${PAYMENT_CREDENTIAL_QUERY_KEYS})=([^&#\s<>]+)/gi`,
+  // URL pairs run through redactUrlQueryPairs first so net-policy owns both ordinary and
+  // obfuscated query-name classification without a second regex masking the value twice.
   // JSON fields.
   String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|credential|authorization|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material|${PAYMENT_CREDENTIAL_JSON_KEYS})"\s*:\s*"([^"]+)"`,
   // HTTP client diagnostics often stringify request config objects using
@@ -213,7 +228,8 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   AUTHORIZATION_BASIC_REDACT_PATTERN,
   AUTHORIZATION_BOT_REDACT_PATTERN,
   ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
-  String.raw`(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)`,
+  GATEWAY_SECURITY_COLON_HEADER_REDACT_PATTERN,
+  GATEWAY_SECURITY_EQUALS_ASSIGNMENT_REDACT_PATTERN,
   STANDALONE_BEARER_REDACT_PATTERN,
   // URL userinfo and common connection-string password slots.
   String.raw`\b(?:https?|wss?|ftp):\/\/[^\/\s:@]*:([^\/\s@]+)@`,
@@ -342,7 +358,7 @@ let defaultResolvedPatterns: RegExp[] | undefined;
 const DEFAULT_REDACT_PREFILTER_SOURCES: string[] = [
   // Sensitive key names shared by the env/JSON/query/form/header/assignment families.
   String.raw`KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|COOKIE|SIGNATURE|CREDENTIAL|CARD|CVC|CVV|PAYMENT|PRIVATE KEY`,
-  String.raw`security[-_]?code|\bpass\s*[=:]|\bpassphrase\s*[=:]|_(?:password|pass|passphrase|passwd)\s*[=:]|jwt\s*[=:]|session=|code=`,
+  String.raw`security[-_]?code|\bpass\s*[=:]|\bpassphrase\s*[=:]|_(?:password|pass|passphrase|passwd)\s*[=:]|jwt\s*[=:]|session=|code=|\bsig\s*=`,
   String.raw`\bBearer\s+`,
   // URL userinfo and connection-string password slots (`scheme://user:pass@host`).
   String.raw`:\/\/[^\/\s:@]*:[^\/\s@]+@`,
@@ -403,6 +419,9 @@ function parsePattern(raw: RedactPattern): RegExp | null {
   }
   if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
     shellReferencePreservingPatterns.add(pattern);
+  }
+  if (pattern && typeof raw === "string" && FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES.has(raw)) {
+    formAwareEqualsAssignmentPatterns.add(pattern);
   }
   if (
     pattern &&
@@ -498,6 +517,13 @@ function splitSecretValueForMask(token: string): {
   };
 }
 
+function splitFormAwareCredentialValue(token: string): { secret: string; suffix: string } {
+  const pairBoundary = token.search(/&[A-Za-z_][A-Za-z0-9_.-]*=/u);
+  return pairBoundary < 0
+    ? { secret: token, suffix: "" }
+    : { secret: token.slice(0, pairBoundary), suffix: token.slice(pairBoundary) };
+}
+
 function maskSecretValue(token: string, options?: { hinted?: boolean }): string {
   const { maskable, suffix } = splitSecretValueForMask(token);
   return `${options?.hinted ? maskToken(maskable) : "***"}${suffix}`;
@@ -516,7 +542,7 @@ function normalizeSensitiveKeyName(value: string): string {
 }
 
 function isSensitiveBodyKey(key: string): boolean {
-  return BODY_SECRET_KEYS.has(normalizeSensitiveKeyName(key));
+  return isSensitiveUrlQueryParamName(key) || BODY_SECRET_KEYS.has(normalizeSensitiveKeyName(key));
 }
 
 function hasEncodedOrInvisibleFormKey(key: string): boolean {
@@ -595,7 +621,7 @@ function redactUrlQueryPairs(text: string): string {
     return text;
   }
   return text.replace(URL_QUERY_PAIR_RE, (match, prefix: string, key: string, token: string) => {
-    if (!hasEncodedOrInvisibleFormKey(key) || !isSensitiveBodyKey(key)) {
+    if (!isSensitiveBodyKey(key)) {
       return match;
     }
     return `${prefix}${key}=${maskSecretValue(token, { hinted: true })}`;
@@ -613,7 +639,7 @@ function markUrlQueryPairRedactions(text: string, bitmap: boolean[]): void {
     const prefix = match[1] ?? "";
     const key = match[2] ?? "";
     const token = match[3] ?? "";
-    if (!hasEncodedOrInvisibleFormKey(key) || !isSensitiveBodyKey(key)) {
+    if (!isSensitiveBodyKey(key)) {
       continue;
     }
     const secretValue = splitSecretValueForMask(token);
@@ -899,9 +925,12 @@ function redactMatch(
   }
   const selected = selectSecretCapture(match, groups);
   const token = selected.value;
+  const formAwareValue = formAwareEqualsAssignmentPatterns.has(pattern)
+    ? splitFormAwareCredentialValue(token)
+    : { secret: token, suffix: "" };
   // An earlier pass (form-body or quoted-assignment masking) may already have replaced this
   // value with ***; re-masking would strip its quote wrapper around the placeholder.
-  if (splitSecretValueForMask(token).maskable === "***") {
+  if (splitSecretValueForMask(formAwareValue.secret).maskable === "***") {
     return match;
   }
   const isShellReferencePattern = shellReferencePreservingPatterns.has(pattern);
@@ -919,7 +948,7 @@ function redactMatch(
   // retained hint instead of being exposed by delimiter-aware masking.
   const masked = isShellReferencePattern
     ? maskToken(token)
-    : maskSecretValue(token, { hinted: true });
+    : `${maskSecretValue(formAwareValue.secret, { hinted: true })}${formAwareValue.suffix}`;
   if (token === match) {
     return masked;
   }
@@ -1012,7 +1041,10 @@ function markPatternMatchRedaction(
   if (tokenStart < 0) {
     return;
   }
-  const secretValue = splitSecretValueForMask(selected.value);
+  const selectedSecret = formAwareEqualsAssignmentPatterns.has(pattern)
+    ? splitFormAwareCredentialValue(selected.value).secret
+    : selected.value;
+  const secretValue = splitSecretValueForMask(selectedSecret);
   markBitmapRange(
     bitmap,
     match.index + tokenStart + secretValue.maskStart,

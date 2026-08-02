@@ -24,6 +24,7 @@ const applyPluginAutoEnableMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
+  loadPluginRegistryHandle: (params: unknown) => loadOpenClawPluginsMock(params),
   resolveCompatibleRuntimePluginRegistry: (params: unknown) =>
     resolveRuntimePluginRegistryMock(params),
   resolvePluginRegistryLoadCacheKey: (params: unknown) => JSON.stringify(params),
@@ -1729,6 +1730,67 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("rechecks cached optional tool availability when provider auth changes", () => {
+    const config = createContext().config;
+    const env = {};
+    installToolManifestSnapshot({
+      config,
+      env,
+      plugin: {
+        id: "multi",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        setup: {
+          providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }],
+        },
+        contracts: {
+          tools: ["other_tool", "optional_tool"],
+        },
+        toolMetadata: {
+          optional_tool: {
+            optional: true,
+            authSignals: [{ provider: "xai" }],
+          },
+        },
+      },
+    });
+    const factory = vi.fn(() => [makeTool("other_tool"), makeTool("optional_tool")]);
+    setActivePluginRegistry(
+      createToolRegistry([
+        {
+          pluginId: "multi",
+          optional: false,
+          source: "/tmp/multi.js",
+          names: ["other_tool", "optional_tool"],
+          declaredNames: ["other_tool", "optional_tool"],
+          factory,
+        },
+      ]) as never,
+      "test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
+    const resolveWithAuth = (hasAuth: boolean) =>
+      resolvePluginTools({
+        ...createResolveToolsParams({
+          context: {
+            ...createContext(),
+            config,
+          },
+          env,
+          toolAllowlist: [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, "optional_tool"],
+        }),
+        hasAuthForProvider: (providerId) => providerId === "xai" && hasAuth,
+      });
+
+    expectResolvedToolNames(resolveWithAuth(true), ["other_tool", "optional_tool"]);
+    expectResolvedToolNames(resolveWithAuth(false), ["other_tool"]);
+    expectResolvedToolNames(resolveWithAuth(true), ["other_tool", "optional_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+
   it("does not materialize manifest-optional sibling tools from non-optional factories by default", async () => {
     const config = createContext().config;
     installToolManifestSnapshot({
@@ -3135,7 +3197,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("loads a standalone registry when cached runtime registries lack matching tool entries", () => {
+  it("keeps a cold-loaded standalone registry scoped through tool callbacks", async () => {
     const config = {
       plugins: {
         enabled: true,
@@ -3153,7 +3215,17 @@ describe("resolvePluginTools optional tools", () => {
         enabledByDefault: false,
       }),
     });
-    const memorySearchFactory = vi.fn(() => [makeTool("memory_search"), makeTool("memory_get")]);
+    const memorySearchFactory = vi.fn(() => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(loadedRegistry);
+      return ["memory_search", "memory_get"].map((name) => {
+        const tool = makeTool(name);
+        tool.execute = async () => {
+          expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(loadedRegistry);
+          return { content: [{ type: "text", text: "ok" }] };
+        };
+        return tool;
+      });
+    });
     const loadedRegistry = {
       plugins: [{ id: "memory-core", status: "loaded" }],
       tools: [
@@ -3196,6 +3268,10 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
     expect(memorySearchFactory).toHaveBeenCalledTimes(1);
+    await expect(tools[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
     const loaderParams = mockCallParams(loadOpenClawPluginsMock) as {
       activate?: unknown;
       onlyPluginIds?: unknown;

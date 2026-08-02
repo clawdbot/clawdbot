@@ -71,6 +71,7 @@ export type GuardedFetchOptions = {
     | {
         flowId?: string;
         meta?: Record<string, unknown>;
+        sensitiveRequestHeaderNames?: readonly string[];
       };
   maxRedirects?: number;
   /**
@@ -345,6 +346,9 @@ async function captureGuardedFetchExchange(params: {
       captureOrigin: "guarded-fetch",
       ...(params.auditContext ? { auditContext: params.auditContext } : {}),
       ...params.capture?.meta,
+      ...(params.capture?.sensitiveRequestHeaderNames
+        ? { sensitiveRequestHeaderNames: params.capture.sensitiveRequestHeaderNames }
+        : {}),
     },
   });
 }

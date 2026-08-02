@@ -102,7 +102,7 @@ const QUERY_EXPANSIONS: ReadonlyArray<{ terms: readonly string[]; add: readonly 
   },
   {
     terms: ["remind", "reminder", "later", "tomorrow", "daily", "weekly", "recurring"],
-    add: ["schedule", "cron", "reminder"],
+    add: ["schedule", "automations", "cron", "reminder"],
   },
   { terms: ["say", "tell", "reply", "respond", "answer"], add: ["message", "send"] },
   { terms: ["picture", "photo", "meme", "screenshot"], add: ["image"] },

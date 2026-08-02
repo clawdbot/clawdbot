@@ -4,6 +4,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
+import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
@@ -105,7 +106,7 @@ export async function applyPreparedChannelAccountConfiguration(params: {
     nextConfig = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: nextConfig,
       channelKey: params.channel,
-      setupSurface: plugin.setup,
+      setupSurface: setup as ChannelSetupAdapter,
     });
   }
   nextConfig = applyAccountConfig({

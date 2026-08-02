@@ -1,5 +1,9 @@
 // Control UI route classifier for base-path and root-mounted SPA serving.
 import { isReadHttpMethod } from "./control-ui-http-utils.js";
+import {
+  classifyGatewayProbePath,
+  classifyMcpAppStandalonePath,
+} from "./gateway-http-route-contracts.js";
 
 type ControlUiRequestClassification =
   | { kind: "not-control-ui" }
@@ -7,7 +11,6 @@ type ControlUiRequestClassification =
   | { kind: "redirect"; location: string }
   | { kind: "serve" };
 
-const ROOT_MOUNTED_GATEWAY_PROBE_PATHS = new Set(["/health", "/healthz", "/ready", "/readyz"]);
 const CONTROL_UI_PLUGIN_MANAGER_PATH = "/settings/plugins";
 
 /** Keep the plugin recovery surface ahead of plugin-owned HTTP routes. */
@@ -52,9 +55,14 @@ export function classifyControlUiRequest(params: {
     if (pathname === "/ui" || pathname.startsWith("/ui/")) {
       return { kind: "not-found" };
     }
-    // Keep core probe routes outside the root-mounted SPA catch-all so the
-    // gateway probe handler can answer them even when the Control UI owns `/`.
-    if (ROOT_MOUNTED_GATEWAY_PROBE_PATHS.has(pathname)) {
+    // Keep probe namespaces outside the root SPA: exact paths reach the probe
+    // handler, while malformed variants must not look healthy by serving HTML.
+    if (classifyGatewayProbePath(pathname) !== "outside") {
+      return { kind: "not-control-ui" };
+    }
+    // The standalone host owns this namespace when enabled. When disabled or
+    // malformed, plugins may still claim it before the final Gateway 404.
+    if (classifyMcpAppStandalonePath(pathname) !== "outside") {
       return { kind: "not-control-ui" };
     }
     // Keep plugin-owned HTTP routes outside the root-mounted Control UI SPA

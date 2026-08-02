@@ -16,10 +16,16 @@ vi.mock("../../../globals.js", () => ({
   setVerbose: vi.fn(),
 }));
 
-vi.mock("../../plugin-registry.js", () => ({
-  ensurePluginRegistryLoaded: vi.fn(),
+const loadPluginRegistryHandleMock = vi.fn(() => ({ gatewayHandlers: {} }));
+vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../../../plugins/channel-plugin-ids.js", () => ({
+  resolveConfiguredChannelPluginIds: () => ["configured-channel"],
+  resolveDiscoverableScopedChannelPluginIds: (params: { channelIds: string[] }) =>
+    params.channelIds,
 }));
-const { ensurePluginRegistryLoaded } = await import("../../plugin-registry.js");
+vi.mock("../../../plugins/loader.js", () => ({
+  loadPluginRegistryHandle: loadPluginRegistryHandleMock,
+}));
 
 const hasHooksMock = vi.fn((_hookName: string) => false);
 const runGatewayStopMock = vi.fn(
@@ -120,6 +126,12 @@ function expectMessageCommandOptions(expected: Record<string, unknown>, callInde
   }
 }
 
+function expectRegistryLoad(pluginIds: string[]): void {
+  expect(loadPluginRegistryHandleMock).toHaveBeenCalledWith(
+    expect.objectContaining({ onlyPluginIds: pluginIds, throwOnLoadError: true }),
+  );
+}
+
 describe("runMessageAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -137,10 +149,7 @@ describe("runMessageAction", () => {
   it("calls exit(0) after successful message delivery", async () => {
     await runSendAction();
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["discord"],
-    });
+    expectRegistryLoad(["discord"]);
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(0);
   });
@@ -148,18 +157,13 @@ describe("runMessageAction", () => {
   it("loads configured channel plugins when no target channel is known yet", async () => {
     await runSendAction({ channel: undefined });
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-    });
+    expectRegistryLoad(["configured-channel"]);
   });
 
   it("narrows plugin loading from a channel-prefixed target", async () => {
     await runSendAction({ channel: undefined, target: "discord:channel:12345" });
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["discord"],
-    });
+    expectRegistryLoad(["discord"]);
   });
 
   it("skips local plugin preload for any gateway-owned scoped channel action", async () => {
@@ -167,7 +171,7 @@ describe("runMessageAction", () => {
 
     await runSendAction({ target: "channel:12345" });
 
-    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expectMessageCommandOptions({
       action: "send",
       channel: "discord",
@@ -187,10 +191,7 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["telegram"],
-    });
+    expectRegistryLoad(["telegram"]);
     expectMessageCommandOptions({
       action: "broadcast",
       targets: ["telegram:1", "telegram:2"],
@@ -209,10 +210,7 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["discord"],
-    });
+    expectRegistryLoad(["discord"]);
     expectMessageCommandOptions({ action: "custom-action" });
   });
 
@@ -221,16 +219,13 @@ describe("runMessageAction", () => {
 
     await runSendAction({ target: "channel:12345" });
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["discord"],
-    });
+    expectRegistryLoad(["discord"]);
   });
 
   it("keeps target-prefixed Telegram sends from local plugin preload", async () => {
     await runSendAction({ channel: undefined, target: "telegram:12345" });
 
-    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expectMessageCommandOptions({
       action: "send",
       target: "telegram:12345",
@@ -250,7 +245,7 @@ describe("runMessageAction", () => {
       forceDocument: true,
     });
 
-    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expectMessageCommandOptions({
       action: "send",
       channel: "telegram",
@@ -273,10 +268,7 @@ describe("runMessageAction", () => {
       dryRun: true,
     });
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["telegram"],
-    });
+    expectRegistryLoad(["telegram"]);
     expect(messageCommandMock).toHaveBeenCalledTimes(1);
   });
 
@@ -290,13 +282,11 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-    });
+    expectRegistryLoad(["configured-channel"]);
   });
 
   it("exits with failure when plugin registry loading fails before dispatch", async () => {
-    vi.mocked(ensurePluginRegistryLoaded).mockImplementationOnce(() => {
+    loadPluginRegistryHandleMock.mockImplementationOnce(() => {
       throw new Error("plugin load failed");
     });
 
@@ -305,6 +295,29 @@ describe("runMessageAction", () => {
     expect(messageCommandMock).not.toHaveBeenCalled();
     expect(errorMock).toHaveBeenCalledWith("Error: plugin load failed");
     expect(exitMock).toHaveBeenCalledOnce();
+    expect(exitMock).toHaveBeenCalledWith(1);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
+  });
+
+  it("rejects conflicting poll visibility flags before loading channel plugins", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("poll", {
+        channel: "telegram",
+        target: "123",
+        pollQuestion: "Ship it?",
+        pollOption: ["Yes", "No"],
+        pollAnonymous: true,
+        pollPublic: true,
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(errorMock).toHaveBeenCalledWith(
+      "Error: --poll-anonymous and --poll-public are mutually exclusive.",
+    );
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
+    expect(messageCommandMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(1);
     expect(exitMock).not.toHaveBeenCalledWith(0);
   });
@@ -369,7 +382,7 @@ describe("runMessageAction", () => {
 
     const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
     expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
-    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expect(messageCommandMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(1);
     expect(exitMock).not.toHaveBeenCalledWith(0);

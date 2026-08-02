@@ -491,7 +491,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
-      await refreshPreparedModelRuntimeSnapshots(nextConfig, { catalogMode: "static" });
+      await refreshPreparedModelRuntimeSnapshots(nextConfig, {
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+      });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);
       return;

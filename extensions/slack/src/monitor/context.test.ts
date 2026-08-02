@@ -25,6 +25,7 @@ function createTestContext(params?: {
     runtime: {} as RuntimeEnv,
     botUserId: "U_BOT",
     botId: "B_BOT",
+    identityHealth: { lifecycle: "ready", lastError: null },
     teamId: "T_EXPECTED",
     apiAppId: params?.apiAppId ?? "A_EXPECTED",
     historyLimit: 0,

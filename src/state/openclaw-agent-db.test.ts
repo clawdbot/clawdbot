@@ -3004,6 +3004,59 @@ describe("openclaw agent database", () => {
     ).toEqual([{ key: "key-a" }]);
   });
 
+  it("repairs same-version additive session-key surfaces before schema validation", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = opened.path;
+    opened.db
+      .prepare(
+        `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(
+        "agent:worker-1:session-1",
+        "session-1",
+        JSON.stringify({ sessionId: "session-1", updatedAt: 1 }),
+        1,
+      );
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const shippedSchema = new DatabaseSync(databasePath);
+    try {
+      shippedSchema.exec(`
+        DROP TRIGGER session_nodes_entry_valid_after_insert;
+        DROP TRIGGER session_nodes_entry_valid_after_entry_update;
+        DROP TRIGGER session_nodes_entry_valid_after_identity_update;
+        DROP INDEX idx_agent_session_nodes_entry_valid_pending;
+        DROP TABLE session_key_contract;
+        ALTER TABLE session_nodes DROP COLUMN entry_valid;
+      `);
+      expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+    } finally {
+      shippedSchema.close();
+    }
+
+    const repaired = migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
+    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(repaired.db))).toEqual(
+      normalizeSqliteSchemaShapeSql(
+        createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
+      ),
+    );
+    expect(
+      repaired.db
+        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+        .get("agent:worker-1:session-1"),
+    ).toEqual({ entry_valid: 1 });
+    expect(
+      repaired.db.prepare("SELECT main_key FROM session_key_contract WHERE id = 1").get(),
+    ).toEqual({ main_key: "main" });
+  });
+
   it("rejects a missing current-schema table instead of recreating it empty", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 
 type LoadStaticCatalog =
   typeof import("./embedded-agent-runner/model.static-catalog.js").loadBundledProviderStaticCatalogContextModels;
@@ -29,7 +30,7 @@ const mocks = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
-  ensureRuntimePluginsLoaded: vi.fn(),
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
   loadStaticCatalog: vi.fn<LoadStaticCatalog>(async () => []),
   prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({ entries: [] })),
   resolveStaticCatalogModel: vi.fn(() => undefined),
@@ -105,7 +106,8 @@ vi.mock("./models-config.providers.implicit.js", () => ({
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: (...args: unknown[]) => mocks.ensureRuntimePluginsLoaded(...args),
+  loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
+    mocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
@@ -152,7 +154,9 @@ describe("prepared model runtime snapshots", () => {
       pluginCatalogs: [],
     }));
     mocks.buildPreparedModelCatalogSnapshot.mockClear();
-    mocks.ensureRuntimePluginsLoaded.mockClear();
+    mocks.loadAgentRuntimePluginRegistryHandle
+      .mockReset()
+      .mockReturnValue(createEmptyPluginRegistry());
     mocks.loadStaticCatalog.mockClear();
     mocks.prepareStaticCatalog.mockClear();
     mocks.resolveStaticCatalogModel.mockClear();
@@ -811,7 +815,7 @@ describe("prepared model runtime snapshots", () => {
       refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" }),
     ).resolves.toBeUndefined();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
     expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
   });

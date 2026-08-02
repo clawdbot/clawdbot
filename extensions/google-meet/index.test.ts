@@ -268,6 +268,7 @@ async function startTestNodeRealtimeAudioBridge(params: TestNodeRealtimeEnginePa
     logScope: "[google-meet]",
     logPrefix: "node",
   });
+  Reflect.set(transport, Symbol.for("openclaw.internal.meeting-node-output-generation.v1"), true);
   return {
     type: "node-command-pair" as const,
     nodeId,
@@ -6823,9 +6824,14 @@ describe("google-meet plugin", () => {
     expect(callbacks?.cfg).toBe(fullConfig);
     inputStdout.write(Buffer.from([1, 2, 3]));
     callbacks?.onAudio(Buffer.from([4, 5]));
+    await vi.waitFor(() => {
+      expect(outputStdinWrites).toEqual([Buffer.from([4, 5])]);
+    });
     callbacks?.onMark?.("mark-1");
     callbacks?.onClearAudio();
-    callbacks?.onAudio(Buffer.from([6, 7]));
+    await vi.waitFor(() => {
+      expect(outputProcess.kill).toHaveBeenCalledWith("SIGKILL");
+    });
     callbacks?.onReady?.();
     callbacks?.onTranscript?.("assistant", "How can I help you?", true);
     callbacks?.onTranscript?.("user", "Please summarize the launch.", true);
@@ -6835,6 +6841,7 @@ describe("google-meet plugin", () => {
       type: "response.done",
       detail: "status=completed",
     });
+    callbacks?.onAudio(Buffer.from([6, 7]));
     callbacks?.onToolCall?.({
       itemId: "item-1",
       callId: "tool-call-1",
@@ -6856,9 +6863,9 @@ describe("google-meet plugin", () => {
       stdio: ["ignore", "pipe", "pipe"],
     });
     expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2, 3]));
-    expect(outputStdinWrites).toEqual([Buffer.from([4, 5])]);
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGKILL");
-    expect(replacementOutputStdinWrites).toEqual([Buffer.from([6, 7])]);
+    await vi.waitFor(() => {
+      expect(replacementOutputStdinWrites).toEqual([Buffer.from([6, 7])]);
+    });
     outputProcess.emit("error", new Error("stale output process failed after clear"));
     outputStdin.emit("error", new Error("stale output pipe closed after clear"));
     outputProcess.stderr.emit("error", new Error("stale output stderr closed after clear"));
@@ -7222,7 +7229,9 @@ describe("google-meet plugin", () => {
       stdio: ["ignore", "pipe", "pipe"],
     });
     expect(bridge.handleBargeIn).toHaveBeenCalled();
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGKILL");
+    await vi.waitFor(() => {
+      expect(outputProcess.kill).toHaveBeenCalledWith("SIGKILL");
+    });
     expect(sendAudio).not.toHaveBeenCalledWith(Buffer.from([1, 2, 3, 4]));
     const health = handle.getHealth();
     expect(health.clearCount).toBe(1);
@@ -7299,6 +7308,12 @@ describe("google-meet plugin", () => {
     );
     expect(callbacks?.cfg).toBe(fullConfig);
     callbacks?.onAudio(Buffer.from([1, 2, 3]));
+    await vi.waitFor(() => {
+      const pushCall = runtime.nodes.invoke.mock.calls
+        .map(([call]) => call)
+        .find((call) => isRecord(call.params) && call.params.action === "pushAudio");
+      expect(pushCall).toBeDefined();
+    });
     callbacks?.onClearAudio();
     callbacks?.onReady?.();
     callbacks?.onTranscript?.("assistant", "How can I help from the node?", true);
@@ -7342,7 +7357,11 @@ describe("google-meet plugin", () => {
       const clear = requireRecord(clearCall, "node clear audio call");
       expect(clear.nodeId).toBe("node-1");
       expect(clear.command).toBe("googlemeet.chrome");
-      expect(clear.params).toStrictEqual({ action: "clearAudio", bridgeId: "bridge-1" });
+      expect(clear.params).toStrictEqual({
+        action: "clearAudio",
+        bridgeId: "bridge-1",
+        outputGeneration: 1,
+      });
       expect(clear.timeoutMs).toBe(5_000);
     });
     await vi.waitFor(() => {

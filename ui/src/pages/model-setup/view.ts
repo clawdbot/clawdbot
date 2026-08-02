@@ -10,6 +10,11 @@ import {
 import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/model-setup.css";
+import {
+  failureLabel,
+  renderModelSetupFailure,
+  renderConfiguredModel,
+} from "./configured-model.ts";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import {
   focusSelectedManualProvider,
@@ -119,24 +124,14 @@ function candidateStatus(candidate: Candidate): string {
   return t("modelSetup.candidates.detected");
 }
 
-function failureLabel(status: string): string {
-  const labels: Record<string, string> = {
-    auth: t("modelSetup.failure.auth"),
-    rate_limit: t("modelSetup.failure.rateLimit"),
-    billing: t("modelSetup.failure.billing"),
-    timeout: t("modelSetup.failure.timeout"),
-    format: t("modelSetup.failure.format"),
-    unavailable: t("modelSetup.failure.unavailable"),
-    unknown: t("modelSetup.failure.unknown"),
-  };
-  return labels[status] ?? labels.unknown!;
-}
-
 function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
-  // The current connection already owns verification and status. Keep the
-  // existing-model candidate only for older Gateways that lack that surface.
+  // The current connection owns verification and recovery for the configured
+  // route, including provider-auto candidates returned by newer Gateways.
   const candidates = result.configuredModel
-    ? result.candidates.filter((candidate) => candidate.kind !== "existing-model")
+    ? result.candidates.filter(
+        (candidate) =>
+          candidate.kind !== "existing-model" && candidate.modelRef !== result.configuredModel,
+      )
     : result.candidates;
   if (candidates.length === 0) {
     return nothing;
@@ -170,22 +165,24 @@ function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetu
                       ${t("modelSetup.candidates.testing", { modelRef: candidate.modelRef })}
                     </div>`
                   : nothing}
-                ${failure
-                  ? html`<div class="callout danger" role="alert">
-                      <strong>${failureLabel(failure.status)}</strong> ${failure.error}
-                    </div>`
-                  : nothing}
+                ${failure ? renderModelSetupFailure(failure.status, failure.error) : nothing}
               </div>
-              <button
-                type="button"
-                class="btn primary"
-                ?disabled=${props.actionsDisabled}
-                @click=${() => props.onActivateCandidate(candidate)}
-              >
-                ${testing
-                  ? t("modelSetup.candidates.testingButton")
-                  : t("modelSetup.candidates.testAndUse")}
-              </button>
+              <div class="model-setup__row-actions">
+                <button
+                  type="button"
+                  class=${`btn ${failure ? "" : "primary"}`}
+                  ?disabled=${props.actionsDisabled}
+                  @click=${() => props.onActivateCandidate(candidate)}
+                >
+                  <span>
+                    ${testing
+                      ? t("modelSetup.candidates.testingButton")
+                      : failure
+                        ? t("modelSetup.candidates.retry")
+                        : t("modelSetup.candidates.testAndUse")}
+                  </span>
+                </button>
+              </div>
             </div>
           `;
         })}
@@ -222,51 +219,6 @@ function renderEmptyState(props: ModelSetupViewProps, result: SystemAgentSetupDe
             </div>
           `,
         )}
-      </div>
-    </section>
-  `;
-}
-
-function renderCurrentConnection(props: ModelSetupViewProps, modelRef: string) {
-  // A successful verify reports the model that actually answered; prefer it over
-  // the detect-time snapshot so concurrent config changes cannot mislabel the result.
-  const displayRef = props.verify.phase === "ok" ? props.verify.modelRef : modelRef;
-  return html`
-    <section class="settings-section model-setup__current" data-verify-phase=${props.verify.phase}>
-      <div class="settings-section__header">
-        <h2>${t("modelSetup.verify.title")}</h2>
-      </div>
-      <div class="model-setup__row">
-        <div class="model-setup__row-main">
-          <strong>${displayRef}</strong>
-          ${props.verify.phase === "checking"
-            ? html`<div class="model-setup__testing" role="status">
-                ${t("modelSetup.verify.checking", { modelRef })}
-              </div>`
-            : props.verify.phase === "ok"
-              ? html`<div class="model-setup__verified" role="status">
-                  ${props.verify.latencyMs === undefined
-                    ? t("modelSetup.verify.answered")
-                    : t("modelSetup.verify.answeredIn", {
-                        latencyMs: String(props.verify.latencyMs),
-                      })}
-                </div>`
-              : props.verify.phase === "failed"
-                ? html`<div class="callout danger" role="alert">
-                    <strong>${failureLabel(props.verify.status)}</strong> ${props.verify.error}
-                  </div>`
-                : nothing}
-        </div>
-        ${props.canVerify
-          ? html`<button
-              type="button"
-              class="btn"
-              ?disabled=${props.actionsDisabled}
-              @click=${props.onVerify}
-            >
-              ${t("modelSetup.verify.button")}
-            </button>`
-          : nothing}
       </div>
     </section>
   `;
@@ -429,9 +381,7 @@ function renderPrepare(props: ModelSetupViewProps, result: SystemAgentSetupDetec
                 ?disabled=${props.actionsDisabled}
                 @click=${() => props.onStartPrepare(option)}
               >
-                ${option.id === "ollama"
-                  ? t("modelSetup.prepare.ollamaButton")
-                  : t("modelSetup.prepare.button")}
+                ${option.actionLabel ?? t("modelSetup.prepare.ollamaButton")}
               </button>
             </div>
           `,
@@ -597,7 +547,13 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
 
 function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
   const current = result.configuredModel
-    ? renderCurrentConnection(props, result.configuredModel)
+    ? renderConfiguredModel({
+        result,
+        verify: props.verify,
+        canVerify: props.canVerify,
+        actionsDisabled: props.actionsDisabled,
+        onVerify: props.onVerify,
+      })
     : nothing;
   if (!props.canAdmin) {
     return html`${current}
@@ -642,6 +598,7 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
           <p>${t("modelSetup.intro")}</p>
         </div>
         ${props.page.phase === "ready" &&
+        !props.page.result.configuredModel &&
         props.activation.phase !== "success" &&
         props.canAdmin &&
         !props.gatewayTooOld

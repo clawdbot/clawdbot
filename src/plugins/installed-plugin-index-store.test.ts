@@ -431,6 +431,15 @@ describe("installed plugin index persistence", () => {
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
   });
 
+  it("leaves retired JSON index files to the doctor migration owner", async () => {
+    const stateDir = makeTempDir();
+    const filePath = path.join(stateDir, "installs.json");
+    fs.writeFileSync(filePath, JSON.stringify(createIndex()), "utf8");
+
+    await expect(readPersistedInstalledPluginIndex({ filePath })).resolves.toBeNull();
+    await expect(readPersistedInstalledPluginIndexInstallRecords({ filePath })).resolves.toBeNull();
+  });
+
   it("rejects pre-migration persisted indexes so update can rebuild them", async () => {
     const stateDir = makeTempDir();
     insertPersistedIndexRow(stateDir, { migrationVersion: 0 });

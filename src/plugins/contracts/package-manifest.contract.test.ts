@@ -79,6 +79,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["audio-decode", "baileys"],
     minHostVersionBaseline: "2026.3.22",
   },
+  { pluginId: "xiaomi", minHostVersionBaseline: "2026.7.2" },
   { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "zalouser", minHostVersionBaseline: "2026.3.22" },
 ];

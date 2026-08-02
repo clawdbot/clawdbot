@@ -72,7 +72,8 @@ vi.mock("./bash-tools.exec-host-node-phases.js", () => ({
   resolveNodeExecutionTarget: vi.fn(async () => ({
     nodeId: "node-1",
     argv: ["tool", "--version"],
-    invokeTimeoutMs: 30_000,
+    invokeDeadlineMs: 30_000,
+    invokeWaitMs: 35_000,
     supportsSystemRunPrepare: true,
   })),
   shouldSkipNodeApprovalPrepare: vi.fn(
@@ -88,9 +89,7 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
 vi.mock("./bash-process-registry.js", () => ({ tail: vi.fn((text: string) => text) }));
 
 vi.mock("./bash-tools.exec-runtime.js", () => ({
-  DEFAULT_NOTIFY_TAIL_CHARS: 1_000,
   createApprovalSlug: vi.fn(() => "approval"),
-  normalizeNotifyOutput: vi.fn((text: string) => text),
 }));
 
 vi.mock("./embedded-agent-runner/run/abortable.js", () => ({
@@ -225,7 +224,7 @@ describe("node-host dispatch cancellation", () => {
 
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 30_000 },
+      { timeoutMs: 35_000 },
       expect.objectContaining({ command: "system.run" }),
       { scopes: ["operator.write", "operator.approvals"], signal: controller.signal },
     );
@@ -245,7 +244,7 @@ describe("node-host dispatch cancellation", () => {
 
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 30_000 },
+      { timeoutMs: 35_000 },
       expect.objectContaining({ command: "system.run" }),
       { signal: controller.signal },
     );

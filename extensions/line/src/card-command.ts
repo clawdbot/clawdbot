@@ -3,7 +3,6 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { messageAction, postbackAction, uriAction } from "./actions.js";
 import {
   createActionCard,
@@ -14,6 +13,7 @@ import {
   type CardAction,
   type ListItem,
 } from "./flex-templates.js";
+import { createFlexMessage } from "./send.js";
 import type { LineChannelData } from "./types.js";
 
 const CARD_USAGE = `Usage: /card <type> "title" "body" [options]
@@ -38,6 +38,16 @@ function buildLineReply(lineData: LineChannelData): ReplyPayload {
       line: lineData,
     },
   };
+}
+
+function buildLineFlexReply(
+  altText: string,
+  contents: Parameters<typeof createFlexMessage>[1],
+): ReplyPayload {
+  const message = createFlexMessage(altText, contents);
+  return buildLineReply({
+    flexMessage: { altText: message.altText, contents: message.contents },
+  });
 }
 
 /**
@@ -188,12 +198,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
           case "info": {
             const [title = "Info", body = "", footer] = args;
             const bubble = createInfoCard(title, body, footer);
-            return buildLineReply({
-              flexMessage: {
-                altText: truncateUtf16Safe(`${title}: ${body}`, 400),
-                contents: bubble,
-              },
-            });
+            return buildLineFlexReply(`${title}: ${body}`, bubble);
           }
 
           case "image": {
@@ -203,12 +208,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
               return { text: "Error: Image card requires --url <image-url>" };
             }
             const bubble = createImageCard(imageUrl, title, caption);
-            return buildLineReply({
-              flexMessage: {
-                altText: truncateUtf16Safe(`${title}: ${caption}`, 400),
-                contents: bubble,
-              },
-            });
+            return buildLineFlexReply(`${title}: ${caption}`, bubble);
           }
 
           case "action": {
@@ -220,12 +220,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createActionCard(title, body, actions, {
               imageUrl: flags.url || flags.image,
             });
-            return buildLineReply({
-              flexMessage: {
-                altText: truncateUtf16Safe(`${title}: ${body}`, 400),
-                contents: bubble,
-              },
-            });
+            return buildLineFlexReply(`${title}: ${body}`, bubble);
           }
 
           case "list": {
@@ -237,15 +232,10 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
               };
             }
             const bubble = createListCard(title, items);
-            return buildLineReply({
-              flexMessage: {
-                altText: truncateUtf16Safe(
-                  `${title}: ${items.map((i) => i.title).join(", ")}`,
-                  400,
-                ),
-                contents: bubble,
-              },
-            });
+            return buildLineFlexReply(
+              `${title}: ${items.map((item) => item.title).join(", ")}`,
+              bubble,
+            );
           }
 
           case "receipt": {
@@ -261,15 +251,10 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             }
 
             const bubble = createReceiptCard({ title, items, total, footer });
-            return buildLineReply({
-              flexMessage: {
-                altText: truncateUtf16Safe(
-                  `${title}: ${items.map((i) => `${i.name} ${i.value}`).join(", ")}`,
-                  400,
-                ),
-                contents: bubble,
-              },
-            });
+            return buildLineFlexReply(
+              `${title}: ${items.map((item) => `${item.name} ${item.value}`).join(", ")}`,
+              bubble,
+            );
           }
 
           case "confirm": {

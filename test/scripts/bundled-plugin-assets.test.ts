@@ -223,6 +223,21 @@ describe("bundled plugin assets", () => {
     });
   });
 
+  it("rejects a symlinked dist root before running copy hooks", async () => {
+    await withPluginAssetFixture(async (rootDir) => {
+      const targetDir = path.join(rootDir, "live-gateway-dist");
+      fs.mkdirSync(targetDir);
+      fs.writeFileSync(path.join(targetDir, "sentinel.js"), "keep\n");
+      fs.symlinkSync(targetDir, path.join(rootDir, "dist"), "dir");
+
+      await expect(runBundledPluginAssetHooks({ phase: "copy", rootDir })).rejects.toThrow(
+        /symbolic link/u,
+      );
+      expect(fs.readFileSync(path.join(targetDir, "sentinel.js"), "utf8")).toBe("keep\n");
+      expect(fs.readlinkSync(path.join(rootDir, "dist"))).toBe(targetDir);
+    });
+  });
+
   it("parses phase and plugin filters", () => {
     expect(parseBundledPluginAssetArgs(["--phase", "build", "--plugin=canvas"])).toEqual({
       check: false,

@@ -1,5 +1,5 @@
 // Whatsapp plugin module implements qa driver behavior.
-import type { ConnectionState, proto, WAMessage } from "baileys";
+import { getContentType, type ConnectionState, type proto, type WAMessage } from "baileys";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
   describeReplyContext,
@@ -180,19 +180,10 @@ function findMessageSection(
     if (current.depth >= 4) {
       continue;
     }
-    for (const wrapperName of [
-      "botInvokeMessage",
-      "documentWithCaptionMessage",
-      "ephemeralMessage",
-      "groupMentionedMessage",
-      "viewOnceMessage",
-      "viewOnceMessageV2",
-      "viewOnceMessageV2Extension",
-    ]) {
-      const wrapper = current.value[wrapperName];
-      if (isRecord(wrapper) && isRecord(wrapper.message)) {
-        queue.push({ depth: current.depth + 1, value: wrapper.message });
-      }
+    const contentType = getContentType(current.value as proto.IMessage);
+    const wrapper = contentType ? current.value[contentType] : undefined;
+    if (isRecord(wrapper) && isRecord(wrapper.message)) {
+      queue.push({ depth: current.depth + 1, value: wrapper.message });
     }
   }
   return undefined;
@@ -218,6 +209,7 @@ function readPoll(message: unknown): WhatsAppQaDriverObservedPoll | undefined {
     "pollCreationMessage",
     "pollCreationMessageV2",
     "pollCreationMessageV3",
+    "pollCreationMessageV5",
   ]);
   if (!poll) {
     return undefined;
@@ -244,6 +236,7 @@ function readMedia(message: unknown):
   const mediaSections = [
     "imageMessage",
     "videoMessage",
+    "ptvMessage",
     "audioMessage",
     "documentMessage",
     "stickerMessage",

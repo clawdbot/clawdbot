@@ -47,6 +47,7 @@ export {
   remapChunkLines,
   requireNodeSqlite,
   resolveMemoryBackendConfig,
+  resolveMemorySearchStaleness,
   runWithConcurrency,
   splitCuratedMarkdownEntries,
   statRegularFile,

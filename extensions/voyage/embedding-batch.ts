@@ -77,12 +77,14 @@ function resolveVoyageBatchDeps(overrides: Partial<VoyageBatchDeps> | undefined)
 function buildVoyageBatchRequest<T>(params: {
   client: VoyageEmbeddingClient;
   path: string;
+  signal?: AbortSignal;
   onResponse: (res: Response) => Promise<T>;
 }) {
   const baseUrl = normalizeBatchBaseUrl(params.client);
   return {
     url: `${baseUrl}/${params.path}`,
     ssrfPolicy: params.client.ssrfPolicy,
+    signal: params.signal,
     init: {
       headers: buildBatchHeaders(params.client, { json: true }),
     },
@@ -130,12 +132,14 @@ async function fetchVoyageBatchStatus(params: {
   batchId: string;
   deps: VoyageBatchDeps;
   maxResponseBytes?: number;
+  signal?: AbortSignal;
 }): Promise<VoyageBatchStatus> {
   const maxBytes = params.maxResponseBytes ?? VOYAGE_BATCH_RESPONSE_MAX_BYTES;
   return await params.deps.withRemoteHttpResponse(
     buildVoyageBatchRequest({
       client: params.client,
       path: `batches/${params.batchId}`,
+      signal: params.signal,
       onResponse: async (res) => {
         await assertOkOrThrowProviderError(res, "voyage.batch-status");
         return await readProviderJsonResponse<VoyageBatchStatus>(res, "voyage-batch-status", {
@@ -191,15 +195,34 @@ async function waitForVoyageBatch(params: {
   deps: VoyageBatchDeps;
 }): Promise<BatchCompletionResult> {
   const start = params.deps.now();
+  const deadline = start + params.timeoutMs;
   let current: VoyageBatchStatus | undefined = params.initial;
   while (true) {
-    const status =
-      current ??
-      (await fetchVoyageBatchStatus({
-        client: params.client,
-        batchId: params.batchId,
-        deps: params.deps,
-      }));
+    let status: VoyageBatchStatus;
+    if (current) {
+      status = current;
+    } else {
+      const remainingRequestMs = deadline - params.deps.now();
+      if (remainingRequestMs <= 0) {
+        throw new Error(`voyage batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
+      }
+      const signal = AbortSignal.timeout(Math.max(1, remainingRequestMs));
+      try {
+        status = await fetchVoyageBatchStatus({
+          client: params.client,
+          batchId: params.batchId,
+          deps: params.deps,
+          signal,
+        });
+      } catch (error) {
+        if (signal.aborted) {
+          throw new Error(`voyage batch ${params.batchId} timed out after ${params.timeoutMs}ms`, {
+            cause: error,
+          });
+        }
+        throw error;
+      }
+    }
     const state = status.status ?? "unknown";
     await throwIfBatchCompletionError({
       provider: "voyage",
@@ -231,11 +254,13 @@ async function waitForVoyageBatch(params: {
     if (!params.wait) {
       throw new Error(`voyage batch ${params.batchId} still ${state}; wait disabled`);
     }
-    if (params.deps.now() - start > params.timeoutMs) {
+    const remainingMs = deadline - params.deps.now();
+    if (remainingMs <= 0) {
       throw new Error(`voyage batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
     }
-    params.debug?.(`voyage batch ${params.batchId} ${state}; waiting ${params.pollIntervalMs}ms`);
-    await params.deps.sleep(params.pollIntervalMs);
+    const waitMs = Math.min(params.pollIntervalMs, remainingMs);
+    params.debug?.(`voyage batch ${params.batchId} ${state}; waiting ${waitMs}ms`);
+    await params.deps.sleep(waitMs);
     current = undefined;
   }
 }

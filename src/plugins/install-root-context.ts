@@ -42,6 +42,11 @@ export function resolveActivePluginInstallRoots(
   return pluginInstallRootContext.getStore() ?? resolvePluginInstallRoots(env, homedir);
 }
 
+/** Return whether the current run pinned operator-owned plugin install roots. */
+export function hasActivePluginInstallRoots(): boolean {
+  return pluginInstallRootContext.getStore() !== undefined;
+}
+
 /**
  * Keep plugin discovery on one operator-owned install generation while a run
  * redirects OPENCLAW_STATE_DIR for ephemeral sessions and runtime state.

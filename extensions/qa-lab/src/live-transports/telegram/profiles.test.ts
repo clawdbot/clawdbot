@@ -56,6 +56,16 @@ describe("Telegram QA profiles", () => {
     ).toThrow("execution.kind=flow");
   });
 
+  it("selects the native queue-validation regression as an explicit live scenario", () => {
+    expect(
+      resolveTelegramQaScenarioIds({
+        profile: "release",
+        providerMode: "live-frontier",
+        scenarioIds: ["telegram-queue-invalid-mode"],
+      }),
+    ).toEqual(["telegram-queue-invalid-mode"]);
+  });
+
   it("rejects unknown profiles and channel-ineligible explicit scenarios", () => {
     expect(() =>
       resolveTelegramQaScenarioIds({ providerMode: "live-frontier", profile: "transport" }),

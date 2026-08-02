@@ -1,5 +1,6 @@
 import type {
   SessionCatalog,
+  SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
@@ -40,6 +41,22 @@ export function adoptedCatalogSessionKeys(catalogs: readonly SessionCatalog[]): 
     }
   }
   return keys;
+}
+
+export function visibleCatalogHosts(
+  hosts: readonly SessionCatalogHost[],
+  creatorId?: string | null,
+): SessionCatalogHost[] {
+  const visible: SessionCatalogHost[] = [];
+  for (const host of hosts) {
+    const sessions = host.sessions.filter(
+      (session) => !creatorId || session.createdActor?.id === creatorId,
+    );
+    if (sessions.length > 0) {
+      visible.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
+    }
+  }
+  return visible;
 }
 
 export type CatalogBackingSessionDisplay = {

@@ -239,7 +239,6 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
 }));
 
 vi.mock("./bash-tools.exec-runtime.js", () => ({
-  DEFAULT_NOTIFY_TAIL_CHARS: 1000,
   createApprovalSlug: vi.fn(() => "slug"),
   normalizeNotifyOutput: vi.fn((value) => value),
   runExecProcess: runExecProcessMock,
@@ -2078,6 +2077,49 @@ EOF`,
     });
     expect(requireSentFollowupTarget(0)?.direct).toBe(false);
     expect(requireSentFollowupText(0)).toContain("done");
+  });
+
+  it("keeps multiline gateway approval follow-up output intact", async () => {
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    const aggregated = "first line\r\n\tindented\n\nlast line  \t\n";
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-1" },
+      promise: Promise.resolve({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        aggregated,
+      }),
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "openclaw sessions export-trajectory --json",
+      approvalFollowupMode: "agent",
+      sessionId: "approval-session",
+      sessionStore: "/tmp/openclaw-sessions.json",
+      turnSourceChannel: "webchat",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    });
+    const text = requireSentFollowupText(0);
+    expect(text).toContain(aggregated);
+    // The compact notify formatter would have collapsed every run of whitespace.
+    expect(text).not.toContain("first line indented last line");
   });
 
   it("fails closed when detached approval metadata cannot be persisted", async () => {

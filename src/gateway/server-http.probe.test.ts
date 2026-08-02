@@ -1,6 +1,9 @@
 // Server HTTP probe tests cover readiness, health, disabled compat routes, and
 // auth handling through the in-memory HTTP harness.
+import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import os from "node:os";
+import nodePath from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   prepareGatewaySuspend,
@@ -31,6 +34,16 @@ async function sendGatewayRequest(server: GatewayServerHarness, options: Gateway
   const { res, getBody } = createResponse();
   await dispatchRequest(server, req, res);
   return { res, getBody };
+}
+
+async function withMarkedControlUiRoot(run: (root: string) => Promise<void>): Promise<void> {
+  const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-http-routing-"));
+  try {
+    await fs.writeFile(nodePath.join(root, "index.html"), "<html>spa fallback</html>\n");
+    await run(root);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 }
 
 describe("gateway OpenAI-compatible disabled HTTP routes", () => {
@@ -112,7 +125,143 @@ describe("gateway OpenAI-compatible disabled HTTP routes", () => {
   });
 });
 
+describe("standalone MCP App HTTP routing", () => {
+  it.each([
+    {
+      name: "disabled shell",
+      enabled: false,
+      requestPath: "/__openclaw__/mcp-app",
+    },
+    {
+      name: "disabled view",
+      enabled: false,
+      requestPath: "/__openclaw__/mcp-app/view",
+    },
+    {
+      name: "enabled malformed child",
+      enabled: true,
+      requestPath: "/__openclaw__/mcp-app/other",
+    },
+  ])(
+    "returns 404 for the $name instead of Control UI HTML",
+    async ({ name, enabled, requestPath }) => {
+      await withMarkedControlUiRoot(async (controlUiRoot) => {
+        await withGatewayServer({
+          prefix: `mcp-app-routing-${name}`,
+          resolvedAuth: AUTH_NONE,
+          overrides: {
+            controlUiEnabled: true,
+            controlUiBasePath: "",
+            controlUiRoot: { kind: "resolved", path: controlUiRoot },
+            getRuntimeConfig: () => ({
+              gateway: { trustedProxies: [] },
+              mcp: { apps: { enabled } },
+            }),
+          },
+          run: async (server) => {
+            const { res, getBody } = await sendGatewayRequest(server, {
+              path: requestPath,
+              method: "GET",
+            });
+
+            expect(res.statusCode).toBe(404);
+            expect(getBody()).toBe("Not Found");
+          },
+        });
+      });
+    },
+  );
+
+  it.each([
+    { name: "disabled endpoint", enabled: false, requestPath: "/__openclaw__/mcp-app" },
+    { name: "malformed child", enabled: true, requestPath: "/__openclaw__/mcp-app/other" },
+  ])("preserves plugin precedence for a $name", async ({ enabled, requestPath }) => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 204;
+      res.end();
+      return true;
+    });
+    await withGatewayServer({
+      prefix: "mcp-app-routing-plugin-precedence",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: () => false,
+        getRuntimeConfig: () => ({
+          gateway: { trustedProxies: [] },
+          mcp: { apps: { enabled } },
+        }),
+      },
+      run: async (server) => {
+        const { res } = await sendGatewayRequest(server, {
+          path: requestPath,
+          method: "GET",
+        });
+
+        expect(res.statusCode).toBe(204);
+        expect(handlePluginRequest).toHaveBeenCalledOnce();
+      },
+    });
+  });
+});
+
 describe("gateway probe endpoints", () => {
+  it("returns 404 for probe namespace variants instead of false-green Control UI HTML", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      ready: false,
+      failing: ["gateway-draining"],
+      uptimeMs: 1_000,
+    });
+    await withMarkedControlUiRoot(async (controlUiRoot) => {
+      await withGatewayServer({
+        prefix: "probe-namespace-root-control-ui",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "resolved", path: controlUiRoot },
+          getReadiness,
+        },
+        run: async (server) => {
+          const exact = await sendGatewayRequest(server, { path: "/readyz" });
+          expect(exact.res.statusCode).toBe(503);
+          expect(JSON.parse(exact.getBody())).toMatchObject({ ready: false });
+
+          for (const routePath of ["/health/", "/healthz/details", "/ready/", "/readyz/details"]) {
+            const { res, getBody } = await sendGatewayRequest(server, { path: routePath });
+            expect(res.statusCode, routePath).toBe(404);
+            expect(getBody(), routePath).toBe("Not Found");
+          }
+        },
+      });
+    });
+  });
+
+  it("preserves plugin precedence for an unclaimed probe descendant", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 204;
+      res.end();
+      return true;
+    });
+    await withGatewayServer({
+      prefix: "probe-namespace-plugin-precedence",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: () => false,
+      },
+      run: async (server) => {
+        const { res } = await sendGatewayRequest(server, { path: "/readyz/details" });
+        expect(res.statusCode).toBe(204);
+        expect(handlePluginRequest).toHaveBeenCalledOnce();
+      },
+    });
+  });
+
   it("keeps liveness green while a prepared suspension lease makes readiness red", async () => {
     resetGatewayWorkAdmission();
     const channelManager = {

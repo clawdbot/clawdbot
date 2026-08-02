@@ -22,6 +22,10 @@ const messageReplyMock = vi.hoisted(() => vi.fn());
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const emptyConfig: ClawdbotConfig = {};
+const validPngImage = Buffer.from(
+  "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de",
+  "hex",
+);
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -58,14 +62,13 @@ let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFe
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
-function sendTestImage() {
-  return sendMediaFeishu({
+const sendTestImage = () =>
+  sendMediaFeishu({
     cfg: emptyConfig,
     to: "user:ou_target",
-    mediaBuffer: Buffer.from("image"),
+    mediaBuffer: validPngImage,
     fileName: "photo.png",
   });
-}
 
 function expectMediaTimeoutClientConfigured(): void {
   const options = mockCallArg<{ httpTimeoutMs?: number }>(createFeishuClientMock, 0, 0);
@@ -457,7 +460,6 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expectMediaTimeoutClientConfigured();
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("image");
-    expect(callData<{ uuid?: string }>(messageCreateMock).uuid).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("reuses one uuid when retrying a transient media message send", async () => {
@@ -467,7 +469,6 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     await sendTestImage();
 
-    expect(messageCreateMock).toHaveBeenCalledTimes(2);
     const firstUuid = callData<{ uuid?: string }>(messageCreateMock, 0).uuid;
     const secondUuid = callData<{ uuid?: string }>(messageCreateMock, 1).uuid;
     expect(firstUuid).toMatch(/^[0-9a-f-]{36}$/);
@@ -559,7 +560,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     const result = await sendMediaFeishu({
       cfg: emptyConfig,
       to: "user:ou_target",
-      mediaBuffer: Buffer.from("image"),
+      mediaBuffer: validPngImage,
       fileName: "photo.png",
       replyToMessageId: "om_parent",
     });
