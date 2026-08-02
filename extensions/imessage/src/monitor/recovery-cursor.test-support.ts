@@ -104,6 +104,16 @@ describe("iMessage recovery cursor", () => {
     expect(loadIMessageRecoveryCursor("default", DB)).toBe(6);
   });
 
+  it("rewinds a cursor to zero when chat.db is rebuilt empty at the same path", () => {
+    advanceIMessageRecoveryCursor("default", DB, 9000);
+    expect(
+      loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false, watermarkRowid: 0 }),
+    ).toBe(0);
+    expect(loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBe(0);
+    advanceIMessageRecoveryCursor("default", DB, 1);
+    expect(loadIMessageRecoveryCursor("default", DB)).toBe(1);
+  });
+
   it("keeps a cursor at or below the database watermark", () => {
     advanceIMessageRecoveryCursor("default", DB, 4990);
     expect(loadIMessageRecoveryCursor("default", DB, { watermarkRowid: 5000 })).toBe(4990);

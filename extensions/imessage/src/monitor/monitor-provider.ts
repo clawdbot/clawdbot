@@ -241,7 +241,10 @@ async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<num
     const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
       | { maxRowid?: unknown }
       | undefined;
-    return typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid) ? row.maxRowid : null;
+    if (typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid)) {
+      return row.maxRowid;
+    }
+    return row?.maxRowid === null ? 0 : null;
   } catch (err) {
     logVerbose(`imessage: startup rowid watermark unavailable for db=${dbPath}: ${String(err)}`);
     return null;
