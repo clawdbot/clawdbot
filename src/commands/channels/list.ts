@@ -15,6 +15,7 @@ import {
 } from "../../channels/status/read-model.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { listManifestInstalledChannelIds } from "../channel-setup/discovery.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
@@ -152,16 +153,28 @@ export async function channelsListCommand(
     return;
   }
   const showAll = opts.all === true;
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  // Plugin metadata is process-stable. Resolve it once and carry its manifest,
+  // discovery, and installed-index facts through every list projection.
+  const metadataSnapshot = resolvePluginMetadataSnapshot({
+    config: cfg,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    env: process.env,
+    allowWorkspaceScopedCurrent: true,
+  });
 
   // JSON needs only manifest-backed account ids. Text keeps setup-backed snapshots
   // because its credential/status details are part of the human output contract.
   const plugins = opts.json
-    ? listReadOnlyChannelPluginsForConfig(cfg)
-    : listReadOnlyChannelPluginsForConfig(cfg, { includeSetupFallbackPlugins: true });
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    ? listReadOnlyChannelPluginsForConfig(cfg, { metadataSnapshot })
+    : listReadOnlyChannelPluginsForConfig(cfg, {
+        includeSetupFallbackPlugins: true,
+        metadataSnapshot,
+      });
   const catalogEntries = listTrustedChannelPluginCatalogEntries({
     cfg,
     ...(workspaceDir ? { workspaceDir } : {}),
+    ...(metadataSnapshot.discovery ? { discovery: metadataSnapshot.discovery } : {}),
   });
   const runtimeAccountsByChannel =
     opts.json === true
@@ -173,6 +186,7 @@ export async function channelsListCommand(
     listManifestInstalledChannelIds({
       cfg,
       ...(workspaceDir ? { workspaceDir } : {}),
+      index: metadataSnapshot.index,
     }),
   );
   const installedByChannelId = new Map(

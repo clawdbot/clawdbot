@@ -6,6 +6,11 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
+  metadataSnapshot: {
+    plugins: [],
+    index: { plugins: [] },
+    discovery: { candidates: [], diagnostics: [] },
+  },
   readConfigFileSnapshot: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
@@ -20,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultAgentId: vi.fn(() => "main"),
+  resolvePluginMetadataSnapshot: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -32,6 +38,10 @@ vi.mock("../cli/command-config-resolution.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
 vi.mock("../cli/command-secret-targets.js", () => ({
@@ -129,6 +139,7 @@ describe("channels list", () => {
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
     mocks.callGateway.mockReset();
     mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(mocks.metadataSnapshot);
   });
 
   it("does not include auth providers in JSON output (auth section was removed)", async () => {
@@ -167,7 +178,9 @@ describe("channels list", () => {
 
     await channelsListCommand({ json: true }, runtime);
 
-    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config);
+    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
+      metadataSnapshot: mocks.metadataSnapshot,
+    });
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
     const payload = JSON.parse(loggedText(runtime)) as {
       chat?: Record<string, { accounts: string[]; installed: boolean; origin: string }>;
@@ -224,6 +237,7 @@ describe("channels list", () => {
 
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
       includeSetupFallbackPlugins: true,
+      metadataSnapshot: mocks.metadataSnapshot,
     });
     const output = stripAnsi(loggedText(runtime));
     expect(output).toContain("Chat channels:");
@@ -550,9 +564,15 @@ describe("channels list", () => {
     await channelsListCommand({ all: true, json: true }, runtime);
 
     expect(mocks.listManifestInstalledChannelIds).toHaveBeenCalledOnce();
+    expect(mocks.listTrustedChannelPluginCatalogEntries).toHaveBeenCalledWith({
+      cfg: {},
+      workspaceDir: "/tmp/workspace",
+      discovery: mocks.metadataSnapshot.discovery,
+    });
     expect(mocks.listManifestInstalledChannelIds).toHaveBeenCalledWith({
       cfg: {},
       workspaceDir: "/tmp/workspace",
+      index: mocks.metadataSnapshot.index,
     });
     const payload = JSON.parse(loggedText(runtime)) as {
       chat: Record<string, { installed: boolean }>;
