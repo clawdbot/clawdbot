@@ -461,6 +461,100 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(children[0]?.requesterSettleWake?.lastError).toContain("legacy_unfenced");
   });
 
+  it.each([
+    ["stale member first", ["run-stale", "run-current"]],
+    ["matching member first", ["run-current", "run-stale"]],
+  ] as const)(
+    "partitions a mixed batch (%s): fences stale members and delivers only matching completions",
+    async (_label, order) => {
+      sessionStore = { [REQUESTER]: { sessionId: "sess-main", lifecycleRevision: "revision-2" } };
+      const stale = makeSettledChild({
+        runId: "run-stale",
+        expectedRequesterLifecycleRevision: "revision-1",
+        completion: { required: true, resultText: "stale findings" },
+      });
+      const current = makeSettledChild({
+        runId: "run-current",
+        expectedRequesterLifecycleRevision: "revision-2",
+        completion: { required: true, resultText: "current findings" },
+        delivery: { status: "pending" },
+      });
+      const byRunId = { "run-stale": stale, "run-current": current };
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(
+        order.map((runId) => byRunId[runId]),
+      );
+
+      const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+        wakeParams({ settledEntry: current }),
+      );
+
+      expect(woke).toBe(true);
+      expect(deliverSpy).toHaveBeenCalledTimes(1);
+      const message = String(deliveredCallArg().triggerMessage);
+      expect(message).toContain("current findings");
+      expect(message).not.toContain("stale findings");
+      expect(transitionBatchSpy).toHaveBeenCalledWith(
+        ["run-stale"],
+        expect.objectContaining({ lifecycleMismatch: "requester_replaced" }),
+      );
+      expect(stale.requesterSettleWake?.lifecycleMismatch).toBe("requester_replaced");
+      expect(current.requesterSettleWake).toBeUndefined();
+      expect(completeBatchSpy).toHaveBeenCalledWith(["run-current"]);
+    },
+  );
+
+  it("fences legacy members of a mixed batch while delivering matching completions", async () => {
+    sessionStore = { [REQUESTER]: { sessionId: "sess-main", lifecycleRevision: "revision-1" } };
+    const legacy = makeSettledChild({
+      runId: "run-legacy",
+      expectedRequesterLifecycleRevision: undefined,
+      completion: { required: true, resultText: "legacy findings" },
+    });
+    const current = makeSettledChild({
+      runId: "run-current",
+      completion: { required: true, resultText: "current findings" },
+      delivery: { status: "pending" },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([legacy, current]);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: current }),
+    );
+
+    expect(woke).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    const message = String(deliveredCallArg().triggerMessage);
+    expect(message).toContain("current findings");
+    expect(message).not.toContain("legacy findings");
+    expect(legacy.requesterSettleWake?.lifecycleMismatch).toBe("legacy_unfenced");
+    expect(current.requesterSettleWake).toBeUndefined();
+  });
+
+  it("completes a matching subset whose completions were already delivered after fencing stale members", async () => {
+    sessionStore = { [REQUESTER]: { sessionId: "sess-main", lifecycleRevision: "revision-2" } };
+    const stale = makeSettledChild({
+      runId: "run-stale",
+      expectedRequesterLifecycleRevision: "revision-1",
+      delivery: { status: "pending" },
+    });
+    const current = makeSettledChild({
+      runId: "run-current",
+      expectedRequesterLifecycleRevision: "revision-2",
+      delivery: { status: "delivered" },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([stale, current]);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: current }),
+    );
+
+    expect(woke).toBe(false);
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(stale.requesterSettleWake?.lifecycleMismatch).toBe("requester_replaced");
+    expect(current.requesterSettleWake).toBeUndefined();
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-current"]);
+  });
+
   it("does not add a wake turn for an ordinary frozen single completion", async () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({
