@@ -35,6 +35,113 @@ describe("resolveMentions", () => {
       expect(result.hasExplicitMention).toBe(true);
     });
 
+    it.each([
+      {
+        label: "full Matrix user ID",
+        mentionedUserId: "@bot:matrix.org",
+        body: "hello @bot:matrix.org",
+      },
+      {
+        label: "localpart shorthand",
+        mentionedUserId: "@bot:matrix.org",
+        body: "hello @bot",
+      },
+      {
+        label: "colon-delimited shorthand",
+        mentionedUserId: "@bot:matrix.org",
+        body: "@bot: hello",
+      },
+      {
+        label: "parenthesized shorthand",
+        mentionedUserId: "@bot:matrix.org",
+        body: "hello (@bot)",
+      },
+      {
+        label: "sentence-ending full Matrix user ID",
+        mentionedUserId: "@bot:matrix.org",
+        body: "hello @bot:matrix.org.",
+      },
+      {
+        label: "special localpart characters",
+        mentionedUserId: "@foo/bar+baz=ok:matrix.org",
+        body: "hello @foo/bar+baz=ok",
+      },
+      {
+        label: "bracketed IPv6 homeserver and port",
+        mentionedUserId: "@bot:[2001:db8::1]:8448",
+        body: "hello @bot:[2001:db8::1]:8448.",
+      },
+    ])(
+      "detects native plain-text $label without configured mention patterns",
+      ({ mentionedUserId, body }) => {
+        const params = {
+          content: {
+            msgtype: "m.text",
+            body,
+            "m.mentions": { user_ids: [mentionedUserId] },
+          },
+          userId: mentionedUserId,
+          text: body,
+          mentionRegexes: [],
+        };
+        const expected = { wasMentioned: true, hasExplicitMention: true };
+
+        expect(resolveMentions(params)).toEqual(expected);
+        expect(resolveMentions(params)).toEqual(expected);
+      },
+    );
+
+    it.each([
+      { label: "same localpart on another homeserver", body: "hello @bot:evil.example" },
+      { label: "case-different homeserver", body: "hello @bot:MATRIX.ORG" },
+      { label: "extended DNS homeserver", body: "hello @bot:matrix.org.evil" },
+      { label: "unexpected homeserver port", body: "hello @bot:matrix.org:8448" },
+      { label: "alternate IPv6 homeserver", body: "hello @bot:[::1]" },
+      { label: "extended dotted localpart", body: "hello @bot.extra" },
+      { label: "extended plus localpart", body: "hello @bot+evil" },
+      { label: "extended hyphenated localpart", body: "hello @bot-evil" },
+      { label: "extended slash localpart", body: "hello @bot/evil" },
+      { label: "embedded email token", body: "hello contact@bot" },
+      { label: "adjacent mention prefix", body: "hello @@bot" },
+      { label: "zero-width foreign homeserver", body: "hello @bot\u200b:evil.example" },
+      { label: "zero-width domain extension", body: "hello @bot:matrix.org\u200b.evil" },
+      { label: "bidirectional foreign homeserver", body: "hello @bot\u202e:evil.example" },
+      { label: "BOM foreign homeserver", body: "hello @bot\ufeff:evil.example" },
+      { label: "invisible combining grapheme joiner", body: "hello @bot\u034f:evil.example" },
+      { label: "invisible variation selector", body: "hello @bot\ufe0f:evil.example" },
+      { label: "invisible Hangul filler", body: "hello @bot\u3164:evil.example" },
+    ])("rejects forged native mention metadata for $label", ({ body }) => {
+      expect(
+        resolveMentions({
+          content: {
+            msgtype: "m.text",
+            body,
+            "m.mentions": { user_ids: [userId] },
+          },
+          userId,
+          text: body,
+          mentionRegexes: [],
+        }),
+      ).toEqual({ wasMentioned: false, hasExplicitMention: false });
+    });
+
+    it("requires metadata to name the exact account even when that account is visibly mentioned", () => {
+      const body = "hello @bot:matrix.org";
+
+      expect(
+        resolveMentions({
+          content: {
+            msgtype: "m.text",
+            body,
+            "m.mentions": { user_ids: ["@bot:evil.example"] },
+          },
+          userId,
+          text: body,
+          mentionRegexes: [],
+        }),
+      ).toEqual({ wasMentioned: false, hasExplicitMention: false });
+    });
+
     it("does not trust m.mentions.user_ids without a visible text or formatted mention", () => {
       const result = resolveMentions({
         content: {

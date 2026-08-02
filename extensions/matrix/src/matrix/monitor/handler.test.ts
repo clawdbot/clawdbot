@@ -952,6 +952,53 @@ describe("matrix monitor handler pairing account scope", () => {
     },
   );
 
+  it.each([
+    { label: "full Matrix user ID", body: "hello @bot:example.org" },
+    { label: "localpart shorthand", body: "hello @bot" },
+  ])("processes native plain-text $label without configured mention patterns", async ({ body }) => {
+    const getMemberDisplayName = vi.fn(async () => "sender");
+    const { handler, recordInboundSession, runPrepared } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      mentionRegexes: [],
+      getMemberDisplayName,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$native-plain-text-mention",
+        body,
+        mentions: { user_ids: ["@bot:example.org"] },
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalledOnce();
+    expect(runPrepared.mock.calls[0]?.[0].ctxPayload).toMatchObject({
+      AccountId: "ops",
+      WasMentioned: true,
+    });
+    expect(getMemberDisplayName).not.toHaveBeenCalledWith("!room:example.org", "@bot:example.org");
+  });
+
+  it("rejects forged plain-text native mentions from another Matrix homeserver", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      mentionRegexes: [],
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$foreign-native-mention",
+        body: "hello @bot:evil.example",
+        mentions: { user_ids: ["@bot:example.org"] },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
   it("processes room messages mentioned via displayName in formatted_body", async () => {
     const recordInboundSession = vi.fn(async () => {});
     const { handler } = createMatrixHandlerTestHarness({

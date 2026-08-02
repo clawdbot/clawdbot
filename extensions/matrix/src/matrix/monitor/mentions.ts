@@ -6,6 +6,7 @@ import { getMatrixRuntime } from "../../runtime.js";
 import type { RoomMessageEventContent } from "./types.js";
 
 const MATRIX_HTML_ENTITY_RE = /&(?:#x?[0-9a-f]+|amp|apos|gt|lt|nbsp|quot);/gi;
+const MATRIX_MENTION_TOKEN_CHARS = String.raw`A-Za-z0-9_=+/\-\p{Default_Ignorable_Code_Point}`;
 
 function decodeVisibleHtmlEntities(value: string): string {
   return value.replace(MATRIX_HTML_ENTITY_RE, (entity) => {
@@ -36,6 +37,21 @@ function resolveMatrixUserLocalpart(userId: string): string | null {
     return null;
   }
   return trimmed.slice(1, colonIndex).trim() || null;
+}
+
+function hasVisibleNativeMatrixUserMention(text: string | undefined, userId: string): boolean {
+  const localpart = resolveMatrixUserLocalpart(userId);
+  if (!text || !localpart) {
+    return false;
+  }
+
+  // Native metadata must name the exact account; visible shorthand cannot hide
+  // another homeserver, extended localpart, or invisible Unicode separators.
+  const pattern = new RegExp(
+    String.raw`(?<![${MATRIX_MENTION_TOKEN_CHARS}.@])(?:${escapeRegExp(userId)}|${escapeRegExp(`@${localpart}`)})(?![${MATRIX_MENTION_TOKEN_CHARS}]|[.:](?=\S))`,
+    "u",
+  );
+  return pattern.test(text);
 }
 
 function resolveMatrixMentionPrefixCandidates(params: {
@@ -216,13 +232,14 @@ export function resolveMentions(params: {
         mentionRegexes: params.mentionRegexes,
       })
     : false;
-  // Matrix clients can mention users through m.mentions metadata plus a visible
-  // Matrix URI label in formatted_body. Keep the visible-mention requirement so
-  // hidden metadata-only mentions do not trigger the handler.
+  // Native mentions may use visible plain-text Matrix IDs without HTML. Keep
+  // exact metadata ownership and visibility so forged mentions stay inert.
   const metadataBackedUserMention = Boolean(
     params.userId &&
     mentionedUsers.has(params.userId) &&
-    (mentionedInFormattedBody || textMentioned),
+    (mentionedInFormattedBody ||
+      textMentioned ||
+      hasVisibleNativeMatrixUserMention(params.text, params.userId)),
   );
   const metadataBackedRoomMention = Boolean(mentions?.room) && visibleRoomMention;
   const explicitMention =
