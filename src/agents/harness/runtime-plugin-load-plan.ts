@@ -2,7 +2,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
-import { resolveEffectivePluginActivationState } from "../../plugins/config-state.js";
+import {
+  isTestDefaultMemorySlotDisabled,
+  resolveEffectivePluginActivationState,
+} from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
 import {
   loadPluginRegistrySnapshot,
@@ -45,6 +48,10 @@ function resolveSelectedMemoryPluginIds(params: {
   config: OpenClawConfig | undefined;
   workspaceDir: string;
 }): string[] {
+  // Honor config-owned test defaults before discovery forces an implicit memory owner.
+  if (isTestDefaultMemorySlotDisabled(params.config ?? {})) {
+    return [];
+  }
   const registry = loadPluginRegistrySnapshot(params);
   const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   const memorySlot = plugins.slots.memory;
