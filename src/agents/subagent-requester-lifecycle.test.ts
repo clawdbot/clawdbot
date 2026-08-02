@@ -1,13 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionAccessScope } from "../config/sessions/session-accessor.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadRequesterLifecycleRevision, testing } from "./subagent-requester-lifecycle.js";
 
-type LoadSessionScope = Parameters<
-  typeof import("../config/sessions/session-accessor.js").loadSessionEntry
->[0];
-type LoadSessionEntryMock = (scope: LoadSessionScope) => { lifecycleRevision?: string } | undefined;
-
-const loadSessionEntry = vi.fn<LoadSessionEntryMock>();
+const loadSessionEntry = vi.fn<(scope: SessionAccessScope) => SessionEntry | undefined>();
 const resolveStorePath = vi.fn(() => "/tmp/sessions.json");
 
 function setDefaultDeps() {
@@ -34,7 +31,7 @@ describe("loadRequesterLifecycleRevision", () => {
   });
 
   it("resolves the canonical requester key and returns the persisted lifecycle revision", () => {
-    loadSessionEntry.mockReturnValue({ lifecycleRevision: "revision-1" });
+    loadSessionEntry.mockReturnValue({ lifecycleRevision: "revision-1" } as SessionEntry);
 
     expect(loadRequesterLifecycleRevision("main")).toBe("revision-1");
     expect(loadSessionEntry).toHaveBeenCalledWith({
@@ -46,7 +43,7 @@ describe("loadRequesterLifecycleRevision", () => {
   });
 
   it("passes an already-canonical requester key through unchanged", () => {
-    loadSessionEntry.mockReturnValue({ lifecycleRevision: "revision-2" });
+    loadSessionEntry.mockReturnValue({ lifecycleRevision: "revision-2" } as SessionEntry);
 
     expect(loadRequesterLifecycleRevision("agent:main:main")).toBe("revision-2");
     expect(loadSessionEntry).toHaveBeenCalledWith(
@@ -55,7 +52,7 @@ describe("loadRequesterLifecycleRevision", () => {
   });
 
   it("returns undefined when the session entry has no lifecycle revision", () => {
-    loadSessionEntry.mockReturnValue({});
+    loadSessionEntry.mockReturnValue({} as SessionEntry);
 
     expect(loadRequesterLifecycleRevision("main")).toBeUndefined();
   });

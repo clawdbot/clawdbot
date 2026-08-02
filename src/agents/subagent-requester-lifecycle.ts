@@ -3,7 +3,8 @@
  * admission, so settle wakes can fence stale completions after a reset.
  */
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
+import { resolveAgentIdFromSessionKey } from "../config/sessions/main-session.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveDefaultAgentId } from "./agent-scope-config.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";

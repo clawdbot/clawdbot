@@ -399,8 +399,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(woke).toBe(false);
     expect(deliverSpy).not.toHaveBeenCalled();
     expect(completeBatchSpy).not.toHaveBeenCalled();
-    expect(children[0].requesterSettleWake?.lifecycleMismatch).toBe("requester_missing");
-    expect(children[0].requesterSettleWake?.lastError).toContain("requester_missing");
+    expect(children[0]?.requesterSettleWake?.lifecycleMismatch).toBe("requester_missing");
+    expect(children[0]?.requesterSettleWake?.lastError).toContain("requester_missing");
   });
 
   it("delivers to the unchanged requester lifecycle exactly once", async () => {
@@ -457,8 +457,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(woke).toBe(false);
     expect(deliverSpy).not.toHaveBeenCalled();
     expect(completeBatchSpy).not.toHaveBeenCalled();
-    expect(children[0].requesterSettleWake?.lifecycleMismatch).toBe("legacy_unfenced");
-    expect(children[0].requesterSettleWake?.lastError).toContain("legacy_unfenced");
+    expect(children[0]?.requesterSettleWake?.lifecycleMismatch).toBe("legacy_unfenced");
+    expect(children[0]?.requesterSettleWake?.lastError).toContain("legacy_unfenced");
   });
 
   it("does not add a wake turn for an ordinary frozen single completion", async () => {
