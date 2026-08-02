@@ -1040,7 +1040,8 @@ export function registerControlUiAndPairingSuite(): void {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
-    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { getPairedDevice, listDevicePairing, verifyDeviceToken } =
+      await import("../infra/device-pairing.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
