@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  CaptureScope,
   ClickButton,
   CuaDriver,
   DesktopScope,
@@ -60,6 +61,9 @@ class DirectCuaDriverSession implements CuaDriverSession {
   readonly generation = randomUUID();
   private readonly runtime: CuaDriverLike;
   private readonly session: CuaDriverSessionLike;
+  private readonly publicSession = `openclaw-${randomUUID()}`;
+  private startPromise: Promise<void> | undefined;
+  private started = false;
   private disposed = false;
 
   constructor() {
@@ -70,49 +74,99 @@ class DirectCuaDriverSession implements CuaDriverSession {
       authorization: { ...CUA_OPENCLAW_AUTHORIZATION },
     });
     this.session = createTrustedSession(this.runtime, {
-      publicSession: `openclaw-${randomUUID()}`,
+      publicSession: this.publicSession,
       mode: SessionPermissionMode.Unrestricted,
       ttlSeconds: CUA_OPENCLAW_AUTHORIZATION.maxSessionTtlSeconds,
       idleTtlSeconds: CUA_OPENCLAW_AUTHORIZATION.maxIdleTtlSeconds,
     });
   }
 
+  private async ensureStarted(signal?: AbortSignal): Promise<void> {
+    if (this.disposed) {
+      throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
+    }
+    if (!this.startPromise) {
+      const start = this.session
+        .startSession(
+          { session: this.publicSession, captureScope: CaptureScope.Desktop },
+          asyncOptions(signal),
+        )
+        .then(() => {
+          this.started = true;
+        });
+      this.startPromise = start;
+      try {
+        await start;
+      } catch (error) {
+        if (this.startPromise === start) {
+          this.startPromise = undefined;
+        }
+        throw error;
+      }
+      return;
+    }
+    await this.startPromise;
+  }
+
+  private async invoke<T>(
+    signal: AbortSignal | undefined,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    await this.ensureStarted(signal);
+    return await operation();
+  }
+
   isAvailable(): boolean {
     return !this.disposed && this.runtime.isAvailable();
   }
   resetAvailabilityCache(): void {}
-  getDesktopState(signal?: AbortSignal) {
-    return this.session.getDesktopState({}, asyncOptions(signal));
+  async getDesktopState(signal?: AbortSignal) {
+    return await this.invoke(signal, () => this.session.getDesktopState({}, asyncOptions(signal)));
   }
-  getScreenSize(signal?: AbortSignal) {
-    return this.session.getScreenSize({}, asyncOptions(signal));
+  async getScreenSize(signal?: AbortSignal) {
+    return await this.invoke(signal, () => this.session.getScreenSize({}, asyncOptions(signal)));
   }
-  click(input: { x: number; y: number; button: ClickButton; count: number }, signal?: AbortSignal) {
-    return this.session.click({ ...input, scope: DesktopScope.Desktop }, asyncOptions(signal));
+  async click(
+    input: { x: number; y: number; button: ClickButton; count: number },
+    signal?: AbortSignal,
+  ) {
+    return await this.invoke(signal, () =>
+      this.session.click({ ...input, scope: DesktopScope.Desktop }, asyncOptions(signal)),
+    );
   }
-  drag(
+  async drag(
     input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
     signal?: AbortSignal,
   ) {
-    return this.session.drag({ ...input, scope: DesktopScope.Desktop }, asyncOptions(signal));
+    return await this.invoke(signal, () =>
+      this.session.drag({ ...input, scope: DesktopScope.Desktop }, asyncOptions(signal)),
+    );
   }
-  moveCursor(input: { x: number; y: number }, signal?: AbortSignal) {
-    return this.session.moveCursor({ ...input, scope: DesktopScope.Desktop }, asyncOptions(signal));
+  async moveCursor(input: { x: number; y: number }, signal?: AbortSignal) {
+    return await this.invoke(signal, () =>
+      this.session.moveCursor({ ...input, scope: DesktopScope.Desktop }, asyncOptions(signal)),
+    );
   }
-  scroll(
+  async scroll(
     input: { x: number; y: number; direction: ScrollDirection; amount: bigint },
     signal?: AbortSignal,
   ) {
-    return this.session.scroll(
-      { ...input, scope: DesktopScope.Desktop, by: ScrollBy.Line },
-      asyncOptions(signal),
+    return await this.invoke(signal, () =>
+      this.session.scroll(
+        { ...input, scope: DesktopScope.Desktop, by: ScrollBy.Line },
+        asyncOptions(signal),
+      ),
     );
   }
-  typeText(text: string, signal?: AbortSignal) {
-    return this.session.typeText({ text, scope: DesktopScope.Desktop }, asyncOptions(signal));
+  async typeText(text: string, signal?: AbortSignal) {
+    return await this.invoke(signal, () =>
+      this.session.typeText({ text, scope: DesktopScope.Desktop }, asyncOptions(signal)),
+    );
   }
-  pressKey(input: { key: string; modifiers: string[] }, signal?: AbortSignal) {
-    return this.session.pressKey({ ...input, scope: DesktopScope.Desktop }, asyncOptions(signal));
+  async pressKey(input: { key: string; modifiers: string[] }, signal?: AbortSignal) {
+    return await this.invoke(signal, () =>
+      this.session.pressKey({ ...input, scope: DesktopScope.Desktop }, asyncOptions(signal)),
+    );
   }
 
   async dispose(): Promise<void> {
@@ -121,6 +175,20 @@ class DirectCuaDriverSession implements CuaDriverSession {
     }
     this.disposed = true;
     let failure: unknown;
+    try {
+      await this.startPromise;
+    } catch (error) {
+      failure = error;
+    }
+    if (this.started) {
+      try {
+        // End the native desktop session before revoking its trusted handle.
+        // Closing only the handle can leave the started session behind on stop.
+        await this.session.endSession({ session: this.publicSession });
+      } catch (error) {
+        failure ??= error;
+      }
+    }
     try {
       this.session.close();
     } catch (error) {
