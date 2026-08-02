@@ -198,8 +198,7 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-const { mapStartupPluginQuarantineRefresh, runDoctorConfigPreflight } =
-  await import("./doctor-config-preflight.js");
+const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
 
 describe("runDoctorConfigPreflight state migration", () => {
   beforeEach(() => {
@@ -576,53 +575,6 @@ describe("runDoctorConfigPreflight state migration", () => {
     );
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
-  });
-
-  it("maps active payload failures into refreshed plugin quarantine", () => {
-    const result = mapStartupPluginQuarantineRefresh({
-      cfg: {
-        gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
-      },
-      failures: [
-        {
-          pluginId: "discord",
-          installPath: "/plugins/discord",
-          reason: "missing-main-entry",
-          detail: "index.js",
-        },
-      ],
-    });
-
-    expect(result.blockingDiagnostic).toBeNull();
-    expect(result.quarantinedPlugins).toMatchObject([
-      {
-        pluginId: "discord",
-        state: "configured-unavailable",
-        diagnostic: { reason: "missing-main-entry" },
-      },
-    ]);
-  });
-
-  it("maps active ownerless payload failures into blocking diagnostics", () => {
-    const result = mapStartupPluginQuarantineRefresh({
-      cfg: {
-        gateway: { mode: "local", port: 19091 },
-        plugins: { entries: { discord: { enabled: true } } },
-      },
-      failures: [
-        {
-          pluginId: "discord",
-          reason: "missing-install-path",
-          detail: "Install path is missing from the plugin install record.",
-        },
-      ],
-    });
-
-    expect(result.quarantinedPlugins).toEqual([]);
-    expect(result.blockingDiagnostic?.messages).toEqual([
-      expect.stringContaining("Install path is missing from the plugin install record."),
-    ]);
   });
 
   it("clears stale plugin quarantine through the current-checkpoint preflight", async () => {
