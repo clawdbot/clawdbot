@@ -129,7 +129,6 @@ function setupDeps(params: {
   persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
   runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
   runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
-  ensureControlUiAssetsBuilt?: GuidedOnboardingDeps["ensureControlUiAssetsBuilt"];
   runBrowserHandoff?: GuidedOnboardingDeps["runBrowserHandoff"];
   probeBrowserHandoffGateway?: GuidedOnboardingDeps["probeBrowserHandoffGateway"];
   applySetup?: GuidedOnboardingDeps["applySetup"];
@@ -166,8 +165,6 @@ function setupDeps(params: {
     runSetupMemoryImportStep,
     runAppRecommendations:
       params.runAppRecommendations ?? vi.fn(async ({ config }) => recommendationOutcome(config)),
-    ensureControlUiAssetsBuilt:
-      params.ensureControlUiAssetsBuilt ?? vi.fn(async () => ({ ok: true, built: false })),
     runBrowserHandoff:
       params.runBrowserHandoff ??
       (vi.fn(async () => ({

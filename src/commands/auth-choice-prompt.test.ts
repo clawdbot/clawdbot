@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { WizardPrompter, WizardSelectParams } from "../wizard/prompts.js";
 import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
-import { KEEP_CURRENT_AUTH_CHOICE, promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
+import { isKeepCurrentAuthChoice, promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 
 const buildAuthChoiceGroups = vi.hoisted(() => vi.fn());
 const compareAuthChoiceGroups = vi.hoisted(() =>
@@ -121,7 +121,7 @@ describe("promptAuthChoiceGrouped", () => {
       }
       if (params.message === "OpenAI auth method") {
         methodOptions = params.options;
-        return KEEP_CURRENT_AUTH_CHOICE;
+        return "__keep-current";
       }
       throw new Error(`unexpected prompt ${params.message}`);
     });
@@ -142,19 +142,19 @@ describe("promptAuthChoiceGrouped", () => {
       },
     });
 
-    expect(result).toBe(KEEP_CURRENT_AUTH_CHOICE);
+    expect(isKeepCurrentAuthChoice(result)).toBe(true);
     expect(providerOptions).toContainEqual({
       value: "openai",
       label: "OpenAI (currently configured)",
       hint: undefined,
     });
     expect(methodOptions[0]).toEqual({
-      value: KEEP_CURRENT_AUTH_CHOICE,
+      value: "__keep-current",
       label: "Keep current config",
       hint: "Keep openai/gpt-5.5",
     });
     expect(methodOptions.map((option) => option.value)).toEqual([
-      KEEP_CURRENT_AUTH_CHOICE,
+      "__keep-current",
       "openai",
       "openai-api-key",
       "__back",

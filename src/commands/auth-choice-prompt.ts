@@ -15,7 +15,7 @@ import type { AuthChoice } from "./onboard-types.js";
 
 const BACK_VALUE = "__back";
 const MORE_VALUE = "__more";
-export const KEEP_CURRENT_AUTH_CHOICE = "__keep-current";
+const KEEP_CURRENT_AUTH_CHOICE = "__keep-current";
 
 type KeepCurrentAuthChoice = typeof KEEP_CURRENT_AUTH_CHOICE;
 type PromptAuthChoiceResult = AuthChoice | KeepCurrentAuthChoice;
@@ -33,6 +33,10 @@ type PromptAuthChoiceGroupedParams = {
   allowKeepCurrentProvider?: boolean;
   detectedProviderIds?: ReadonlySet<string>;
 };
+
+export function isKeepCurrentAuthChoice(value: unknown): value is KeepCurrentAuthChoice {
+  return value === KEEP_CURRENT_AUTH_CHOICE;
+}
 
 function resolveConfiguredModelRef(config?: OpenClawConfig): string | undefined {
   return resolveAgentModelPrimaryValue(config?.agents?.defaults?.model);
