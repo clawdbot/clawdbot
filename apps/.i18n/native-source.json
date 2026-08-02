@@ -34275,7 +34275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 108,
+      "line": 102,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "New Gateway Window…",
       "surface": "apple",
@@ -34283,7 +34283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 113,
+      "line": 107,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "New Thread",
       "surface": "apple",
@@ -34291,7 +34291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 119,
+      "line": 113,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Settings...",
       "surface": "apple",
@@ -34299,7 +34299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 127,
+      "line": 121,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Back",
       "surface": "apple",
@@ -34307,7 +34307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 132,
+      "line": 126,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Forward",
       "surface": "apple",
@@ -34315,7 +34315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 139,
+      "line": 133,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Command Palette…",
       "surface": "apple",
@@ -34323,7 +34323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 157,
+      "line": 150,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw - Voice Wake live meter active",
       "surface": "apple",
@@ -34331,7 +34331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 158,
+      "line": 151,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -34339,7 +34339,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 455,
+      "line": 410,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Close Canvas",
       "surface": "apple",
@@ -34347,7 +34347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 455,
+      "line": 410,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Open Canvas",
       "surface": "apple",
