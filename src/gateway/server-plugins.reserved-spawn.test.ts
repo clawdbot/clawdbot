@@ -64,6 +64,13 @@ const reservation = {
   runId: "plugin-reserved-run",
   task: "run the reserved child",
 } as const;
+const defaultRequesterStorePath = "/tmp/openclaw-main-sessions.json";
+const defaultRequesterCfg = {
+  agents: {
+    defaults: { subagents: { allowAgents: ["worker"] } },
+    entries: { main: {}, worker: {} },
+  },
+};
 
 function withReservedPluginScope<T>(
   run: () => T,
@@ -133,12 +140,8 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
           await run(new AbortController().signal),
       );
     loadSessionEntryReadOnly.mockReset().mockReturnValue({
-      cfg: {
-        agents: {
-          defaults: { subagents: { allowAgents: ["worker"] } },
-          entries: { main: {}, worker: {} },
-        },
-      },
+      cfg: defaultRequesterCfg,
+      storePath: defaultRequesterStorePath,
       entry: {
         pluginOwnerId: "agentic-os",
         sessionId: "requester-session",
@@ -624,12 +627,8 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       expectedLifecycleRevision: "plugin-child-inspection-lifecycle",
     };
     const requesterEntry = {
-      cfg: {
-        agents: {
-          defaults: { subagents: { allowAgents: ["worker"] } },
-          entries: { main: {}, worker: {} },
-        },
-      },
+      cfg: defaultRequesterCfg,
+      storePath: defaultRequesterStorePath,
       entry: {
         pluginOwnerId: "agentic-os",
         sessionId: "requester-session",
@@ -686,12 +685,8 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       expectedLifecycleRevision: "plugin-child-original-lifecycle",
     };
     const requesterEntry = {
-      cfg: {
-        agents: {
-          defaults: { subagents: { allowAgents: ["worker"] } },
-          entries: { main: {}, worker: {} },
-        },
-      },
+      cfg: defaultRequesterCfg,
+      storePath: defaultRequesterStorePath,
       entry: {
         pluginOwnerId: "agentic-os",
         sessionId: "requester-session",
@@ -794,12 +789,8 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     });
     loadSessionEntryReadOnly
       .mockReturnValueOnce({
-        cfg: {
-          agents: {
-            defaults: { subagents: { allowAgents: ["worker"] } },
-            entries: { main: {}, worker: {} },
-          },
-        },
+        cfg: defaultRequesterCfg,
+        storePath: defaultRequesterStorePath,
         entry: {
           pluginOwnerId: "agentic-os",
           sessionId: "requester-session",
@@ -808,12 +799,8 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
         },
       })
       .mockReturnValueOnce({
-        cfg: {
-          agents: {
-            defaults: { subagents: { allowAgents: ["worker"] } },
-            entries: { main: {}, worker: {} },
-          },
-        },
+        cfg: defaultRequesterCfg,
+        storePath: defaultRequesterStorePath,
         entry: {
           pluginOwnerId: "foreign-plugin",
           sessionId: "requester-session",
@@ -842,12 +829,8 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     };
     const registry = createHarnessOwnerRegistry();
     loadSessionEntryReadOnly.mockReturnValue({
-      cfg: {
-        agents: {
-          defaults: { subagents: { allowAgents: ["worker"] } },
-          entries: { main: {}, worker: {} },
-        },
-      },
+      cfg: defaultRequesterCfg,
+      storePath: defaultRequesterStorePath,
       entry: {
         sessionId: "locked-harness-session",
         lifecycleRevision: "7",
@@ -892,12 +875,8 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     };
     const registry = createHarnessOwnerRegistry();
     const loaded = {
-      cfg: {
-        agents: {
-          defaults: { subagents: { allowAgents: ["worker"] } },
-          entries: { main: {}, worker: {} },
-        },
-      },
+      cfg: defaultRequesterCfg,
+      storePath: defaultRequesterStorePath,
       entry: {
         sessionId: "locked-harness-session",
         lifecycleRevision: "7",
@@ -940,12 +919,8 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     };
     const registry = createHarnessOwnerRegistry();
     const loaded = {
-      cfg: {
-        agents: {
-          defaults: { subagents: { allowAgents: ["worker"] } },
-          entries: { main: {}, worker: {} },
-        },
-      },
+      cfg: defaultRequesterCfg,
+      storePath: defaultRequesterStorePath,
       entry: {
         sessionId: "locked-harness-session",
         lifecycleRevision: "7",
@@ -986,12 +961,8 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     };
     const registry = createHarnessOwnerRegistry();
     const loaded = {
-      cfg: {
-        agents: {
-          defaults: { subagents: { allowAgents: ["worker"] } },
-          entries: { main: {}, worker: {} },
-        },
-      },
+      cfg: defaultRequesterCfg,
+      storePath: defaultRequesterStorePath,
       entry: {
         pluginOwnerId: "agentic-os",
         sessionId: "locked-harness-session",
@@ -1033,12 +1004,8 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     };
     const registry = createHarnessOwnerRegistry();
     const loaded = {
-      cfg: {
-        agents: {
-          defaults: { subagents: { allowAgents: ["worker"] } },
-          entries: { main: {}, worker: {} },
-        },
-      },
+      cfg: defaultRequesterCfg,
+      storePath: defaultRequesterStorePath,
       entry: {
         pluginOwnerId: "agentic-os",
         sessionId: "locked-harness-session",

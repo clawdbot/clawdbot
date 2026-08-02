@@ -60,6 +60,7 @@ describe("spawnReserved identity byte bounds", () => {
           entries: { main: {}, worker: {} },
         },
       },
+      storePath: "/tmp/openclaw-main-sessions.json",
       entry: {
         pluginOwnerId: "agentic-os",
         sessionId: "requester-session",
