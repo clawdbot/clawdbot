@@ -503,7 +503,11 @@ export async function finalizeSetupWizard(
     const controlUiEnabled =
       nextConfig.gateway?.controlUi?.enabled ?? baseConfig.gateway?.controlUi?.enabled ?? true;
     if (!opts.skipUi && controlUiEnabled) {
-      const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
+      const controlUiRoot =
+        nextConfig.gateway?.controlUi?.root ?? baseConfig.gateway?.controlUi?.root;
+      const controlUiAssets = await ensureControlUiAssetsBuilt(runtime, {
+        rootOverride: controlUiRoot,
+      });
       if (!controlUiAssets.ok && controlUiAssets.message) {
         runtime.error(controlUiAssets.message);
       }

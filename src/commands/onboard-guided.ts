@@ -442,6 +442,7 @@ async function runGuidedOnboardingFlow(
       onBuildStart: () => {
         controlUiProgress = prompter.progress(t("wizard.guided.controlUiPreparing"));
       },
+      rootOverride: persistedConfig.gateway?.controlUi?.root,
     }).finally(() => controlUiProgress?.stop());
     controlUiAssetsReady = assets.ok;
     if (!assets.ok && assets.message) {

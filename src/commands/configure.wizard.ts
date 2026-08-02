@@ -814,7 +814,9 @@ export async function runConfigureWizard(
       return;
     }
 
-    const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
+    const controlUiAssets = await ensureControlUiAssetsBuilt(runtime, {
+      rootOverride: nextConfig.gateway?.controlUi?.root,
+    });
     if (!controlUiAssets.ok && controlUiAssets.message) {
       runtime.error(controlUiAssets.message);
     }

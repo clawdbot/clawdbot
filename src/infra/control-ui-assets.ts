@@ -289,8 +289,23 @@ function summarizeCommandOutput(text: string): string | undefined {
 
 export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
-  opts?: { timeoutMs?: number; onBuildStart?: () => void },
+  opts?: { timeoutMs?: number; onBuildStart?: () => void; rootOverride?: string },
 ): Promise<EnsureControlUiAssetsResult> {
+  const rootOverride = opts?.rootOverride?.trim();
+  if (rootOverride) {
+    // Gateway overrides are authoritative. Never hide an invalid custom root
+    // by building or serving the unrelated package-default assets.
+    const resolvedRoot = resolveControlUiRootOverrideSync(rootOverride);
+    if (resolvedRoot) {
+      return { ok: true, built: false };
+    }
+    return {
+      ok: false,
+      built: false,
+      message: `Control UI assets not found at ${path.resolve(rootOverride)}. Build the custom UI there or update \`gateway.controlUi.root\`.`,
+    };
+  }
+
   const health = await resolveControlUiDistIndexHealth({ argv1: process.argv[1] });
   const indexFromDist = health.indexPath;
   if (health.exists) {

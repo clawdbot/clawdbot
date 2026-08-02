@@ -575,6 +575,21 @@ describe("runConfigureWizard", () => {
     );
   });
 
+  it("prepares the configured Control UI root instead of default assets", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        controlUi: { root: "/srv/openclaw-control-ui" },
+      },
+    });
+
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+    expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(expect.anything(), {
+      rootOverride: "/srv/openclaw-control-ui",
+    });
+  });
+
   it("shows static Windows Firewall guidance for LAN Gateway links without inspection", async () => {
     setupBaseWizardState({
       gateway: {

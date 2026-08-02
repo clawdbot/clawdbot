@@ -158,6 +158,29 @@ describe("control UI assets helpers (fs-mocked)", () => {
     }
   });
 
+  it("accepts a configured Control UI root without preparing default assets", async () => {
+    const uiDir = abs("fixtures/custom-control-ui");
+    setDir(uiDir);
+    setFile(path.join(uiDir, "index.html"), "<html></html>\n");
+
+    await expect(ensureControlUiAssetsBuilt(undefined, { rootOverride: uiDir })).resolves.toEqual({
+      ok: true,
+      built: false,
+    });
+    expect(state.runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid configured Control UI root without building default assets", async () => {
+    const uiDir = abs("fixtures/missing-custom-control-ui");
+
+    await expect(ensureControlUiAssetsBuilt(undefined, { rootOverride: uiDir })).resolves.toEqual({
+      ok: false,
+      built: false,
+      message: `Control UI assets not found at ${uiDir}. Build the custom UI there or update \`gateway.controlUi.root\`.`,
+    });
+    expect(state.runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
   it("resolves control-ui root from override file or directory", () => {
     const root = abs("fixtures/override");
     const uiDir = path.join(root, "dist", "control-ui");

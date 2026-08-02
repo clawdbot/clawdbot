@@ -33,6 +33,7 @@ const resolveLocalControlUiProbeLinks = vi.hoisted(() =>
     wsUrl: "ws://127.0.0.1:18789",
   })),
 );
+const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const resolveDefaultModelAuthStatus = vi.hoisted(() =>
@@ -215,7 +216,7 @@ vi.mock("../daemon/systemd.js", () => ({
 }));
 
 vi.mock("../infra/control-ui-assets.js", () => ({
-  ensureControlUiAssetsBuilt: vi.fn(async () => ({ ok: true })),
+  ensureControlUiAssetsBuilt,
 }));
 
 vi.mock("../infra/container-environment.js", () => ({
@@ -496,6 +497,20 @@ describe("finalizeSetupWizard", () => {
     resolveDefaultModelCatalogFacts.mockReturnValue({ found: true });
     loadModelCatalog.mockReset();
     loadModelCatalog.mockResolvedValue([]);
+    ensureControlUiAssetsBuilt.mockClear();
+  });
+
+  it("prepares the configured Control UI root instead of default assets", async () => {
+    const prompter = createLaterPrompter();
+    const nextConfig = {
+      gateway: { controlUi: { root: "/srv/openclaw-control-ui" } },
+    } satisfies OpenClawConfig;
+
+    await finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter, nextConfig }));
+
+    expect(ensureControlUiAssetsBuilt).toHaveBeenCalledWith(expect.anything(), {
+      rootOverride: "/srv/openclaw-control-ui",
+    });
   });
 
   it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
