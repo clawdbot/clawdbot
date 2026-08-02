@@ -65,6 +65,7 @@ import type {
 import { testing as swarmSchedulerTesting } from "./swarm-scheduler.test-support.js";
 
 const noop = () => {};
+type GatewayCallRequest = { method?: string; params?: Record<string, unknown> };
 
 function findRecordCallArg(
   mock: ReturnType<typeof vi.fn>,
@@ -98,7 +99,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 const mocks = vi.hoisted(() => ({
-  callGateway: vi.fn<(request: { method?: string }) => Promise<Record<string, unknown>>>(),
+  callGateway: vi.fn<(request: GatewayCallRequest) => Promise<Record<string, unknown>>>(),
   onAgentEvent: vi.fn<(_handler: (event: AgentEventPayload) => void) => typeof noop>(() => noop),
   getAgentRunContext: vi.fn<(_runId: string) => unknown>(() => undefined),
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(() => ({
