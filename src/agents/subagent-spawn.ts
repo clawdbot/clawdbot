@@ -383,6 +383,9 @@ export async function spawnSubagentDirect(
         toolSpawnMetadata,
         spawnedWorkspaceDir,
         childSessionKey,
+        expectedExistingSessionId: ctx.preallocatedRunId
+          ? provisionalSessionCleanupIdentity?.expectedSessionId
+          : undefined,
         collect: params.collect === true,
         childSessionOrigin,
         childIdem,
@@ -701,12 +704,10 @@ export async function spawnSubagentDirect(
   }
 }
 
-const testing = {
-  setDepsForTest(overrides?: Parameters<typeof setSubagentSpawnDepsForTest>[0]) {
-    setSubagentSpawnDepsForTest(overrides);
-  },
-};
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] =
-    testing;
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] = {
+    setDepsForTest(overrides?: Parameters<typeof setSubagentSpawnDepsForTest>[0]) {
+      setSubagentSpawnDepsForTest(overrides);
+    },
+  };
 }

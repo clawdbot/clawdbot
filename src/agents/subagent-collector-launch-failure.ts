@@ -42,19 +42,23 @@ export async function handleCollectorLaunchStartFailure(params: {
   let lastSettlementError: unknown;
   for (let attempt = 1; attempt <= COLLECTOR_LAUNCH_SETTLEMENT_MAX_ATTEMPTS; attempt += 1) {
     try {
-      settleFailedQueuedSubagentLaunch(params.childRunId, launchError);
-      settledLaunch = true;
-      break;
-    } catch (error) {
-      lastSettlementError = error;
-      if (attempt >= COLLECTOR_LAUNCH_SETTLEMENT_MAX_ATTEMPTS) {
+      settledLaunch = settleFailedQueuedSubagentLaunch(params.childRunId, launchError);
+      if (!settledLaunch) {
+        lastSettlementError = new Error("collector launch failure had no durable queued owner");
+      }
+      if (settledLaunch) {
         break;
       }
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-        timer.unref?.();
-      });
+    } catch (error) {
+      lastSettlementError = error;
     }
+    if (attempt >= COLLECTOR_LAUNCH_SETTLEMENT_MAX_ATTEMPTS) {
+      break;
+    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
+      timer.unref?.();
+    });
   }
   if (!settledLaunch) {
     log.warn("collector launch failure settlement retry budget exhausted", {
@@ -69,7 +73,7 @@ export async function handleCollectorLaunchStartFailure(params: {
     sessionCleanup.status === "fulfilled" &&
     sessionCleanup.value.attachmentsRemoved &&
     sessionCleanup.value.sessionDeleted;
-  if (cleanupComplete) {
+  if (settledLaunch && cleanupComplete) {
     emitSessionLifecycleEvent({
       sessionKey: params.childSessionKey,
       reason: "delete",
@@ -77,5 +81,5 @@ export async function handleCollectorLaunchStartFailure(params: {
     });
     completeCollectorLaunchCleanup(params.childRunId);
   }
-  return true;
+  return settledLaunch;
 }

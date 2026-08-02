@@ -565,6 +565,50 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
   });
 
+  it("releases process claims after bounded cleanup retries when durable registry owns the failure", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.useFakeTimers();
+    const runtime = createGatewaySubagentRuntime();
+    const dedupe: GatewayRequestContext["dedupe"] = new Map();
+    const durableReservation = {
+      ...reservation,
+      childSessionKey: "agent:worker:subagent:plugin-reserved-durable-child",
+      runId: "plugin-reserved-durable-run",
+    };
+    let durableOwner = false;
+    getLatestSubagentRunByChildSessionKey.mockImplementation((childSessionKey: string) =>
+      durableOwner && childSessionKey === durableReservation.childSessionKey
+        ? {
+            runId: durableReservation.runId,
+            childSessionKey: durableReservation.childSessionKey,
+            spawnFailureCleanup: { status: "exhausted" },
+          }
+        : undefined,
+    );
+    spawnSubagentDirect.mockResolvedValueOnce({
+      status: "error",
+      error: "gateway request timeout for agent",
+      childSessionKey: durableReservation.childSessionKey,
+      runId: durableReservation.runId,
+      reservedCleanup: { sessionDeletion: "indeterminate" },
+    });
+
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(durableReservation), dedupe),
+    ).rejects.toThrow("gateway request timeout for agent");
+    expect(dedupe.has(`agent:${durableReservation.runId}`)).toBe(true);
+
+    durableOwner = true;
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(cleanupProvisionalSession).toHaveBeenCalledTimes(3);
+    expect(dedupe.has(`agent:${durableReservation.runId}`)).toBe(false);
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(durableReservation), dedupe),
+    ).rejects.toThrow("already exists");
+    expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps reserved claims when replacement inspection throws", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.useFakeTimers();

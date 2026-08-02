@@ -15,6 +15,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
 } from "./subagent-lifecycle-events.js";
 import {
+  archivedSubagentSessionDeleteIdentity,
   reconcileOrphanedRun,
   safeRemoveAttachmentsDir,
   shouldDeleteArchivedSubagentSession,
@@ -481,7 +482,10 @@ export function createSubagentRegistrySweeper(params: {
         params.clearPendingLifecycleError(runId);
         if (shouldDeleteArchivedSubagentSession(entry)) {
           try {
-            await deleteSession(entry.childSessionKey);
+            await deleteSession(
+              entry.childSessionKey,
+              archivedSubagentSessionDeleteIdentity(entry),
+            );
           } catch (error) {
             params.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
               runId,

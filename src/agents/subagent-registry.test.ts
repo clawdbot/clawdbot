@@ -670,6 +670,77 @@ describe("subagent registry seam flow", () => {
     ).toHaveLength(0);
   });
 
+  it("deletes terminally recovered failed-spawn sessions at archive with the original identity", async () => {
+    const originalCreatedAt = Date.parse("2026-03-24T11:59:50Z");
+    const childEndedAt = originalCreatedAt + 1_000;
+    const childSessionKey = "agent:worker:subagent:failed-spawn-terminal-delete-child";
+    const runId = "failed-spawn-terminal-delete-run";
+    const sessionIdentity = {
+      expectedSessionId: "terminal-delete-provisional-session",
+      expectedLifecycleRevision: "terminal-delete-provisional-lifecycle",
+    };
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          sessionId: sessionIdentity.expectedSessionId,
+          lifecycleRevision: sessionIdentity.expectedLifecycleRevision,
+          startedAt: originalCreatedAt,
+          endedAt: childEndedAt,
+          updatedAt: childEndedAt,
+          status: "done",
+        },
+        childSessionKey,
+      ),
+    );
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": { ok: true },
+    });
+
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+    expect(
+      mod.quarantineFailedSubagentSpawn({
+        runId,
+        childSessionKey,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterAgentId: "main",
+        task: "failed spawn with terminal child cleanup delete",
+        cleanup: "delete",
+        agentId: "worker",
+        reason: "ambiguous dispatch failure",
+        sessionIdentity,
+        createdAt: originalCreatedAt,
+      }),
+    ).toBe("recorded");
+
+    await mod.testing.sweepOnceForTests();
+    await waitForFast(() =>
+      expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+        spawnFailureCleanup: { status: "terminal_registered" },
+      }),
+    );
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
+    ).toHaveLength(0);
+
+    const archived = expectDefined(mod.getSubagentRunByRunId(runId), "terminal recovered run");
+    vi.setSystemTime(archived.archiveAtMs ?? Date.now());
+    await mod.testing.sweepOnceForTests();
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          key: childSessionKey,
+          expectedSessionId: sessionIdentity.expectedSessionId,
+          expectedLifecycleRevision: sessionIdentity.expectedLifecycleRevision,
+        }),
+      }),
+    );
+    expect(mod.getSubagentRunByRunId(runId)).toBeUndefined();
+  });
+
   it("releases identity-bound failed-spawn quarantine when the original session is absent", async () => {
     const childSessionKey = "agent:worker:subagent:failed-spawn-missing-child";
     const runId = "failed-spawn-missing-run";
@@ -1562,6 +1633,84 @@ describe("subagent registry seam flow", () => {
     expect(mod.listSessionMaintenanceProtectedSubagentSessionKeys()).toEqual([
       "agent:main:subagent:restored",
     ]);
+  });
+
+  it("routes restored failed-spawn quarantine through guarded cleanup reconciliation", async () => {
+    const now = Date.now();
+    const childSessionKey = "agent:worker:subagent:restored-failed-spawn-quarantine";
+    const sessionIdentity = {
+      expectedSessionId: "restored-failed-spawn-session",
+      expectedLifecycleRevision: "restored-failed-spawn-lifecycle",
+    };
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+    }) => {
+      params.runs.set(
+        "run-restored-failed-spawn-quarantine",
+        createSubagentRunRecord({
+          runId: "run-restored-failed-spawn-quarantine",
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          requesterAgentId: "main",
+          task: "restore failed spawn quarantine",
+          cleanup: "delete",
+          agentId: "worker",
+          createdAt: now - 10_000,
+          execution: { status: "interrupted", interruptedAt: now - 9_000 },
+          completion: { required: false },
+          spawnFailureCleanup: {
+            status: "pending",
+            reason: "ambiguous launch failure before restart",
+            recordedAt: now - 9_000,
+            attempts: 0,
+            maxAttempts: 3,
+            nextAttemptAt: now - 1,
+            sessionDeletion: "indeterminate",
+            sessionIdentity,
+          },
+        }),
+      );
+      return 1;
+    }) as never);
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          sessionId: sessionIdentity.expectedSessionId,
+          lifecycleRevision: sessionIdentity.expectedLifecycleRevision,
+          updatedAt: now,
+          status: "running",
+        },
+        childSessionKey,
+      ),
+    );
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": { ok: true },
+      "agent.wait": new Error("restored failed-spawn quarantine must not resume"),
+    });
+
+    mod.initSubagentRegistry();
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() =>
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.delete",
+          params: expect.objectContaining({
+            key: childSessionKey,
+            expectedSessionId: sessionIdentity.expectedSessionId,
+            expectedLifecycleRevision: sessionIdentity.expectedLifecycleRevision,
+          }),
+        }),
+      ),
+    );
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent.wait"),
+    ).toHaveLength(0);
+    expect(mod.getSubagentRunByRunId("run-restored-failed-spawn-quarantine")).toMatchObject({
+      spawnFailureCleanup: { status: "deleted", sessionIdentity },
+      cleanupHandled: true,
+    });
   });
 
   it("replays a past-due requester-settle obligation during registry restore", async () => {

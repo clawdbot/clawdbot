@@ -16,6 +16,7 @@ export function buildSubagentLaunchRequest(params: {
   toolSpawnMetadata: Parameters<typeof normalizeSpawnedRunMetadata>[0];
   spawnedWorkspaceDir?: string;
   childSessionKey: string;
+  expectedExistingSessionId?: string;
   collect: boolean;
   childSessionOrigin?: {
     channel?: string;
@@ -90,6 +91,9 @@ export function buildSubagentLaunchRequest(params: {
   const request: Record<string, unknown> = {
     message: childTaskMessage,
     sessionKey: params.childSessionKey,
+    ...(params.expectedExistingSessionId
+      ? { expectedExistingSessionId: params.expectedExistingSessionId }
+      : {}),
     ...(params.collect
       ? {}
       : {

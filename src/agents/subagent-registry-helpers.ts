@@ -29,6 +29,7 @@ import {
   resolveSubagentRunOrphanReason,
   type SubagentRunOrphanReason,
 } from "./subagent-session-reconciliation.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 
 export const PROVISIONAL_KILL_RECONCILIATION_MS = 5 * 60_000;
 export const MIN_ANNOUNCE_RETRY_DELAY_MS = 1_000;
@@ -127,10 +128,19 @@ export function failedSpawnCleanupTerminalError(status: "missing" | "replaced"):
 }
 
 export function shouldDeleteArchivedSubagentSession(entry: SubagentRunRecord): boolean {
-  return (
-    entry.cleanup !== "keep" &&
-    !isTerminalSpawnFailureCleanupStatus(entry.spawnFailureCleanup?.status)
-  );
+  if (entry.cleanup === "keep") {
+    return false;
+  }
+  const status = entry.spawnFailureCleanup?.status;
+  return status === "terminal_registered" || !isTerminalSpawnFailureCleanupStatus(status);
+}
+
+export function archivedSubagentSessionDeleteIdentity(
+  entry: SubagentRunRecord,
+): ProvisionalSessionCleanupIdentity | undefined {
+  return entry.spawnFailureCleanup?.status === "terminal_registered"
+    ? entry.spawnFailureCleanup.sessionIdentity
+    : undefined;
 }
 
 /** Persists child session timing/status derived from the subagent registry row. */
@@ -340,6 +350,9 @@ export function reconcileOrphanedRestoredRuns(params: {
     if (entry.killReconciliation || entry.terminalOwner === "interrupted-recovery") {
       // Provider completion or interrupted recovery still owns these rows.
       // Their bounded reconciliation runs even when the session vanished.
+      continue;
+    }
+    if (entry.spawnFailureCleanup && typeof entry.cleanupCompletedAt !== "number") {
       continue;
     }
     const orphanReason = resolveSubagentRunOrphanReason({

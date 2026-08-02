@@ -43,6 +43,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
+let handleCollectorLaunchStartFailure: typeof import("./subagent-collector-launch-failure.js").handleCollectorLaunchStartFailure;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 let spawnFailureQuarantine: typeof import("./subagent-spawn-failure-quarantine.js");
 
@@ -271,6 +272,8 @@ describe("spawnSubagentDirect seam flow", () => {
       },
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
+    ({ handleCollectorLaunchStartFailure } =
+      await import("./subagent-collector-launch-failure.js"));
     spawnFailureQuarantine = await import("./subagent-spawn-failure-quarantine.js");
   });
 
@@ -322,6 +325,7 @@ describe("spawnSubagentDirect seam flow", () => {
     spawnFailureQuarantine.resetRetainedFailedSpawnAdmissionsForTests();
     swarmSchedulerTesting.reset();
     vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
   it("rejects direct swarm parameters while tools.swarm is disabled", async () => {
@@ -1115,6 +1119,7 @@ describe("spawnSubagentDirect seam flow", () => {
     );
     installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
       onStore: (store) => {
+        store[preallocatedChildSessionKey].sessionId ??= "plugin-reserved-created-session";
         persistedStore = store;
       },
     });
@@ -1150,9 +1155,12 @@ describe("spawnSubagentDirect seam flow", () => {
     const reservedDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
       ([method]) => method === "agent",
     );
+    const expectedSessionId = persistedStore?.[preallocatedChildSessionKey]?.sessionId;
+    expect(expectedSessionId).toBeTypeOf("string");
     expect(reservedDispatch?.[1]).toMatchObject({
       sessionKey: preallocatedChildSessionKey,
       idempotencyKey: preallocatedRunId,
+      expectedExistingSessionId: expectedSessionId,
     });
     expect(readReservedSubagentClaimToken(reservedDispatch?.[1])).toBe("plugin-reserved-claim");
     expect(reservedDispatch?.[2]).toMatchObject({ pluginRuntimeOwnerId: "agentic-os" });
@@ -1966,26 +1974,31 @@ describe("spawnSubagentDirect seam flow", () => {
 
   it("bounds collector launch settlement retries when registry persistence keeps failing", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
+    vi.useFakeTimers();
     hoisted.settleFailedQueuedSubagentLaunchMock.mockImplementation(() => {
       throw new Error("registry busy");
     });
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        throw new Error("launch failed");
-      }
-      return {};
+
+    const settled = handleCollectorLaunchStartFailure({
+      error: new Error("launch failed"),
+      childSessionKey: "agent:main:subagent:failed-collector-settlement",
+      childRunId: "failed-collector-settlement-run",
+      threadBindingReady: true,
+      launchTerminationConfirmed: false,
+      requesterInternalKey: "agent:main:main",
     });
 
-    const result = await spawnSubagentDirect(
-      { task: "fail launch with persistent registry errors", collect: true },
-      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(settled).resolves.toBe(false);
+    expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledTimes(3);
+    expect(hoisted.completeCollectorLaunchCleanupMock).not.toHaveBeenCalled();
+    expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:failed-collector-settlement",
+        reason: "delete",
+      }),
     );
-
-    expect(result.status).toBe("accepted");
-    await vi.waitFor(() =>
-      expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledTimes(3),
-    );
+    vi.useRealTimers();
   });
 
   it("uses and validates tools.swarm.defaultAgentId for collector children", async () => {
@@ -2630,6 +2643,14 @@ describe("spawnSubagentDirect seam flow", () => {
         },
       },
     });
+    const agentParams = hoisted.dispatchGatewayMethodInProcessMock.mock.calls
+      .filter(([method]) => method === "agent")
+      .map(([, params]) => requireRecord(params));
+    expect(agentParams).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ expectedExistingSessionId: "forked-session-id" }),
+      ]),
+    );
     const deleteParams = hoisted.dispatchGatewayMethodInProcessMock.mock.calls
       .filter(([method]) => method === "sessions.delete")
       .map(([, params]) => requireRecord(params));

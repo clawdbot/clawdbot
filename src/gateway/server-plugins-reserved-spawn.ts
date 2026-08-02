@@ -117,6 +117,15 @@ function retainReservedSubagentCleanupHolder(params: {
       // Fail closed: unresolved inspection cannot release reserved identities.
     }
     if (holder.attempts >= maxAttempts) {
+      if (
+        hasDurableReservedCleanupOwner({
+          runId: params.runId,
+          childSessionKey: params.childSessionKey,
+        })
+      ) {
+        holder.release();
+        return;
+      }
       holder.timer = undefined;
       return;
     }
@@ -134,6 +143,20 @@ function retainReservedSubagentCleanupHolder(params: {
 
 function hasIndeterminateReservedCleanup(result: SpawnSubagentResult): boolean {
   return result.reservedCleanup?.sessionDeletion === "indeterminate";
+}
+
+function hasDurableReservedCleanupOwner(params: {
+  runId: string;
+  childSessionKey: string;
+}): boolean {
+  const latest = getLatestSubagentRunByChildSessionKey(params.childSessionKey);
+  return (
+    latest?.runId === params.runId &&
+    latest.childSessionKey === params.childSessionKey &&
+    (Boolean(latest.spawnFailureCleanup) ||
+      typeof latest.cleanupCompletedAt === "number" ||
+      typeof latest.execution?.endedAt === "number")
+  );
 }
 
 function assertReservedSubagentTextWithinLimit(

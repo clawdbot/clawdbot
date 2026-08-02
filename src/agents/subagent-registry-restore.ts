@@ -213,6 +213,9 @@ export function createSubagentRegistryRestorer(config: {
         ) {
           continue;
         }
+        if (entry.spawnFailureCleanup && typeof entry.cleanupCompletedAt !== "number") {
+          continue;
+        }
         resumeRun(runId);
       }
 
