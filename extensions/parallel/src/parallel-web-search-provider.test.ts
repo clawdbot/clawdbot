@@ -71,10 +71,14 @@ function callArguments(index = 2): JsonRecord {
 function headerOf(call: EndpointCall, name: string): string | undefined {
   return (call.init.headers as Record<string, string>)[name];
 }
-function pushMcpHandshake(toolPayload: unknown, sessionId = "sess-1"): void {
+function pushMcpHandshake(
+  toolPayload: unknown,
+  sessionId = "sess-1",
+  protocolVersion: string | null = "2025-06-18",
+): void {
   endpointMockState.responses.push(
     jsonResponse(
-      { jsonrpc: "2.0", id: "i", result: { protocolVersion: "2025-06-18" } },
+      { jsonrpc: "2.0", id: "i", result: protocolVersion ? { protocolVersion } : {} },
       { "mcp-session-id": sessionId },
     ),
     jsonResponse({ jsonrpc: "2.0" }),
@@ -587,9 +591,10 @@ describe("runParallelMcpSearch", () => {
     expect(response.results[0]).toMatchObject({ url: "https://example.com", title: "Example" });
   });
   it("uses the search queries as the objective when none was supplied", async () => {
-    pushMcpHandshake({ results: [] }, "s");
+    pushMcpHandshake({ results: [] }, "s", null);
     await runParallelMcpSearch({ searchQueries: ["alpha", "beta"], maxResults: 5 });
     expect(callArguments().objective).toBe("alpha beta");
+    expect(headerOf(endpointCall(1), "MCP-Protocol-Version")).toBe("2025-06-18");
   });
   it("forwards a caller-supplied session id verbatim (no re-minting)", async () => {
     pushMcpHandshake({ results: [] }, "s");
