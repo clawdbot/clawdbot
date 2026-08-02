@@ -389,7 +389,7 @@ describe("msteams graph helpers", () => {
 
   it("releases a successful bodyful DELETE response", async () => {
     const upstreamCancel = vi.fn();
-    const release = vi.fn(async () => {});
+    const release = vi.fn(async () => undefined);
     const response = new Response(
       new ReadableStream<Uint8Array>({
         start(controller) {
