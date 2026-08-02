@@ -78,6 +78,75 @@ describe("SQLite CLI session history", () => {
     });
   });
 
+  it("uses the resolved session target store for canonical CLI history", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const customStoreDir = tempDirs.make("openclaw-cli-target-store-");
+    const sessionId = "session-sqlite-resolved-target-store";
+    const sessionKey = "agent:main:cron:resolved-target-store";
+    const defaultStorePath = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    const targetStorePath = path.join(customStoreDir, "sessions.json");
+    const header = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: sessionId,
+      timestamp: new Date(0).toISOString(),
+      cwd: stateDir,
+    };
+
+    await replaceTranscriptEvents(
+      { agentId: "main", sessionId, sessionKey, storePath: defaultStorePath },
+      [
+        header,
+        {
+          type: "message",
+          id: "msg-default-store",
+          parentId: null,
+          message: { role: "user", content: "wrong default-store history" },
+        },
+      ],
+    );
+    await replaceTranscriptEvents(
+      { agentId: "main", sessionId, sessionKey, storePath: targetStorePath },
+      [
+        header,
+        {
+          type: "message",
+          id: "msg-target-store",
+          parentId: null,
+          message: { role: "user", content: "resolved target-store history" },
+        },
+      ],
+    );
+
+    await withCliSessionState(stateDir, async () => {
+      const transcriptParams = {
+        sessionId,
+        sessionFile: sessionKey,
+        sessionKey,
+        agentId: "main",
+        sessionTarget: {
+          agentId: "main",
+          sessionId,
+          sessionKey,
+          storePath: targetStorePath,
+        },
+      };
+      await expect(hasCliSessionTranscript(transcriptParams)).resolves.toBe(true);
+      const history = await loadCliSessionHistoryMessages(transcriptParams);
+      expect(history).toHaveLength(1);
+      expectMessageFields(history[0], {
+        role: "user",
+        content: "resolved target-store history",
+      });
+    });
+  });
+
   it("loads branched history from markers used by CLI resumes", async () => {
     const stateDir = tempDirs.make("openclaw-cli-state-");
     const sessionId = "session-sqlite-branch";
