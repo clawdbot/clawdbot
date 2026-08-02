@@ -272,7 +272,9 @@ export function resolveEmbeddedAgentStreamFn(
 function composeRunSignal(callerSignal: AbortSignal, runSignal: AbortSignal): AbortSignal {
   const composedSignal = AbortSignal.any([callerSignal, runSignal]);
   const disposeActivityBridge = onLlmRequestActivity(composedSignal, () => {
-    notifyLlmRequestActivity(callerSignal);
+    if (!composedSignal.aborted) {
+      notifyLlmRequestActivity(callerSignal);
+    }
   });
   // Dispose from `callerSignal`, never from `composedSignal`: Node keeps composite
   // signals that carry an `abort` listener in a process-wide strong set

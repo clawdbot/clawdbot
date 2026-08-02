@@ -850,6 +850,46 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       // one; the idle watchdog listens on the signal it handed in.
       notifyLlmRequestActivity(mergedSignal);
       expect(onCallerActivity).toHaveBeenCalledTimes(1);
+
+      runController.abort();
+      notifyLlmRequestActivity(mergedSignal);
+      expect(onCallerActivity).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("does not bridge provider request activity from a pre-aborted run", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const runController = new AbortController();
+    const callerController = new AbortController();
+    runController.abort();
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      sessionId: "session-1",
+      signal: runController.signal,
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as never,
+    });
+
+    const result = await expectStreamResultRecord(
+      streamFn({ provider: "openai", id: "gpt-5.4" } as never, {} as never, {
+        signal: callerController.signal,
+      }),
+      "pre-aborted merged activity signal result",
+    );
+    const mergedSignal = result.signal as AbortSignal;
+    expect(mergedSignal).toMatchObject({ aborted: true });
+
+    const onCallerActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(callerController.signal, onCallerActivity);
+    try {
+      notifyLlmRequestActivity(mergedSignal);
+      expect(onCallerActivity).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
     }
