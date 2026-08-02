@@ -145,8 +145,6 @@ export async function finishGatewayStartup(params: {
     attachedGatewayExtraHandlers,
     startListening,
     loadStartupPluginsModule,
-    runtimePluginsLoaded,
-    deferredConfiguredChannelPluginIds,
     gatewayPluginConfigAtStart,
     startupActivationSourceConfig,
     defaultWorkspaceDir,
@@ -173,7 +171,6 @@ export async function finishGatewayStartup(params: {
     resolvedAuth,
     preauthConnectionBudget,
     releaseStartupAccountStarts,
-    loadGatewayPluginBootstrapModule,
     cronReconciliation,
     postReadyState,
     cronStartState,
@@ -311,29 +308,6 @@ export async function finishGatewayStartup(params: {
       : () => {},
   );
 
-  if (!minimalTestGateway) {
-    if (runtimePluginsLoaded && deferredConfiguredChannelPluginIds.length > 0) {
-      const { reloadDeferredGatewayPlugins } = await loadGatewayPluginBootstrapModule();
-      const loaded = await startupTrace.measure("gateway.deferred-plugins", () =>
-        reloadDeferredGatewayPlugins({
-          cfg: gatewayPluginConfigAtStart,
-          activationSourceConfig: startupActivationSourceConfig,
-          workspaceDir: defaultWorkspaceDir,
-          log,
-          coreGatewayMethodNames,
-          hostServices: pluginHostServices,
-          baseMethods,
-          pluginIds: startupPluginIds,
-          pluginLookUpTable,
-          logDiagnostics: false,
-          ambientEnvTriggers,
-        }),
-      );
-      replaceAttachedPluginRuntime(loaded);
-      await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
-    }
-  }
-
   const [{ attachGatewayWsHandlers }, { listPluginNodeCapabilities }] = await startupTrace.measure(
     "gateway.ws-imports",
     () =>
@@ -452,24 +426,22 @@ export async function finishGatewayStartup(params: {
           logHooks,
           logChannels,
           unavailableGatewayMethods,
-          loadStartupPlugins: runtimePluginsLoaded
-            ? undefined
-            : async () => {
-                const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
-                return loadGatewayStartupPluginRuntime({
-                  cfg: gatewayPluginConfigAtStart,
-                  activationSourceConfig: startupActivationSourceConfig,
-                  workspaceDir: defaultWorkspaceDir,
-                  log,
-                  baseMethods,
-                  coreGatewayMethodNames,
-                  hostServices: pluginHostServices,
-                  startupPluginIds,
-                  pluginLookUpTable,
-                  startupTrace,
-                  ambientEnvTriggers,
-                });
-              },
+          loadStartupPlugins: async () => {
+            const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
+            return loadGatewayStartupPluginRuntime({
+              cfg: gatewayPluginConfigAtStart,
+              activationSourceConfig: startupActivationSourceConfig,
+              workspaceDir: defaultWorkspaceDir,
+              log,
+              baseMethods,
+              coreGatewayMethodNames,
+              hostServices: pluginHostServices,
+              startupPluginIds,
+              pluginLookUpTable,
+              startupTrace,
+              ambientEnvTriggers,
+            });
+          },
           onStartupPluginsLoading: () => {
             startupState.pendingReason = "startup-sidecars";
           },

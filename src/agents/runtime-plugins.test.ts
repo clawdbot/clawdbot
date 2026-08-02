@@ -90,7 +90,7 @@ describe("agent runtime plugin registries", () => {
     });
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
       expect.objectContaining({
-        forceFullRuntimeForChannelPlugins: true,
+        channelPluginLoadIntent: "full",
       }),
     );
   });

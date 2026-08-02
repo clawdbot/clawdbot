@@ -662,7 +662,6 @@ export function createSetupEntryChannelPluginFixture(params: {
   fullBlurb: string;
   setupBlurb: string;
   configured: boolean;
-  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   useBundledFullEntryContract?: boolean;
   bundledFullEntryId?: string;
   useBundledSetupEntryContract?: boolean;
@@ -693,13 +692,6 @@ export function createSetupEntryChannelPluginFixture(params: {
         openclaw: {
           extensions: ["./index.cjs"],
           setupEntry: "./setup-entry.cjs",
-          ...(params.startupDeferConfiguredChannelFullLoadUntilAfterListen
-            ? {
-                startup: {
-                  deferConfiguredChannelFullLoadUntilAfterListen: true,
-                },
-              }
-            : {}),
         },
       },
       null,

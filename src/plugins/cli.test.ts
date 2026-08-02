@@ -20,8 +20,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./loader.js", () => ({
   loadOpenClawPluginCliRegistry: (...args: unknown[]) =>
     mocks.loadOpenClawPluginCliRegistry(...args),
-  loadPluginRegistryHandle: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
   loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
+  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+    mocks.loadOpenClawPlugins({ ...options, activate: false }),
 }));
 
 vi.mock("./activation-planner.js", () => ({
@@ -387,7 +388,7 @@ describe("registerPluginCliCommands", () => {
       demo: ["demo configured"],
     });
     expect(loadOptions.cache).toBe(false);
-    expect(loadOptions.forceFullRuntimeForChannelPlugins).toBe(true);
+    expect(loadOptions.channelPluginLoadIntent).toBe("full");
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
   });
 
@@ -558,6 +559,20 @@ describe("registerPluginCliCommands", () => {
     await expect(loadValidatedConfigForPluginRegistration()).resolves.toBe(snapshotConfig);
     expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("skips unrelated plugin validation for cold plugin-owned CLI commands", async () => {
+    const snapshotConfig = { plugins: { enabled: true } } as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+      valid: true,
+      config: {},
+      runtimeConfig: snapshotConfig,
+    });
+
+    await expect(
+      loadValidatedConfigForPluginRegistration({ skipPluginValidation: true }),
+    ).resolves.toBe(snapshotConfig);
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
   });
 
   it("preserves an already-active runtime config snapshot", async () => {

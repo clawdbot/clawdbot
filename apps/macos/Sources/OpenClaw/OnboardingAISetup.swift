@@ -124,6 +124,10 @@ final class OnboardingAISetupModel {
     private let routeIdentityProvider: @MainActor () -> String?
     private var started = false
     private var attemptToken = UUID()
+    /// One-shot: the next detection pass lists choices without auto-activating,
+    /// so the connected-state "choose a different AI" path ends at a picker
+    /// instead of re-connecting the same auto candidate.
+    @ObservationIgnored private var suppressNextAutoActivation = false
     @ObservationIgnored private var pendingVerification: PendingVerification?
     @ObservationIgnored private var pendingActivationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
     @ObservationIgnored private var completedHandoff: CompletedHandoff?
@@ -135,7 +139,9 @@ final class OnboardingAISetupModel {
     /// Only a just-completed provider flow may trust setupComplete without re-probing.
     @ObservationIgnored private var providerAuthReconciliationPending = false
 
-    private struct PersistedActivationState: Equatable {
+    /// Internal (not private): the persisted-transition helper lives in
+    /// OnboardingAISetupSupport.swift with the other pure statics.
+    struct PersistedActivationState: Equatable {
         let setupComplete: Bool
         let configuredModel: String?
     }
@@ -229,6 +235,25 @@ final class OnboardingAISetupModel {
         self.started = true
         self.phase = .detecting
         scheduleDetection()
+    }
+
+    /// Escape hatch from a successful auto-connect: re-detect and present every
+    /// candidate, provider, and API-key route without auto-activating, so the
+    /// user can replace the auto-chosen AI with one they pick themselves.
+    func chooseDifferentAI() {
+        guard self.beginChooseDifferentAI() else { return }
+        self.scheduleDetection()
+    }
+
+    /// Split from `chooseDifferentAI` so tests can drive the detection await.
+    @discardableResult
+    func beginChooseDifferentAI() -> Bool {
+        guard self.connected else { return false }
+        self.resetForGatewayChange()
+        self.suppressNextAutoActivation = true
+        self.started = true
+        self.phase = .detecting
+        return true
     }
 
     func showConfiguredGatewayProbeUnavailable() {
@@ -658,6 +683,7 @@ final class OnboardingAISetupModel {
         self.manualError = nil
         self.manualTesting = false
         self.showManualEntry = false
+        self.suppressNextAutoActivation = false
         if let authSessionToCancel, let authServerLease {
             Task {
                 await self.gateway.cancelWizardSession(authSessionToCancel, on: authServerLease)
@@ -775,6 +801,13 @@ extension OnboardingAISetupModel {
                 self.statuses[candidate.kind] = .untried
             }
             self.phase = .ready
+            if self.suppressNextAutoActivation {
+                // "Choose a different AI" pass: list every route and let the
+                // user pick; auto-activating here would redo the undone choice.
+                self.suppressNextAutoActivation = false
+                self.showManualEntry = !self.manualProviders.isEmpty
+                return
+            }
             if let preparedChoiceID {
                 // Detection kinds encode the provider-auth choice ID, while
                 // PrepareOption.brandId owns the model-ref namespace.
@@ -794,14 +827,15 @@ extension OnboardingAISetupModel {
                 return
             }
             if let first = autoCandidateAfter(kind: nil) {
-                // Candidate found: connect without asking. Switching later
-                // stays one click away while the test runs server-side.
+                // Candidate found: connect without asking. The connected banner
+                // keeps "Choose a different AI" so this choice stays reversible.
                 await self.activate(kind: first.kind, context: context)
             } else {
                 self.showManualEntry = !self.manualProviders.isEmpty
             }
         } catch {
             guard self.isCurrentAttempt(context) else { return }
+            self.suppressNextAutoActivation = false
             self.phase = .ready
             self.detectError = Self.transportFailure(error.localizedDescription)
             self.showManualEntry = self.candidates.isEmpty
@@ -839,16 +873,6 @@ extension OnboardingAISetupModel {
         self.phase = .ready
         self.detectError = Self.transportFailure(
             "No Gateway is selected. Select a Gateway, then try again.")
-    }
-
-    private static func activationTransitionWasPersisted(
-        expectedModel: String,
-        before: PersistedActivationState?,
-        after: PersistedActivationState?) -> Bool
-    {
-        guard let before, let after else { return false }
-        let wasAlreadyPersisted = before.setupComplete && before.configuredModel == expectedModel
-        return !wasAlreadyPersisted && after.setupComplete && after.configuredModel == expectedModel
     }
 
     /// Candidates the automatic ladder may try: skip definitively logged-out
@@ -1122,16 +1146,6 @@ extension OnboardingAISetupModel {
             result: result,
             activationOwner: activationOwner)
         return self.connected
-    }
-
-    private static func remainingMilliseconds(
-        until deadline: ContinuousClock.Instant,
-        clock: ContinuousClock,
-        cappedAt capMs: Int) -> Int
-    {
-        let components = clock.now.duration(to: deadline).components
-        let milliseconds = components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
-        return max(0, min(capMs, Int(milliseconds)))
     }
 }
 

@@ -192,6 +192,47 @@ describe("OpenClaw native shell", () => {
     expect(navigate).toHaveBeenCalledExactlyOnceWith("channels", undefined);
   });
 
+  it("carries a native same-app search into navigation", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    shell.runtime = {
+      context: {
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    const event = new CustomEvent("openclaw:native-navigate", {
+      cancelable: true,
+      detail: { path: "/custodian", search: "?onboarding=1" },
+    });
+
+    shell.handleNativeNavigate(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", { search: "?onboarding=1" });
+  });
+
+  it.each(["#frag-only", "onboarding=1", "?onboarding=1#x"])(
+    "ignores malformed native search %s and keeps the plain route",
+    (search) => {
+      const navigate = vi.fn();
+      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      shell.runtime = {
+        context: {
+          navigate,
+        } as unknown as ApplicationContext,
+      };
+      const event = new CustomEvent("openclaw:native-navigate", {
+        cancelable: true,
+        detail: { path: "/custodian", search },
+      });
+
+      shell.handleNativeNavigate(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", undefined);
+    },
+  );
+
   it.each(["https://example.com", "//example.com", "/https://example.com", "/unknown"])(
     "leaves invalid native Dashboard path %s unhandled",
     (path) => {

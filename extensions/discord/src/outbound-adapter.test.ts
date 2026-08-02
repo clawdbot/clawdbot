@@ -17,7 +17,7 @@ await installDiscordOutboundModuleSpies(hoisted);
 
 let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDiscordOutboundTarget;
 let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
-let beginDiscordInboundEventDeliveryCorrelation: typeof import("./inbound-event-delivery.js").beginDiscordInboundEventDeliveryCorrelation;
+let discordInboundEventDelivery: typeof import("./inbound-event-delivery.js").discordInboundEventDelivery;
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -45,7 +45,7 @@ function mockObjectArg(
 beforeAll(async () => {
   ({ normalizeDiscordOutboundTarget } = await import("./normalize.js"));
   ({ discordOutbound } = await import("./outbound-adapter.js"));
-  ({ beginDiscordInboundEventDeliveryCorrelation } = await import("./inbound-event-delivery.js"));
+  ({ discordInboundEventDelivery } = await import("./inbound-event-delivery.js"));
 });
 
 describe("normalizeDiscordOutboundTarget", () => {
@@ -833,7 +833,7 @@ describe("discordOutbound", () => {
 
   it("notifies inbound event delivery after shared outbound delivery succeeds", async () => {
     const markDelivered = vi.fn();
-    const end = beginDiscordInboundEventDeliveryCorrelation(
+    const end = discordInboundEventDelivery.begin(
       "agent:main:discord:channel:c1",
       {
         outboundTo: "thread-1",

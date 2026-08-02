@@ -33,6 +33,19 @@ function stepIsBusy(props: ChannelWizardViewProps): boolean {
 
 function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) {
   const message = step.message?.trim() ?? "";
+  if (step.executor === "gateway") {
+    return html`
+      ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
+      <div class="channels-wizard__spinner" role="status" aria-live="polite">
+        ${message || t("channels.setup.working")}
+      </div>
+      <div class="channels-wizard__footer">
+        <button type="button" class="btn" @click=${() => props.onClose()}>
+          ${t("common.cancel")}
+        </button>
+      </div>
+    `;
+  }
   const looksLikeCode = message.includes("{") || message.includes("  ");
   return html`
     ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
@@ -218,7 +231,7 @@ export function renderChannelWizard(
         ? html`<div class="channels-wizard__error">${wizard.validationError}</div>`
         : nothing}
       ${renderStepBody(step, props)}
-      ${wizard.phase === "step" && wizard.busy
+      ${wizard.phase === "step" && wizard.busy && step.executor !== "gateway"
         ? html`<div class="channels-wizard__spinner">${t("channels.setup.working")}</div>`
         : nothing}
     `;

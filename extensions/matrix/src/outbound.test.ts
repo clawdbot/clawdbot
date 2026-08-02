@@ -1,6 +1,6 @@
 // Matrix tests cover outbound plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
+import { chunkTextForOutbound, type OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({
   sendMessageMatrix: vi.fn(),
@@ -61,6 +61,24 @@ describe("matrixOutbound cfg threading", () => {
     }
 
     expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
+  });
+
+  it("makes progress for fractional BMP and astral limits", () => {
+    const chunker = matrixOutbound.chunker;
+    if (!chunker) {
+      throw new Error("matrixOutbound.chunker missing");
+    }
+
+    expect(chunker("ABCD", 0.5)).toEqual(["A", "B", "C", "D"]);
+    expect(chunker("😀😀", 1.5)).toEqual(["😀", "😀"]);
+    expect(chunkTextForOutbound("ABCD", 0.5)).toEqual(["A", "B", "C", "D"]);
+    expect(chunkTextForOutbound("😀😀", 1.5)).toEqual(["😀", "😀"]);
+  });
+
+  it("preserves Matrix compatibility behavior", () => {
+    expect(chunkTextForOutbound("", 5)).toEqual([""]);
+    expect(chunkTextForOutbound("", 0.5)).toEqual([""]);
+    expect(chunkTextForOutbound("abcdef   ", 5)).toEqual(["abcde", "f   "]);
   });
 
   it("passes resolved cfg to sendMessageMatrix for text sends", async () => {

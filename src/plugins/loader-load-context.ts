@@ -19,7 +19,11 @@ import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snap
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
+import type {
+  ChannelPluginLoadIntent,
+  PluginLoadOptions,
+  PluginRuntimeSubagentMode,
+} from "./loader-types.js";
 import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
@@ -183,8 +187,7 @@ function buildCacheKey(params: {
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
-  preferSetupRuntimeForChannelPlugins?: boolean;
-  forceFullRuntimeForChannelPlugins?: boolean;
+  channelPluginLoadIntent: ChannelPluginLoadIntent;
   preferBuiltPluginArtifacts?: boolean;
   resolveRawConfigEnvVars?: boolean;
   toolDiscovery?: boolean;
@@ -225,12 +228,6 @@ function buildCacheKey(params: {
     params.requireSetupEntryForSetupOnlyChannelPlugins === true
       ? "require-setup-entry"
       : "allow-full-fallback";
-  const startupChannelMode =
-    params.forceFullRuntimeForChannelPlugins === true
-      ? "force-full"
-      : params.preferSetupRuntimeForChannelPlugins === true
-        ? "prefer-setup"
-        : "full";
   const bundledArtifactMode =
     params.preferBuiltPluginArtifacts === true ? "prefer-built-artifacts" : "source-default";
   const rawConfigEnvMode =
@@ -248,7 +245,7 @@ function buildCacheKey(params: {
       loadPaths,
       activationMetadataKey: params.activationMetadataKey ?? "",
     },
-  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
   return createHash("sha256").update(cacheIdentity).digest("hex");
 }
 
@@ -335,8 +332,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const forceSetupOnlyChannelPlugins = options.forceSetupOnlyChannelPlugins === true;
   const requireSetupEntryForSetupOnlyChannelPlugins =
     options.requireSetupEntryForSetupOnlyChannelPlugins === true;
-  const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
-  const forceFullRuntimeForChannelPlugins = options.forceFullRuntimeForChannelPlugins === true;
+  const channelPluginLoadIntent = options.channelPluginLoadIntent ?? "full";
   const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
@@ -389,8 +385,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
-    preferSetupRuntimeForChannelPlugins,
-    forceFullRuntimeForChannelPlugins,
+    channelPluginLoadIntent,
     preferBuiltPluginArtifacts,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
     toolDiscovery: options.toolDiscovery,
@@ -413,8 +408,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
-    preferSetupRuntimeForChannelPlugins,
-    forceFullRuntimeForChannelPlugins,
+    channelPluginLoadIntent,
     preferBuiltPluginArtifacts,
     shouldActivate: options.activate !== false,
     shouldLoadModules: options.loadModules !== false,

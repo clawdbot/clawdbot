@@ -55,7 +55,7 @@ async function loadMemoryCommandConfig(
   commandName: string,
   mode?: "enforce_resolved" | "read_only_status",
 ) {
-  const config = getRuntimeConfig();
+  const config = getRuntimeConfig({ skipPluginValidation: true });
   try {
     const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
       config,
