@@ -31,7 +31,11 @@ export type SubagentAnnounceDeliveryResult = {
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 
-type SubagentAnnounceDispatchPhase = "steer-primary" | "direct-primary" | "steer-fallback";
+type SubagentAnnounceDispatchPhase =
+  | "steer-primary"
+  | "direct-primary"
+  | "steer-fallback"
+  | "direct-fallback";
 
 type SubagentAnnounceDispatchPhaseResult = {
   phase: SubagentAnnounceDispatchPhase;
@@ -111,24 +115,25 @@ export async function runSubagentAnnounceDispatch(params: {
     return withPhases(primaryDirect);
   }
 
-  // Completion handoff prefers direct delivery first so the completion agent's
-  // final visible message wins before falling back to steering.
-  const primaryDirect = await params.direct();
-  appendPhase("direct-primary", primaryDirect);
-  if (primaryDirect.delivered || primaryDirect.terminal) {
-    return withPhases(primaryDirect);
+  // A live requester owns its visible reply.  Wake it with the completion
+  // context first; it can synthesize the child result with any acknowledgement
+  // it already gave.  Sending the child text directly first creates a second
+  // user-visible reply when the requester resumes from sessions_yield.
+  const primarySteerOutcome = await params.steer();
+  const primarySteer = mapSteerOutcomeToDeliveryResult(primarySteerOutcome);
+  appendPhase("steer-primary", primarySteer);
+  if (primarySteer.delivered) {
+    return withPhases(primarySteer);
   }
 
   if (params.signal?.aborted) {
-    return withPhases(primaryDirect);
+    return withPhases(primarySteer);
   }
 
-  const fallbackSteerOutcome = await params.steer();
-  const fallbackSteer = mapSteerOutcomeToDeliveryResult(fallbackSteerOutcome);
-  appendPhase("steer-fallback", fallbackSteer);
-  if (fallbackSteer.delivered) {
-    return withPhases(fallbackSteer);
-  }
-
-  return withPhases(primaryDirect);
+  // The requester is unavailable.  Preserve the completion idempotency key on
+  // this single fallback transport attempt; terminal/unknown outcomes are not
+  // replayed by this dispatcher.
+  const fallbackDirect = await params.direct();
+  appendPhase("direct-fallback", fallbackDirect);
+  return withPhases(fallbackDirect);
 }

@@ -1122,6 +1122,8 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceTool?: string;
   requesterIsSubagent: boolean;
   allowGeneratedMediaDirectFallback: boolean;
+  /** Dispatch already attempted the live requester wake; do not echo it. */
+  skipActiveRequesterWake?: boolean;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
@@ -1207,7 +1209,9 @@ async function sendSubagentAnnounceDirectly(params: {
         error: "requester session abandoned after timeout",
       };
     }
-    let activeRequesterWakeFailed = false;
+    // Dispatch has already attempted the active requester wake when this is
+    // a completion fallback, so media repair may proceed without another wake.
+    let activeRequesterWakeFailed = params.skipActiveRequesterWake === true;
     let cronContinuation:
       | {
           sessionId: string;
@@ -1310,6 +1314,7 @@ async function sendSubagentAnnounceDirectly(params: {
     });
     if (
       params.expectsCompletionMessage &&
+      !params.skipActiveRequesterWake &&
       requesterActivity.sessionId &&
       requesterActivity.isActive
     ) {
@@ -1869,6 +1874,10 @@ export async function deliverSubagentAnnouncement(params: {
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
         allowGeneratedMediaDirectFallback: true,
+        // Completion dispatch tries the active parent first. A failed wake
+        // must not be retried here: it could race a late resume and emit a
+        // second visible completion.
+        skipActiveRequesterWake: params.expectsCompletionMessage,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),

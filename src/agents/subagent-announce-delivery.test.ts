@@ -2068,12 +2068,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
       phases: [
-        {
-          phase: "direct-primary",
-          delivered: true,
-          path: "direct",
-          error: undefined,
-        },
+        { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+        { phase: "direct-fallback", delivered: true, path: "direct", error: undefined },
       ],
     });
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
@@ -2114,17 +2110,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       error: "requester session abandoned after timeout",
     });
     expect(result.phases).toEqual([
+      expect.objectContaining({ phase: "steer-primary", delivered: false, path: "none" }),
       expect.objectContaining({
-        phase: "direct-primary",
+        phase: "direct-fallback",
         delivered: false,
         path: "none",
         reason: "requester_abandoned",
         error: "requester session abandoned after timeout",
-      }),
-      expect.objectContaining({
-        phase: "steer-fallback",
-        delivered: false,
-        path: "none",
       }),
     ]);
     expect(callGateway).not.toHaveBeenCalled();
@@ -2132,7 +2124,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
 
-  it("uses steer fallback when a completion handoff has no visible output", async () => {
+  it("does not re-steer after a completion handoff has no visible output", async () => {
     const callGateway = createPayloadGatewayMock();
     const queueEmbeddedAgentMessageWithOutcome = vi
       .fn<QueueEmbeddedAgentMessageWithOutcome>()
@@ -2163,12 +2155,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
       phases: [
-        {
-          phase: "direct-primary",
-          delivered: true,
-          path: "direct",
-          error: undefined,
-        },
+        { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+        { phase: "direct-fallback", delivered: true, path: "direct", error: undefined },
       ],
     });
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
@@ -3648,7 +3636,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: true,
       path: "none",
-      phases: [{ phase: "direct-primary", delivered: true, path: "none", error: undefined }],
+      phases: [
+        { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+        { phase: "direct-fallback", delivered: true, path: "none", error: undefined },
+      ],
     });
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
     expect(callGateway).not.toHaveBeenCalled();
@@ -3973,20 +3964,19 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       }),
     });
 
-    expectDeliveryPath(result, "steered");
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expectDeliveryPath(result, "direct");
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
     expectRecordFields(mockCallArg(queueEmbeddedAgentMessageWithOutcome, 0, 2), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      waitForTranscriptCommit: true,
-    });
-    const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
-    expectRecordFields(retryOptions, {
       waitForTranscriptCommit: true,
     });
     expect(
-      (retryOptions as { sourceReplyDeliveryMode?: unknown }).sourceReplyDeliveryMode,
+      (
+        mockCallArg(queueEmbeddedAgentMessageWithOutcome, 0, 2) as {
+          sourceReplyDeliveryMode?: unknown;
+        }
+      ).sourceReplyDeliveryMode,
     ).toBeUndefined();
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the external requester route when completion origin is internal", async () => {
@@ -4053,7 +4043,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(result.delivered).toBe(false);
     expect(result.path).toBe("direct");
     expect(result.terminal).toBe(true);
-    expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
+    expect(result.phases?.map((phase) => phase.phase)).toEqual([
+      "steer-primary",
+      "direct-fallback",
+    ]);
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
   });
@@ -4087,7 +4080,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(result.path).toBe("direct");
     expect(result.error).toBe("some model error");
     expect(result.terminal).toBe(true);
-    expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
+    expect(result.phases?.map((phase) => phase.phase)).toEqual([
+      "steer-primary",
+      "direct-fallback",
+    ]);
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
   });

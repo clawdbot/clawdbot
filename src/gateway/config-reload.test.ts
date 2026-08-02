@@ -315,6 +315,9 @@ describe("buildGatewayReloadPlan", () => {
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",
     "gateway.auth.mode",
+    "tools.agentToAgent.enabled",
+    "tools.agentToAgent.allow",
+    "tools.sessions.visibility",
   ])("keeps restart-owned path restart-backed: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
 

@@ -84,6 +84,11 @@ const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
+  // Session tools capture orchestration access policy when their owning agent
+  // runtime is created. A baseline-only config commit leaves those live tools
+  // enforcing the previous policy, so routing changes require a fresh process.
+  { prefix: "tools.agentToAgent", kind: "restart" },
+  { prefix: "tools.sessions", kind: "restart" },
   // gateway.terminal.* deliberately has no rule here: it falls through to the
   // `gateway` restart rule below. The terminal drives the Control UI CSP (WASM
   // permissions) and the bootstrap availability flag, both fixed at document
