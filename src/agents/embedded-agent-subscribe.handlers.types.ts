@@ -61,8 +61,8 @@ type AssistantStreamData = {
   phase?: AssistantPhase;
 };
 
-/** Deferred assistant stream event plus whether it should emit partial replies. */
-type AssistantStreamDelivery = {
+/** Assistant payload deferred only for irreversible partial-reply callbacks. */
+type AssistantPartialReplyDelivery = {
   data: AssistantStreamData;
   emitPartialReply: boolean;
 };
@@ -136,7 +136,7 @@ export type EmbeddedAgentSubscribeState = {
   lastDeliveredBlockReplyText?: string;
   deferBlockReplyDelivery: boolean;
   deferredBlockReplies: BlockReplyPayload[];
-  deferredAssistantEvents: AssistantStreamDelivery[];
+  deferredAssistantPartialReplies: AssistantPartialReplyDelivery[];
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
@@ -277,9 +277,9 @@ export type EmbeddedAgentSubscribeContext = {
     payload: BlockReplyPayload,
     options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => void;
-  flushDeferredAssistantEvents: () => void;
+  flushDeferredAssistantPartialReplies: () => void;
   flushDeferredBlockReplies: () => void;
-  clearDeferredAssistantEvents: () => void;
+  clearDeferredAssistantPartialReplies: () => void;
   clearDeferredBlockReplies: () => void;
 };
 

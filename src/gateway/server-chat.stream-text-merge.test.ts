@@ -74,6 +74,17 @@ describe("server chat stream text merge", () => {
     expect(replacement).not.toContain(prior);
   });
 
+  it("clears the live buffer for an explicit empty replacement", () => {
+    expect(
+      resolveMergedAssistantText({
+        previousText: "Rejected draft",
+        nextText: "",
+        nextDelta: "",
+        replace: true,
+      }),
+    ).toBe("");
+  });
+
   it("would concatenate superseded text if replacement incorrectly included delta", () => {
     const prior = "coordination draft";
     const buggy = resolveMergedAssistantText({
