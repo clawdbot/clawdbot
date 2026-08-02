@@ -239,6 +239,39 @@ describe("chunkText", () => {
   ]);
 });
 
+describe("chunkByParagraph packAdjacent option", () => {
+  it("keeps each paragraph its own chunk when packAdjacent is false", () => {
+    const text = "First short paragraph.\n\nSecond short paragraph.";
+
+    expect(chunkByParagraph(text, 4096)).toEqual([text]);
+    expect(chunkByParagraph(text, 4096, { packAdjacent: false })).toEqual([
+      "First short paragraph.",
+      "Second short paragraph.",
+    ]);
+  });
+
+  it("still length-splits an oversized paragraph when packAdjacent is false", () => {
+    const text = `${"a".repeat(30)}\n\n${"b".repeat(30)}`;
+
+    expect(chunkByParagraph(text, 20, { packAdjacent: false })).toEqual([
+      "a".repeat(20),
+      "a".repeat(10),
+      "b".repeat(20),
+      "b".repeat(10),
+    ]);
+  });
+
+  it("does not pack across fence-preserved paragraph boundaries when packAdjacent is false", () => {
+    const text = "intro paragraph\n\n```\ncode line one\n\ncode line two\n```\n\noutro paragraph";
+
+    expect(chunkByParagraph(text, 4096, { packAdjacent: false })).toEqual([
+      "intro paragraph",
+      "```\ncode line one\n\ncode line two\n```",
+      "outro paragraph",
+    ]);
+  });
+});
+
 describe("chunkByParagraph Unicode line/paragraph separators", () => {
   it.each([
     {

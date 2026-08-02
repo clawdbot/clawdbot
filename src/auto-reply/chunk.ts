@@ -184,13 +184,14 @@ export function chunkByNewline(
  *
  * - Only breaks at paragraph separators ("\n\n" or more, allowing whitespace on blank lines)
  * - Packs multiple paragraphs into a single chunk up to `limit`
+ *   (unless `packAdjacent` is disabled, in which case each paragraph stays its own chunk)
  * - Falls back to length-based splitting when a single paragraph exceeds `limit`
  *   (unless `splitLongParagraphs` is disabled)
  */
 export function chunkByParagraph(
   text: string,
   limit: number,
-  opts?: { splitLongParagraphs?: boolean },
+  opts?: { splitLongParagraphs?: boolean; packAdjacent?: boolean },
 ): string[] {
   if (!text) {
     return [];
@@ -199,6 +200,7 @@ export function chunkByParagraph(
     return [text];
   }
   const splitLongParagraphs = opts?.splitLongParagraphs !== false;
+  const packAdjacent = opts?.packAdjacent !== false;
 
   // U+2029 PARAGRAPH SEPARATOR maps to a blank-line boundary; U+2028 LINE
   // SEPARATOR and CR/CRLF map to a single newline.
@@ -257,7 +259,7 @@ export function chunkByParagraph(
     }
 
     const candidate = `${currentChunk}${separatorBefore ?? "\n\n"}${paragraph}`;
-    if (candidate.length <= limit) {
+    if (packAdjacent && candidate.length <= limit) {
       currentChunk = candidate;
       return;
     }
@@ -292,11 +294,19 @@ export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode):
   return chunkText(text, limit);
 }
 
-export function chunkMarkdownTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
+export function chunkMarkdownTextWithMode(
+  text: string,
+  limit: number,
+  mode: ChunkMode,
+  opts?: { packAdjacent?: boolean },
+): string[] {
   if (mode === "newline") {
     // Paragraph chunking is fence-safe because we never split at arbitrary indices.
     // If a paragraph must be split by length, defer to the markdown-aware chunker.
-    const paragraphChunks = chunkByParagraph(text, limit, { splitLongParagraphs: false });
+    const paragraphChunks = chunkByParagraph(text, limit, {
+      splitLongParagraphs: false,
+      ...(opts?.packAdjacent === undefined ? {} : { packAdjacent: opts.packAdjacent }),
+    });
     const out: string[] = [];
     for (const chunk of paragraphChunks.flatMap((paragraphChunk) =>
       paragraphChunk.length > limit

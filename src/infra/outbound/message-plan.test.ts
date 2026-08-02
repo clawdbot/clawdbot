@@ -33,6 +33,40 @@ describe("outbound message planning", () => {
     expect(units.map((unit) => unit.overrides.deliveryPartCount)).toEqual([2, 2]);
   });
 
+  it("plans blank-line-separated paragraphs as separate units in newline mode", () => {
+    // openclaw/openclaw#109032: the Codex runtime hands the planner the full
+    // reply text at once; paragraph boundaries must survive as unit boundaries
+    // instead of being packed back under the transport limit.
+    const units = planOutboundTextMessageUnits({
+      text: "First short paragraph.\n\nSecond short paragraph.",
+      textLimit: 4096,
+      chunker: (text) => [text],
+      chunkMode: "newline",
+      overrides: {},
+    });
+
+    expect(units.map((unit) => (unit.kind === "text" ? unit.text : unit.kind))).toEqual([
+      "First short paragraph.",
+      "Second short paragraph.",
+    ]);
+  });
+
+  it("plans markdown newline mode without re-packing paragraphs", () => {
+    const units = planOutboundTextMessageUnits({
+      text: "First short paragraph.\n\nSecond short paragraph.",
+      textLimit: 4096,
+      chunker: (text) => [text],
+      chunkMode: "newline",
+      chunkerMode: "markdown",
+      overrides: {},
+    });
+
+    expect(units.map((unit) => (unit.kind === "text" ? unit.text : unit.kind))).toEqual([
+      "First short paragraph.",
+      "Second short paragraph.",
+    ]);
+  });
+
   it("keeps explicit text replies from consuming the implicit slot", () => {
     const policy = createReplyToDeliveryPolicy({
       replyToId: "implicit-reply",

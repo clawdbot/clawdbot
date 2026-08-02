@@ -146,10 +146,17 @@ export function planOutboundTextMessageUnits(params: {
   }
 
   if (params.chunkMode === "newline") {
+    // Keep each paragraph its own outbound unit: newline mode encodes the
+    // author's visible-reply boundaries, so adjacent blocks must not be packed
+    // back together just because they fit under the transport limit
+    // (openclaw/openclaw#109032 — Codex runtime delivers the full reply text in
+    // one plan call, unlike streamed block delivery which plans per block).
     const blockChunks =
       (params.chunkerMode ?? "text") === "markdown"
-        ? chunkMarkdownTextWithMode(params.text, params.textLimit, "newline")
-        : chunkByParagraph(params.text, params.textLimit);
+        ? chunkMarkdownTextWithMode(params.text, params.textLimit, "newline", {
+            packAdjacent: false,
+          })
+        : chunkByParagraph(params.text, params.textLimit, { packAdjacent: false });
 
     if (!blockChunks.length && params.text) {
       blockChunks.push(params.text);
