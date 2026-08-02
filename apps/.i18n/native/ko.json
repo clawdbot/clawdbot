@@ -21954,6 +21954,11 @@
       "translated": "설정 세부 정보 복사"
     },
     {
+      "id": "native.apple.c90ec3f0f60d21bc",
+      "source": "Choose a different AI…",
+      "translated": "다른 AI 선택…"
+    },
+    {
       "id": "native.apple.e0458fcb8c0536ea",
       "source": "No usable AI access found on this Gateway",
       "translated": "이 Gateway에서 사용할 수 있는 AI 액세스를 찾지 못했습니다"
@@ -22184,26 +22189,6 @@
       "translated": "오류 복사"
     },
     {
-      "id": "native.apple.7dee24e5bf088dd5",
-      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
-      "translated": "\\(incomplete)개의 \\(Self.memoryNoun(incomplete))을(를) 가져올 수 없습니다."
-    },
-    {
-      "id": "native.apple.84189c39ea5803c6",
-      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
-      "translated": "Gateway에서 일관되지 않은 제공업체 계획을 반환했습니다. 다시 계획해 보세요."
-    },
-    {
-      "id": "native.apple.4c9e75d64cbc5cc2",
-      "source": "The Gateway did not return a usable import plan. Try planning again.",
-      "translated": "Gateway에서 사용할 수 있는 가져오기 계획을 반환하지 않았습니다. 다시 계획해 보세요."
-    },
-    {
-      "id": "native.apple.2070bf43a67680ee",
-      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
-      "translated": "Gateway에서 \\(plan.summary.errors)개의 \\(Self.memoryNoun(plan.summary.errors))을(를) 계획할 수 없습니다. 다시 시도해 보세요."
-    },
-    {
       "id": "native.apple.ba758aa97c24ffe6",
       "source": "Wake up, my friend!",
       "translated": "일어나, 친구야!"
@@ -22254,7 +22239,12 @@
       "translated": "권장"
     },
     {
-      "id": "native.apple.78d1ad73762a7ce8",
+      "id": "native.apple.6ed12b86d399b69d",
+      "source": "Authenticate with your Gateway",
+      "translated": "Gateway로 인증"
+    },
+    {
+      "id": "native.apple.e319780979ae71d1",
       "source": "Connect your AI",
       "translated": "AI 연결"
     },
@@ -22262,106 +22252,6 @@
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "뒤로"
-    },
-    {
-      "id": "native.apple.7ca0977d5f73356d",
-      "source": "Bring your memories along",
-      "translated": "추억을 함께 가져오세요"
-    },
-    {
-      "id": "native.apple.b57ee4f83cff23f3",
-      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
-      "translated": "OpenClaw는 이미 사용 중인 AI 도구에서 유용한 컨텍스트를 새 어시스턴트로 가져올 수 있습니다."
-    },
-    {
-      "id": "native.apple.46cab71d748860b8",
-      "source": "Looking for memories…",
-      "translated": "추억을 찾는 중…"
-    },
-    {
-      "id": "native.apple.c9e5f1aebe85e201",
-      "source": "Checking supported AI tools on this Mac.",
-      "translated": "이 Mac에서 지원되는 AI 도구를 확인하는 중입니다."
-    },
-    {
-      "id": "native.apple.77290f36f36f00e5",
-      "source": "No memories to import",
-      "translated": "가져올 추억이 없습니다"
-    },
-    {
-      "id": "native.apple.e5cca7b9f082ace9",
-      "source": "You can import memories later from the dashboard.",
-      "translated": "나중에 대시보드에서 추억을 가져올 수 있습니다."
-    },
-    {
-      "id": "native.apple.963add2f12fd18cb",
-      "source": "Import memories",
-      "translated": "추억 가져오기"
-    },
-    {
-      "id": "native.apple.9db369e036a38a29",
-      "source": "Importing memories…",
-      "translated": "추억을 가져오는 중…"
-    },
-    {
-      "id": "native.apple.71b8e38a5e7040ef",
-      "source": "Refresh plan",
-      "translated": "계획 새로 고침"
-    },
-    {
-      "id": "native.apple.e87bec72cb9c9dbf",
-      "source": "Retry pending imports before refreshing the plan.",
-      "translated": "계획을 새로 고치기 전에 보류 중인 가져오기를 다시 시도하세요."
-    },
-    {
-      "id": "native.apple.f678888102fded6e",
-      "source": "You can skip this and import later from the dashboard’s Memory import page.",
-      "translated": "이 단계를 건너뛰고 나중에 대시보드의 추억 가져오기 페이지에서 가져올 수 있습니다."
-    },
-    {
-      "id": "native.apple.36108528c6acc448",
-      "source": "\\(provider.alreadyImportedCount) already imported",
-      "translated": "\\(provider.alreadyImportedCount)개를 이미 가져왔습니다"
-    },
-    {
-      "id": "native.apple.9b3444de8c9b2acc",
-      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
-      "translated": "\\(result.migrated)개의 \\(self.memoryLabel(result.migrated))을(를) 가져왔습니다."
-    },
-    {
-      "id": "native.apple.3252fea4dac8669a",
-      "source": "Couldn’t check for memories",
-      "translated": "추억을 확인할 수 없습니다"
-    },
-    {
-      "id": "native.apple.d371deb696de9e6b",
-      "source": "Retry",
-      "translated": "다시 시도"
-    },
-    {
-      "id": "native.apple.406ae454540725d0",
-      "source": "You can do this later from the dashboard’s Memory import page.",
-      "translated": "나중에 대시보드의 추억 가져오기 페이지에서 이 작업을 수행할 수 있습니다."
-    },
-    {
-      "id": "native.apple.d1b5d99f67dae42e",
-      "source": "Your memories are ready",
-      "translated": "메모리가 준비되었습니다"
-    },
-    {
-      "id": "native.apple.6dbe5b174271b62a",
-      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
-      "translated": "\\(imported)개의 \\(self.memoryLabel(imported))을 OpenClaw로 가져왔습니다."
-    },
-    {
-      "id": "native.apple.d47b887f98e13e24",
-      "source": "\\(result.migrated) imported",
-      "translated": "\\(result.migrated)개 가져옴"
-    },
-    {
-      "id": "native.apple.6ac3d513f0ec5da7",
-      "source": "You can manage imported memories anytime from the dashboard.",
-      "translated": "가져온 메모리는 언제든지 대시보드에서 관리할 수 있습니다."
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
