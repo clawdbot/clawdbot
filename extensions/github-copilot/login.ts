@@ -161,10 +161,7 @@ async function postGitHubDeviceFlowForm(params: {
   });
   try {
     if (!response.ok) {
-      // GitHub OAuth error responses ship a JSON body (`{error, error_description}`)
-      // that this helper does not consume. Cancel the unread stream before throwing
-      // so the underlying fetch connection is not held open waiting for the caller
-      // to drain a payload we already decided to discard.
+      // Release closes the dispatcher, so cancel its unread response body first.
       await response.body?.cancel().catch(() => undefined);
       throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
     }
