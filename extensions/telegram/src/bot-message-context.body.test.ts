@@ -494,6 +494,51 @@ describe("resolveTelegramInboundBody", () => {
     expect(result?.effectiveWasMentioned).toBe(true);
   });
 
+  it("ignores leading commands addressed to another bot when mentions are optional", async () => {
+    const logger = createLogger();
+    const command = "/status@other_bot";
+    const result = await resolveGroup({
+      logger,
+      message: {
+        text: command,
+        entities: [{ type: "bot_command", offset: 0, length: command.length }],
+      },
+      overrides: {
+        groupConfig: { requireMention: false } as never,
+        requireMention: false,
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps this bot's leading command when a later command targets another bot", async () => {
+    const logger = createLogger();
+    const ownCommand = "/inspect@bot";
+    const otherCommand = "/weather@other_bot";
+    const text = `${ownCommand} ${otherCommand}`;
+    const result = await resolveGroup({
+      logger,
+      message: {
+        text,
+        entities: [
+          { type: "bot_command", offset: 0, length: ownCommand.length },
+          {
+            type: "bot_command",
+            offset: ownCommand.length + 1,
+            length: otherCommand.length,
+          },
+        ],
+      },
+      overrides: {
+        groupConfig: { requireMention: false } as never,
+        requireMention: false,
+      },
+    });
+
+    expect(result?.rawBody).toBe(text);
+  });
+
   it("does not transcribe group audio for unauthorized senders", async () => {
     transcribeFirstAudioMock.mockReset();
     const logger = createLogger();
