@@ -368,7 +368,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       // An event raced this snapshot. Retry instead of resurrecting resolved work.
       if (revision !== startRevision) {
         requestRerun();
-        return;
+        return true;
       }
       suggestions.clear();
       for (const value of listed) {

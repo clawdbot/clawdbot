@@ -445,8 +445,7 @@ async function ensureSessionRuntimeCleanup(params: {
     });
   };
   const ensureMcpRetirementWatcher = () => {
-    let watcher!: Promise<void>;
-    watcher = getOrCreatePromise(
+    const watcher = getOrCreatePromise(
       mcpRunEndWatchers,
       sessionId,
       async () => {
