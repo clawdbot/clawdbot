@@ -8,7 +8,7 @@ import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export type ReservedSubagentDedupeReservation = {
+type ReservedSubagentDedupeReservation = {
   acceptedAt: number;
   dedupeKeys: string[];
   expiresAtMs: number;
@@ -20,7 +20,7 @@ export type ReservedSubagentDedupeReservation = {
   status: "accepted";
 };
 
-export type ReservedSubagentDedupeReservationState = {
+type ReservedSubagentDedupeReservationState = {
   expired: boolean;
   reservation: ReservedSubagentDedupeReservation;
 };
