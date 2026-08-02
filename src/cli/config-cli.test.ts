@@ -4430,7 +4430,7 @@ describe("config cli", () => {
         await runConfigCommand(["config", "file", "--json"]);
 
         expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ path: configPath }, 2);
-        expect(JSON.parse(JSON.stringify(lastMockArg(defaultRuntime.writeJson)))).toEqual({
+        expect(structuredClone(lastMockArg(defaultRuntime.writeJson))).toEqual({
           path: configPath,
         });
       } finally {

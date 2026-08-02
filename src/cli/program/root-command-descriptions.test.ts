@@ -191,7 +191,7 @@ const JSON_NOT_APPLICABLE = {
 } as const;
 
 // These subcommands intentionally consume --json from their parent and emit JSON.
-const JSON_OUTPUT_INHERITED_FROM_PARENT = new Set([
+const JSON_OUTPUT_INHERITED_FROM_PARENT = new Set<string>([
   "skills curator status",
   "skills curator pin",
   "skills curator unpin",
@@ -199,7 +199,7 @@ const JSON_OUTPUT_INHERITED_FROM_PARENT = new Set([
 ]);
 
 // Route-first parsing accepts JSON before Commander registration is reached.
-const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents"]);
+const JSON_OUTPUT_ROUTE_FIRST = new Set<string>(["agents"]);
 
 async function registerAllBuiltInCommands(): Promise<Command> {
   const program = new Command().name("openclaw");
