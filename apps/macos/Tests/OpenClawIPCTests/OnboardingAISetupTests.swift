@@ -2147,16 +2147,24 @@ struct OnboardingAISetupTests {
         #expect(card.secondaryTitle == "Try again")
         #expect(!card.title.localizedCaseInsensitiveContains("AI account"))
 
-        view.returnToGatewayAuthentication()
-
-        #expect(view.activePageIndex == view.connectionPageIndex)
-        #expect(view.remoteAuthIssue == .tokenRequired)
-        #expect(view.showAdvancedConnection)
+        let decision = try #require(OnboardingView.gatewayAuthenticationReturnDecision(
+            connectionMode: appState.connectionMode,
+            authIssue: view.aiSetup.configuredGatewayAuthIssue,
+            pageOrder: view.pageOrder,
+            connectionPageIndex: view.connectionPageIndex,
+            probeInput: view.remoteGatewayProbeInput))
+        #expect(decision.connectionPage == view.pageOrder.firstIndex(of: view.connectionPageIndex))
+        #expect(decision.authIssue == .tokenRequired)
+        #expect(decision.probeState == .failed(
+            view.remoteGatewayProbeInput,
+            RemoteGatewayAuthIssue.tokenRequired.statusMessage))
+        #expect(decision.showRemoteChoices)
+        #expect(decision.showAdvancedConnection)
         #expect(OnboardingView.shouldShowRemoteTokenField(
-            showAdvancedConnection: view.showAdvancedConnection,
+            showAdvancedConnection: decision.showAdvancedConnection,
             remoteToken: appState.remoteToken,
             remoteTokenUnsupported: appState.remoteTokenUnsupported,
-            authIssue: view.remoteAuthIssue))
+            authIssue: decision.authIssue))
     }
 
     @Test func `remote AI detection auth blocks without candidate fallthrough`() async throws {
