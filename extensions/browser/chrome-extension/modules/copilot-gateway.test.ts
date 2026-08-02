@@ -114,7 +114,7 @@ async function receiveGatewayConnect(index: number) {
   socket.message({
     type: "event",
     event: "connect.challenge",
-    payload: { nonce: `pairing-nonce-${index}` },
+    payload: { nonce: `pairing-nonce-${index}`, ts: Date.now() },
   });
   await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
   const requestId = socket.sent[0]?.id;
