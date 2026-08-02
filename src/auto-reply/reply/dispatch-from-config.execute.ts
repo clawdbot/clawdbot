@@ -499,7 +499,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
           ),
         trackDispatchLifecycleWork,
       ),
-  ).catch((error) => {
+  ).catch((error: unknown) => {
     if (
       params.replyOptions?.isHeartbeat === true ||
       !didDeliverVisiblePartialReply ||
