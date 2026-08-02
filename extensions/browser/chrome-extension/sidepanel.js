@@ -143,9 +143,9 @@ function updateState(state) {
       break;
     case "approval":
       setGate({
-        title: "Waiting for device approval",
+        title: "Approve this copilot device",
         detail:
-          "This browser needs a one-time approval on the OpenClaw gateway — approve it there (openclaw devices approve, or the gateway's Devices settings). The panel connects automatically once approved.",
+          "On the Gateway, run openclaw devices list, inspect this dedicated browser identity, then approve its current request.",
       });
       break;
     case "denied":

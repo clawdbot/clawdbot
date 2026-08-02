@@ -14,6 +14,7 @@ import {
   PROTOCOL_VERSION,
 } from "./copilot-runtime.js";
 import { normalizeGatewayUrl } from "./panel-core.js";
+import { reconnectDelayMs } from "./relay-core.js";
 
 const CLIENT_ID = GATEWAY_CLIENT_IDS.BROWSER_COPILOT;
 const CLIENT_MODE = GATEWAY_CLIENT_MODES.UI;
@@ -214,6 +215,11 @@ export class CopilotGatewayClient {
         if (!pairingRequired) {
           this.pairingRetries = 0;
         }
+        // Status listeners may switch Gateways immediately; reserve this scope's
+        // retry before notifying them so its count cannot leak into the next one.
+        const pairingReconnectDelayMs = pairingRequired
+          ? reconnectDelayMs(++this.pairingRetries)
+          : undefined;
         this.#emitStatus({
           state: pairingRequired ? "approval" : "error",
           label: error.message,
@@ -222,11 +228,7 @@ export class CopilotGatewayClient {
         return {
           closeCode: 4008,
           closeReason: "connect failed",
-          // Approval is a human step; back off 2s→30s while waiting instead of hammering
-          // the gateway every 2s. A successful connect (onHello) resets the delay.
-          reconnectDelayMs: pairingRequired
-            ? Math.min(2_000 * 2 ** this.pairingRetries++, 30_000)
-            : undefined,
+          reconnectDelayMs: pairingReconnectDelayMs,
           stop:
             details.code === "AUTH_DEVICE_TOKEN_MISMATCH" ||
             (details.pauseReconnect === true && !pairingRequired),

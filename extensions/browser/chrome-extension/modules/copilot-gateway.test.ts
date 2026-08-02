@@ -105,6 +105,43 @@ class FakeWebSocket {
   }
 }
 
+async function receiveGatewayConnect(index: number) {
+  const socket = FakeWebSocket.instances[index];
+  if (!socket) {
+    throw new Error(`expected Gateway socket ${index}`);
+  }
+  await vi.advanceTimersByTimeAsync(0);
+  socket.message({
+    type: "event",
+    event: "connect.challenge",
+    payload: { nonce: `pairing-nonce-${index}` },
+  });
+  await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+  const requestId = socket.sent[0]?.id;
+  if (typeof requestId !== "string") {
+    throw new Error(`expected Gateway connect request ${index}`);
+  }
+  return { socket, requestId };
+}
+
+async function rejectGatewayPairing(socket: FakeWebSocket, requestId: string) {
+  socket.message({
+    type: "res",
+    id: requestId,
+    ok: false,
+    error: {
+      code: "UNAVAILABLE",
+      message: "device approval required",
+      details: {
+        code: "PAIRING_REQUIRED",
+        requestId: `approval-${requestId}`,
+        pauseReconnect: true,
+      },
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+}
+
 describe("browser copilot Gateway custody", () => {
   it("scopes device identities and issued tokens to one Gateway", async () => {
     const storage = storageArea();
@@ -219,6 +256,91 @@ describe("browser copilot Gateway custody", () => {
       notify: true,
       pendingError: undefined,
     });
+  });
+
+  it("backs off pending device approvals and resets after a successful connection", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+    vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+    const client = new CopilotGatewayClient({
+      storage: storageArea(),
+      WebSocketImpl: FakeWebSocket as never,
+    });
+    const statuses: Array<Record<string, unknown>> = [];
+    client.onStatus((status) => statuses.push(status));
+
+    try {
+      client.start("ws://127.0.0.1:28789/");
+      const expectedDelays = [2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+      for (const [index, delay] of expectedDelays.entries()) {
+        const { socket, requestId } = await receiveGatewayConnect(index);
+        await rejectGatewayPairing(socket, requestId);
+        expect(statuses.at(-1)).toMatchObject({
+          state: "approval",
+          requestId: `approval-${requestId}`,
+        });
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(FakeWebSocket.instances).toHaveLength(index + 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(FakeWebSocket.instances).toHaveLength(index + 2);
+      }
+
+      const approved = await receiveGatewayConnect(expectedDelays.length);
+      approved.socket.message({ type: "res", id: approved.requestId, ok: true, payload: {} });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.ready).toBe(true);
+
+      approved.socket.close();
+      await vi.advanceTimersByTimeAsync(1_000);
+      const next = await receiveGatewayConnect(expectedDelays.length + 1);
+      await rejectGatewayPairing(next.socket, next.requestId);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(FakeWebSocket.instances).toHaveLength(expectedDelays.length + 2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(FakeWebSocket.instances).toHaveLength(expectedDelays.length + 3);
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not leak approval retries when a status listener switches Gateways", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+    vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+    const client = new CopilotGatewayClient({
+      storage: storageArea(),
+      WebSocketImpl: FakeWebSocket as never,
+    });
+    let switchedGateway = false;
+    client.onStatus((status) => {
+      if (status.state === "approval" && !switchedGateway) {
+        switchedGateway = true;
+        client.start("ws://127.0.0.1:38789/");
+      }
+    });
+
+    try {
+      client.start("ws://127.0.0.1:28789/");
+      const original = await receiveGatewayConnect(0);
+      await rejectGatewayPairing(original.socket, original.requestId);
+      expect(switchedGateway).toBe(true);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+
+      const replacement = await receiveGatewayConnect(1);
+      await rejectGatewayPairing(replacement.socket, replacement.requestId);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(FakeWebSocket.instances).toHaveLength(3);
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("clears a rejected device token before starting a fresh connection", async () => {
