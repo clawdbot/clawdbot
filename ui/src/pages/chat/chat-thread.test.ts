@@ -3819,11 +3819,18 @@ describe("expansion-state render dependencies", () => {
   it("keeps mounted disclosure handlers attached to recreated session expansion maps", async () => {
     resetChatThreadState();
     const { builtinEnvironments } = await import("vitest/runtime");
-    const environment = await builtinEnvironments.jsdom.setup(globalThis, {
-      jsdom: { url: "http://localhost/", pretendToBeVisual: true },
-    });
+    const fixtureGlobals = ["Request", "URL", "jsdom"] as const;
+    const originalFixtureGlobals = fixtureGlobals.map(
+      (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
+    );
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    let environment: Awaited<ReturnType<typeof builtinEnvironments.jsdom.setup>> | undefined;
 
     try {
+      environment = await builtinEnvironments.jsdom.setup(globalThis, {
+        jsdom: { url: "http://localhost/", pretendToBeVisual: true },
+      });
       const [{ render }, { ChatTranscriptController, resetChatThreadPresentationState }] =
         await Promise.all([import("lit"), import("./components/chat-thread.ts")]);
       const host = {
@@ -3906,13 +3913,35 @@ describe("expansion-state render dependencies", () => {
       expect(staleUsers.size).toBe(0);
       resetChatThreadPresentationState();
     } finally {
-      document.body.replaceChildren();
-      await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, 0);
-      });
-      await environment.teardown(globalThis);
-      resetChatThreadState();
+      try {
+        if (environment) {
+          try {
+            document.body.replaceChildren();
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, 0);
+            });
+          } finally {
+            await environment.teardown(globalThis);
+          }
+        }
+      } finally {
+        // Vitest assigns these compatibility globals after its own restore snapshot.
+        for (const [name, descriptor] of originalFixtureGlobals) {
+          if (descriptor) {
+            Object.defineProperty(globalThis, name, descriptor);
+          } else {
+            Reflect.deleteProperty(globalThis, name);
+          }
+        }
+        resetChatThreadState();
+      }
     }
+
+    for (const [name, descriptor] of originalFixtureGlobals) {
+      expect(Object.getOwnPropertyDescriptor(globalThis, name)).toEqual(descriptor);
+    }
+    expect(Object.getOwnPropertyDescriptor(globalThis, "document")).toEqual(originalDocument);
+    expect(Object.getOwnPropertyDescriptor(globalThis, "window")).toEqual(originalWindow);
   });
 });
 
