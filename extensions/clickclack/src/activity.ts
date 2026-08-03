@@ -16,7 +16,7 @@
  *   frame, and PATCH it when a later frame carries a strictly longer body.
  */
 import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
-import { isClickClackTimeoutError } from "./http-client.js";
+import { isClickClackAmbiguousWriteError } from "./http-client.js";
 import type { ClickClackMessage, ClickClackMessageProvenance } from "./types.js";
 
 /** Debounce window for PATCHing streaming commentary snapshots. */
@@ -175,14 +175,14 @@ export function createClickClackActivityPublisher(params: {
     }
     chain = chain
       .then(async () => {
-        // A previous write may have committed before timing out. Stop the whole
+        // A previous write may have committed before failing ambiguously. Stop the whole
         // best-effort publisher so queued rows cannot add duplicate or serial waits.
         if (!activityAbandoned) {
           await work();
         }
       })
       .catch((error: unknown) => {
-        if (isClickClackTimeoutError(error)) {
+        if (isClickClackAmbiguousWriteError(error)) {
           activityAbandoned = true;
           for (const segment of commentaryByItem.values()) {
             if (segment.timer) {

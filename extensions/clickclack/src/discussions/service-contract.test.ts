@@ -76,6 +76,27 @@ describe("ClickClack discussion service contracts", () => {
     expect(channels).toHaveBeenCalledTimes(1);
   });
 
+  it("reconciles a non-timeout ambiguous channel patch outcome", async () => {
+    const ambiguous = Object.assign(new Error("ClickClack write outcome is ambiguous"), {
+      name: "ClickClackAmbiguousWriteError",
+    });
+    const updateChannel = vi.fn().mockRejectedValueOnce(ambiguous);
+    const channels = vi.fn(async () => [managedChannel(true)]);
+    const client = { updateChannel, channels } as unknown as ClickClackClient;
+
+    await expect(
+      updateChannelWithReconciliation({
+        client,
+        workspaceId: "wsp_team",
+        channelId: "chn_managed",
+        patch: { archived: true },
+      }),
+    ).resolves.toMatchObject({ id: "chn_managed", archived: true });
+
+    expect(updateChannel).toHaveBeenCalledTimes(1);
+    expect(channels).toHaveBeenCalledWith("wsp_team");
+  });
+
   it("leaves a completed but unapplied channel patch for the owner to reject", async () => {
     const updateChannel = vi.fn(async () => managedChannel(false));
     const channels = vi.fn();

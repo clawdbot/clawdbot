@@ -2,12 +2,18 @@
  * Thin ClickClack REST/websocket client used by gateway, resolver, and outbound
  * delivery code.
  */
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   fetchWithTimeout,
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { WebSocket } from "ws";
 import type {
   ClickClackBotCommand,
@@ -86,10 +92,57 @@ export function isClickClackTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.name === "TimeoutError";
 }
 
+export function isClickClackAmbiguousWriteError(error: unknown): boolean {
+  return (
+    isClickClackTimeoutError(error) ||
+    (error instanceof Error && error.name === "ClickClackAmbiguousWriteError")
+  );
+}
+
 function createClickClackTimeoutError(message: string): Error {
   const error = new Error(message);
   error.name = "TimeoutError";
   return error;
+}
+
+function createClickClackAmbiguousWriteError(cause: unknown): Error {
+  const error = new Error(
+    cause instanceof Error ? cause.message : "ClickClack write outcome is ambiguous",
+    { cause },
+  );
+  error.name = "ClickClackAmbiguousWriteError";
+  return error;
+}
+
+function isAmbiguousClickClackTransportError(error: unknown): boolean {
+  const candidates = collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.error,
+  ]);
+  if (
+    candidates.some(
+      (candidate) =>
+        readErrorName(candidate) === "AbortError" ||
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "ambiguous",
+    )
+  ) {
+    return true;
+  }
+  if (
+    candidates.some(
+      (candidate) =>
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "pre-connect",
+    )
+  ) {
+    return false;
+  }
+  // Once Fetch has been invoked, an unclassified rejection cannot prove that
+  // the request stayed local. Fail closed for writes that require reconciliation.
+  return true;
+}
+
+function isAmbiguousClickClackHttpStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
 type ClickClackMessagePage = {
@@ -183,28 +236,61 @@ export function createClickClackClient(options: ClientOptions) {
     const timeoutRecoverySafe = !isUpload && policy.timeoutRecoverySafe === true;
     const useResponseHeaderDeadline =
       !isUpload && (method === "GET" || method === "HEAD" || timeoutRecoverySafe);
-    const response = useResponseHeaderDeadline
-      ? await fetchWithTimeout(url, requestInit, CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS, fetcher)
-      : await fetcher(url, requestInit);
+    let response: Response;
+    try {
+      response = useResponseHeaderDeadline
+        ? await fetchWithTimeout(url, requestInit, CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS, fetcher)
+        : await fetcher(url, requestInit);
+    } catch (error) {
+      if (
+        timeoutRecoverySafe &&
+        !isClickClackTimeoutError(error) &&
+        isAmbiguousClickClackTransportError(error)
+      ) {
+        throw createClickClackAmbiguousWriteError(error);
+      }
+      throw error;
+    }
     if (!response.ok) {
-      const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
+      let detail: string;
+      try {
+        detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
+      } catch (error) {
+        if (timeoutRecoverySafe && isAmbiguousClickClackHttpStatus(response.status)) {
+          throw createClickClackAmbiguousWriteError(error);
+        }
+        throw error;
+      }
       // Remote error bodies are untrusted output; redact them even when the
       // operator disables log redaction or overrides log-only patterns.
-      throw new ClickClackHttpError(
+      const httpError = new ClickClackHttpError(
         response.status,
         redactToolPayloadText(detail),
         new Headers(response.headers),
       );
+      if (timeoutRecoverySafe && isAmbiguousClickClackHttpStatus(response.status)) {
+        throw createClickClackAmbiguousWriteError(httpError);
+      }
+      throw httpError;
     }
-    return await readProviderJsonResponse<T>(response, "ClickClack response", {
-      maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
-      // A recoverable write may have committed before its successful response
-      // body stalls. Preserve that ambiguity for the owner reconciliation path.
-      onIdleTimeout: timeoutRecoverySafe
-        ? ({ chunkTimeoutMs }) =>
-            createClickClackTimeoutError(`ClickClack response body stalled for ${chunkTimeoutMs}ms`)
-        : undefined,
-    });
+    try {
+      return await readProviderJsonResponse<T>(response, "ClickClack response", {
+        maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
+        // A recoverable write may have committed before its successful response
+        // body stalls. Preserve that ambiguity for the owner reconciliation path.
+        onIdleTimeout: timeoutRecoverySafe
+          ? ({ chunkTimeoutMs }) =>
+              createClickClackTimeoutError(
+                `ClickClack response body stalled for ${chunkTimeoutMs}ms`,
+              )
+          : undefined,
+      });
+    } catch (error) {
+      if (timeoutRecoverySafe && !isClickClackTimeoutError(error)) {
+        throw createClickClackAmbiguousWriteError(error);
+      }
+      throw error;
+    }
   }
 
   async function fetchEventPage(

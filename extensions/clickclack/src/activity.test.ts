@@ -311,11 +311,44 @@ describe("createClickClackActivityPublisher", () => {
     expect(onError).toHaveBeenCalledTimes(1);
   });
 
+  it("abandons later activity after a non-timeout ambiguous create outcome", async () => {
+    const onError = vi.fn();
+    const ambiguous = Object.assign(new Error("ClickClack write outcome is ambiguous"), {
+      name: "ClickClackAmbiguousWriteError",
+    });
+    const createActivityMessage = vi
+      .fn()
+      .mockRejectedValueOnce(ambiguous)
+      .mockResolvedValueOnce({ id: "unexpected" } as ClickClackMessage);
+    const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
+    const publisher = createClickClackActivityPublisher({
+      client: { createActivityMessage, updateMessageBody } as ActivityClient,
+      target: { channelId: "chn_1" },
+      turnId: "msg_turn",
+      onError,
+    });
+
+    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First" });
+    await publisher.finalize();
+    publisher.onItemEvent({
+      itemId: "c1",
+      kind: "preamble",
+      progressText: "First and second",
+    });
+    await publisher.finalize();
+
+    expect(createActivityMessage).toHaveBeenCalledTimes(1);
+    expect(updateMessageBody).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledExactlyOnceWith(ambiguous);
+  });
+
   it("allows a longer commentary snapshot to retry after a definitive create failure", async () => {
     const onError = vi.fn();
     const createActivityMessage = vi
       .fn()
-      .mockRejectedValueOnce(new Error("connection refused"))
+      .mockRejectedValueOnce(
+        Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" }),
+      )
       .mockResolvedValueOnce({ id: "msg_retry" } as ClickClackMessage);
     const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
     const publisher = createClickClackActivityPublisher({

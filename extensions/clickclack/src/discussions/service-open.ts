@@ -3,8 +3,8 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   ClickClackHttpError,
+  isClickClackAmbiguousWriteError,
   isClickClackChannelNameConflict,
-  isClickClackTimeoutError,
   type ClickClackClient,
 } from "../http-client.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
@@ -128,7 +128,7 @@ export function assertChannelPatch(
 
 /**
  * Applies a setter-style managed-channel patch with bounded ambiguous-result
- * recovery. A timed-out request is verified by authoritative relist; one retry
+ * recovery. An ambiguous request is verified by authoritative relist; one retry
  * is allowed only after that relist proves the desired patch is absent.
  */
 export async function updateChannelWithReconciliation(params: {
@@ -139,14 +139,14 @@ export async function updateChannelWithReconciliation(params: {
 }): Promise<Awaited<ReturnType<ClickClackClient["updateChannel"]>>> {
   const applyPatch = () => params.client.updateChannel(params.channelId, params.patch);
 
-  let timeoutError: unknown;
+  let ambiguousError: unknown;
   try {
     return await applyPatch();
   } catch (error) {
-    if (!isClickClackTimeoutError(error)) {
+    if (!isClickClackAmbiguousWriteError(error)) {
       throw error;
     }
-    timeoutError = error;
+    ambiguousError = error;
   }
 
   for (let relistAttempt = 0; relistAttempt < 2; relistAttempt += 1) {
@@ -154,26 +154,26 @@ export async function updateChannelWithReconciliation(params: {
     assertManagedChannelListContract(channels);
     const channel = channels.find((candidate) => candidate.id === params.channelId);
     if (!channel) {
-      throw timeoutError;
+      throw ambiguousError;
     }
     try {
       assertChannelPatch(channel, params.patch);
       return channel;
     } catch {
       if (relistAttempt > 0) {
-        throw timeoutError;
+        throw ambiguousError;
       }
     }
     try {
       return await applyPatch();
     } catch (error) {
-      if (!isClickClackTimeoutError(error)) {
+      if (!isClickClackAmbiguousWriteError(error)) {
         throw error;
       }
-      timeoutError = error;
+      ambiguousError = error;
     }
   }
-  throw timeoutError;
+  throw ambiguousError;
 }
 
 function assertManagedChannelContract(
@@ -378,6 +378,11 @@ export async function openClickClackDiscussionBinding(
           channels = await client.channels(workspace.id);
           assertManagedChannelListContract(channels);
           continue;
+        }
+        // Only a create can have produced a new external_ref channel to adopt.
+        // An already adopted PATCH has exhausted its own bounded recovery here.
+        if (adopted) {
+          throw error;
         }
         const definitiveNoCreate = isDefinitiveNoCreateHttpError(error);
         try {

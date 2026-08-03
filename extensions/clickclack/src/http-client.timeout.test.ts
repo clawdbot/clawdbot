@@ -209,6 +209,94 @@ describe("ClickClack HTTP client timeouts", () => {
     }
   });
 
+  it("classifies a recoverable write whose successful body is malformed as ambiguous", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response('{"message":', {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await expect(
+      client.createActivityMessage({
+        channelId: "activity-channel",
+        body: "working",
+        kind: "agent_commentary",
+      }),
+    ).rejects.toMatchObject({
+      name: "ClickClackAmbiguousWriteError",
+      cause: expect.objectContaining({
+        message: "ClickClack response: malformed JSON response",
+      }),
+    });
+  });
+
+  it.each([
+    { label: "an ambiguous server failure", status: 500 },
+    { label: "an ambiguous request timeout response", status: 408 },
+  ])("classifies $label before owner recovery", async ({ status }) => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response('{"error":"unavailable"}', {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await expect(
+      client.createActivityMessage({
+        channelId: "activity-channel",
+        body: "working",
+        kind: "agent_commentary",
+      }),
+    ).rejects.toMatchObject({ name: "ClickClackAmbiguousWriteError" });
+  });
+
+  it("distinguishes ambiguous socket loss from a proven pre-connect failure", async () => {
+    const reset = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+    });
+    const refused = Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" });
+    const unknown = new TypeError("fetch failed");
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(reset)
+      .mockRejectedValueOnce(refused)
+      .mockRejectedValueOnce(unknown);
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    const createActivity = () =>
+      client.createActivityMessage({
+        channelId: "activity-channel",
+        body: "working",
+        kind: "agent_commentary",
+      });
+
+    await expect(createActivity()).rejects.toMatchObject({
+      name: "ClickClackAmbiguousWriteError",
+      cause: reset,
+    });
+    await expect(createActivity()).rejects.toBe(refused);
+    await expect(createActivity()).rejects.toMatchObject({
+      name: "ClickClackAmbiguousWriteError",
+      cause: unknown,
+    });
+  });
+
   it("does not impose the response-header deadline on JSON writes", async () => {
     vi.useFakeTimers();
     try {
