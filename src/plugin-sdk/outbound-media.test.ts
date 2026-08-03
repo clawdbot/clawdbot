@@ -448,7 +448,9 @@ describe("createHostedOutboundMediaStore", () => {
         replacementSettled = true;
       },
     );
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(replacementSettled).toBe(false);
     releaseDelete?.();
 

@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { unlinkIfExists as unlinkIfExistsType } from "openclaw/plugin-sdk/media-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
@@ -226,7 +229,9 @@ describe("SMS outbound hosted media", () => {
       account: { ...createAccount(), accountId: "cleanup-retry" },
       mediaUrl: "https://example.com/photo.png",
     });
-    const chunkStore = openKeyedStore.mock.results[1]?.value;
+    const chunkStore = openKeyedStore.mock.results[1]?.value as
+      | PluginStateKeyedStore<unknown>
+      | undefined;
     if (!chunkStore) {
       throw new Error("expected hosted media chunk store");
     }
@@ -391,8 +396,12 @@ describe("SMS outbound hosted media", () => {
         mediaUrl: "https://example.com/photo.png",
       }),
     );
-    const metadataStore = openKeyedStore.mock.results[0]?.value;
-    const chunkStore = openKeyedStore.mock.results[1]?.value;
+    const metadataStore = openKeyedStore.mock.results[0]?.value as
+      | PluginStateKeyedStore<unknown>
+      | undefined;
+    const chunkStore = openKeyedStore.mock.results[1]?.value as
+      | PluginStateKeyedStore<unknown>
+      | undefined;
     if (!metadataStore || !chunkStore) {
       throw new Error("expected hosted media stores");
     }
