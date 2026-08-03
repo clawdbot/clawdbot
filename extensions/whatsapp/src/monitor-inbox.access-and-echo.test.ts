@@ -170,6 +170,45 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("blocks allowlisted same-phone fromMe DMs when self-chat mode is disabled", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          allowFrom: ["+123"],
+          selfChatMode: false,
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    });
+    const { onMessage, listener, sock } = await openInboxMonitor();
+
+    try {
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              id: "self-disabled",
+              fromMe: true,
+              remoteJid: "123@s.whatsapp.net",
+            },
+            message: { conversation: "disabled self-chat" },
+            messageTimestamp: nowSeconds(),
+          },
+        ],
+      });
+      await settleInboundWork();
+
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+      expect(sock.readMessages).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
   it("locks down when no config is present (pairing for unknown senders)", async () => {
     // No config file => locked-down defaults apply (pairing for unknown senders)
     mockLoadConfig.mockReturnValue({});
@@ -289,6 +328,7 @@ describe("web monitor inbox", () => {
         whatsapp: {
           groupPolicy: "open",
           allowFrom: ["+123"],
+          selfChatMode: false,
         },
       },
       messages: DEFAULT_MESSAGES_CFG,

@@ -52,7 +52,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}.`,
       );
     }
-    server = await startControlUiE2eServer();
+    server = await startControlUiE2eServer(undefined, { source: true });
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
 

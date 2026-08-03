@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
   createPluginModuleLoaderCache,
@@ -127,17 +128,23 @@ function loadValidatedPublicSurfaceModule(params: {
   boundaryRoot: string;
   boundaryLabel: string;
   surfaceLabel: string;
+  origin: "bundled" | "global";
 }): object {
   const cached = publicSurfaceModuleCache.get(params.modulePath);
   if (cached) {
     return cached as object;
   }
 
+  // Official install trust does not make mutable plugin roots immutable;
+  // the shared policy preserves bundled and immutable Nix-store exceptions.
   const opened = openRootFileSync({
     absolutePath: params.modulePath,
     rootPath: params.boundaryRoot,
     boundaryLabel: params.boundaryLabel,
-    rejectHardlinks: false,
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+      origin: params.origin,
+      rootDir: params.boundaryRoot,
+    }),
   });
   if (!opened.ok) {
     throw new Error(`Unable to open ${params.surfaceLabel}`, { cause: opened.error });
@@ -182,6 +189,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
     boundaryLabel:
       location.boundaryRoot === OPENCLAW_PACKAGE_ROOT ? "OpenClaw package root" : "plugin root",
     surfaceLabel: `bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
+    origin: "bundled",
   }) as T;
 }
 
@@ -201,6 +209,7 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
     boundaryRoot: path.resolve(params.pluginRoot),
     boundaryLabel: "plugin root",
     surfaceLabel: `plugin public surface ${params.artifactBasename}`,
+    origin: "global",
   }) as T;
 }
 

@@ -329,6 +329,35 @@ describe("bundled plugin public surface loader", () => {
     },
   );
 
+  it
+    .runIf(process.platform !== "win32")
+    .each(["provider-policy-api.js", "api.js", "runtime-api.js"])(
+    "rejects installed plugin public artifact %s hardlinked outside its root",
+    async (artifact) => {
+      const publicSurfaceLoader = await importFreshModule<
+        typeof import("./public-surface-loader.js")
+      >(
+        import.meta.url,
+        `./public-surface-loader.js?scope=installed-hardlink-${artifact.replace(".js", "")}`,
+      );
+      const tempRoot = fs.realpathSync(createTempDir());
+      const pluginRoot = path.join(tempRoot, "installed-plugin");
+      const outsidePath = path.join(tempRoot, "outside.js");
+      const artifactPath = path.join(pluginRoot, artifact);
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(outsidePath, 'export const marker = "outside-plugin-root";\n', "utf8");
+      fs.linkSync(outsidePath, artifactPath);
+
+      expect(fs.statSync(artifactPath).nlink).toBeGreaterThan(1);
+      expect(() =>
+        publicSurfaceLoader.loadPluginPublicArtifactModuleSync({
+          pluginRoot,
+          artifactBasename: artifact,
+        }),
+      ).toThrow(`Unable to open plugin public surface ${artifact}`);
+    },
+  );
+
   it("does not cache missing public artifact locations", async () => {
     vi.doMock("./native-module-require.js", () => ({
       tryNativeRequireJavaScriptModule: (modulePath: string) => ({

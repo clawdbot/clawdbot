@@ -232,6 +232,46 @@ describe("provider public artifacts", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects trusted official provider policy artifacts hardlinked outside the installed root",
+    () => {
+      const tempRoot = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-hardlink-")),
+      );
+      const pluginRoot = path.join(tempRoot, "installed-provider");
+      const outsidePath = path.join(tempRoot, "outside-policy.js");
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(
+        outsidePath,
+        'export function resolveThinkingProfile() { return { defaultLevel: "escaped" }; }\n',
+        "utf8",
+      );
+      fs.linkSync(outsidePath, path.join(pluginRoot, "provider-policy-api.js"));
+
+      try {
+        const pluginId = "hardlinked-provider";
+        expect(() =>
+          resolveProviderPolicySurface(pluginId, {
+            manifestRegistry: {
+              plugins: [
+                {
+                  id: pluginId,
+                  origin: "global",
+                  trustedOfficialInstall: true,
+                  rootDir: pluginRoot,
+                  providers: [pluginId],
+                  cliBackends: [],
+                } as never,
+              ],
+            },
+          }),
+        ).toThrow("Unable to open plugin public surface provider-policy-api.js");
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("resolves namespaced provider policies from their trusted external plugin root", () => {
     const bundledPluginsDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-empty-bundled-plugins-"),
