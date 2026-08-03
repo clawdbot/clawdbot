@@ -390,14 +390,19 @@ describe("startGatewayPostAttachRuntime", () => {
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
     const methodsAtRecoveryRegistration: string[][] = [];
-    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(() => {
-      methodsAtRecoveryRegistration.push([...unavailableGatewayMethods]);
-    });
+    const currentConfig = { agents: { list: [{ id: "main" }, { id: "work" }] } };
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
+      (params: { getConfig: () => unknown }) => {
+        methodsAtRecoveryRegistration.push([...unavailableGatewayMethods]);
+        expect(params.getConfig()).toBe(currentConfig);
+      },
+    );
     const onSidecarsReady = vi.fn();
     const log = { info: vi.fn(), warn: vi.fn() };
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
+      getConfig: () => currentConfig,
       log,
       unavailableGatewayMethods,
       onSidecarsReady,
@@ -419,8 +424,8 @@ describe("startGatewayPostAttachRuntime", () => {
     );
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
-      cfg: { hooks: { internal: { enabled: false } } },
       delayMs: 0,
+      getConfig: expect.any(Function),
       shouldContinue: expect.any(Function),
       waitForStart: undefined,
       gatewayRuntime: expect.any(Object),
@@ -2757,6 +2762,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
   return {
     minimalTestGateway: false,
     cfgAtStart: { hooks: { internal: { enabled: false } } } as never,
+    getConfig: () => ({ hooks: { internal: { enabled: false } } }) as never,
     bindHost: "127.0.0.1",
     bindHosts: ["127.0.0.1"],
     port: 18789,
