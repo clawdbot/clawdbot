@@ -10,6 +10,7 @@ import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
 import {
   createStateSchemaInlinePlugin,
@@ -581,10 +582,13 @@ function buildUnifiedDeclarationPartitions(
     extensionEntriesById.set(extensionId, extensionEntries);
   }
 
-  const pluginSdkPartitions = partitionUnifiedEntryGroups(
-    pluginSdkEntries.map((entry) => [entry]),
-    2,
+  const publicPluginSdkEntryNames = new Set(
+    publicPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`),
   );
+  const pluginSdkPartitions = [
+    pluginSdkEntries.filter(([name]) => publicPluginSdkEntryNames.has(name)),
+    pluginSdkEntries.filter(([name]) => !publicPluginSdkEntryNames.has(name)),
+  ];
   const extensionPartitions = partitionUnifiedEntryGroups(
     [...extensionEntriesById.entries()]
       .toSorted(([left], [right]) => left.localeCompare(right))
