@@ -31,6 +31,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   } = runtime;
   const {
     params,
+    options,
     preDynamicStartupStages,
     mutable,
     startupAuthProfileId,
@@ -121,6 +122,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     sessionAgentId,
     pluginConfig,
     profilerEnabled,
+    allowProviderRuntimePluginLoad: options.allowProviderRuntimePluginLoad,
     onYieldDetected: () => {
       toolState.yieldDetected = true;
     },

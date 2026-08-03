@@ -21,6 +21,7 @@ export type CodexRunAttemptOptions = {
   postToolRawAssistantCompletionIdleTimeoutMs?: number;
   turnTerminalIdleTimeoutMs?: number;
   clientFactory?: CodexAppServerClientFactory;
+  allowProviderRuntimePluginLoad?: boolean;
 };
 
 export type CodexRunAttemptInput = {

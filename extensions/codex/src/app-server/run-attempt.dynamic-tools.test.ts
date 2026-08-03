@@ -104,8 +104,10 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     params.onAgentToolResult = onAgentToolResult;
 
     try {
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start", 210_000);
+      const run = runCodexAppServerAttempt(params, {
+        allowProviderRuntimePluginLoad: false,
+      });
+      await harness.waitForMethod("turn/start", 10_000);
 
       const toolRequest = harness.handleServerRequest({
         id: "request-continue-delegate",
