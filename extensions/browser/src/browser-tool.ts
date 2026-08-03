@@ -819,10 +819,13 @@ export function createBrowserTool(opts?: {
             }
           } catch (err) {
             // Fall back to returning the raw image block so the agent loop can
-            // still recover. Provider/runtime error messages are untrusted
-            // input too, so defang line-start final-reply media directives.
+            // still recover. Provider/runtime errors are untrusted page input;
+            // preserve their trust boundary and defang reply-media directives.
             const rawReason = err instanceof Error ? err.message : String(err);
-            const reason = neutralizeMediaDirectives(rawReason);
+            const reason = wrapExternalContent(neutralizeMediaDirectives(rawReason), {
+              source: "browser",
+              includeWarning: false,
+            });
             const extraText = `[browser screenshot vision failed: ${reason}]\n${shareHint}`;
             return await browserToolDeps.imageResultFromFile({
               label: "browser:screenshot",
