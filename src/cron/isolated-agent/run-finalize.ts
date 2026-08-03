@@ -3,7 +3,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
-import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
+import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -343,11 +344,18 @@ export async function finalizeCronRun(params: {
     prepared.deliveryRequested &&
     !hasFatalErrorPayload &&
     isHeartbeatOnlyResponse(deliveryPayloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
+  const heartbeatControlOnlyResponse =
+    heartbeatOnlyResponse &&
+    deliveryPayloads.every(
+      (payload) =>
+        stripHeartbeatToken(payload.text, { mode: "heartbeat", maxAckChars: 0 }).shouldSkip ||
+        isSilentReplyPayloadText(payload.text, HEARTBEAT_TOKEN),
+    );
   const spawnOnlyHandoff =
     acceptedSessionSpawn &&
-    (heartbeatOnlyResponse ||
+    (heartbeatControlOnlyResponse ||
       (deliveryPayloads.length === 0 && normalizeOptionalString(synthesizedText) === undefined));
-  if (spawnOnlyHandoff && heartbeatOnlyResponse) {
+  if (spawnOnlyHandoff && heartbeatControlOnlyResponse) {
     // Parent heartbeat acknowledgments cannot fulfill child delivery; one-shot
     // cleanup must wait for actual descendant output before retiring the job.
     deliveryPayloads = [];
