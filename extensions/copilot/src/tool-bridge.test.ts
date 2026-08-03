@@ -1456,6 +1456,28 @@ describe("createCopilotToolBridge tool conversion", () => {
     );
   });
 
+  it("fails explicitly when a bridged tool returns an unsupported result control", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Question sent." }],
+      details: { status: "pending" },
+      control: { type: "yield" as const, message: "Waiting for answer" },
+    }));
+    const sourceTool = makeTool({
+      canYield: true,
+      executionMode: "sequential",
+      execute,
+    });
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, {});
+
+    const result = await runSdkTool(sdkTool, {});
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      resultType: "failure",
+      textResultForLlm: "Tool requested yield, but yield is not supported in this runtime",
+    });
+  });
+
   it("calls beforeExecute with the invocation context before execute", async () => {
     const beforeExecute = vi.fn(async () => undefined);
     const sourceTool = makeTool();
