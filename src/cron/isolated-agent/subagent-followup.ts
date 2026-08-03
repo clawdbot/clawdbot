@@ -2,7 +2,11 @@
 import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
 import { listDescendantRunsForRequester } from "../../agents/subagent-registry-read.js";
 import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
-import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyPayloadText,
+  SILENT_REPLY_TOKEN,
+} from "../../auto-reply/tokens.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
@@ -134,7 +138,7 @@ export async function waitForDescendantSubagentSummary(params: {
       // Parent heartbeat acknowledgments remain in chat.history after the
       // child settles and must not masquerade as descendant output.
       !stripHeartbeatToken(latest, { mode: "heartbeat", maxAckChars: 0 }).shouldSkip &&
-      !isSilentReplyText(latest, HEARTBEAT_TOKEN) &&
+      !isSilentReplyPayloadText(latest, HEARTBEAT_TOKEN) &&
       (latest !== initialReply || !isLikelyInterimCronMessage(latest))
     ) {
       // Ignore the original interim acknowledgement; only a new synthesis or a

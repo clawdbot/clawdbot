@@ -504,7 +504,15 @@ describe("waitForDescendantSubagentSummary", () => {
     expect(result).toBe("Completed despite gateway error.");
   });
 
-  it.each(["NO_REPLY", "HEARTBEAT_OK", "**HEARTBEAT_OK**", "<b>HEARTBEAT_OK</b>"])(
+  it.each([
+    "NO_REPLY",
+    "HEARTBEAT_OK",
+    "**HEARTBEAT_OK**",
+    "<b>HEARTBEAT_OK</b>",
+    "<thinking>Check the schedule.</thinking>\nHEARTBEAT_OK",
+    '{"action":"HEARTBEAT_OK"}',
+    '"HEARTBEAT_OK"',
+  ])(
     "skips the %s control-only parent reply instead of treating it as child output",
     async (parentReply) => {
       vi.useFakeTimers();
@@ -528,6 +536,8 @@ describe("waitForDescendantSubagentSummary", () => {
     "HEARTBEAT_OK child completed the scheduled reminder",
     "child completed the scheduled reminder HEARTBEAT_OK",
     "<b>HEARTBEAT_OK</b> child completed the scheduled reminder",
+    "<thinking>Check the schedule.</thinking>\nHere is the scheduled reminder.\nHEARTBEAT_OK",
+    '{"action":"HEARTBEAT_OK","message":"child completed the scheduled reminder"}',
   ])(
     "preserves substantive synthesis that also contains a heartbeat token: %s",
     async (synthesis) => {
