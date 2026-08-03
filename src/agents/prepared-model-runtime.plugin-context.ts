@@ -1,5 +1,6 @@
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -50,6 +51,21 @@ export function preparePluginLoadContext(
     setPreparedPluginRuntimeLoadContext(registry, context);
   }
   return context;
+}
+
+/** Resolves and attaches the plugin facts owned by one prepared workspace generation. */
+export function prepareOwnedPluginLoadContext(
+  input: PreparedModelRuntimeInput,
+  env: NodeJS.ProcessEnv,
+  registry: PluginRegistry | undefined,
+): PluginMetadataSnapshot {
+  const metadataSnapshot = resolvePluginMetadataSnapshot({
+    config: input.config,
+    env,
+    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+  });
+  preparePluginLoadContext(input, env, registry, metadataSnapshot);
+  return metadataSnapshot;
 }
 
 /** Reads plugin facts carried by a lifecycle-owned prepared runtime snapshot. */
