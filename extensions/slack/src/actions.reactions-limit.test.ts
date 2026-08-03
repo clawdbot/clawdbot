@@ -21,7 +21,11 @@ function createSlackReactionClient(reactions: SlackReaction[]) {
     retryConfig: { retries: 0 },
     fetch: async (input, init) => {
       const method = new URL(String(input)).pathname.split("/").at(-1) ?? "";
-      const body = new URLSearchParams(String(init?.body ?? ""));
+      const requestBody = init?.body;
+      if (typeof requestBody !== "string") {
+        throw new Error("Slack reaction requests must use URL-encoded request bodies.");
+      }
+      const body = new URLSearchParams(requestBody);
       calls.push({ method, body });
       const result =
         method === "reactions.get"
