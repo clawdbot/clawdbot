@@ -545,7 +545,7 @@ describe("runCapability provider output decisions", () => {
             fileName: `fixture.${extension}`,
             size: buffer.length,
           }),
-        } as Parameters<typeof runCapability>[0]["attachments"],
+        } as unknown as Parameters<typeof runCapability>[0]["attachments"],
         media: [{ index: 0, kind: capability, mime }],
         agentDir: "/tmp/openclaw-media-provider-output-test",
         providerRegistry: new Map<string, MediaUnderstandingProvider>([
