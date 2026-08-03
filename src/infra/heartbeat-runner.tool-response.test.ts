@@ -727,54 +727,54 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       expect(result.status).toBe("ran");
       expectTelegramSend(sendTelegram, { text: notice, cfg });
     });
+  });
 
-    it("stamps scheduledToolPolicy for heartbeat runs to avoid sender wildcard stripping", async () => {
-      return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-        // Agent entry with a wildcard sender policy that denies cron/fs/runtime groups.
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: {
-              workspace: tmpDir,
-              heartbeat: { every: "5m", target: "telegram" },
-            },
-            entries: {
-              main: {
-                tools: {
-                  toolsBySender: {
-                    "*": { deny: ["group:fs", "group:runtime", "cron"] },
-                  },
+  it("stamps scheduledToolPolicy for heartbeat runs to avoid sender wildcard stripping", async () => {
+    return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      // Agent entry with a wildcard sender policy that denies cron/fs/runtime groups.
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "telegram" },
+          },
+          entries: {
+            main: {
+              tools: {
+                toolsBySender: {
+                  "*": { deny: ["group:fs", "group:runtime", "cron"] },
                 },
               },
             },
           },
-          channels: {
-            telegram: { token: "test-token", allowFrom: ["*"], heartbeat: { showOk: false } },
-          },
-          session: { store: storePath },
-        } as OpenClawConfig;
+        },
+        channels: {
+          telegram: { token: "test-token", allowFrom: ["*"], heartbeat: { showOk: false } },
+        },
+        session: { store: storePath },
+      } as OpenClawConfig;
 
-        await seedMainSessionStore(storePath, cfg, {
-          lastChannel: "telegram",
-          lastProvider: "telegram",
-          lastTo: "-1001234567890",
-        });
-
-        // Run heartbeat once and inspect the getReplyFromConfig options.
-        replySpy.mockResolvedValue({ text: "ok" });
-        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
-
-        await runHeartbeatOnce({
-          cfg,
-          deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
-        });
-
-        // getReplyFromConfig's second argument is the options object.
-        const opts = replySpy.mock.calls[0]?.[1];
-        expect(opts).toBeDefined();
-        expect(opts.scheduledToolPolicy).toBeDefined();
-        // The heartbeat should be marked as a trusted scheduled run.
-        expect(opts.scheduledToolPolicy?.mode).toBe("trusted");
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "-1001234567890",
       });
+
+      // Run heartbeat once and inspect the getReplyFromConfig options.
+      replySpy.mockResolvedValue({ text: "ok" });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      // getReplyFromConfig's second argument is the options object.
+      const opts = replySpy.mock.calls[0]?.[1];
+      expect(opts).toBeDefined();
+      expect(opts!.scheduledToolPolicy).toBeDefined();
+      // The heartbeat should be marked as a trusted scheduled run.
+      expect(opts!.scheduledToolPolicy?.mode).toBe("trusted");
     });
   });
 

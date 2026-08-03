@@ -1,6 +1,7 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { AgentPlanStep } from "../channels/streaming.js";
+import type { CronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -105,7 +106,6 @@ type ReasoningProgressPayload = {
 type ProgressCallbackResult = false | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
-import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
