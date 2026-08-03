@@ -4,8 +4,13 @@
  */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
-import { USER_BOOTSTRAP_MAX_CHARS } from "./embedded-agent-helpers/bootstrap.js";
+import {
+  resolveBootstrapMaxChars,
+  resolveBootstrapTotalMaxChars,
+  USER_BOOTSTRAP_MAX_CHARS,
+} from "./embedded-agent-helpers/bootstrap.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
@@ -383,6 +388,41 @@ export function buildBootstrapPromptWarning(params: {
         })
       : [],
     warningSignaturesSeen,
+  };
+}
+
+/** Builds the canonical bootstrap budget diagnosis after caller-owned routing. */
+export function buildBootstrapBudgetState(params: {
+  config?: OpenClawConfig;
+  agentId?: string | null;
+  bootstrapFiles: WorkspaceBootstrapFile[];
+  injectedFiles: EmbeddedContextFile[];
+  previousSignature?: string;
+  seenSignatures?: string[];
+}) {
+  const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, params.agentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, params.agentId);
+  const bootstrapAnalysis = analyzeBootstrapBudget({
+    files: buildBootstrapInjectionStats({
+      bootstrapFiles: params.bootstrapFiles,
+      injectedFiles: params.injectedFiles,
+    }),
+    bootstrapMaxChars,
+    bootstrapTotalMaxChars,
+  });
+  const bootstrapPromptWarningMode: BootstrapPromptWarningMode = "always";
+  const bootstrapPromptWarning = buildBootstrapPromptWarning({
+    analysis: bootstrapAnalysis,
+    mode: bootstrapPromptWarningMode,
+    seenSignatures: params.seenSignatures,
+    previousSignature: params.previousSignature,
+  });
+  return {
+    bootstrapAnalysis,
+    bootstrapMaxChars,
+    bootstrapPromptWarning,
+    bootstrapPromptWarningMode,
+    bootstrapTotalMaxChars,
   };
 }
 

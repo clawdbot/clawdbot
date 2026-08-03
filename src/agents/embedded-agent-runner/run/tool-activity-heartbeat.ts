@@ -1,14 +1,10 @@
-import { copyPluginToolMeta } from "../../../plugins/tools.js";
 import {
   clearToolActivityRun,
   getLastToolActivityMs,
   notifyToolActivity,
   onToolActivity,
 } from "../../../shared/tool-activity-heartbeat.js";
-import { copyBeforeToolCallHookMarker } from "../../agent-tools.before-tool-call.js";
-import { copyChannelAgentToolMeta } from "../../channel-tools.js";
-import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
-import { copyToolTerminalPresentation } from "../../tool-terminal-presentation.js";
+import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 
 export { clearToolActivityRun, getLastToolActivityMs, notifyToolActivity, onToolActivity };
@@ -33,11 +29,6 @@ export function wrapEmbeddedAttemptToolWithActivity<T extends AnyAgentTool>(
       }
     }) as typeof originalExecute,
   } as T;
-  // Tool metadata lives in identity-keyed WeakMaps, so object spread is insufficient.
-  copyPluginToolMeta(tool, wrappedTool);
-  copyChannelAgentToolMeta(tool, wrappedTool);
-  copyBeforeToolCallHookMarker(tool, wrappedTool);
-  copyToolTerminalPresentation(tool, wrappedTool);
-  copyCodeModeControlToolIdentity(tool, wrappedTool);
-  return wrappedTool;
+  // Tool metadata is identity-keyed, so object spread is insufficient.
+  return copyAgentToolMetadata(tool, wrappedTool);
 }

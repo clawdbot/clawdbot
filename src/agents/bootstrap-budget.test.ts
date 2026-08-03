@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
+  buildBootstrapBudgetState,
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
   buildBootstrapPromptWarningNotice,
@@ -11,6 +12,42 @@ import {
 } from "./bootstrap-budget.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
+
+describe("buildBootstrapBudgetState", () => {
+  it("composes configured limits, ordered injection stats, and warning state", () => {
+    const bootstrapFiles = [
+      {
+        name: "AGENTS.md",
+        path: "/tmp/AGENTS.md",
+        content: "a".repeat(8),
+        missing: false,
+      },
+      {
+        name: "SOUL.md",
+        path: "/tmp/SOUL.md",
+        content: "b".repeat(8),
+        missing: false,
+      },
+    ];
+
+    const state = buildBootstrapBudgetState({
+      config: {
+        agents: { defaults: { bootstrapMaxChars: 10, bootstrapTotalMaxChars: 12 } },
+      },
+      bootstrapFiles,
+      injectedFiles: [
+        { path: "/tmp/AGENTS.md", content: "a".repeat(8) },
+        { path: "/tmp/SOUL.md", content: "b".repeat(4) },
+      ],
+    });
+
+    expect(state.bootstrapMaxChars).toBe(10);
+    expect(state.bootstrapTotalMaxChars).toBe(12);
+    expect(state.bootstrapPromptWarningMode).toBe("always");
+    expect(state.bootstrapAnalysis.truncatedFiles[0]?.causes).toEqual(["total-limit"]);
+    expect(state.bootstrapPromptWarning.warningShown).toBe(true);
+  });
+});
 
 describe("buildBootstrapInjectionStats", () => {
   it("maps raw and injected sizes and marks truncation", () => {

@@ -75,7 +75,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
   const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
   const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
-  const shouldSendToolStartStatuses = false;
   const notifiedSessionMetadataChangeKeys = new Set<string>();
   const routeState: { sessionMetadataChangesForResult?: CommandSessionMetadataChange[] } = {};
   const notifySessionMetadataChanges = (
@@ -600,7 +599,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     shouldSuppressDefaultToolProgressMessages,
     shouldSendVerboseProgressMessages,
     shouldSendToolSummaries,
-    shouldSendToolStartStatuses,
     notifySessionMetadataChanges,
     shouldDeliverVerboseProgressDespiteSourceSuppression,
     shouldDeliverForcedToolProgressDespiteSourceSuppression,
