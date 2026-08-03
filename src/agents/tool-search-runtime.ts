@@ -35,17 +35,19 @@ import {
   tokenizeQuery,
 } from "./tool-search-ranking.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
-import type {
-  CatalogSource,
-  CatalogVisibilityOptions,
-  ToolSearchCallOptions,
-  ToolSearchCatalogEntry,
-  ToolSearchCatalogSession,
-  ToolSearchCatalogToolExecutor,
-  ToolSearchConfig,
-  ToolSearchToolContext,
-  UnknownToolErrorOptions,
-  UnknownToolRecoverySurface,
+import {
+  MAX_TOOL_SEARCH_RESULTS,
+  type CatalogSource,
+  type CatalogVisibilityOptions,
+  type ToolSearchCallOptions,
+  type ToolSearchCatalogEntry,
+  type ToolSearchCatalogSession,
+  type ToolSearchCatalogToolExecutor,
+  type ToolSearchConfig,
+  type ToolSearchRequest,
+  type ToolSearchToolContext,
+  type UnknownToolErrorOptions,
+  type UnknownToolRecoverySurface,
 } from "./tool-search-types.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 
@@ -220,7 +222,7 @@ function readToolSearchLimit(value: unknown, config: ToolSearchConfig): number {
   return Math.min(value, config.maxSearchLimit);
 }
 
-export function readToolSearchArgs(
+function readToolSearchArgs(
   args: unknown,
   config: ToolSearchConfig,
 ): { query: string; limit: number } {
@@ -234,6 +236,52 @@ export function readToolSearchArgs(
     query,
     limit: readToolSearchLimit(params.limit ?? options?.limit, config),
   };
+}
+
+export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): ToolSearchRequest {
+  const params = asToolParamsRecord(args);
+  const hasQuery = params.query !== undefined;
+  const hasQueries = params.queries !== undefined;
+  if (hasQuery === hasQueries) {
+    throw new ToolInputError("provide exactly one of query or queries.");
+  }
+  if (hasQuery) {
+    return { kind: "single", search: readToolSearchArgs(params, config) };
+  }
+  if (params.limit !== undefined || params.options !== undefined) {
+    throw new ToolInputError("set limit on each batch query, not on the batch request.");
+  }
+  if (!Array.isArray(params.queries) || params.queries.length === 0) {
+    throw new ToolInputError("queries must be a non-empty array.");
+  }
+  if (params.queries.length > MAX_TOOL_SEARCH_RESULTS) {
+    throw new ToolInputError(`queries may contain at most ${MAX_TOOL_SEARCH_RESULTS} entries.`);
+  }
+
+  const searches = params.queries.map((value, index) => {
+    if (!isRecord(value)) {
+      throw new ToolInputError(`queries[${index}] must be an object.`);
+    }
+    const query = value.query;
+    if (typeof query !== "string" || !query.trim()) {
+      throw new ToolInputError(`queries[${index}].query must be a non-empty string.`);
+    }
+    try {
+      return { query, limit: readToolSearchLimit(value.limit, config) };
+    } catch (error) {
+      if (error instanceof ToolInputError) {
+        throw new ToolInputError(`queries[${index}].${error.message}`);
+      }
+      throw error;
+    }
+  });
+  const requestedResults = searches.reduce((total, search) => total + search.limit, 0);
+  if (requestedResults > MAX_TOOL_SEARCH_RESULTS) {
+    throw new ToolInputError(
+      `batch queries may request at most ${MAX_TOOL_SEARCH_RESULTS} results in total.`,
+    );
+  }
+  return { kind: "batch", searches };
 }
 
 export function readToolSearchCallArgs(

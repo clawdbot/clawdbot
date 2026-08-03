@@ -17,6 +17,7 @@ import {
 } from "./providers/shared/debug-request-cursor.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import {
+  assertToolSearchBatchLaneResult,
   assertToolSearchLaneResults,
   fetchJson,
   readToolSearchGatewayFetchLimits,
@@ -235,7 +236,8 @@ describe("tool search gateway e2e lane result", () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-lane-"));
     const configPath = path.join(tempRoot, "openclaw.json");
     const inputPrefix = "i".repeat(499);
-    const toolOutputPrefix = "o".repeat(3_999);
+    const searchOutput = '{"results":[{"query":"first"}]}';
+    const toolOutput = `${"o".repeat(3_999)}😀tail`;
     await fs.writeFile(configPath, "{}\n", "utf8");
     const jsonResponse = (body: unknown) =>
       new Response(JSON.stringify(body), {
@@ -248,11 +250,17 @@ describe("tool search gateway e2e lane result", () => {
       .mockResolvedValueOnce(
         jsonResponse([
           {
+            body: { tools: [] },
+            plannedToolName: "tool_search",
+            raw: "{}",
+            toolOutput: searchOutput,
+          },
+          {
             allInputText: `${inputPrefix}😀tail\n### Deferred Tool Schemas\n- fake_plugin_tool_17: Fake plugin target`,
             body: { tools: [] },
             plannedToolName: "fake_plugin_tool_17",
             raw: "{}",
-            toolOutput: `${toolOutputPrefix}😀tail`,
+            toolOutput,
           },
         ]),
       );
@@ -304,7 +312,9 @@ describe("tool search gateway e2e lane result", () => {
       });
 
       expect(result.providerInputSnippet).toBe(inputPrefix);
-      expect(result.providerToolOutputSnippet).toBe(toolOutputPrefix);
+      expect(result.providerToolOutputSnippet).toBe(
+        `${searchOutput}\n${"o".repeat(4_000 - searchOutput.length - 1)}`,
+      );
       expect(result.providerDirectoryContainsTarget).toBe(true);
       expect(result.targetToolIdentity).toEqual({
         source: "plugin",
@@ -391,6 +401,55 @@ describe("tool search gateway e2e lane assertions", () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  it("accepts one structured batch search followed by one catalog call", () => {
+    expect(() =>
+      assertToolSearchBatchLaneResult({
+        targetTool,
+        tools: {
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 3,
+          providerDirectoryContainsTarget: false,
+          providerPlannedTools: ["tool_search", "tool_call"],
+          providerRawBytes: 4_000,
+          providerToolOutputSnippet: JSON.stringify({
+            results: [
+              { query: targetTool, candidates: [{ name: targetTool }] },
+              { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+            ],
+          }),
+          sessionLogToolMentions: {
+            tool_search: 1,
+            tool_call: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects structured proof that splits discovery across outer calls", () => {
+    expect(() =>
+      assertToolSearchBatchLaneResult({
+        targetTool,
+        tools: {
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 3,
+          providerDirectoryContainsTarget: false,
+          providerPlannedTools: ["tool_search", "tool_search", "tool_call"],
+          providerRawBytes: 4_000,
+          providerToolOutputSnippet: JSON.stringify({
+            results: [{ query: targetTool, candidates: [{ name: targetTool }] }],
+          }),
+          sessionLogToolMentions: {
+            tool_search: 2,
+            tool_call: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).toThrow("structured lane did not use one batch search");
   });
 
   it("preserves surrogate pairs in both lane debug output snippets", () => {

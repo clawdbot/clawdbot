@@ -22,7 +22,7 @@ import {
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
-type Lane = "normal" | "code";
+type Lane = "normal" | "code" | "tools";
 
 type LaneResult = {
   lane: Lane;
@@ -135,6 +135,8 @@ async function countToolSearchSessionLogMentions(params: { stateDir: string; tar
     sessionsDir: path.join(params.stateDir, "agents", "qa", "sessions"),
     needles: {
       tool_search_code: "tool_search_code",
+      tool_search: "tool_search",
+      tool_call: "tool_call",
       [params.targetTool]: params.targetTool,
     },
   });
@@ -283,12 +285,17 @@ function applyLaneConfig(
       ...new Set([
         ...(Array.isArray(tools.alsoAllow) ? tools.alsoAllow : []),
         FAKE_PLUGIN_ID,
-        ...(params.lane === "code"
+        ...(params.lane !== "normal"
           ? ["tool_search_code", "tool_search", "tool_describe", "tool_call"]
           : []),
       ]),
     ],
-    toolSearch: params.lane === "code",
+    toolSearch:
+      params.lane === "code"
+        ? true
+        : params.lane === "tools"
+          ? { enabled: true, mode: "tools" }
+          : false,
   };
 
   const gateway = (cfg.gateway && typeof cfg.gateway === "object" ? cfg.gateway : {}) as Record<
@@ -442,6 +449,12 @@ export async function runToolSearchGatewayLane(params: {
     plannedToolName?: string;
   }>;
   const lastRequest = laneRequests.at(-1) ?? {};
+  // The last provider request contains the terminal target result, while earlier
+  // requests contain discovery results needed to prove the complete bridge flow.
+  const providerToolOutputs = laneRequests
+    .map((request) => request.toolOutput)
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n");
   // Responses providers may carry system text in instructions or input items;
   // inspect the full recorded prompt so late directory entries are not lost.
   const providerPromptText = [lastRequest.instructions, lastRequest.allInputText]
@@ -467,7 +480,7 @@ export async function runToolSearchGatewayLane(params: {
       lastRequest.allInputText ?? lastRequest.prompt ?? "",
       500,
     ),
-    providerToolOutputSnippet: truncateUtf16Safe(lastRequest.toolOutput ?? "", 4_000),
+    providerToolOutputSnippet: truncateUtf16Safe(providerToolOutputs, 4_000),
     providerDeclaredToolCount: Array.isArray(lastRequest.body?.tools)
       ? lastRequest.body.tools.length
       : 0,
@@ -565,4 +578,43 @@ export function assertToolSearchLaneResults(params: {
       `tools.effective did not attribute ${targetTool} to plugin ${FAKE_PLUGIN_ID}: ${laneDebug()}`,
     );
   }
+}
+
+export function assertToolSearchBatchLaneResult(params: {
+  tools: LaneResultSummary;
+  targetTool: string;
+}) {
+  const { targetTool, tools } = params;
+  const debug = () =>
+    JSON.stringify(
+      {
+        plannedTools: tools.providerPlannedTools,
+        toolOutput: tools.providerToolOutputSnippet,
+        output: truncateUtf16Safe(tools.gatewayOutputText, 300),
+        mentions: tools.sessionLogToolMentions,
+      },
+      null,
+      2,
+    );
+  assert(
+    tools.providerPlannedTools.filter((name) => name === "tool_search").length === 1 &&
+      tools.providerPlannedTools.filter((name) => name === "tool_call").length === 1,
+    `structured lane did not use one batch search followed by one catalog call: ${debug()}`,
+  );
+  assert(
+    tools.providerToolOutputSnippet?.includes('"results"') === true &&
+      tools.providerToolOutputSnippet.includes(targetTool) &&
+      tools.providerToolOutputSnippet.includes("large plugin tool catalog"),
+    `structured lane did not return both grouped search results: ${debug()}`,
+  );
+  assert(
+    tools.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
+      tools.gatewayOutputText.includes(targetTool) &&
+      (tools.sessionLogToolMentions[targetTool] ?? 0) > 0,
+    `structured lane did not call ${targetTool}: ${debug()}`,
+  );
+  assert(
+    !tools.providerPlannedTools.includes(targetTool),
+    `structured lane exposed direct provider tool ${targetTool}: ${debug()}`,
+  );
 }

@@ -4901,6 +4901,64 @@ Update and merge these partial structured summaries.`,
     expect(String(toolPlanOutput.arguments)).toContain("current");
   });
 
+  it("plans one structured batch search for the Tool Search gateway fixture", async () => {
+    const server = await startMockServer();
+    const targetTool = "fake_plugin_tool_17";
+
+    const response = await expectNonStreamingResponses(server, {
+      tools: [{ type: "function", name: "tool_search" }],
+      input: [
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+      ],
+    });
+
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.type).toBe("function_call");
+    expect(toolPlanOutput.name).toBe("tool_search");
+    expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual({
+      queries: [
+        { query: targetTool, limit: 1 },
+        { query: "large plugin tool catalog", limit: 1 },
+      ],
+    });
+  });
+
+  it("calls the selected catalog tool after a structured batch search", async () => {
+    const server = await startMockServer();
+    const targetTool = "fake_plugin_tool_17";
+
+    const response = await expectNonStreamingResponses(server, {
+      tools: [
+        { type: "function", name: "tool_search" },
+        { type: "function", name: "tool_call" },
+      ],
+      input: [
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+        makeToolOutputWithCallId(
+          "call_tool_search_1",
+          JSON.stringify({
+            results: [
+              { query: targetTool, candidates: [{ name: targetTool }] },
+              {
+                query: "large plugin tool catalog",
+                candidates: [{ name: "fake_plugin_tool_01" }],
+              },
+            ],
+          }),
+        ),
+      ],
+    });
+
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.type).toBe("function_call");
+    expect(toolPlanOutput.name).toBe("tool_call");
+    expect(JSON.parse(String(toolPlanOutput.arguments))).toMatchObject({ id: targetTool });
+  });
+
   it("plans the explicit web_fetch fixture prompt as the canonical direct call", async () => {
     const server = await startMockServer();
     const prompt =

@@ -30,12 +30,13 @@ import { MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS } from "./tool-search-directory.
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
-  readToolSearchArgs,
   readToolSearchCallArgs,
   readToolSearchId,
+  readToolSearchRequest,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
 import {
+  MAX_TOOL_SEARCH_RESULTS,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -187,18 +188,50 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Query in English: matching is lexical against tool names and descriptions, which are written in English, so a query in another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
+        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
       parameters: Type.Object({
-        query: Type.String({
-          description: "Search query, in English. Describe the capability you need.",
-        }),
+        query: Type.Optional(
+          Type.String({
+            description: "Single search query, in English. Describe the capability you need.",
+          }),
+        ),
         limit: Type.Optional(
-          Type.Integer({ minimum: 1, description: "Maximum number of results." }),
+          Type.Integer({ minimum: 1, description: "Maximum number of single-search results." }),
+        ),
+        queries: Type.Optional(
+          Type.Array(
+            Type.Object({
+              query: Type.String({
+                minLength: 1,
+                description: "Search query, in English. Describe the capability you need.",
+              }),
+              limit: Type.Optional(
+                Type.Integer({ minimum: 1, description: "Maximum results for this query." }),
+              ),
+            }),
+            {
+              minItems: 1,
+              maxItems: MAX_TOOL_SEARCH_RESULTS,
+              description: `Independent searches. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}.`,
+            },
+          ),
         ),
       }),
       execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
-        const search = readToolSearchArgs(args, config);
-        return jsonResult(await runtime.search(search.query, { limit: search.limit }));
+        const request = readToolSearchRequest(args, config);
+        if (request.kind === "single") {
+          return jsonResult(
+            await runtime.search(request.search.query, { limit: request.search.limit }),
+          );
+        }
+        return jsonResult({
+          results: await Promise.all(
+            request.searches.map(async (search) => ({
+              query: search.query,
+              candidates: await runtime.search(search.query, { limit: search.limit }),
+            })),
+          ),
+        });
       },
     },
     {

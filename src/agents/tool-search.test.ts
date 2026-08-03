@@ -196,10 +196,176 @@ describe("Tool Search", () => {
     expect(Value.Check(limitSearchTool.parameters, input)).toBe(valid);
   });
 
+  it("accepts bounded structured batch queries in the tool schema", () => {
+    expect(
+      Value.Check(limitSearchTool.parameters, {
+        queries: [
+          { query: "today's calendar events", limit: 3 },
+          { query: "Slack messages needing attention", limit: 3 },
+        ],
+      }),
+    ).toBe(true);
+    expect(Value.Check(limitSearchTool.parameters, { queries: [] })).toBe(false);
+    expect(
+      Value.Check(limitSearchTool.parameters, {
+        queries: Array.from({ length: 51 }, (_, index) => ({ query: `query ${index}`, limit: 1 })),
+      }),
+    ).toBe(false);
+  });
+
   it.each([5.5, 0, -1])("rejects runtime limit %s", async (limit) => {
     await expect(limitSearchTool.execute("call-limit", { query: "test", limit })).rejects.toThrow(
       "limit must be a positive integer",
     );
+  });
+
+  it.each([
+    {
+      label: "missing request",
+      input: {},
+      error: "provide exactly one of query or queries",
+    },
+    {
+      label: "mixed single and batch request",
+      input: { query: "calendar", queries: [{ query: "Slack" }] },
+      error: "provide exactly one of query or queries",
+    },
+    {
+      label: "empty batch",
+      input: { queries: [] },
+      error: "queries must be a non-empty array",
+    },
+    {
+      label: "empty batch query",
+      input: { queries: [{ query: "  " }] },
+      error: "queries[0].query must be a non-empty string",
+    },
+    {
+      label: "top-level batch limit",
+      input: { queries: [{ query: "calendar" }], limit: 1 },
+      error: "set limit on each batch query",
+    },
+  ])("rejects $label", async ({ input, error }) => {
+    await expect(limitSearchTool.execute("call-invalid-batch", input)).rejects.toThrow(error);
+  });
+
+  it("rejects batches whose effective result limits exceed the shared budget", async () => {
+    const searchTool = expectDefined(
+      createToolSearchTools({
+        config: {
+          tools: { toolSearch: { enabled: true, mode: "tools", maxSearchLimit: 50 } },
+        } as never,
+      }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
+      "batch budget search tool",
+    );
+
+    await expect(
+      searchTool.execute("call-batch-budget", {
+        queries: [
+          { query: "calendar", limit: 25 },
+          { query: "Slack", limit: 26 },
+        ],
+      }),
+    ).rejects.toThrow("batch queries may request at most 50 results in total");
+    await expect(
+      searchTool.execute("call-default-batch-budget", {
+        queries: Array.from({ length: 7 }, (_, index) => ({ query: `surface ${index}` })),
+      }),
+    ).rejects.toThrow("batch queries may request at most 50 results in total");
+  });
+
+  it("searches batch queries independently while preserving scalar results", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const shared = pluginTool(
+      "fake_attention",
+      "Find calendar events and Slack messages needing attention",
+    );
+    const config = {
+      tools: { toolSearch: { enabled: true, mode: "tools", maxSearchLimit: 50 } },
+    } as never;
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        shared,
+      ],
+      config,
+      catalogRef,
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ config, catalogRef }).find(
+        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+      ),
+      "structured batch search tool",
+    );
+
+    const scalar = await searchTool.execute("call-scalar-search", {
+      query: "calendar events",
+      limit: 1,
+    });
+    expect(scalar.details).toEqual([
+      expect.objectContaining({ name: "fake_attention", source: "openclaw" }),
+    ]);
+
+    const batch = await searchTool.execute("call-batch-search", {
+      queries: [
+        { query: "calendar events", limit: 1 },
+        { query: "Slack messages", limit: 1 },
+        { query: "zzzzunmatched", limit: 1 },
+      ],
+    });
+    expect(batch.details).toEqual({
+      results: [
+        {
+          query: "calendar events",
+          candidates: [expect.objectContaining({ name: "fake_attention", source: "openclaw" })],
+        },
+        {
+          query: "Slack messages",
+          candidates: [expect.objectContaining({ name: "fake_attention", source: "openclaw" })],
+        },
+        { query: "zzzzunmatched", candidates: [] },
+      ],
+    });
+    expect(catalogRef.current?.searchCount).toBe(4);
+  });
+
+  it("uses the same structured batch contract in directory mode", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { toolSearch: { enabled: true, mode: "directory" } },
+    } as never;
+    applyToolSchemaDirectoryCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        pluginTool("fake_directory_calendar", "Read directory calendar events"),
+      ],
+      config,
+      catalogRef,
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ config, catalogRef }).find(
+        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+      ),
+      "directory batch search tool",
+    );
+
+    const result = await searchTool.execute("call-directory-batch-search", {
+      queries: [{ query: "directory calendar", limit: 1 }],
+    });
+
+    expect(result.details).toEqual({
+      results: [
+        {
+          query: "directory calendar",
+          candidates: [expect.objectContaining({ name: "fake_directory_calendar" })],
+        },
+      ],
+    });
+    expect(catalogRef.current?.searchCount).toBe(1);
   });
 
   it("keeps direct-only tools visible and out of the structured catalog", () => {
