@@ -778,6 +778,52 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("does not let recall days bypass the apply query-diversity gate", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Move backups to S3 Glacier."]);
+      const recallDays = ["2026-04-01", "2026-04-02", "2026-04-03"];
+      for (const day of recallDays) {
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "glacier retention",
+          dayBucket: day,
+          nowMs: Date.parse(`${day}T10:00:00.000Z`),
+          dedupeByQueryPerDay: true,
+          results: [
+            {
+              path: "memory/2026-04-01.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.96,
+              snippet: "Move backups to S3 Glacier.",
+              source: "memory",
+            },
+          ],
+        });
+      }
+
+      const candidates = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      });
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]).toMatchObject({ uniqueQueries: 1, recallDays });
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 2,
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      });
+      expect(applied.applied).toBe(0);
+    });
+  });
+
   it("merges a repeated claim across three day files and clears the default gates", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const queryDays = ["2026-04-01", "2026-04-02", "2026-04-03"];

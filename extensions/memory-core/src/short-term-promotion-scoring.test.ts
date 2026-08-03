@@ -191,6 +191,44 @@ describe("short-term promotion score calibration", () => {
     });
   });
 
+  it("does not treat recall days as query diversity", async () => {
+    const workspaceDir = await createTempWorkspace("promotion-query-diversity-");
+    const repeatedQuery = createRecallEntry({
+      key: "repeated-query",
+      signalCount: 3,
+      avgScore: 1,
+      queryHashes: ["query-a"],
+      recallDays: RECALL_DAYS,
+      conceptTags: ["backup", "backups", "glacier", "s3"],
+    });
+    await shortTermTestState.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: NOW_ISO,
+      entries: { "repeated-query": repeatedQuery },
+    });
+
+    await expect(
+      rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 2,
+        nowMs: NOW_MS,
+      }),
+    ).resolves.toHaveLength(0);
+
+    const ranked = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 1,
+      nowMs: NOW_MS,
+    });
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0]?.components.diversity).toBeCloseTo(0.2);
+    expect(ranked[0]?.components.consolidation).toBeGreaterThan(0.4);
+  });
+
   it("keeps the minimum score boundary inclusive", async () => {
     const workspaceDir = await createTempWorkspace("promotion-score-boundary-");
     const boundary = createRecallEntry({
