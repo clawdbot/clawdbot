@@ -23,8 +23,8 @@ scenario:
     - src/auto-reply/reply/get-reply.ts
     - src/media-understanding/apply.ts
     - src/media-understanding/runner.ts
-    - test/e2e/qa-lab/media/vision-channel-offload.product.test.ts
+    - test/e2e/qa-lab/media/vision-channel-offload.e2e.test.ts
   execution:
     kind: vitest
-    path: test/e2e/qa-lab/media/vision-channel-offload.product.test.ts
+    path: test/e2e/qa-lab/media/vision-channel-offload.e2e.test.ts
     summary: Send an image through QA-channel, prove the configured image model summarizes it, and prove the text-only active model receives only the summary before one visible reply.

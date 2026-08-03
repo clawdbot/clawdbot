@@ -1,12 +1,14 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaBusServer } from "../../../../extensions/qa-lab/src/bus-server.js";
-import { createQaBusState } from "../../../../extensions/qa-lab/src/bus-state.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
-import type { MockOpenAiRequestSnapshot } from "../../../../extensions/qa-lab/src/providers/mock-openai/mock-openai-contracts.js";
-import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
-import { createQaChannelTransport } from "../../../../extensions/qa-lab/src/qa-channel-transport.js";
+import {
+  createQaBusState,
+  createQaChannelTransport,
+  type MockOpenAiRequestSnapshot,
+  startQaBusServer,
+  startQaGatewayChild,
+  startQaMockOpenAiServer,
+} from "../../../../extensions/qa-lab/api.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const ACTIVE_MODEL_ID = "gpt-5.6-luna";
@@ -33,7 +35,7 @@ function configureVisionOffload(config: OpenClawConfig): OpenClawConfig {
       return model;
     }
     foundActiveModel = true;
-    return { ...model, input: ["text"] as const };
+    return { ...model, input: ["text" as const] };
   });
   if (!foundActiveModel) {
     throw new Error(`active QA model is missing from provider catalog: ${ACTIVE_MODEL_ID}`);
@@ -81,12 +83,40 @@ async function readMockRequests(baseUrl: string, after: number) {
   return (await response.json()) as MockOpenAiRequestSnapshot[];
 }
 
+function compactRequestShapes(requests: MockOpenAiRequestSnapshot[]) {
+  return requests.map((request) => ({
+    cursor: request.cursor,
+    model: request.model,
+    imageInputCount: request.imageInputCount,
+    inputRoles: readInputRoles(request),
+    instructions: request.instructions?.slice(0, 240),
+    allInputTextTail: request.allInputText.slice(-400),
+  }));
+}
+
+function readInputRoles(request: MockOpenAiRequestSnapshot) {
+  const input = Array.isArray(request.body.input) ? request.body.input : [];
+  return input.flatMap((item) =>
+    item && typeof item === "object" && typeof (item as { role?: unknown }).role === "string"
+      ? [(item as { role: string }).role]
+      : [],
+  );
+}
+
 describe("QA-channel vision offload", () => {
   const cleanups: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
+    const errors: unknown[] = [];
     for (const cleanup of cleanups.splice(0).toReversed()) {
-      await cleanup();
+      try {
+        await cleanup();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "vision channel offload cleanup failed");
     }
   });
 
@@ -157,20 +187,26 @@ describe("QA-channel vision offload", () => {
     const scenarioRequests = (await readMockRequests(mock.baseUrl, requestCursor)).filter(
       (request) => request.allInputText.includes(SCENARIO_MARKER),
     );
-    expect(scenarioRequests).toHaveLength(2);
+    const requestDiagnostics = `requests=${JSON.stringify(compactRequestShapes(scenarioRequests))}`;
+    expect(scenarioRequests, requestDiagnostics).toHaveLength(2);
 
     const [imageRequest, activeModelRequest] = scenarioRequests;
-    expect(imageRequest).toMatchObject({
-      model: IMAGE_MODEL_ID,
-      imageInputCount: expect.any(Number),
-    });
-    expect(imageRequest.imageInputCount).toBeGreaterThanOrEqual(1);
-    expect(activeModelRequest).toMatchObject({
-      model: ACTIVE_MODEL_ID,
-      imageInputCount: 0,
-    });
-    expect(activeModelRequest.cursor).toBeGreaterThan(imageRequest.cursor);
-    expect(activeModelRequest.allInputText).toContain(PROVIDER_SUMMARY);
+    if (!imageRequest || !activeModelRequest) {
+      throw new Error(requestDiagnostics);
+    }
+    expect(imageRequest.model, requestDiagnostics).toBe(IMAGE_MODEL_ID);
+    expect(imageRequest.imageInputCount, requestDiagnostics).toBe(1);
+    expect(readInputRoles(imageRequest), requestDiagnostics).toEqual(["developer", "user"]);
+    expect(activeModelRequest.model, requestDiagnostics).toBe(ACTIVE_MODEL_ID);
+    expect(activeModelRequest.imageInputCount, requestDiagnostics).toBe(0);
+    expect(readInputRoles(activeModelRequest), requestDiagnostics).toEqual([
+      "system",
+      "user",
+      "user",
+    ]);
+    expect(imageRequest.cursor, requestDiagnostics).toBeLessThan(activeModelRequest.cursor);
+    expect(imageRequest.allInputText, requestDiagnostics).toContain(IMAGE_PROMPT);
+    expect(activeModelRequest.allInputText, requestDiagnostics).toContain(PROVIDER_SUMMARY);
 
     const visibleOutbound = state
       .getSnapshot()
