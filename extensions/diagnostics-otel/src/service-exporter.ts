@@ -119,10 +119,7 @@ export function resolveOtelHttpAgentOptions(params: {
     const agent = createNodeProxyAgent({ mode: "env", targetUrl: url, agentOptions });
     return agent ? () => agent : undefined;
   } catch {
-    logger.warn(
-      `diagnostics-otel: env proxy agent unavailable for OTLP ${signalIdentifier.toLowerCase()} exporter; falling back to default Node agent`,
-    );
-    return undefined;
+    throw new Error("Configured telemetry proxy is invalid or unsupported; refusing direct export");
   }
 }
 
