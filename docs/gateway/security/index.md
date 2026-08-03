@@ -623,6 +623,14 @@ See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
 Set `gateway.trustedProxies` for proper forwarded-client IP handling behind nginx/Caddy/Traefik/etc. When the Gateway detects proxy headers from an address **not** in `trustedProxies`, it will not treat the connection as local; if gateway auth is disabled, that connection is rejected. This prevents proxied connections from appearing to come from localhost and receiving automatic trust.
 
+With token or password auth, an unconfigured same-host loopback proxy is kept
+usable but cannot receive trusted per-client attribution. Authentication
+attempts from that proxy therefore share one non-exempt fail-safe rate-limit
+bucket. A successful client does not clear other clients' failures, so one
+sender can temporarily lock out everyone behind that unconfigured proxy.
+Configure `gateway.trustedProxies` to restore validated per-client buckets;
+see [Rate limiting](/gateway/security/rate-limiting#unconfigured-same-host-reverse-proxies).
+
 `trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, which is stricter: it fails closed on loopback-source proxies by default. Same-host loopback reverse proxies can use `trustedProxies` for local-client detection and forwarded-IP handling, but can only satisfy `trusted-proxy` auth mode when `gateway.auth.trustedProxy.allowLoopback = true`; otherwise use token/password auth.
 
 ```yaml

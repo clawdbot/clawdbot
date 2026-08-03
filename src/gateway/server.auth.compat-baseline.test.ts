@@ -298,6 +298,71 @@ describe("gateway auth compatibility baseline", () => {
     });
   });
 
+  describe("proxied token mode deferred failure accounting", () => {
+    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let port = 0;
+    let prevToken: string | undefined;
+
+    beforeAll(async () => {
+      prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      testState.gatewayAuth = {
+        mode: "token",
+        token: "secret",
+        rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 },
+      };
+      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      port = await getFreePort();
+      server = await startGatewayServer(port);
+    });
+
+    afterAll(async () => {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    });
+
+    test("records a deferred shared failure before rejecting device proof", async () => {
+      const headers = { "x-forwarded-for": "203.0.113.10" };
+      const first = await openWs(port, headers);
+      try {
+        const nonce = await readConnectChallengeNonce(first);
+        const signed = await createSignedDevice({
+          token: "wrong",
+          scopes: ["operator.admin"],
+          clientId: GATEWAY_CLIENT_NAMES.TEST,
+          clientMode: GATEWAY_CLIENT_MODES.TEST,
+          nonce,
+        });
+        const response = await connectReq(first, {
+          token: "wrong",
+          device: { ...signed.device, signature: `${signed.device.signature}invalid` },
+        });
+        expect(response.ok).toBe(false);
+        expect(response.error?.message ?? "").toContain("signature");
+      } finally {
+        first.close();
+      }
+
+      const second = await openWs(port, headers);
+      try {
+        const nonce = await readConnectChallengeNonce(second);
+        const signed = await createSignedDevice({
+          token: "wrong",
+          scopes: ["operator.admin"],
+          clientId: GATEWAY_CLIENT_NAMES.TEST,
+          clientMode: GATEWAY_CLIENT_MODES.TEST,
+          nonce,
+        });
+        const response = await connectReq(second, { token: "wrong", device: signed.device });
+        expectAuthErrorDetails({
+          details: response.error?.details,
+          expectedCode: ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
+        });
+      } finally {
+        second.close();
+      }
+    });
+  });
+
   describe("password mode", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
     let port = 0;

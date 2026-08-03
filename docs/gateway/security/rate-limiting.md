@@ -29,8 +29,10 @@ Failed authentication attempts are throttled per client IP, before any
 request handling. This is the brute-force guard for exposed Gateways.
 
 - Only _wrong_ credentials count. Missing credentials (a client that never
-  sent a token) and successful authentications do not consume budget; a
-  successful auth resets the counter for that IP.
+  sent a token) and successful authentications do not consume budget. A
+  successful auth normally resets the counter for that client IP; the shared
+  fail-safe proxy bucket described below is intentionally not reset by one
+  client's success.
 - Defaults: 10 failures per 60 seconds, then a 5 minute lockout for that IP.
 - Loopback (`127.0.0.1` / `::1`) is exempt by default so local CLI sessions
   cannot be locked out.
@@ -55,7 +57,9 @@ While locked out, connection attempts fail with:
 }
 ```
 
-Attempts from other IPs (including loopback) are unaffected during a lockout.
+Attempts from other resolved IPs (including direct loopback) are unaffected
+during a lockout. Clients in the shared fail-safe proxy bucket are one
+exception: they share its lockout.
 
 Tune it under `gateway.auth.rateLimit` in `openclaw.json`:
 
@@ -87,6 +91,22 @@ failures are keyed by the normalized page origin (for example
 `browser-origin:https://evil.example`) rather than the shared loopback IP,
 so each origin gets its own bucket; from non-loopback addresses the key
 stays the client IP. This is not configurable.
+
+### Unconfigured same-host reverse proxies
+
+When a request arrives from a loopback socket with forwarding headers but the
+proxy is not configured in `gateway.trustedProxies`, OpenClaw cannot safely
+attribute the request to the claimed forwarded IP. It places that traffic in
+one non-loopback, non-exempt fail-safe bucket instead. All clients behind that
+unconfigured proxy share the bucket, and one successful authentication does
+not clear failures recorded for other clients.
+
+This prevents the loopback exemption from disabling brute-force lockout, but
+it also means one client can temporarily lock out the other clients behind
+that proxy. Configure the proxy address in `gateway.trustedProxies` and have
+the proxy overwrite forwarding headers to restore validated per-client
+attribution. See [Trusted Proxy Auth](/gateway/trusted-proxy-auth) and the
+[Gateway security guide](/gateway/security#reverse-proxy-configuration).
 
 ### Webhooks
 
@@ -159,8 +179,10 @@ the resulting restart obeys the cooldown.
 - Bucket maps are bounded (hard entry caps plus periodic pruning), so
   unique-key floods cannot grow memory without bound.
 - When a client is behind a reverse proxy, the effective IP is the resolved
-  client IP; see [trusted proxy auth](/gateway/trusted-proxy-auth) for how
-  proxy headers are validated before they can influence it.
+  client IP. If an unconfigured loopback proxy cannot provide a validated
+  identity, all of its clients share the fail-safe bucket described above.
+  See [trusted proxy auth](/gateway/trusted-proxy-auth) for how proxy headers
+  are validated before they can influence attribution.
 - Retry signaling varies by surface: Gateway RPC limiters return
   `retryable: true` plus `retryAfterMs`, the webhook ingress uses HTTP 429
   with a `Retry-After` header, and ACP embeds the wait in the error message.

@@ -10,6 +10,7 @@ import {
 } from "../../../infra/device-bootstrap.js";
 import { verifyDeviceToken } from "../../../infra/device-pairing.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
+import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import {
   AUTH_CREDENTIAL_FALLBACK_SERIALIZATION_SCOPE,
@@ -156,6 +157,17 @@ async function authenticateGatewayConnectCore(
     deviceTokenCandidateSource,
   } = connectAuthState;
   let { authResult, authOk, authMethod } = connectAuthState;
+  let rejectedPendingSharedAuthFailure = pendingSharedAuthFailure;
+  const settleRejectedSharedAuthFailure = async () => {
+    if (!rejectedPendingSharedAuthFailure) {
+      return;
+    }
+    rejectedPendingSharedAuthFailure = false;
+    await authRateLimiter?.recordFailureAndDelay(
+      browserRateLimitClientIp,
+      AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    );
+  };
   const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
     const { authProvided, canRetryWithDeviceToken, recommendedNextStep } =
       resolveUnauthorizedHandshakeContext({
@@ -348,6 +360,7 @@ async function authenticateGatewayConnectCore(
     return false;
   };
   if (!handleMissingDeviceIdentity()) {
+    await settleRejectedSharedAuthFailure();
     return undefined;
   }
   const deviceProof = verifyGatewayConnectDeviceProof(context, {
@@ -358,6 +371,7 @@ async function authenticateGatewayConnectCore(
     scopes,
   });
   if (!deviceProof.ok) {
+    await settleRejectedSharedAuthFailure();
     return undefined;
   }
 
