@@ -52,7 +52,8 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
   const feedback = copied ? "copied" : "error";
   delete button.dataset[copied ? "error" : "copied"];
   button.dataset[feedback] = "1";
-  setButtonLabel(button, t(copied ? "common.copied" : "common.copyFailed"));
+  const feedbackLabel = t(copied ? "common.copied" : "common.copyFailed");
+  setButtonLabel(button, feedbackLabel);
 
   const duration = copied ? COPIED_FOR_MS : ERROR_FOR_MS;
   window.setTimeout(() => {
@@ -60,7 +61,13 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
       return;
     }
     delete button.dataset[feedback];
-    setButtonLabel(button, idleLabel);
+    // A locale rerender can replace the idle label while feedback is still active.
+    const renderedLabel =
+      button.querySelector("[data-copy-label]")?.textContent ?? button.getAttribute("aria-label");
+    setButtonLabel(
+      button,
+      renderedLabel && renderedLabel !== feedbackLabel ? renderedLabel : idleLabel,
+    );
   }, duration);
 }
 

@@ -15,6 +15,7 @@ describe("renderChannelWizard", () => {
       render(nothing, container);
     }
     document.body.replaceChildren();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
@@ -206,6 +207,7 @@ describe("renderChannelWizard", () => {
       const execCommand = vi.fn(() => false);
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
+      const schedule = vi.spyOn(window, "setTimeout");
       const container = document.createElement("div");
       document.body.append(container);
       const props = {
@@ -248,6 +250,16 @@ describe("renderChannelWizard", () => {
       try {
         expect(() => render(renderChannelWizard(props), container)).not.toThrow();
         expect(button?.textContent?.trim()).toBe("Kopieren");
+        const reset = schedule.mock.calls.find(
+          ([, delay]) => delay === (copied ? 1_500 : 2_000),
+        )?.[0];
+        if (typeof reset !== "function") {
+          throw new Error("Expected copy feedback to schedule its reset");
+        }
+        reset();
+        expect(button?.textContent?.trim()).toBe("Kopieren");
+        expect(button?.getAttribute("aria-label")).toBe("Kopieren");
+        expect(button?.dataset[copied ? "copied" : "error"]).toBeUndefined();
       } finally {
         await i18n.setLocale("en");
       }
