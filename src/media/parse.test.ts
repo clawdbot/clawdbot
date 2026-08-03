@@ -36,6 +36,7 @@ describe("splitMediaFromOutput", () => {
 
   function expectAcceptedMediaPathCase(expectedPath: string, input: string) {
     expectParsedMediaOutputCase(input, { mediaUrls: [expectedPath] });
+    expect(splitMediaFromOutput(input).segments).toEqual([{ type: "media", url: expectedPath }]);
   }
 
   function expectRejectedMediaPathCase(input: string) {
@@ -94,6 +95,47 @@ describe("splitMediaFromOutput", () => {
   ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
     expectAcceptedMediaPathCase(expectedPath, input);
   });
+
+  it.each([
+    ["bare image", "Generated image\nMEDIA:image.png", ["image.png"]],
+    ["bare audio", "Generated audio\nMEDIA:voice.ogg", ["voice.ogg"]],
+    ["bare document", "Generated document\nMEDIA:report.pdf", ["report.pdf"]],
+    ["caption after bare filename", "MEDIA:image.png\nGenerated image", ["image.png"]],
+    ["quoted bare filename", 'Generated image\nMEDIA:"image.png"', ["image.png"]],
+    [
+      "quoted bare filename with spaces",
+      'Generated image\nMEDIA:"render final.png"',
+      ["render final.png"],
+    ],
+    ["unquoted bare filename with spaces", "MEDIA:render final.png", ["render final.png"]],
+    [
+      "remote followed by bare filename",
+      "MEDIA:https://example.com/remote.png\nMEDIA:image.png",
+      ["https://example.com/remote.png", "image.png"],
+    ],
+    [
+      "bare filenames surrounding remote media",
+      "MEDIA:image.png\nMEDIA:https://example.com/remote.png\nMEDIA:voice.ogg",
+      ["image.png", "https://example.com/remote.png", "voice.ogg"],
+    ],
+    ["explicit relative sibling", "MEDIA:./image.png", ["./image.png"]],
+    ["absolute sibling", "MEDIA:/tmp/image.png", ["/tmp/image.png"]],
+    [
+      "multiple paths on one directive",
+      "MEDIA:/tmp/image.png /tmp/voice.ogg",
+      ["/tmp/image.png", "/tmp/voice.ogg"],
+    ],
+  ] as const)(
+    "projects every accepted media URL into ordered segments: %s",
+    (_name, input, urls) => {
+      const result = splitMediaFromOutput(input);
+
+      expect(result.mediaUrls).toEqual(urls);
+      expect(result.segments?.filter((segment) => segment.type === "media")).toEqual(
+        urls.map((url) => ({ type: "media", url })),
+      );
+    },
+  );
 
   it.each([
     ["MEDIA:/tmp/a.png /tmp/b.png", ["/tmp/a.png", "/tmp/b.png"]],
