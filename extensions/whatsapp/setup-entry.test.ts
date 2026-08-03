@@ -71,7 +71,7 @@ describe("whatsapp setup entry", () => {
     expect(legacySessionSurface.isLegacyGroupSessionKey).toBeTypeOf("function");
   });
 
-  it("plans migration for every Baileys auth category while preserving other shared-root files", () => {
+  it("plans migration for every Baileys auth category while preserving other shared-root files", async () => {
     const oauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-legacy-migration-"));
     const authFiles = [
       "creds.json",
@@ -101,12 +101,13 @@ describe("whatsapp setup entry", () => {
       if (!detectLegacyStateMigrations) {
         throw new Error("expected WhatsApp legacy state migration detector");
       }
-      const migrations = detectLegacyStateMigrations({
-        cfg: {},
-        env: {},
-        oauthDir,
-        stateDir: oauthDir,
-      });
+      const migrations =
+        (await detectLegacyStateMigrations({
+          cfg: {},
+          env: {},
+          oauthDir,
+          stateDir: oauthDir,
+        })) ?? [];
 
       expect(migrations.map((migration) => path.basename(migration.sourcePath)).toSorted()).toEqual(
         authFiles.toSorted(),
