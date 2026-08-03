@@ -1,10 +1,14 @@
 // Amazon Bedrock tests cover embedding provider plugin behavior.
-import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
+import * as bedrockRuntimeSdk from "@aws-sdk/client-bedrock-runtime";
+import { NodeHttp2Handler } from "@smithy/node-http-handler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBedrockEmbeddingProvider, hasAwsCredentials } from "./embedding-provider.js";
 import { embeddingTesting as testing } from "./test-support.js";
 
+vi.mock("@aws-sdk/client-bedrock-runtime", { spy: true });
+
 afterEach(() => {
+  vi.mocked(bedrockRuntimeSdk.BedrockRuntimeClient).mockReset();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -85,6 +89,110 @@ describe("bedrock embedding endpoint routing", () => {
       customEndpoint: false,
     },
     {
+      name: "configured canonical FIPS endpoint in its own signing region",
+      remoteBaseUrl: undefined,
+      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.amazonaws.com",
+      hostname: "bedrock-runtime-fips.us-west-2.amazonaws.com",
+      signingRegion: "us-west-2",
+      customEndpoint: false,
+    },
+    {
+      name: "configured canonical FIPS endpoint with SDK FIPS mode",
+      remoteBaseUrl: undefined,
+      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.amazonaws.com",
+      hostname: "bedrock-runtime-fips.us-west-2.amazonaws.com",
+      signingRegion: "us-west-2",
+      fips: true,
+      customEndpoint: false,
+    },
+    {
+      name: "configured canonical dual-stack endpoint",
+      remoteBaseUrl: undefined,
+      providerBaseUrl: "https://bedrock-runtime.us-west-2.api.aws",
+      hostname: "bedrock-runtime.us-west-2.api.aws",
+      signingRegion: "us-west-2",
+      customEndpoint: false,
+    },
+    {
+      name: "configured canonical dual-stack endpoint with SDK dual-stack mode",
+      remoteBaseUrl: undefined,
+      providerBaseUrl: "https://bedrock-runtime.us-west-2.api.aws",
+      hostname: "bedrock-runtime.us-west-2.api.aws",
+      signingRegion: "us-west-2",
+      dualstack: true,
+      customEndpoint: false,
+    },
+    {
+      name: "configured canonical combined FIPS and dual-stack endpoint",
+      remoteBaseUrl: undefined,
+      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.api.aws",
+      hostname: "bedrock-runtime-fips.us-west-2.api.aws",
+      signingRegion: "us-west-2",
+      customEndpoint: false,
+    },
+    {
+      name: "configured canonical combined FIPS and dual-stack endpoint with SDK modes",
+      remoteBaseUrl: undefined,
+      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.api.aws",
+      hostname: "bedrock-runtime-fips.us-west-2.api.aws",
+      signingRegion: "us-west-2",
+      fips: true,
+      dualstack: true,
+      customEndpoint: false,
+    },
+    {
+      name: "configured FIPS endpoint upgraded by SDK dual-stack mode",
+      remoteBaseUrl: undefined,
+      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.amazonaws.com",
+      hostname: "bedrock-runtime-fips.us-west-2.api.aws",
+      signingRegion: "us-west-2",
+      dualstack: true,
+      customEndpoint: false,
+    },
+    {
+      name: "configured dual-stack endpoint upgraded by SDK FIPS mode",
+      remoteBaseUrl: undefined,
+      providerBaseUrl: "https://bedrock-runtime.us-west-2.api.aws",
+      hostname: "bedrock-runtime-fips.us-west-2.api.aws",
+      signingRegion: "us-west-2",
+      fips: true,
+      customEndpoint: false,
+    },
+    {
+      name: "configured GovCloud FIPS endpoint with partition-aware signing",
+      remoteBaseUrl: undefined,
+      providerBaseUrl: "https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com",
+      hostname: "bedrock-runtime-fips.us-gov-west-1.amazonaws.com",
+      signingRegion: "us-gov-west-1",
+      customEndpoint: false,
+    },
+    {
+      name: "configured China FIPS dual-stack endpoint with its partition DNS suffix",
+      remoteBaseUrl: undefined,
+      providerBaseUrl: "https://bedrock-runtime-fips.cn-north-1.api.amazonwebservices.com.cn",
+      hostname: "bedrock-runtime-fips.cn-north-1.api.amazonwebservices.com.cn",
+      signingRegion: "cn-north-1",
+      customEndpoint: false,
+    },
+    {
+      name: "ISO PrivateLink endpoint when speculative security modes are unsupported",
+      remoteBaseUrl: "https://vpce-memory.bedrock-runtime.us-iso-east-1.c2s.ic.gov",
+      providerBaseUrl: undefined,
+      hostname: "vpce-memory.bedrock-runtime.us-iso-east-1.c2s.ic.gov",
+      signingRegion: "us-iso-east-1",
+      unsupportedPartitionModes: true,
+    },
+    {
+      name: "ISO regional endpoint that correctly rejects an explicitly requested unsupported mode",
+      remoteBaseUrl: undefined,
+      providerBaseUrl: "https://bedrock-runtime.us-iso-east-1.c2s.ic.gov",
+      hostname: "bedrock-runtime.us-iso-east-1.c2s.ic.gov",
+      signingRegion: "us-iso-east-1",
+      dualstack: true,
+      unsupportedPartitionModes: true,
+      expectedError: "DualStack is enabled but this partition does not support DualStack",
+    },
+    {
       name: "SDK PrivateLink override for a canonical regional provider URL",
       remoteBaseUrl: undefined,
       providerBaseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -101,6 +209,15 @@ describe("bedrock embedding endpoint routing", () => {
       signingRegion: "us-east-1",
       fips: true,
       expectedError: "Invalid Configuration: FIPS and custom endpoint are not supported",
+    },
+    {
+      name: "explicit PrivateLink endpoint that correctly rejects dual-stack mode",
+      remoteBaseUrl: "https://vpce-memory.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+      providerBaseUrl: undefined,
+      hostname: "vpce-memory.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+      signingRegion: "us-east-1",
+      dualstack: true,
+      expectedError: "Invalid Configuration: Dualstack and custom endpoint are not supported",
     },
   ])("sends signed requests to the $name", async (testCase) => {
     const { remoteBaseUrl, providerBaseUrl, hostname, signingRegion } = testCase;
@@ -119,29 +236,51 @@ describe("bedrock embedding endpoint routing", () => {
     vi.stubEnv("AWS_USE_FIPS_ENDPOINT", fips ? "true" : undefined);
     vi.stubEnv("AWS_USE_DUALSTACK_ENDPOINT", dualstack ? "true" : undefined);
 
-    const observedRequests: Array<{ hostname: string; authorization: string | undefined }> = [];
-    const originalSend = BedrockRuntimeClient.prototype.send;
-    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(
-      function (command, options) {
-        this.config.requestHandler = {
-          handle: async (request) => {
-            observedRequests.push({
-              hostname: request.hostname,
-              authorization: request.headers.authorization,
+    if ("unsupportedPartitionModes" in testCase) {
+      const { BedrockRuntimeClient: ActualBedrockRuntimeClient } = await vi.importActual<
+        typeof import("@aws-sdk/client-bedrock-runtime")
+      >("@aws-sdk/client-bedrock-runtime");
+      vi.mocked(bedrockRuntimeSdk.BedrockRuntimeClient).mockImplementation(
+        class extends ActualBedrockRuntimeClient {
+          constructor(...args: ConstructorParameters<typeof ActualBedrockRuntimeClient>) {
+            super(...args);
+            const endpointProvider = this.config.endpointProvider.bind(this.config);
+            vi.spyOn(this.config, "endpointProvider").mockImplementation((parameters, context) => {
+              if (
+                parameters.Region === "us-iso-east-1" &&
+                !parameters.Endpoint &&
+                (parameters.UseFIPS || parameters.UseDualStack)
+              ) {
+                const unsupportedMode = parameters.UseFIPS ? "FIPS" : "DualStack";
+                throw new Error(
+                  `${unsupportedMode} is enabled but this partition does not support ${unsupportedMode}`,
+                );
+              }
+              return endpointProvider(parameters, context);
             });
-            return {
-              response: {
-                statusCode: 200,
-                headers: { "content-type": "application/json" },
-                body: Buffer.from(JSON.stringify({ embedding: [3, 4] })),
-              },
-            };
+          }
+        },
+      );
+    }
+
+    const observedRequests: Array<{ hostname: string; authorization: string | undefined }> = [];
+    vi.spyOn(NodeHttp2Handler, "create").mockImplementation(() => {
+      const requestHandler = new NodeHttp2Handler();
+      vi.spyOn(requestHandler, "handle").mockImplementation(async (request) => {
+        observedRequests.push({
+          hostname: request.hostname,
+          authorization: request.headers.authorization,
+        });
+        return {
+          response: {
+            statusCode: 200,
+            headers: { "content-type": "application/json" },
+            body: Buffer.from(JSON.stringify({ embedding: [3, 4] })),
           },
-          destroy() {},
         };
-        return originalSend.call(this, command, options);
-      },
-    );
+      });
+      return requestHandler;
+    });
 
     const { provider, client } = await createBedrockEmbeddingProvider({
       config: providerBaseUrl

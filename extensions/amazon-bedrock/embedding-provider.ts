@@ -24,6 +24,8 @@ type BedrockEmbeddingClient = {
   model: string;
   dimensions?: number;
   endpoint?: string;
+  useFipsEndpoint?: true;
+  useDualstackEndpoint?: true;
 };
 
 /** Default Bedrock embedding model used when no explicit model is configured. */
@@ -150,7 +152,7 @@ function loadDefaultCredentialProvider(): Promise<AwsCredentialProvider | null> 
 // ---------------------------------------------------------------------------
 
 const MODEL_PREFIX_RE = /^(?:bedrock|amazon-bedrock|aws)\//;
-const REGION_RE = /bedrock-runtime\.([a-z0-9-]+)\./;
+const REGION_RE = /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\./;
 
 function normalizeBedrockEmbeddingModel(model: string): string {
   const trimmed = model.trim();
@@ -321,7 +323,12 @@ export async function createBedrockEmbeddingProvider(
 
   const invoke = async (body: string, signal?: AbortSignal): Promise<string> => {
     await refreshAwsSharedConfigCacheForBedrock();
-    const sdk = new BedrockRuntimeClient({ region: client.region, endpoint: client.endpoint });
+    const sdk = new BedrockRuntimeClient({
+      region: client.region,
+      endpoint: client.endpoint,
+      useFipsEndpoint: client.useFipsEndpoint,
+      useDualstackEndpoint: client.useDualstackEndpoint,
+    });
     try {
       const res = await sdk.send(
         new InvokeModelCommand({
@@ -408,6 +415,8 @@ function resolveBedrockEmbeddingClient(
   let endpoint =
     normalizeOptionalString(options.remote?.baseUrl) ??
     normalizeOptionalString(providerConfig?.baseUrl);
+  let useFipsEndpoint: true | undefined;
+  let useDualstackEndpoint: true | undefined;
 
   const region =
     regionFromUrl(options.remote?.baseUrl) ??
@@ -419,10 +428,28 @@ function resolveBedrockEmbeddingClient(
   if (endpoint) {
     const sdk = new BedrockRuntimeClient({ region });
     try {
-      const endpointModes = { Region: region, UseFIPS: false, UseDualStack: false };
-      const regionalEndpoint = sdk.config.endpointProvider(endpointModes).url.href;
-      // Pinning regional metadata would defeat SDK-owned FIPS and private endpoint overrides.
-      endpoint = new URL(endpoint).href === regionalEndpoint ? undefined : endpoint;
+      const normalizedEndpoint = new URL(endpoint).href;
+      for (const fips of [false, true]) {
+        for (const dualstack of [false, true]) {
+          const endpointModes = { Region: region, UseFIPS: fips, UseDualStack: dualstack };
+          try {
+            if (sdk.config.endpointProvider(endpointModes).url.href !== normalizedEndpoint) {
+              continue;
+            }
+          } catch {
+            // Unsupported hypothetical modes must not reject a valid custom endpoint.
+            continue;
+          }
+          // SDK-owned endpoints must retain their security modes and environment overrides.
+          endpoint = undefined;
+          useFipsEndpoint = fips || undefined;
+          useDualstackEndpoint = dualstack || undefined;
+          break;
+        }
+        if (!endpoint) {
+          break;
+        }
+      }
     } finally {
       sdk.destroy();
     }
@@ -440,7 +467,14 @@ function resolveBedrockEmbeddingClient(
     dimensions = spec?.dims;
   }
 
-  return { region, model, dimensions, ...(endpoint ? { endpoint } : {}) };
+  return {
+    region,
+    model,
+    dimensions,
+    ...(endpoint ? { endpoint } : {}),
+    ...(useFipsEndpoint ? { useFipsEndpoint } : {}),
+    ...(useDualstackEndpoint ? { useDualstackEndpoint } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
