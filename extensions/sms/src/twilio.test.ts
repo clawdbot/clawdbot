@@ -347,12 +347,16 @@ describe("Twilio SMS helpers", () => {
     );
   });
 
+  it("opts delivery commits into 5xx retries without adding 4xx retries", () => {
+    const callbackUrl = resolveTwilioStatusCallbackUrl("https://gateway.example.com/webhooks/sms");
+    const overrides = new URLSearchParams(callbackUrl.split("#")[1]);
+
+    expect(overrides.get("rp")?.split(",")).toEqual(["ct", "5xx"]);
+    expect(overrides.get("rp")?.split(",")).not.toContain("4xx");
+    expect(overrides.get("rc")).toBe("1");
+  });
+
   it.each([
-    [
-      "adds connection and server-error retries by default",
-      "https://gateway.example.com/webhooks/sms",
-      "https://gateway.example.com/webhooks/sms#rp=ct,5xx&rc=1",
-    ],
     [
       "accepts an absolute HTTP callback URL",
       "http://gateway.example.com/webhooks/sms",

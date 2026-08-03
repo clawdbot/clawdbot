@@ -21,11 +21,11 @@ import {
 import type { ResolvedSmsAccount } from "./types.js";
 
 const INVALID_REQUEST_MAX_REQUESTS = 300;
-const CALLBACK_DISPATCH_MAX_REQUESTS = 30;
+const INBOUND_DISPATCH_MAX_REQUESTS = 30;
 const SMS_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
 const SMS_WEBHOOK_ACCEPTED_VALUE = "durable";
 
-// Count failed-auth traffic separately from the stricter dispatchable callback quota.
+// Count failed-auth traffic separately from the stricter dispatchable inbound quota.
 // The over-budget decision is applied only after validation fails, so a same-key
 // invalid burst cannot block a later valid Twilio callback before authentication.
 const invalidRequestRateLimiter = createFixedWindowRateLimiter({
@@ -33,14 +33,14 @@ const invalidRequestRateLimiter = createFixedWindowRateLimiter({
   windowMs: 60_000,
   maxTrackedKeys: 5_000,
 });
-const callbackDispatchRateLimiter = createFixedWindowRateLimiter({
-  maxRequests: CALLBACK_DISPATCH_MAX_REQUESTS,
+const inboundDispatchRateLimiter = createFixedWindowRateLimiter({
+  maxRequests: INBOUND_DISPATCH_MAX_REQUESTS,
   windowMs: 60_000,
   maxTrackedKeys: 5_000,
 });
-const VALIDATED_AGGREGATE_MAX_REQUESTS = 300;
-const validatedAggregateRateLimiter = createFixedWindowRateLimiter({
-  maxRequests: VALIDATED_AGGREGATE_MAX_REQUESTS,
+const VALIDATED_INBOUND_AGGREGATE_MAX_REQUESTS = 300;
+const validatedInboundAggregateRateLimiter = createFixedWindowRateLimiter({
+  maxRequests: VALIDATED_INBOUND_AGGREGATE_MAX_REQUESTS,
   windowMs: 60_000,
   maxTrackedKeys: 1_000,
 });
@@ -146,10 +146,13 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       return rejectInvalidRequestRateLimit({ key: clientAddressKey, log: params.log, res });
     }
 
+    // Signed delivery callbacks bypass inbound dispatch quotas because Twilio does not
+    // retry HTTP errors by default. Bounded keyed state owns durable admission, and the
+    // generated StatusCallback opts into 5xx retries when that commit fails.
     if (isTwilioDeliveryStatusForm(form)) {
       if (
         params.account.dangerouslyDisableSignatureValidation &&
-        callbackDispatchRateLimiter.isRateLimited(clientAddressKey)
+        inboundDispatchRateLimiter.isRateLimited(clientAddressKey)
       ) {
         params.log?.warn?.("SMS webhook callback rate limit exceeded");
         respondTwiml(res, 429, "Rate limit exceeded");
@@ -191,7 +194,7 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     const dispatchKey = params.account.dangerouslyDisableSignatureValidation
       ? clientAddressKey
       : rateLimitKey({ account: params.account, subject: resolveTwilioInboundSender(form) });
-    if (callbackDispatchRateLimiter.isRateLimited(dispatchKey)) {
+    if (inboundDispatchRateLimiter.isRateLimited(dispatchKey)) {
       params.log?.warn?.("SMS webhook callback rate limit exceeded");
       respondTwiml(res, 429, "Rate limit exceeded");
       return true;
@@ -202,7 +205,7 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     // cannot create unbounded durable-ingress pressure.
     if (!params.account.dangerouslyDisableSignatureValidation) {
       const aggregateKey = accountRouteRateLimitKey(params.account);
-      if (validatedAggregateRateLimiter.isRateLimited(aggregateKey)) {
+      if (validatedInboundAggregateRateLimiter.isRateLimited(aggregateKey)) {
         params.log?.warn?.(`SMS webhook aggregate rate limit exceeded for ${aggregateKey}`);
         respondTwiml(res, 429, "Rate limit exceeded");
         return true;

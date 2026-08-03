@@ -407,7 +407,7 @@ describe("SMS delivery observations", () => {
     expect(current.observations[0]?.rawDlrDoneDate).toBe("5");
   });
 
-  it("reopens plugin state when the injected runtime changes", async () => {
+  it("opens bounded plugin state and reopens it when the injected runtime changes", async () => {
     const firstStore = createStore();
     const secondStore = createStore();
     const firstOpen = vi.fn(() => firstStore);
@@ -427,7 +427,13 @@ describe("SMS delivery observations", () => {
     );
     await listRecentSmsDeliveryRecords(account);
 
-    expect(firstOpen).toHaveBeenCalledOnce();
-    expect(secondOpen).toHaveBeenCalledOnce();
+    const expectedOptions = {
+      namespace: "twilio-delivery-observations-v1",
+      maxEntries: 5_000,
+      overflowPolicy: "evict-oldest",
+      defaultTtlMs: 30 * 24 * 60 * 60 * 1000,
+    };
+    expect(firstOpen).toHaveBeenCalledExactlyOnceWith(expectedOptions);
+    expect(secondOpen).toHaveBeenCalledExactlyOnceWith(expectedOptions);
   });
 });

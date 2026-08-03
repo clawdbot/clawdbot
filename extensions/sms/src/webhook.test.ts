@@ -346,6 +346,57 @@ describe("createSmsWebhookHandler", () => {
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
   });
 
+  it("waits for the durable delivery commit before returning HTTP 200", async () => {
+    const account = createAccount();
+    const payload = createSignedDeliveryPayload({
+      account,
+      messageSid: createMessageSid(22),
+      status: "sent",
+    });
+    let releaseCommit: (() => void) | undefined;
+    const delivery = createDeliveryRecorder(
+      vi.fn<SmsDeliveryRecorder["record"]>(async ({ form }) => {
+        await new Promise<void>((resolve) => {
+          releaseCommit = resolve;
+        });
+        return {
+          duplicate: false,
+          record: {
+            accountId: account.accountId,
+            accountSidHash: "account-sid-hash",
+            messageSid: form.MessageSid ?? "",
+            status: form.MessageStatus ?? "",
+            firstObservedAt: 1,
+            lastObservedAt: 1,
+            observations: [],
+          },
+        };
+      }),
+    );
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account,
+      ingress: createIngress(),
+      delivery,
+    });
+    const res = createResponse();
+
+    const pending = handler(createRequest(payload.body, payload.signature), res);
+    await vi.waitFor(() => expect(delivery.record).toHaveBeenCalledOnce());
+    expect(res.endMock).not.toHaveBeenCalled();
+    expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+
+    if (!releaseCommit) {
+      throw new Error("expected pending SMS delivery commit");
+    }
+    releaseCommit();
+    await pending;
+
+    expect(res.statusCode).toBe(200);
+    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+    expect(res.endMock).toHaveBeenCalledOnce();
+  });
+
   it("acknowledges but does not store a signed delivery callback for another account", async () => {
     const payload = createSignedDeliveryPayload({
       messageSid: createMessageSid(22),
@@ -651,12 +702,15 @@ describe("createSmsWebhookHandler", () => {
     expect(defaultRes.statusCode).toBe(200);
   });
 
-  it("meters the validated dispatch quota per sender, not per shared egress address", async () => {
+  it("meters inbound dispatch per sender without throttling signed delivery callbacks", async () => {
     const warn = vi.fn();
+    const account = createAccount();
+    const delivery = createDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account,
       ingress: createIngress(),
+      delivery,
       log: { warn },
     });
 
@@ -699,13 +753,28 @@ describe("createSmsWebhookHandler", () => {
     );
     expect(stillLimitedRes.statusCode).toBe(429);
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
+
+    const status = createSignedDeliveryPayload({
+      account,
+      messageSid: createMessageSid(533),
+      status: "delivered",
+    });
+    const statusRes = createResponse();
+    await handler(createRequest(status.body, status.signature), statusRes);
+
+    expect(statusRes.statusCode).toBe(200);
+    expect(delivery.record).toHaveBeenCalledOnce();
+    expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
   });
 
-  it("bounds aggregate validated callback fan-out across distinct senders", async () => {
+  it("bounds aggregate inbound fan-out without throttling signed delivery callbacks", async () => {
+    const account = createAccount();
+    const delivery = createDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account,
       ingress: createIngress(),
+      delivery,
     });
 
     for (let i = 0; i < 300; i += 1) {
@@ -725,6 +794,18 @@ describe("createSmsWebhookHandler", () => {
     await handler(createRequest(overAggregate.body, overAggregate.signature), overAggregateRes);
 
     expect(overAggregateRes.statusCode).toBe(429);
+    expect(enqueueSmsIngress).toHaveBeenCalledTimes(300);
+
+    const status = createSignedDeliveryPayload({
+      account,
+      messageSid: createMessageSid(1_201),
+      status: "delivered",
+    });
+    const statusRes = createResponse();
+    await handler(createRequest(status.body, status.signature), statusRes);
+
+    expect(statusRes.statusCode).toBe(200);
+    expect(delivery.record).toHaveBeenCalledOnce();
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(300);
   });
 
