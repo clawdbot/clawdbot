@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { OpenClawSchema } from "../config/zod-schema.js";
+import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 import { startNodeHostMcpManager } from "./mcp.js";
 
 function tool(name: string, description?: string): Tool {
@@ -62,6 +63,18 @@ async function startManagerWithTools(listed: ReadonlyArray<{ serverName: string;
       warn: vi.fn(),
     },
   );
+}
+
+function itWithFrozenClock(name: string, run: () => Promise<void>): void {
+  it(name, async () => {
+    // Size and pagination proofs must not spend the separately tested catalog deadline.
+    useFrozenTime(1_000);
+    try {
+      await run();
+    } finally {
+      useRealTime();
+    }
+  });
 }
 
 describe("node host MCP manager", () => {
@@ -193,7 +206,7 @@ describe("node host MCP manager", () => {
     await untrusted.close();
   });
 
-  it("bounds untrusted descriptor count and schema bytes", async () => {
+  itWithFrozenClock("bounds untrusted descriptor count and schema bytes", async () => {
     const tools = Array.from({ length: 130 }, (_, index) =>
       tool(`tool-${String(index).padStart(3, "0")}`),
     );
@@ -213,7 +226,7 @@ describe("node host MCP manager", () => {
     await manager.close();
   });
 
-  it("keeps global descriptor ordering across catalog pages", async () => {
+  itWithFrozenClock("keeps global descriptor ordering across catalog pages", async () => {
     const firstPage = Array.from({ length: 128 }, (_, index) =>
       tool(`z-${String(index).padStart(3, "0")}`),
     );
@@ -291,7 +304,7 @@ describe("node host MCP manager", () => {
     expect(healthy.close).toHaveBeenCalledOnce();
   });
 
-  it("isolates endless unique-cursor pagination at the page ceiling", async () => {
+  itWithFrozenClock("isolates endless unique-cursor pagination at the page ceiling", async () => {
     let page = 0;
     const endless = createClient({
       list: async () => {
@@ -305,9 +318,7 @@ describe("node host MCP manager", () => {
       { endless: { command: "endless" }, healthy: { command: "healthy" } },
       {
         createClient: (serverName) => (serverName === "endless" ? endless : healthy),
-        // Prove the page ceiling without loaded CI accidentally hitting the
-        // catalog deadline; timeout behavior has its own dedicated coverage.
-        resolveTransport: () => ({ ...transport, requestTimeoutMs: 1_000 }),
+        resolveTransport: () => transport,
         warn,
       },
     );
@@ -367,12 +378,9 @@ describe("node host MCP manager", () => {
     }
   });
 
-  it("isolates an oversized multi-page catalog at the accumulated byte ceiling", async () => {
-    // Large-page byte counting must not spend this unrelated wall-clock deadline;
-    // the preceding case separately proves strict catalog timeout enforcement.
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    try {
+  itWithFrozenClock(
+    "isolates an oversized multi-page catalog at the accumulated byte ceiling",
+    async () => {
       const largeTool = {
         ...tool("large"),
         inputSchema: { type: "object" as const, description: "x".repeat(6 * 1024 * 1024) },
@@ -399,12 +407,10 @@ describe("node host MCP manager", () => {
       expect(manager.descriptors.map((descriptor) => descriptor.name)).toEqual(["healthy_search"]);
 
       await manager.close();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
-  it("isolates a listing that exceeds the retained candidate ceiling", async () => {
+  itWithFrozenClock("isolates a listing that exceeds the retained candidate ceiling", async () => {
     const overflowing = createClient({
       tools: Array.from({ length: 16_385 }, (_, index) => tool(`tool-${index}`)),
     });
