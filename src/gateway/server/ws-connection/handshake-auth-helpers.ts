@@ -68,6 +68,7 @@ function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
 export function resolveHandshakeBrowserSecurityContext(params: {
   requestOrigin?: string;
   clientIp: string | undefined;
+  fallbackClientIp?: string;
   hasProxyHeaders: boolean;
   isLocalClient: boolean;
   rateLimiter?: AuthRateLimiter;
@@ -77,7 +78,10 @@ export function resolveHandshakeBrowserSecurityContext(params: {
     params.requestOrigin && params.requestOrigin.trim() !== "",
   );
   const authRateLimitClientIp = resolveAuthRateLimitClientIp({
-    clientIp: params.clientIp,
+    // Trusted proxies intentionally return no resolved client for malformed or
+    // all-trusted chains. Preserve the socket fallback once so every later
+    // limiter check and write uses the same opaque proxy identity.
+    clientIp: params.clientIp ?? params.fallbackClientIp,
     hasProxyHeaders: params.hasProxyHeaders,
     isLocalClient: params.isLocalClient,
   });

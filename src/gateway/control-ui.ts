@@ -92,10 +92,7 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest, resolveRequestClientIp } from "./net.js";
-import {
-  AUTH_CREDENTIAL_FALLBACK_SERIALIZATION_SCOPE,
-  withSerializedRateLimitAttempt,
-} from "./rate-limit-attempt-serialization.js";
+import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -345,9 +342,9 @@ async function authorizeControlUiReadRequest(
   }
   // Shared and device credentials form one terminal auth attempt. Keep their
   // async checks together so concurrent fallbacks cannot outrun either bucket.
-  return await withSerializedRateLimitAttempt({
+  return await withSerializedCredentialFallbackAttempt({
+    limiter: authOpts.rateLimiter,
     ip: clientIp,
-    scope: AUTH_CREDENTIAL_FALLBACK_SERIALIZATION_SCOPE,
     run,
   });
 }

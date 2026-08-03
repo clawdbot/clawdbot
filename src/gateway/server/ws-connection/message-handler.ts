@@ -166,6 +166,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   const browserSecurity = resolveHandshakeBrowserSecurityContext({
     requestOrigin,
     clientIp,
+    fallbackClientIp: remoteAddr,
     hasProxyHeaders,
     isLocalClient,
     rateLimiter,

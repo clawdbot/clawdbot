@@ -12,10 +12,7 @@ import { verifyDeviceToken } from "../../../infra/device-pairing.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
-import {
-  AUTH_CREDENTIAL_FALLBACK_SERIALIZATION_SCOPE,
-  withSerializedRateLimitAttempt,
-} from "../../rate-limit-attempt-serialization.js";
+import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -61,9 +58,9 @@ export async function authenticateGatewayConnect(
   if (!context.authRateLimiter || !hasCredentialFallback) {
     return await authenticateGatewayConnectCore(context);
   }
-  return await withSerializedRateLimitAttempt({
+  return await withSerializedCredentialFallbackAttempt({
+    limiter: context.authRateLimiter,
     ip: context.browserRateLimitClientIp,
-    scope: AUTH_CREDENTIAL_FALLBACK_SERIALIZATION_SCOPE,
     run: async () => await authenticateGatewayConnectCore(context),
   });
 }

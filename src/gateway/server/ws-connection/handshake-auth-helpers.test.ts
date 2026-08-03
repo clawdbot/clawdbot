@@ -185,6 +185,17 @@ describe("handshake auth helpers", () => {
     expect(resolved.rateLimitClientIp).toBe("identity:forwarded-loopback:127.0.0.1");
   });
 
+  it("uses the socket fallback when a trusted proxy chain has no client identity", () => {
+    const resolved = resolveHandshakeBrowserSecurityContext({
+      clientIp: undefined,
+      fallbackClientIp: "127.0.0.1",
+      hasProxyHeaders: true,
+      isLocalClient: false,
+    });
+
+    expect(resolved.rateLimitClientIp).toBe("identity:forwarded-loopback:127.0.0.1");
+  });
+
   it("recommends device-token retry only for shared-token mismatch with device identity", () => {
     const resolved = resolveUnauthorizedHandshakeContext({
       connectAuth: { token: "shared-token" },

@@ -517,14 +517,47 @@ describe("gateway auth", () => {
     });
 
     expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter" });
-    expect(limiter.check).toHaveBeenCalledWith(
-      "identity:forwarded-loopback:127.0.0.1",
-      "shared-secret",
-    );
+    expect(limiter.check).not.toHaveBeenCalled();
     expect(limiter.reset).toHaveBeenCalledWith(
       "identity:forwarded-loopback:127.0.0.1",
       "shared-secret",
     );
+  });
+
+  it("keeps verified Tailscale avatars outside a locked shared proxy bucket", async () => {
+    const limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+    });
+    const proxyIdentity = "identity:forwarded-loopback:127.0.0.1";
+    limiter.recordFailure(proxyIdentity, "shared-secret");
+    const req = createTailscaleForwardedReq();
+
+    try {
+      const verified = await authorizeUserProfileAvatarHttpGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: true },
+        connectAuth: null,
+        tailscaleWhois: createTailscaleWhois(),
+        req,
+        rateLimiter: limiter,
+        browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
+      });
+      expect(verified).toMatchObject({ ok: true, method: "tailscale", user: "peter" });
+
+      const rejected = await authorizeUserProfileAvatarHttpGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: true },
+        connectAuth: null,
+        tailscaleWhois: async () => ({ login: "mallory", name: "Mallory" }),
+        req,
+        rateLimiter: limiter,
+        browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
+      });
+      expect(rejected).toMatchObject({ ok: false, reason: "rate_limited" });
+    } finally {
+      limiter.dispose();
+    }
   });
 
   it("rejects a cross-origin page before verifying Tailscale avatar identity", async () => {

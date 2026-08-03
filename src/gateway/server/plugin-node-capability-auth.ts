@@ -42,6 +42,15 @@ export async function authorizePluginNodeCapabilityRequest(params: {
     return { ok: false, reason: "unauthorized" };
   }
 
+  const capabilityAuthorized = Boolean(
+    capability &&
+    hasAuthorizedPluginNodeCapability({
+      clients,
+      surface: nodeCapability,
+      capability,
+    }),
+  );
+
   let lastAuthFailure: GatewayAuthResult | null = null;
   const token = getBearerToken(req);
   if (token) {
@@ -54,6 +63,9 @@ export async function authorizePluginNodeCapabilityRequest(params: {
       trustedProxies,
       allowRealIpFallback,
       rateLimiter,
+      // The capability is part of this request's terminal credential set. A
+      // stale bearer must not poison the shared bucket when the fallback wins.
+      deferRateLimitFailure: capabilityAuthorized,
       browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
     });
     if (authResult.ok) {
@@ -62,14 +74,7 @@ export async function authorizePluginNodeCapabilityRequest(params: {
     lastAuthFailure = authResult;
   }
 
-  if (
-    capability &&
-    hasAuthorizedPluginNodeCapability({
-      clients,
-      surface: nodeCapability,
-      capability,
-    })
-  ) {
+  if (capabilityAuthorized) {
     return { ok: true };
   }
 

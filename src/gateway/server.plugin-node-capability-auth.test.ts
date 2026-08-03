@@ -542,6 +542,60 @@ describe("gateway plugin node capability auth", () => {
     }, "openclaw-canvas-auth-test-");
   }, 60_000);
 
+  test("does not charge a stale bearer when a valid node capability succeeds", async () => {
+    await withLoopbackTrustedProxy(async () => {
+      const rateLimiter = createAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        pruneIntervalMs: 0,
+      });
+      await withCanvasGatewayHarness({
+        resolvedAuth: tokenResolvedAuth,
+        rateLimiter,
+        handleHttpRequest: allowCanvasHostHttp,
+        run: async ({ listener, clients }) => {
+          const capability = "active-node";
+          clients.add(
+            makeWsClient({
+              connId: "c-active-node",
+              clientIp: "203.0.113.99",
+              role: "node",
+              mode: "node",
+              capability,
+              capabilityExpiresAtMs: Date.now() + 60_000,
+            }),
+          );
+          const proxyHeaders = {
+            authorization: "Bearer stale-token",
+            "x-forwarded-for": "203.0.113.99",
+          };
+
+          const scopedCanvas = await fetchCanvas(
+            `http://127.0.0.1:${listener.port}${scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`)}`,
+            { headers: proxyHeaders },
+          );
+          expect(scopedCanvas.status).toBe(200);
+          await expectWsConnected(
+            `ws://127.0.0.1:${listener.port}${scopedCanvasPath(capability, CANVAS_WS_PATH)}`,
+            proxyHeaders,
+          );
+
+          const sharedSecretControl = await fetchCanvas(
+            `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            {
+              headers: {
+                authorization: "Bearer test-token",
+                "x-forwarded-for": "203.0.113.99",
+              },
+            },
+          );
+          expect(sharedSecretControl.status).toBe(200);
+        },
+      });
+    });
+  }, 60_000);
+
   test("rejects malformed raw HTTP request targets without disrupting gateway", async () => {
     await withCanvasGatewayHarness({
       resolvedAuth: tokenResolvedAuth,

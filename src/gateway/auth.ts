@@ -555,17 +555,22 @@ async function authorizeGatewayConnectCore(
     return { ok: true, method: "none" };
   }
 
-  const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
-  if (rateLimitResult) {
-    return rateLimitResult;
-  }
-
-  if (
+  const canAttemptTailscaleHeaderAuth =
     allowTailscaleHeaderAuth &&
     auth.allowTailscale &&
     !localDirect &&
-    !hasExplicitSharedSecretAuth(connectAuth)
-  ) {
+    !hasExplicitSharedSecretAuth(connectAuth);
+  const verifyAvatarIdentityBeforeSharedLimit =
+    authSurface === "http-user-profile-avatar" && canAttemptTailscaleHeaderAuth;
+
+  if (!verifyAvatarIdentityBeforeSharedLimit) {
+    const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
+    if (rateLimitResult) {
+      return rateLimitResult;
+    }
+  }
+
+  if (canAttemptTailscaleHeaderAuth) {
     if (authSurface === "http-user-profile-avatar") {
       // Same-origin <img> loads may omit Origin, but Fetch Metadata still identifies
       // their source. Ambient identity accepts that omission only for same-origin loads,
@@ -593,6 +598,15 @@ async function authorizeGatewayConnectCore(
         method: "tailscale",
         user: tailscaleCheck.user.login,
       };
+    }
+  }
+
+  if (verifyAvatarIdentityBeforeSharedLimit) {
+    // Verified avatar identity is independent of the aggregate shared-secret
+    // bucket. A failed identity check still falls through to that bucket.
+    const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
+    if (rateLimitResult) {
+      return rateLimitResult;
     }
   }
 
