@@ -600,7 +600,7 @@ describe("resolveDirectSessionVisibility", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Session history visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+        "Session history visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
     });
   });
 
