@@ -301,6 +301,17 @@ export class AcpGatewayAgent implements Agent {
   }
 
   shutdown(): void {
+    // Abort any in-flight gateway runs so the daemon does not continue
+    // processing after the CLI process disconnects (e.g. Ctrl+C).
+    if (this.pendingPrompts.size > 0) {
+      const toCancel = Array.from(this.pendingPrompts.values());
+      for (const pending of toCancel) {
+        const session = this.sessionStore.getSession(pending.sessionId);
+        if (session) {
+          void this.cancelSessionWork(session).catch(() => {});
+        }
+      }
+    }
     this.sessionUpdates.stop();
     this.activeDisconnectContext = null;
     this.clearDisconnectTimer();

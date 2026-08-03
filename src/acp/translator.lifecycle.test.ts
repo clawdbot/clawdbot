@@ -525,3 +525,43 @@ describe("acp translator stable lifecycle handlers", () => {
     sessionStore.clearAllSessionsForTest();
   });
 });
+
+describe("shutdown aborts in-flight runs", () => {
+  it("sends chat.abort for all pending prompts when shutdown() is called (SIGINT path)", async () => {
+    const sentRunIds: string[] = [];
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) => {
+      if (_method === "chat.send") {
+        const runId = params.idempotencyKey as string;
+        sentRunIds.push(runId);
+        // never resolve — simulates an in-flight run
+        await new Promise<void>(() => {});
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+
+    const sessionStore = createInMemorySessionStore();
+    sessionStore.createSession({
+      sessionId: "session-sigint",
+      sessionKey: "agent:main:work",
+      cwd: "/tmp/openclaw",
+    });
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const pending = await startPendingPrompt({ agent, sentRunIds, sessionId: "session-sigint" });
+
+    // Simulate Ctrl+C / SIGINT triggering shutdown
+    agent.shutdown();
+
+    // The translator must have fired chat.abort for the in-flight run
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        "chat.abort",
+        expect.objectContaining({ runId: pending.runId }),
+      );
+    });
+
+    sessionStore.clearAllSessionsForTest();
+  });
+});
