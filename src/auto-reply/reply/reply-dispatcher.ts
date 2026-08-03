@@ -53,13 +53,17 @@ export type ReplyDispatchDeliveryOutcome =
 function isRetryableNoSendFailure(error: unknown): boolean {
   // An OutboundDeliveryError with sentBeforeError === false proves no
   // recipient-visible send occurred (e.g. channel listener not ready,
-  // reachout timelock active). Such failures are retryable and must not
-  // clear the pendingFinalDelivery marker (#117441).
-  if (isOutboundDeliveryError(error) && !error.sentBeforeError) {
-    return !findPlatformMessageRejectedError(error);
+  // reachout timelock active). Treat it as proven-not-sent so the
+  // pendingFinalDelivery marker is preserved (#117441), but still run the
+  // full graph-wide visible-send guard below — a nested cause may carry
+  // partial-delivery evidence that overrides the wrapper's sentBeforeError.
+  const provenNotSent =
+    isProvenDeliveryNotSentError(error) ||
+    (isOutboundDeliveryError(error) && !error.sentBeforeError);
+  if (!provenNotSent) {
+    return false;
   }
   return (
-    isProvenDeliveryNotSentError(error) &&
     !findPlatformMessageRejectedError(error) &&
     !collectErrorGraphCandidates(error, (candidate) => [
       candidate.cause,
