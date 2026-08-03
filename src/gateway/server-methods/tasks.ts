@@ -12,15 +12,20 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
-import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import { isTerminalTaskStatus } from "../../tasks/task-executor-policy.js";
+import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import { isChatAbortControllerEntryAbortable } from "../chat-abort.js";
 import { mapTaskSummary } from "./task-summary.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
+const CLI_TASK_CANCEL_SETTLE_TIMEOUT_MS = 10_000;
+const CLI_TASK_CANCEL_POLL_MS = 20;
 
 type TaskLedgerStatus = TaskSummary["status"];
 
@@ -52,6 +57,88 @@ function parseCursor(cursor: string | undefined): number | null {
   }
   const parsed = Number(cursor);
   return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+async function waitForCliTaskCancellationSettlement(params: {
+  taskId: string;
+  runId: string;
+  expectedController: AbortController;
+  context: GatewayRequestContext;
+  timeoutMs?: number;
+}): Promise<TaskRecord | null> {
+  const deadline = Date.now() + (params.timeoutMs ?? CLI_TASK_CANCEL_SETTLE_TIMEOUT_MS);
+  while (true) {
+    const current = getTaskById(params.taskId);
+    const active = params.context.chatAbortControllers.get(params.runId);
+    if (
+      current &&
+      isTerminalTaskStatus(current.status) &&
+      active?.controller !== params.expectedController
+    ) {
+      return current;
+    }
+    if (Date.now() >= deadline) {
+      return null;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, CLI_TASK_CANCEL_POLL_MS);
+    });
+  }
+}
+
+async function cancelGatewayCliTask(params: {
+  task: TaskRecord;
+  reason?: string;
+  context: GatewayRequestContext;
+}): Promise<{ found: true; cancelled: boolean; reason?: string; task: TaskRecord }> {
+  const runId = params.task.runId?.trim();
+  const active = runId ? params.context.chatAbortControllers.get(runId) : undefined;
+  if (!runId || !active || active.kind !== "agent") {
+    return {
+      found: true,
+      cancelled: false,
+      reason: "CLI task has no active gateway cancellation handle.",
+      task: params.task,
+    };
+  }
+  if (!isChatAbortControllerEntryAbortable(active)) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: active.controller.signal.aborted
+        ? "CLI task cancellation is already in progress."
+        : "CLI task runtime rejected cancellation.",
+      task: params.task,
+    };
+  }
+
+  active.abortStopReason = "rpc";
+  active.controller.abort(
+    createAbortError(params.reason?.trim() || "CLI task cancellation requested by operator."),
+  );
+  const settled = await waitForCliTaskCancellationSettlement({
+    taskId: params.task.taskId,
+    runId,
+    expectedController: active.controller,
+    context: params.context,
+  });
+  if (!settled) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: `CLI task received cancellation but did not terminate within ${CLI_TASK_CANCEL_SETTLE_TIMEOUT_MS}ms.`,
+      task: getTaskById(params.task.taskId) ?? params.task,
+    };
+  }
+  if (settled.status !== "cancelled") {
+    return {
+      found: true,
+      cancelled: false,
+      reason: `CLI task became ${settled.status} while cancellation was in progress.`,
+      task: settled,
+    };
+  }
+  return { found: true, cancelled: true, task: settled };
 }
 
 // Control UI task methods expose the stable gateway protocol shape; helpers
@@ -125,6 +212,17 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
+    const task = getTaskById(taskId);
+    if (task?.runtime === "cli" && !isTerminalTaskStatus(task.status)) {
+      const result = await cancelGatewayCliTask({ task, reason, context });
+      respond(true, {
+        found: result.found,
+        cancelled: result.cancelled,
+        ...(result.reason ? { reason: result.reason } : {}),
+        task: mapTaskSummary(result.task),
+      });
+      return;
+    }
     const { cancelDetachedTaskRunById } =
       await import("../../tasks/task-executor-cancel.runtime.js");
     const result = await cancelDetachedTaskRunById({

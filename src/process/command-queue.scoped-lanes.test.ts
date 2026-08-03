@@ -244,6 +244,7 @@ describe("scoped command lane lifecycle", () => {
     });
     const replacementState = {
       lane,
+      createdAtMs: Date.now(),
       queue: [],
       activeTaskIds: new Set<number>(),
       maxConcurrent: 1,

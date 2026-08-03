@@ -79,6 +79,17 @@ export type DeliveryQueueHealthSummary = {
   }>;
 };
 
+/** Live process-local health for ephemeral per-session command lanes. */
+export type SessionLaneHealthSummary = {
+  status: "healthy" | "degraded" | "unhealthy";
+  count: number;
+  activeCount: number;
+  queuedCount: number;
+  idleCount: number;
+  oldestAgeMs: number | null;
+  oldestQueuedAgeMs: number | null;
+};
+
 /** Config hot-reload watcher status, present only when a reloader is running. */
 type ConfigReloadHealthSummary = {
   hotReloadStatus: import("../config-reload-status.types.js").GatewayHotReloadStatus;
@@ -90,6 +101,8 @@ export type HealthSummary = {
   ts: number;
   durationMs: number;
   eventLoop?: import("../server/event-loop-health.js").GatewayEventLoopHealth;
+  /** Always present on newly collected snapshots; optional for persisted/test legacy snapshots. */
+  sessionLanes?: SessionLaneHealthSummary;
   plugins?: PluginHealthSummary;
   contextEngines?: ContextEngineHealthSummary;
   deliveryQueues?: DeliveryQueueHealthSummary;

@@ -29,6 +29,8 @@ export type QueueEntry = {
 
 export type LaneState = {
   lane: string;
+  /** When this exact resident lane state was created. */
+  createdAtMs: number;
   queue: QueueEntry[];
   activeTaskIds: Set<number>;
   maxConcurrent: number;
@@ -69,6 +71,12 @@ export function getQueueState() {
   }
   let maxQueueSequence = state.nextQueueSequence - 1;
   for (const lane of state.lanes.values()) {
+    if (typeof lane.createdAtMs !== "number") {
+      lane.createdAtMs = lane.queue.reduce(
+        (oldest, entry) => Math.min(oldest, entry.enqueuedAt),
+        Date.now(),
+      );
+    }
     for (const [index, entry] of (
       lane.queue as Array<
         QueueEntry & {

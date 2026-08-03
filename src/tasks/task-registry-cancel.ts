@@ -84,7 +84,14 @@ export async function cancelTaskById(params: {
           task: cloneTaskRecord(task),
         };
       }
-    } else if (task.runtime !== "cli") {
+    } else if (task.runtime === "cli") {
+      return {
+        found: true,
+        cancelled: false,
+        reason: "CLI task has no runtime cancellation handle in this control plane.",
+        task: cloneTaskRecord(task),
+      };
+    } else {
       if (task.runtime === "cron") {
         const { cancelActiveCronTaskRun } = await loadTaskRegistryControlRuntime();
         if (

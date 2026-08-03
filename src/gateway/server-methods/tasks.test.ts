@@ -6,11 +6,16 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { enqueueCommandInLane, getCommandLaneSnapshots } from "../../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
@@ -26,9 +31,11 @@ import {
   resetTaskRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
+import { createDeferred } from "../../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { removeChatAbortControllerEntry } from "../chat-abort.js";
 import { tasksHandlers } from "./tasks.js";
-import type { RespondFn } from "./types.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const cancelSessionMock = vi.fn();
@@ -84,7 +91,8 @@ function captureRespond() {
 function createContext() {
   return {
     getRuntimeConfig: () => ({}),
-  } as never;
+    chatAbortControllers: new Map(),
+  } as unknown as GatewayRequestContext;
 }
 
 function createSnapshotTask(overrides: Partial<TaskRecord>): TaskRecord {
@@ -109,6 +117,7 @@ function createSnapshotTask(overrides: Partial<TaskRecord>): TaskRecord {
 async function runTaskHandler(
   method: "tasks.list" | "tasks.get" | "tasks.cancel",
   params: Record<string, unknown>,
+  context = createContext(),
 ) {
   const { calls, respond } = captureRespond();
   await expectDefined(
@@ -118,7 +127,7 @@ async function runTaskHandler(
     req: { type: "req", id: `req-${method}`, method },
     params,
     respond,
-    context: createContext(),
+    context,
     client: null,
     isWebchatConnect: () => false,
   });
@@ -490,29 +499,129 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.lastToolName).toBe("exec");
   });
 
-  it("cancels running task records and returns the updated task", async () => {
+  it("kills a live CLI worker exactly once and releases its session lane before acknowledging", async () => {
+    resetCommandQueueStateForTest();
+    const sessionKey = "agent:main:relay72-kill-probe";
+    const runId = "run-cancel";
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
       scopeKind: "session",
-      runId: "run-cancel",
+      childSessionKey: sessionKey,
+      runId,
       task: "Cancelable task",
       status: "running",
       deliveryStatus: "pending",
     });
-
-    const { calls, payload } = await runTaskHandler("tasks.cancel", {
-      taskId: task.taskId,
-      reason: "user stopped task",
+    const context = createContext();
+    const controller = new AbortController();
+    const entry = {
+      controller,
+      sessionId: "relay72-kill-probe",
+      sessionKey,
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      kind: "agent" as const,
+    };
+    context.chatAbortControllers.set(runId, entry);
+    let cancelReceipts = 0;
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const workerStarted = createDeferred();
+    const worker = enqueueCommandInLane(lane, async () => {
+      workerStarted.resolve();
+      await new Promise<never>((_resolve, reject) => {
+        controller.signal.addEventListener(
+          "abort",
+          () => {
+            cancelReceipts += 1;
+            reject(createAbortError("worker killed by cancellation"));
+          },
+          { once: true },
+        );
+      });
     });
+    const workerSettled = worker.catch((error: unknown) => {
+      markTaskTerminalById({
+        taskId: task.taskId,
+        status: "cancelled",
+        endedAt: Date.now(),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      removeChatAbortControllerEntry(context.chatAbortControllers, runId, entry);
+    });
+    await workerStarted.promise;
+
+    const { calls, payload } = await runTaskHandler(
+      "tasks.cancel",
+      {
+        taskId: task.taskId,
+        reason: "user stopped task",
+      },
+      context,
+    );
+    await workerSettled;
 
     expect(calls[0]?.[0]).toBe(true);
     expect(payload?.found).toBe(true);
     expect(payload?.cancelled).toBe(true);
     expect(payload?.task?.id).toBe(task.taskId);
     expect(payload?.task?.status).toBe("cancelled");
-    expect(payload?.task?.error).toBe("user stopped task");
+    expect(payload?.task?.error).toBe("worker killed by cancellation");
+    expect(cancelReceipts).toBe(1);
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    expect(getCommandLaneSnapshots().some((snapshot) => snapshot.lane === lane)).toBe(false);
+
+    finalizeTaskRunByRunId({
+      runId,
+      runtime: "cli",
+      sessionKey,
+      status: "succeeded",
+      endedAt: Date.now() + 1,
+      terminalSummary: "late success must not win",
+    });
+    expect(getTaskById(task.taskId)).toMatchObject({
+      status: "cancelled",
+      error: "worker killed by cancellation",
+    });
+
+    const repeated = await runTaskHandler("tasks.cancel", { taskId: task.taskId }, context);
+    expect(repeated.payload?.cancelled).toBe(false);
+    expect(cancelReceipts).toBe(1);
+  });
+
+  it("fails loudly when a live CLI runtime deliberately rejects cancellation", async () => {
+    const task = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "run-uncancellable",
+      task: "Uncancellable task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    const context = createContext();
+    const controller = new AbortController();
+    context.chatAbortControllers.set("run-uncancellable", {
+      controller,
+      sessionId: "uncancellable-session",
+      sessionKey: "agent:main:main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      kind: "agent",
+      isAbortable: () => false,
+    });
+
+    const { payload } = await runTaskHandler("tasks.cancel", { taskId: task.taskId }, context);
+
+    expect(payload).toMatchObject({
+      found: true,
+      cancelled: false,
+      reason: "CLI task runtime rejected cancellation.",
+    });
+    expect(controller.signal.aborted).toBe(false);
+    expect(getTaskById(task.taskId)?.status).toBe("running");
   });
 
   it("cancels ACP tasks through the live Gateway handler and control runtime", async () => {

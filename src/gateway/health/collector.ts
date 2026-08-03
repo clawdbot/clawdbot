@@ -31,6 +31,7 @@ import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { buildNonSensitiveProbeFailure, resolveHealthAccountContext } from "./account-context.js";
 import { buildDeliveryQueueHealthSummary } from "./delivery-queue.js";
+import { buildSessionLaneHealthSummary } from "./session-lanes.js";
 import type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
@@ -403,6 +404,7 @@ export async function collectGatewayHealthSnapshot(params: {
     ts: Date.now(),
     durationMs: Date.now() - start,
     ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
+    sessionLanes: buildSessionLaneHealthSummary(),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
     ...(contextEngineHealth ? { contextEngines: contextEngineHealth } : {}),
     ...(deliveryQueueHealth ? { deliveryQueues: deliveryQueueHealth } : {}),

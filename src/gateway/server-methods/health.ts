@@ -6,6 +6,7 @@ import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import { getStatusSummary } from "../../status/summary.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
+import { buildSessionLaneHealthSummary } from "../health/session-lanes.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
@@ -133,6 +134,7 @@ function mergeCachedHealthRuntimeState(params: {
   }
   return {
     ...cached,
+    sessionLanes: buildSessionLaneHealthSummary(),
     ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(quarantinedContextEngines.length > 0
       ? { contextEngines: { quarantined: quarantinedContextEngines } }

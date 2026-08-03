@@ -4661,50 +4661,37 @@ describe("task-registry", () => {
       runId: "run-cancel-cli",
       task: "Investigate issue",
       childSessionKey: "agent:main:main",
-      expectedError: "Cancelled by operator.",
-      expectedMessage: "Background task cancelled: Investigate issue (run run-canc).",
     },
     {
       name: "cancels CLI-tracked tasks without childSessionKey",
       runId: "run-cli-no-child",
       task: "Legacy row",
       childSessionKey: undefined,
-      expectedError: undefined,
-      expectedMessage: undefined,
     },
-  ])(
-    "$name",
-    async ({ runId, task: taskName, childSessionKey, expectedError, expectedMessage }) => {
-      await withTaskRegistryTempDir(async () => {
-        const task = createTaskFixture("cli", {
-          requesterOrigin: NOTIFYCHAT_ORIGIN,
-          childSessionKey,
-          runId,
-          task: taskName,
-          deliveryStatus: "pending",
-        });
-        const result = await cancelTask(task.taskId);
-
-        expectRecordFields(result, { found: true, cancelled: true });
-        expectRecordFields(result.task, {
-          taskId: task.taskId,
-          status: "cancelled",
-          ...(expectedError === undefined ? {} : { error: expectedError }),
-        });
-        if (expectedMessage !== undefined) {
-          expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
-          expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
-          await waitForAssertion(() =>
-            expectRecordFields(sentMessageCall(), {
-              channel: "notifychat",
-              to: "notifychat:123",
-              content: expectedMessage,
-            }),
-          );
-        }
+  ])("$name", async ({ runId, task: taskName, childSessionKey }) => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("cli", {
+        requesterOrigin: NOTIFYCHAT_ORIGIN,
+        childSessionKey,
+        runId,
+        task: taskName,
+        deliveryStatus: "pending",
       });
-    },
-  );
+      const result = await cancelTask(task.taskId);
+
+      expectRecordFields(result, {
+        found: true,
+        cancelled: false,
+        reason: "CLI task has no runtime cancellation handle in this control plane.",
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "running",
+      });
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
+    });
+  });
 
   it("cancels active cron tasks through the cron runtime abort handle", async () => {
     await withTaskRegistryTempDir(async () => {
