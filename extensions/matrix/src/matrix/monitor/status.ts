@@ -1,10 +1,11 @@
 // Matrix plugin module implements status behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
-import { formatMatrixErrorMessage } from "../errors.js";
+import { isMatrixAccessTokenInvalidatedError } from "../sdk/client-support.js";
 import {
   isMatrixDisconnectedSyncState,
   isMatrixReadySyncState,
@@ -29,7 +30,7 @@ function formatSyncError(error: unknown): string | null {
   if (error instanceof Error) {
     return error.message || error.name || "unknown";
   }
-  return formatMatrixErrorMessage(error);
+  return formatErrorMessage(error);
 }
 
 export type MatrixMonitorStatusController = ReturnType<typeof createMatrixMonitorStatusController>;
@@ -47,6 +48,7 @@ export function createMatrixMonitorStatusController(params: {
     lastDisconnect: null,
     lastError: null,
     healthState: "starting",
+    lifecycle: "starting",
   };
 
   const emit = () => {
@@ -68,6 +70,8 @@ export function createMatrixMonitorStatusController(params: {
     status.lastError = null;
     status.lastDisconnect = null;
     status.healthState = "healthy";
+    status.lifecycle = "ready";
+    status.terminalDisconnect = undefined;
     emit();
   };
 
@@ -77,6 +81,15 @@ export function createMatrixMonitorStatusController(params: {
     error?: unknown;
   }) => {
     const at = paramsLocal.at ?? Date.now();
+    const tokenInvalidated = isMatrixAccessTokenInvalidatedError(paramsLocal.error);
+    if (status.lifecycle === "blocked" && status.terminalDisconnect === true && !tokenInvalidated) {
+      // The invalidated-token diagnosis is authoritative until a ready sync proves recovery.
+      // Late startup timeouts must not re-enable supervisor restarts or hide the auth failure.
+      status.connected = false;
+      status.lastEventAt = at;
+      emit();
+      return;
+    }
     const error = formatSyncError(paramsLocal.error);
     status.connected = false;
     status.lastEventAt = at;
@@ -86,6 +99,8 @@ export function createMatrixMonitorStatusController(params: {
     };
     status.lastError = error;
     status.healthState = paramsLocal.state.toLowerCase();
+    status.lifecycle = tokenInvalidated ? "blocked" : "recovering";
+    status.terminalDisconnect = tokenInvalidated || undefined;
     emit();
   };
 
@@ -116,8 +131,9 @@ export function createMatrixMonitorStatusController(params: {
     markStopped(at = Date.now()) {
       status.connected = false;
       status.lastEventAt = at;
-      if (status.healthState !== "error") {
+      if (status.lifecycle !== "blocked" && status.healthState !== "error") {
         status.healthState = "stopped";
+        status.lifecycle = "stopped";
       }
       emit();
     },

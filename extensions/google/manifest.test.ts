@@ -33,6 +33,9 @@ type GoogleManifest = {
       paths?: Array<{ path?: string; expected?: string }>;
     };
   };
+  contracts?: {
+    usageProviders?: string[];
+  };
   uiHints?: Record<string, { sensitive?: boolean }>;
 };
 
@@ -96,6 +99,10 @@ describe("google manifest model catalog", () => {
       }),
     ]);
     expect(choices.some((choice) => choice.provider === "google-gemini-cli")).toBe(false);
+  });
+
+  it("does not advertise retired Gemini CLI quota hooks", () => {
+    expect(loadManifest().contracts?.usageProviders).toBeUndefined();
   });
 
   it("suppresses retired Gemini chat model identifiers for all Google chat providers", () => {

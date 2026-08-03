@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core";
 /**
  * Builds structured observations for embedded-agent API/text failures.
  */
@@ -12,7 +13,6 @@ import {
   parseApiErrorInfo,
   type ProviderRuntimeFailureKind,
 } from "./embedded-agent-helpers.js";
-import { stableStringify } from "./stable-stringify.js";
 
 const MAX_OBSERVATION_INPUT_CHARS = 64_000;
 const MAX_FINGERPRINT_MESSAGE_CHARS = 8_000;

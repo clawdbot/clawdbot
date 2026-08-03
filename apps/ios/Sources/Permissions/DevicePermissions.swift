@@ -170,10 +170,13 @@ enum DevicePermissionStatusMap {
 final class DevicePermissionsModel {
     private(set) var grants: [DevicePermissionKind: DevicePermissionGrant] = [:]
     private(set) var requesting: Set<DevicePermissionKind> = []
+    private let eventKitPermissions: EventKitPermissionRequester
+
     /// Owns its manager so authorization callbacks resolve without the app-wide service.
     private let locationService = LocationService()
 
-    init() {
+    init(eventKitPermissions: EventKitPermissionRequester = EventKitPermissionRequester()) {
+        self.eventKitPermissions = eventKitPermissions
         self.locationService.setAuthorizationChangeHandler { [weak self] snapshot in
             self?.grants[.location] = DevicePermissionStatusMap.location(snapshot.authorizationStatus)
         }
@@ -225,17 +228,9 @@ final class DevicePermissionsModel {
                 }
             }
         case .calendar:
-            _ = await PermissionRequestBridge.awaitRequest { completion in
-                EKEventStore().requestFullAccessToEvents { granted, _ in
-                    completion(granted)
-                }
-            }
+            _ = await self.eventKitPermissions.requestFullAccessToEvents()
         case .reminders:
-            _ = await PermissionRequestBridge.awaitRequest { completion in
-                EKEventStore().requestFullAccessToReminders { granted, _ in
-                    completion(granted)
-                }
-            }
+            _ = await self.eventKitPermissions.requestFullAccessToReminders()
         case .location:
             _ = await self.locationService.ensureAuthorization(mode: .whileUsing)
         }

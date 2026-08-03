@@ -25,13 +25,21 @@ export function createTelegramPollingStatusPublisher(setStatus?: TelegramPolling
         // even when the response has no user-visible updates.
         ...createTransportActivityStatusPatch(at),
         mode: "polling",
+        lifecycle: "ready",
+        // Runtime patches merge, so a repaired token must clear the prior terminal auth fact.
+        terminalDisconnect: undefined,
         lastError: null,
       });
     },
-    notePollingError(error: string) {
+    notePollingRecovery() {
+      setStatus?.({ lifecycle: "recovering" });
+    },
+    notePollingError(error: string, lifecycle?: "recovering" | "blocked") {
       setStatus?.({
         mode: "polling",
         connected: false,
+        ...(lifecycle ? { lifecycle } : {}),
+        ...(lifecycle === "blocked" ? { terminalDisconnect: true } : {}),
         lastError: error,
       });
     },

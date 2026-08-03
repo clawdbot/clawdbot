@@ -241,7 +241,10 @@ async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<num
     const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
       | { maxRowid?: unknown }
       | undefined;
-    return typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid) ? row.maxRowid : null;
+    if (typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid)) {
+      return row.maxRowid;
+    }
+    return row?.maxRowid === null ? 0 : null;
   } catch (err) {
     logVerbose(`imessage: startup rowid watermark unavailable for db=${dbPath}: ${String(err)}`);
     return null;
@@ -488,15 +491,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const recoveryCursorRowid = loadIMessageRecoveryCursor(
     accountInfo.accountId,
     recoveryCursorDbIdentity,
-    { migrateLegacyCatchup: !catchupCfg.enabled },
+    { migrateLegacyCatchup: !catchupCfg.enabled, watermarkRowid: recoveryBoundaryRowid },
   );
-  const watchSinceRowid = catchupCfg.enabled
+  const reconciledWatchSinceRowid = catchupCfg.enabled
     ? null
     : recoveryCursorRowid !== null
       ? recoveryBoundaryRowid !== null
         ? Math.max(recoveryCursorRowid, recoveryBoundaryRowid - IMESSAGE_RECOVERY_MAX_ROWS)
         : recoveryCursorRowid
       : recoveryBoundaryRowid;
+  // imsg reserves cursor 0 for a subscribe-time MAX(ROWID) self-fence. Use the
+  // exclusive cursor before SQLite's first generated ROWID instead.
+  const watchSinceRowid = reconciledWatchSinceRowid === 0 ? -1 : reconciledWatchSinceRowid;
 
   let latestAdvancedRecoveryCursorRowid = recoveryCursorRowid ?? -1;
   const durableRecoveryCursorRowids = new Set<number>();
@@ -1546,6 +1552,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         { timeoutMs: probeTimeoutMs },
       );
       attemptSubscriptionId = result?.subscription ?? null;
+      opts.statusSink?.({
+        connected: true,
+        lifecycle: "ready",
+        lastConnectedAt: Date.now(),
+        lastError: null,
+        terminalDisconnect: undefined,
+      });
       client = attemptClient;
       detachAbortHandler = attemptDetachAbortHandler;
       keepAttemptClient = true;
@@ -1554,9 +1567,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (abort?.aborted) {
         return;
       }
-      const shouldRetry =
-        attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && isRetriableWatchSubscribeStartupError(err);
+      const retriable = isRetriableWatchSubscribeStartupError(err);
+      const shouldRetry = attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && retriable;
       if (!shouldRetry) {
+        opts.statusSink?.({
+          connected: false,
+          lifecycle: retriable ? "recovering" : "blocked",
+          terminalDisconnect: retriable ? undefined : true,
+          lastError: String(err),
+        });
         runtime.error?.(
           danger(
             `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure({
@@ -1575,6 +1594,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         );
         throw err;
       }
+      opts.statusSink?.({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: String(err),
+      });
       runtime.log?.(
         warn(
           describeIMessageWatchSubscribeStartupFailure({

@@ -168,18 +168,15 @@ function realtimeTalkAbortReason(signal: AbortSignal): Error {
 }
 
 async function awaitRealtimeTalkMediaRequest(
-  request: Promise<MediaStream>,
+  startRequest: () => Promise<MediaStream>,
   signal: AbortSignal | undefined,
 ): Promise<MediaStream> {
+  if (signal?.aborted) {
+    throw realtimeTalkAbortReason(signal);
+  }
+  const request = startRequest();
   if (!signal) {
     return await request;
-  }
-  if (signal.aborted) {
-    void request.then(
-      (stream) => stream.getTracks().forEach((track) => track.stop()),
-      () => undefined,
-    );
-    throw realtimeTalkAbortReason(signal);
   }
   let removeAbortListener: () => void = () => undefined;
   const aborted = new Promise<never>((_resolve, reject) => {
@@ -216,9 +213,10 @@ export async function openRealtimeTalkInput(
   let audio: MediaStream;
   try {
     audio = await awaitRealtimeTalkMediaRequest(
-      devices.getUserMedia({
-        audio: realtimeTalkAudioConstraints(inputDeviceId),
-      }),
+      () =>
+        devices.getUserMedia({
+          audio: realtimeTalkAudioConstraints(inputDeviceId),
+        }),
       options.signal,
     );
   } catch (error) {
@@ -250,9 +248,10 @@ export async function openRealtimeTalkCamera(
   let camera: MediaStream;
   try {
     camera = await awaitRealtimeTalkMediaRequest(
-      devices.getUserMedia({
-        video: deviceId ? { deviceId: { exact: deviceId } } : true,
-      }),
+      () =>
+        devices.getUserMedia({
+          video: deviceId ? { deviceId: { exact: deviceId } } : true,
+        }),
       options.signal,
     );
     if (options.signal?.aborted) {

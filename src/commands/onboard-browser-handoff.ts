@@ -172,8 +172,12 @@ function isConnectedControlUi(entry: SystemPresence): boolean {
   );
 }
 
-function dashboardPresenceKey(entry: SystemPresence): string {
-  return [entry.deviceId, entry.instanceId, entry.host, entry.mode, entry.ts].join("\0");
+export function resolveConnectedControlUiPresenceKeys(
+  entries: readonly SystemPresence[],
+): string[] {
+  return entries
+    .filter(isConnectedControlUi)
+    .map((entry) => [entry.deviceId, entry.instanceId, entry.host, entry.mode].join("\0"));
 }
 
 async function probeDashboardPresence(
@@ -203,7 +207,7 @@ async function probeDashboardPresence(
     });
     return {
       reachable: true,
-      clientKeys: (presence ?? []).filter(isConnectedControlUi).map(dashboardPresenceKey),
+      clientKeys: resolveConnectedControlUiPresenceKeys(presence ?? []),
     };
   } catch (error) {
     return {
@@ -311,7 +315,7 @@ export async function runBrowserHatchHandoff(
       t("wizard.guided.browserHandoffTitle"),
     );
   } else {
-    const sshHint = target.sshHint ? `\n\n${target.sshHint}` : "";
+    const sshHint = !graphical && target.sshHint ? `\n\n${target.sshHint}` : "";
     await params.prompter.note(
       `${t("wizard.guided.browserHandoffCopy", { url: target.dashboardUrl })}${sshHint}`,
       t("wizard.guided.browserHandoffTitle"),

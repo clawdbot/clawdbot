@@ -150,3 +150,41 @@ describe("zalouser monitor pairing account scoping", () => {
     expect(sendMessageZalouserMock).toHaveBeenCalled();
   });
 });
+
+describe("zalouser monitor lifecycle", () => {
+  it("publishes ready after the listener starts", async () => {
+    setZalouserRuntime({
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as unknown as PluginRuntime);
+    startZaloListenerMock.mockResolvedValueOnce({ stop: vi.fn() });
+    const statusSink = vi.fn();
+
+    await withZalouserIngressTestQueue(async (ingressQueue) => {
+      const abortController = new AbortController();
+      const run = monitorZalouserProvider({
+        account: {
+          accountId: "default",
+          enabled: true,
+          profile: "default",
+          authenticated: true,
+          config: {},
+        },
+        config: {},
+        runtime: createZalouserRuntimeEnv(),
+        abortSignal: abortController.signal,
+        statusSink,
+        ingressQueue,
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(statusSink).toHaveBeenCalledWith({ lifecycle: "ready" });
+        });
+      } finally {
+        abortController.abort();
+        await run;
+      }
+    });
+  });
+});

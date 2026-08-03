@@ -9,6 +9,7 @@ import {
   logAnnounceGiveUp,
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
+  resolveAnnounceRetryDelayMs,
   resolveSubagentArchiveAtMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
@@ -29,6 +30,14 @@ function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRun
     ...overrides,
   };
 }
+
+describe("resolveAnnounceRetryDelayMs", () => {
+  it("preserves the exact retry schedule through attempt 10", () => {
+    expect(
+      Array.from({ length: 10 }, (_, index) => resolveAnnounceRetryDelayMs(index + 1)),
+    ).toEqual([1_000, 2_000, 4_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000]);
+  });
+});
 
 describe("capFrozenResultText", () => {
   it("preserves a valid UTF-8 prefix within the frozen-result byte budget", () => {

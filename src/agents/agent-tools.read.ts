@@ -1077,6 +1077,8 @@ function createSandboxEditOperations(params: SandboxToolParams) {
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
       writeFile: (absolutePath: string, content: string) =>
         params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
+      statFile: (absolutePath: string) =>
+        params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
       access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
     } as const,
     params.memoryWriteProvenance,
@@ -1213,6 +1215,7 @@ function createHostEditOperations(
           return await fs.readFile(resolveHostPath(absolutePath));
         },
         writeFile: writeHostFile,
+        statFile: (absolutePath: string) => statHostFile(resolveHostPath(absolutePath)),
         access: async (absolutePath: string) => {
           await fs.access(resolveHostPath(absolutePath));
         },
@@ -1236,6 +1239,10 @@ function createHostEditOperations(
       },
       writeFile: (absolutePath: string, content: string) =>
         writeWorkspaceFile(root, getRoot, absolutePath, content),
+      statFile: async (absolutePath: string) => {
+        const relative = toRelativeWorkspacePath(root, absolutePath);
+        return statHostFile(path.resolve(root, relative));
+      },
       access: async (absolutePath: string) => {
         let relative: string;
         try {

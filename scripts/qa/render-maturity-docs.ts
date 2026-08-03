@@ -40,6 +40,7 @@ type Args = {
   evidenceDir?: string;
   check: boolean;
   strictInputs: boolean;
+  allowFailures: boolean;
 };
 
 type EvidenceSummary = {
@@ -75,6 +76,7 @@ type DocsRouteIndex = {
 
 type RenderMaturityScorecardInputs = Pick<RenderInputs, "taxonomy" | "scores" | "coverage"> & {
   evidenceSummaries: EvidenceSummary[];
+  acceptedIncompleteEvidence: boolean;
 };
 
 type DerivedCoverageScores = QaMaturityCoverageScores & {
@@ -98,6 +100,7 @@ function parseArgs(argv: string[]): Args {
     evidenceDir: undefined,
     check: false,
     strictInputs: false,
+    allowFailures: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -110,6 +113,10 @@ function parseArgs(argv: string[]): Args {
     }
     if (arg === "--strict-inputs") {
       args.strictInputs = true;
+      continue;
+    }
+    if (arg === "--allow-failures") {
+      args.allowFailures = true;
       continue;
     }
     const next = (): string => {
@@ -145,6 +152,7 @@ Options:
   --evidence-dir <path> Optional directory containing qa-evidence.json artifacts
   --check               Fail when output files are stale
   --strict-inputs       Fail on score or evidence input warnings
+  --allow-failures      Render valid incomplete QA evidence; non-passing checks earn no Coverage
   -h, --help            Show this help
 `);
       process.exit(0);
@@ -721,6 +729,12 @@ function rejectBlockingEvidence(evidenceSummaries: EvidenceSummary[]): void {
   );
 }
 
+function hasIncompleteEvidence(evidenceSummaries: EvidenceSummary[]): boolean {
+  return evidenceSummaries.some(
+    (item) => item.statuses.fail > 0 || item.statuses.blocked > 0 || item.statuses.skipped > 0,
+  );
+}
+
 function latestCoverageScorecard(
   evidenceSummaries: EvidenceSummary[],
 ): EvidenceSummary | undefined {
@@ -959,6 +973,7 @@ function renderMaturityScorecard({
   taxonomy,
   scores,
   evidenceSummaries,
+  acceptedIncompleteEvidence,
 }: RenderMaturityScorecardInputs): string {
   const levels = qaMaturityTaxonomyLevelMap(taxonomy);
   const scoreSurfaces = surfaceScoreMap(scores);
@@ -987,6 +1002,12 @@ function renderMaturityScorecard({
     '  <p className="maturity-jump-links"><a href="#surface-explorer">Browse surfaces</a> / <a href="#qa-evidence-summary">Inspect QA evidence</a> / <a href="/maturity/taxonomy">Read the taxonomy</a></p>',
     "</div>",
     "",
+    ...(acceptedIncompleteEvidence
+      ? [
+          "> **Incomplete QA evidence accepted.** Failed, blocked, and skipped checks provided no Coverage; only passing evidence fulfilled Coverage.",
+          "",
+        ]
+      : []),
     "## What this page is for",
     "",
     "Use this page to answer one question: which OpenClaw surfaces are credible choices for a release, and what evidence supports that judgment? Coverage comes from deterministic QA evidence; quality and completeness are maintained as reviewed maturity scores.",
@@ -1224,7 +1245,10 @@ function main(): void {
   }
 
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
-  rejectBlockingEvidence(evidenceSummaries);
+  if (!args.allowFailures) {
+    rejectBlockingEvidence(evidenceSummaries);
+  }
+  const acceptedIncompleteEvidence = args.allowFailures && hasIncompleteEvidence(evidenceSummaries);
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,
@@ -1255,6 +1279,7 @@ function main(): void {
         taxonomy,
         scores,
         evidenceSummaries,
+        acceptedIncompleteEvidence,
       }),
     ],
     [

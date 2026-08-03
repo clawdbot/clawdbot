@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayPort: vi.fn(),
   resolveControlUiLinks: vi.fn(),
   copyToClipboard: vi.fn(),
+  issueDeviceBootstrapToken: vi.fn(),
   openUrl: vi.fn(),
   inspectPortUsage: vi.fn(),
   ensureGatewayReadyForOperation: vi.fn(),
@@ -27,6 +28,10 @@ vi.mock("./onboard-helpers.js", () => ({
 
 vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: mocks.copyToClipboard,
+}));
+
+vi.mock("../infra/device-bootstrap.js", () => ({
+  issueDeviceBootstrapToken: mocks.issueDeviceBootstrapToken,
 }));
 
 vi.mock("../infra/ports-inspect.js", () => ({
@@ -116,6 +121,11 @@ describe("dashboardCommand bind selection", () => {
     mocks.resolveGatewayPort.mockClear();
     mocks.resolveControlUiLinks.mockClear();
     mocks.copyToClipboard.mockClear();
+    mocks.issueDeviceBootstrapToken.mockReset();
+    mocks.issueDeviceBootstrapToken.mockResolvedValue({
+      token: "browser-bootstrap",
+      expiresAtMs: 123_456,
+    });
     mocks.openUrl.mockClear();
     mocks.inspectPortUsage.mockReset();
     mocks.ensureGatewayReadyForOperation.mockReset();
@@ -186,7 +196,9 @@ describe("dashboardCommand bind selection", () => {
       basePath: undefined,
       tlsEnabled: false,
     });
-    expect(mocks.copyToClipboard).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
+    expect(mocks.copyToClipboard).toHaveBeenCalledWith(
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+    );
   });
 
   it("refuses an authenticated loopback URL owned by a different process", async () => {
@@ -197,6 +209,7 @@ describe("dashboardCommand bind selection", () => {
     await dashboardCommand(runtime, { noOpen: true });
 
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("refusing to copy or open an authenticated URL"),
     );
@@ -212,6 +225,7 @@ describe("dashboardCommand bind selection", () => {
     await dashboardCommand(runtime);
 
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(mocks.openUrl).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
   });
@@ -256,6 +270,7 @@ describe("dashboardCommand bind selection", () => {
     );
     expect(mocks.inspectPortUsage).not.toHaveBeenCalled();
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
   });
 

@@ -199,8 +199,8 @@ describe("release validation no-push transport", () => {
       "validate_docker_lanes",
       "validate_docker_openwebui",
     ]) {
-      const job = workflow.jobs?.[jobName];
-      const runStep = job?.steps?.find((candidate) =>
+      const workflowJob = workflow.jobs?.[jobName];
+      const runStep = workflowJob?.steps?.find((candidate) =>
         candidate.run?.includes("test-live-build-docker.sh"),
       );
 

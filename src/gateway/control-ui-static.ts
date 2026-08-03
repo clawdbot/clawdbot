@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
@@ -296,13 +297,12 @@ function cachedCompressedControlUiHtml(
   // Index HTML is process-stable for a configured root. Keep its few rewritten
   // variants single-flight and bounded so unauthenticated requests cannot fan
   // out zlib work; large hashed assets use build-time sidecars instead.
-  const compression = compressControlUiBody(Buffer.from(body), encoding);
-  controlUiHtmlCompressionCache.set(key, compression);
-  void compression.catch(() => {
-    if (controlUiHtmlCompressionCache.get(key) === compression) {
-      controlUiHtmlCompressionCache.delete(key);
-    }
-  });
+  const compression = getOrCreatePromise(
+    controlUiHtmlCompressionCache,
+    key,
+    () => compressControlUiBody(Buffer.from(body), encoding),
+    { cacheRejections: false },
+  );
   while (controlUiHtmlCompressionCache.size > CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES) {
     const oldestKey = controlUiHtmlCompressionCache.keys().next().value;
     if (oldestKey === undefined) {

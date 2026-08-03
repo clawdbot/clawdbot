@@ -177,7 +177,7 @@ class CustodianSurface extends OpenClawLightDomElement {
           ${store.sending
             ? html`<div class="chat-group assistant custodian__thinking-row" role="status">
                 <div class="chat-avatar assistant custodian__mascot-avatar" aria-hidden="true">
-                  <openclaw-mascot mood="thinking" .size=${32}></openclaw-mascot>
+                  <openclaw-mascot mood="thinking" .size=${26}></openclaw-mascot>
                 </div>
                 <div class="chat-group-messages custodian__thinking">
                   <span></span><span></span><span></span>

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayBoardProvider } from "./gateway-provider.ts";
 import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
-import { GatewayBoardProvider } from "./provider.ts";
 
 let mockLocation: { search: string };
 

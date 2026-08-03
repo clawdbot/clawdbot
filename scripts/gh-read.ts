@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { readSecretFileSync } from "@openclaw/fs-safe/secret";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { truncateUtf16Safe } from "../packages/normalization-core/src/utf16-slice.js";
-import { readBoundedResponseText } from "./lib/bounded-response.ts";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import {
   normalizeGitHubRepo as normalizeRepo,

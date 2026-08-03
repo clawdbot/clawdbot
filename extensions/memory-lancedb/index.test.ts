@@ -234,6 +234,44 @@ async function withMockedOpenAiMemoryPlugin<T>(params: {
   }
 }
 
+function createTestLogger() {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+}
+
+function createMemoryPluginApi<T extends Record<string, unknown>>(
+  dbPath: string,
+  overrides: T = {} as T,
+) {
+  return {
+    id: "memory-lancedb",
+    name: "Memory (LanceDB)",
+    source: "test",
+    config: {},
+    pluginConfig: {
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "text-embedding-3-small",
+      },
+      dbPath,
+      autoCapture: false,
+      autoRecall: false,
+    },
+    runtime: {},
+    logger: createTestLogger(),
+    registerTool: vi.fn(),
+    registerCli: vi.fn(),
+    registerService: vi.fn(),
+    on: vi.fn(),
+    resolvePath: (filePath: string) => filePath,
+    ...overrides,
+  };
+}
+
 describe("memory plugin e2e", () => {
   const { getDbPath, getTmpDir } = installTmpDirHarness({ prefix: "openclaw-memory-test-" });
 
@@ -351,20 +389,11 @@ describe("memory plugin e2e", () => {
       error: vi.fn(),
       debug: vi.fn(),
     };
-    const mockApi = {
-      id: "memory-lancedb",
-      name: "Memory (LanceDB)",
-      source: "test",
-      config: {},
+    const mockApi = createMemoryPluginApi(getDbPath(), {
       pluginConfig: {},
-      runtime: {},
       logger,
-      registerTool: vi.fn(),
-      registerCli: vi.fn(),
       registerService,
-      on: vi.fn(),
-      resolvePath: (filePath: string) => filePath,
-    };
+    });
 
     registerTestPlugin(memoryPlugin, mockApi);
     const service = firstObjectArg(registerService as unknown as MockCallSource, "service");
@@ -381,11 +410,7 @@ describe("memory plugin e2e", () => {
 
   test("registers auto-recall on before_prompt_build instead of the legacy hook", () => {
     const on = vi.fn();
-    const mockApi = {
-      id: "memory-lancedb",
-      name: "Memory (LanceDB)",
-      source: "test",
-      config: {},
+    const mockApi = createMemoryPluginApi(getDbPath(), {
       pluginConfig: {
         embedding: {
           apiKey: OPENAI_API_KEY,
@@ -395,19 +420,8 @@ describe("memory plugin e2e", () => {
         autoCapture: false,
         autoRecall: true,
       },
-      runtime: {},
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      },
-      registerTool: vi.fn(),
-      registerCli: vi.fn(),
-      registerService: vi.fn(),
       on,
-      resolvePath: (filePath: string) => filePath,
-    };
+    });
 
     registerTestPlugin(memoryPlugin, mockApi);
 
@@ -420,34 +434,9 @@ describe("memory plugin e2e", () => {
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-05-18.md"), "# Daily\n", "utf8");
     const registerMemoryCapabilityLocal = vi.fn();
-    const mockApi = {
-      id: "memory-lancedb",
-      name: "Memory (LanceDB)",
-      source: "test",
-      config: {},
-      pluginConfig: {
-        embedding: {
-          apiKey: OPENAI_API_KEY,
-          model: "text-embedding-3-small",
-        },
-        dbPath: getDbPath(),
-        autoCapture: false,
-        autoRecall: false,
-      },
-      runtime: {},
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      },
+    const mockApi = createMemoryPluginApi(getDbPath(), {
       registerMemoryCapability: registerMemoryCapabilityLocal,
-      registerTool: vi.fn(),
-      registerCli: vi.fn(),
-      registerService: vi.fn(),
-      on: vi.fn(),
-      resolvePath: (filePath: string) => filePath,
-    };
+    });
 
     registerTestPlugin(memoryPlugin, mockApi);
     const capability = firstObjectArg(
@@ -515,34 +504,9 @@ describe("memory plugin e2e", () => {
     const registerMemoryCapabilityForPlugin = vi.fn((capability: MemoryPluginCapability) => {
       registerMemoryCapability("memory-lancedb", capability);
     });
-    const mockApi = {
-      id: "memory-lancedb",
-      name: "Memory (LanceDB)",
-      source: "test",
-      config: {},
-      pluginConfig: {
-        embedding: {
-          apiKey: OPENAI_API_KEY,
-          model: "text-embedding-3-small",
-        },
-        dbPath: getDbPath(),
-        autoCapture: false,
-        autoRecall: false,
-      },
-      runtime: {},
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      },
+    const mockApi = createMemoryPluginApi(getDbPath(), {
       registerMemoryCapability: registerMemoryCapabilityForPlugin,
-      registerTool: vi.fn(),
-      registerCli: vi.fn(),
-      registerService: vi.fn(),
-      on: vi.fn(),
-      resolvePath: (filePath: string) => filePath,
-    };
+    });
 
     registerTestPlugin(memoryPlugin, mockApi);
 
@@ -636,10 +600,7 @@ describe("memory plugin e2e", () => {
       };
       const registerTool = vi.fn();
       const registerService = vi.fn();
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         config: cfg,
         pluginConfig: {
           embedding: {
@@ -656,18 +617,9 @@ describe("memory plugin e2e", () => {
             resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
           },
         },
-        logger: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        },
         registerTool,
-        registerCli: vi.fn(),
         registerService,
-        on: vi.fn(),
-        resolvePath: (filePath: string) => filePath,
-      };
+      });
 
       registerTestPlugin(dynamicMemoryPlugin, mockApi);
       const recallTool = registerTool.mock.calls
@@ -763,35 +715,11 @@ describe("memory plugin e2e", () => {
       loadLanceDbModule,
       run: async (dynamicMemoryPlugin) => {
         const registeredTools: any[] = [];
-        const mockApi = {
-          id: "memory-lancedb",
-          name: "Memory (LanceDB)",
-          source: "test",
-          config: {},
-          pluginConfig: {
-            embedding: {
-              apiKey: OPENAI_API_KEY,
-              model: "text-embedding-3-small",
-            },
-            dbPath: getDbPath(),
-            autoCapture: false,
-            autoRecall: false,
-          },
-          runtime: {},
-          logger: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-            debug: vi.fn(),
-          },
+        const mockApi = createMemoryPluginApi(getDbPath(), {
           registerTool: (tool: any, opts: any) => {
             registeredTools.push({ tool, opts });
           },
-          registerCli: vi.fn(),
-          registerService: vi.fn(),
-          on: vi.fn(),
-          resolvePath: (filePath: string) => filePath,
-        };
+        });
 
         registerTestPlugin(dynamicMemoryPlugin, mockApi);
         const recallTool = materializeRegisteredTool(
@@ -863,35 +791,11 @@ describe("memory plugin e2e", () => {
       loadLanceDbModule,
       run: async (dynamicMemoryPlugin) => {
         const registeredTools: any[] = [];
-        const mockApi = {
-          id: "memory-lancedb",
-          name: "Memory (LanceDB)",
-          source: "test",
-          config: {},
-          pluginConfig: {
-            embedding: {
-              apiKey: OPENAI_API_KEY,
-              model: "text-embedding-3-small",
-            },
-            dbPath: getDbPath(),
-            autoCapture: false,
-            autoRecall: false,
-          },
-          runtime: {},
-          logger: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-            debug: vi.fn(),
-          },
+        const mockApi = createMemoryPluginApi(getDbPath(), {
           registerTool: (tool: any, opts: any) => {
             registeredTools.push({ tool, opts });
           },
-          registerCli: vi.fn(),
-          registerService: vi.fn(),
-          on: vi.fn(),
-          resolvePath: (filePath: string) => filePath,
-        };
+        });
 
         registerTestPlugin(dynamicMemoryPlugin, mockApi);
         const recallTool = materializeRegisteredTool(
@@ -967,30 +871,12 @@ describe("memory plugin e2e", () => {
             error: vi.fn(),
             debug: vi.fn(),
           };
-          const mockApi = {
-            id: "memory-lancedb",
-            name: "Memory (LanceDB)",
-            source: "test",
-            config: {},
-            pluginConfig: {
-              embedding: {
-                apiKey: OPENAI_API_KEY,
-                model: "text-embedding-3-small",
-              },
-              dbPath: getDbPath(),
-              autoCapture: false,
-              autoRecall: false,
-            },
-            runtime: {},
+          const mockApi = createMemoryPluginApi(getDbPath(), {
             logger,
             registerTool: (tool: any, opts: any) => {
               registeredTools.push({ tool, opts });
             },
-            registerCli: vi.fn(),
-            registerService: vi.fn(),
-            on: vi.fn(),
-            resolvePath: (filePath: string) => filePath,
-          };
+          });
 
           registerTestPlugin(dynamicMemoryPlugin, mockApi);
           const recallTool = materializeRegisteredTool(
@@ -1057,33 +943,9 @@ describe("memory plugin e2e", () => {
       loadLanceDbModule,
       run: async (dynamicMemoryPlugin) => {
         const registerCli = vi.fn();
-        const mockApi = {
-          id: "memory-lancedb",
-          name: "Memory (LanceDB)",
-          source: "test",
-          config: {},
-          pluginConfig: {
-            embedding: {
-              apiKey: OPENAI_API_KEY,
-              model: "text-embedding-3-small",
-            },
-            dbPath: getDbPath(),
-            autoCapture: false,
-            autoRecall: false,
-          },
-          runtime: {},
-          logger: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-            debug: vi.fn(),
-          },
-          registerTool: vi.fn(),
+        const mockApi = createMemoryPluginApi(getDbPath(), {
           registerCli,
-          registerService: vi.fn(),
-          on: vi.fn(),
-          resolvePath: (filePath: string) => filePath,
-        };
+        });
         const stdoutWrite = vi
           .spyOn(process.stdout, "write")
           .mockImplementation(() => true as unknown as ReturnType<typeof process.stdout.write>);
@@ -1106,11 +968,7 @@ describe("memory plugin e2e", () => {
 
   test("keeps before_prompt_build registered but inert when auto-recall is disabled", async () => {
     const on = vi.fn();
-    const mockApi = {
-      id: "memory-lancedb",
-      name: "Memory (LanceDB)",
-      source: "test",
-      config: {},
+    const mockApi = createMemoryPluginApi(getDbPath(), {
       pluginConfig: {
         embedding: {
           apiKey: OPENAI_API_KEY,
@@ -1120,19 +978,8 @@ describe("memory plugin e2e", () => {
         autoCapture: true,
         autoRecall: false,
       },
-      runtime: {},
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      },
-      registerTool: vi.fn(),
-      registerCli: vi.fn(),
-      registerService: vi.fn(),
       on,
-      resolvePath: (filePath: string) => filePath,
-    };
+    });
 
     registerTestPlugin(memoryPlugin, mockApi);
 
@@ -1148,11 +995,7 @@ describe("memory plugin e2e", () => {
 
   test("keeps agent_end registered but inert when auto-capture is disabled", async () => {
     const on = vi.fn();
-    const mockApi = {
-      id: "memory-lancedb",
-      name: "Memory (LanceDB)",
-      source: "test",
-      config: {},
+    const mockApi = createMemoryPluginApi(getDbPath(), {
       pluginConfig: {
         embedding: {
           apiKey: OPENAI_API_KEY,
@@ -1162,19 +1005,8 @@ describe("memory plugin e2e", () => {
         autoCapture: false,
         autoRecall: true,
       },
-      runtime: {},
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      },
-      registerTool: vi.fn(),
-      registerCli: vi.fn(),
-      registerService: vi.fn(),
       on,
-      resolvePath: (filePath: string) => filePath,
-    };
+    });
 
     registerTestPlugin(memoryPlugin, mockApi);
 
@@ -1236,11 +1068,7 @@ describe("memory plugin e2e", () => {
           error: vi.fn(),
           debug: vi.fn(),
         };
-        const mockApi = {
-          id: "memory-lancedb",
-          name: "Memory (LanceDB)",
-          source: "test",
-          config: {},
+        const mockApi = createMemoryPluginApi(getDbPath(), {
           pluginConfig: {
             embedding: {
               apiKey: OPENAI_API_KEY,
@@ -1251,14 +1079,9 @@ describe("memory plugin e2e", () => {
             autoRecall: true,
             recallMaxChars: 120,
           },
-          runtime: {},
           logger,
-          registerTool: vi.fn(),
-          registerCli: vi.fn(),
-          registerService: vi.fn(),
           on,
-          resolvePath: (p: string) => p,
-        };
+        });
 
         registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
@@ -1349,11 +1172,7 @@ describe("memory plugin e2e", () => {
             error: vi.fn(),
             debug: vi.fn(),
           };
-          const mockApi = {
-            id: "memory-lancedb",
-            name: "Memory (LanceDB)",
-            source: "test",
-            config: {},
+          const mockApi = createMemoryPluginApi(getDbPath(), {
             pluginConfig: {
               embedding: {
                 apiKey: OPENAI_API_KEY,
@@ -1363,16 +1182,12 @@ describe("memory plugin e2e", () => {
               autoCapture: false,
               autoRecall: true,
             },
-            runtime: {},
             logger,
             registerTool: (tool: any, opts: any) => {
               registeredTools.push({ tool, opts });
             },
-            registerCli: vi.fn(),
-            registerService: vi.fn(),
             on,
-            resolvePath: (p: string) => p,
-          };
+          });
 
           registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
@@ -1616,32 +1431,15 @@ describe("memory plugin e2e", () => {
         error: vi.fn(),
         debug: vi.fn(),
       };
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
-        config: {},
-        pluginConfig: {
-          embedding: {
-            apiKey: OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: getDbPath(),
-          autoCapture: false,
-          autoRecall: false,
-        },
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         runtime: {
           config: {
             current: () => configFile,
           },
         },
         logger,
-        registerTool: vi.fn(),
-        registerCli: vi.fn(),
-        registerService: vi.fn(),
         on,
-        resolvePath: (p: string) => p,
-      };
+      });
 
       registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
@@ -1743,11 +1541,7 @@ describe("memory plugin e2e", () => {
     try {
       const { default: dynamicMemoryPlugin } = await import("./index.js");
       const on = vi.fn();
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
-        config: {},
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         pluginConfig: {
           embedding: {
             apiKey: OPENAI_API_KEY,
@@ -1762,18 +1556,8 @@ describe("memory plugin e2e", () => {
             current: () => configFile,
           },
         },
-        logger: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        },
-        registerTool: vi.fn(),
-        registerCli: vi.fn(),
-        registerService: vi.fn(),
         on,
-        resolvePath: (p: string) => p,
-      };
+      });
 
       registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
@@ -1872,29 +1656,15 @@ describe("memory plugin e2e", () => {
     try {
       const { default: dynamicMemoryPlugin } = await import("./index.js");
       const on = vi.fn();
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
-        config: {},
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         pluginConfig: pluginEntryConfig,
         runtime: {
           config: {
             current: () => configFile,
           },
         },
-        logger: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        },
-        registerTool: vi.fn(),
-        registerCli: vi.fn(),
-        registerService: vi.fn(),
         on,
-        resolvePath: (p: string) => p,
-      };
+      });
 
       registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
@@ -2045,11 +1815,7 @@ describe("memory plugin e2e", () => {
     try {
       const { default: dynamicMemoryPlugin } = await import("./index.js");
       const on = vi.fn();
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
-        config: {},
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         pluginConfig: {
           embedding: {
             apiKey: OPENAI_API_KEY,
@@ -2064,18 +1830,8 @@ describe("memory plugin e2e", () => {
             current: () => configFile,
           },
         },
-        logger: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        },
-        registerTool: vi.fn(),
-        registerCli: vi.fn(),
-        registerService: vi.fn(),
         on,
-        resolvePath: (p: string) => p,
-      };
+      });
 
       registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
@@ -2147,11 +1903,7 @@ describe("memory plugin e2e", () => {
     try {
       const { default: dynamicMemoryPlugin } = await import("./index.js");
       const on = vi.fn();
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
-        config: {},
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         pluginConfig: {
           embedding: {
             apiKey: OPENAI_API_KEY,
@@ -2161,19 +1913,8 @@ describe("memory plugin e2e", () => {
           autoCapture: true,
           autoRecall: false,
         },
-        runtime: {},
-        logger: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        },
-        registerTool: vi.fn(),
-        registerCli: vi.fn(),
-        registerService: vi.fn(),
         on,
-        resolvePath: (p: string) => p,
-      };
+      });
 
       registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
@@ -2286,37 +2027,14 @@ describe("memory plugin e2e", () => {
     try {
       const { default: dynamicMemoryPlugin } = await import("./index.js");
       const on = vi.fn();
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
-        config: {},
-        pluginConfig: {
-          embedding: {
-            apiKey: OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: getDbPath(),
-          autoCapture: false,
-          autoRecall: false,
-        },
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         runtime: {
           config: {
             current: () => configFile,
           },
         },
-        logger: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        },
-        registerTool: vi.fn(),
-        registerCli: vi.fn(),
-        registerService: vi.fn(),
         on,
-        resolvePath: (p: string) => p,
-      };
+      });
 
       registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
@@ -2423,11 +2141,7 @@ describe("memory plugin e2e", () => {
     try {
       const { default: dynamicMemoryPlugin } = await import("./index.js");
       const on = vi.fn();
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
-        config: {},
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         pluginConfig: {
           embedding: {
             apiKey: OPENAI_API_KEY,
@@ -2442,18 +2156,8 @@ describe("memory plugin e2e", () => {
             current: () => configFile,
           },
         },
-        logger: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        },
-        registerTool: vi.fn(),
-        registerCli: vi.fn(),
-        registerService: vi.fn(),
         on,
-        resolvePath: (p: string) => p,
-      };
+      });
 
       registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
@@ -2553,11 +2257,7 @@ describe("memory plugin e2e", () => {
     try {
       const { default: dynamicMemoryPlugin } = await import("./index.js");
       const on = vi.fn();
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
-        config: {},
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         pluginConfig: {
           embedding: {
             apiKey: OPENAI_API_KEY,
@@ -2572,18 +2272,8 @@ describe("memory plugin e2e", () => {
             current: () => configFile,
           },
         },
-        logger: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        },
-        registerTool: vi.fn(),
-        registerCli: vi.fn(),
-        registerService: vi.fn(),
         on,
-        resolvePath: (p: string) => p,
-      };
+      });
 
       registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
@@ -2666,11 +2356,7 @@ describe("memory plugin e2e", () => {
       error: vi.fn(),
       debug: vi.fn(),
     };
-    const mockApi = {
-      id: "memory-lancedb",
-      name: "Memory (LanceDB)",
-      source: "test",
-      config: {},
+    const mockApi = createMemoryPluginApi(getDbPath(), {
       pluginConfig: {
         embedding: {
           apiKey: OPENAI_API_KEY,
@@ -2680,14 +2366,9 @@ describe("memory plugin e2e", () => {
         autoCapture: true,
         autoRecall: false,
       },
-      runtime: {},
       logger,
-      registerTool: vi.fn(),
-      registerCli: vi.fn(),
-      registerService: vi.fn(),
       on,
-      resolvePath: (p: string) => p,
-    };
+    });
 
     registerTestPlugin(dynamicMemoryPlugin, mockApi);
 
@@ -3022,11 +2703,7 @@ describe("memory plugin e2e", () => {
     try {
       const { default: memoryPluginItem } = await import("./index.js");
       const registeredTools: any[] = [];
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
-        config: {},
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         pluginConfig: {
           embedding: {
             apiKey: OPENAI_API_KEY,
@@ -3037,21 +2714,10 @@ describe("memory plugin e2e", () => {
           autoCapture: false,
           autoRecall: false,
         },
-        runtime: {},
-        logger: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        },
         registerTool: (tool: any, opts: any) => {
           registeredTools.push({ tool, opts });
         },
-        registerCli: vi.fn(),
-        registerService: vi.fn(),
-        on: vi.fn(),
-        resolvePath: (p: string) => p,
-      };
+      });
 
       registerTestPlugin(memoryPluginItem, mockApi);
       const recallTool = materializeRegisteredTool(
@@ -3140,35 +2806,11 @@ describe("memory plugin e2e", () => {
     try {
       const { default: dynamicMemoryPlugin } = await import("./index.js");
       const registeredTools: any[] = [];
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
-        config: {},
-        pluginConfig: {
-          embedding: {
-            apiKey: OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: getDbPath(),
-          autoCapture: false,
-          autoRecall: false,
-        },
-        runtime: {},
-        logger: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        },
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         registerTool: (tool: any, opts: any) => {
           registeredTools.push({ tool, opts });
         },
-        registerCli: vi.fn(),
-        registerService: vi.fn(),
-        on: vi.fn(),
-        resolvePath: (p: string) => p,
-      };
+      });
 
       registerTestPlugin(dynamicMemoryPlugin, mockApi);
       const recallTool = materializeRegisteredTool(
@@ -3532,35 +3174,11 @@ describe("memory plugin e2e", () => {
       loadLanceDbModule,
       run: async (dynamicMemoryPlugin) => {
         const registeredTools: any[] = [];
-        const mockApi = {
-          id: "memory-lancedb",
-          name: "Memory (LanceDB)",
-          source: "test",
-          config: {},
-          pluginConfig: {
-            embedding: {
-              apiKey: OPENAI_API_KEY,
-              model: "text-embedding-3-small",
-            },
-            dbPath: getDbPath(),
-            autoCapture: false,
-            autoRecall: false,
-          },
-          runtime: {},
-          logger: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-            debug: vi.fn(),
-          },
+        const mockApi = createMemoryPluginApi(getDbPath(), {
           registerTool: (tool: any, opts: any) => {
             registeredTools.push({ tool, opts });
           },
-          registerCli: vi.fn(),
-          registerService: vi.fn(),
-          on: vi.fn(),
-          resolvePath: (filePath: string) => filePath,
-        };
+        });
 
         registerTestPlugin(dynamicMemoryPlugin, mockApi);
         const storeTool = materializeRegisteredTool(
@@ -3694,27 +3312,11 @@ describe("memory plugin e2e", () => {
     try {
       const { default: memoryPluginLocal } = await import("./index.js");
       const registeredTools: any[] = [];
-      const mockApi = {
-        id: "memory-lancedb",
-        name: "Memory (LanceDB)",
-        source: "test",
-        config: {},
-        pluginConfig: {
-          embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
-          dbPath: getDbPath(),
-          autoCapture: false,
-          autoRecall: false,
-        },
-        runtime: {},
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      const mockApi = createMemoryPluginApi(getDbPath(), {
         registerTool: (tool: any, opts: any) => {
           registeredTools.push({ tool, opts });
         },
-        registerCli: vi.fn(),
-        registerService: vi.fn(),
-        on: vi.fn(),
-        resolvePath: (p: string) => p,
-      };
+      });
 
       registerTestPlugin(memoryPluginLocal, mockApi);
       const forgetTool = materializeRegisteredTool(

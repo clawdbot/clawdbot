@@ -9,11 +9,6 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import {
-  pinActivePluginChannelRegistry,
-  pinActivePluginHttpRouteRegistry,
-  pinActivePluginSessionExtensionRegistry,
-} from "../plugins/runtime.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -317,15 +312,18 @@ export async function startGatewayCoreRuntime(input: {
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
         (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim"),
     );
-    return createGatewayMethodRegistry([
-      ...coreDescriptors,
-      ...createPluginGatewayMethodDescriptors(nextPluginRegistry),
-      ...createGatewayMethodDescriptorsFromHandlers({
-        handlers: auxHandlers,
-        owner: { kind: "aux", area: "gateway-extra" },
-        defaultScope: ADMIN_SCOPE,
-      }),
-    ]);
+    return createGatewayMethodRegistry(
+      [
+        ...coreDescriptors,
+        ...createPluginGatewayMethodDescriptors(nextPluginRegistry),
+        ...createGatewayMethodDescriptorsFromHandlers({
+          handlers: auxHandlers,
+          owner: { kind: "aux", area: "gateway-extra" },
+          defaultScope: ADMIN_SCOPE,
+        }),
+      ],
+      nextPluginRegistry,
+    );
   };
   let attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRuntime.registry);
   const listAttachedGatewayMethods = () => {
@@ -355,9 +353,6 @@ export async function startGatewayCoreRuntime(input: {
       runtimeState.gatewayMethods.length,
       ...listAttachedGatewayMethods(),
     );
-    pinActivePluginHttpRouteRegistry(pluginRuntime.registry);
-    pinActivePluginSessionExtensionRegistry(pluginRuntime.registry);
-    pinActivePluginChannelRegistry(pluginRuntime.registry);
     nodeRegistry.refreshNodePluginTools();
   };
   const refreshAttachedGatewayDiscovery = async (
@@ -562,6 +557,5 @@ export async function startGatewayCoreRuntime(input: {
     reloadAttachedGatewayPlugins,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
-    loadGatewayPluginBootstrapModule,
   };
 }

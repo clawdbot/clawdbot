@@ -69,23 +69,37 @@ function applyCurrentPluginAutoEnable(params: {
       discovery: params.snapshot?.discovery,
     });
   }
-  // Gateway plugin metadata and config are replacement snapshots. Reuse only while
-  // mutable config/env content still matches; reload/close lifecycle clears the slot.
   const workspaceDir = params.snapshot.workspaceDir ?? params.workspaceDir;
-  const autoEnableConfigFingerprint = fingerprintPluginAutoEnableConfig(params.config);
-  const autoEnableEnvFingerprint = fingerprintPluginAutoEnableEnv(params.env);
   const cached = currentAutoEnableCache;
-  if (
-    cached?.config === params.config &&
-    cached.env === params.env &&
-    cached.autoEnableConfigFingerprint === autoEnableConfigFingerprint &&
-    cached.autoEnableEnvFingerprint === autoEnableEnvFingerprint &&
+  const metadataMatches =
+    cached !== undefined &&
     cached.metadataConfigFingerprint === params.snapshot.configFingerprint &&
     cached.policyHash === params.snapshot.policyHash &&
     cached.workspaceDir === workspaceDir &&
-    samePluginIds(cached.pluginIds, params.snapshot.pluginIds)
-  ) {
-    return cached.result;
+    samePluginIds(cached.pluginIds, params.snapshot.pluginIds);
+  if (metadataMatches) {
+    if (cached.config === params.config && cached.env === params.env) {
+      return cached.result;
+    }
+    const autoEnableConfigFingerprint =
+      cached.config === params.config
+        ? cached.autoEnableConfigFingerprint
+        : fingerprintPluginAutoEnableConfig(params.config);
+    const autoEnableEnvFingerprint =
+      cached.env === params.env
+        ? cached.autoEnableEnvFingerprint
+        : fingerprintPluginAutoEnableEnv(params.env);
+    if (
+      cached.autoEnableConfigFingerprint === autoEnableConfigFingerprint &&
+      cached.autoEnableEnvFingerprint === autoEnableEnvFingerprint
+    ) {
+      currentAutoEnableCache = {
+        ...cached,
+        config: params.config,
+        env: params.env,
+      };
+      return cached.result;
+    }
   }
   const result = applyPluginAutoEnable({
     config: params.config,
@@ -93,6 +107,8 @@ function applyCurrentPluginAutoEnable(params: {
     manifestRegistry: params.manifestRegistry,
     discovery: params.snapshot.discovery,
   });
+  const autoEnableConfigFingerprint = fingerprintPluginAutoEnableConfig(params.config);
+  const autoEnableEnvFingerprint = fingerprintPluginAutoEnableEnv(params.env);
   currentAutoEnableCache = {
     config: params.config,
     env: params.env,

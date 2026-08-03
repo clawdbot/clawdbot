@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
 import { ExitError } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
@@ -502,6 +503,53 @@ describe("ensureConfigReady", () => {
       snapshot.runtimeConfig,
       snapshot.sourceConfig,
     );
+  });
+
+  it("forwards config snapshot phase measurement", async () => {
+    const snapshot = makeSnapshot();
+    const measuredStages: string[] = [];
+    const measure: ConfigSnapshotReadMeasure = async (stage, run) => {
+      measuredStages.push(stage);
+      return await run();
+    };
+    readConfigFileSnapshotMock.mockImplementationOnce(
+      async (options?: { measure?: ConfigSnapshotReadMeasure }) => {
+        await options?.measure?.("config.snapshot.read.validate", async () => undefined);
+        return snapshot;
+      },
+    );
+
+    await ensureConfigReady({
+      runtime: makeRuntime() as never,
+      commandPath: ["health"],
+      measure,
+    });
+
+    expect(measuredStages).toEqual(["config.snapshot.read.validate"]);
+  });
+
+  it("forwards config snapshot phase measurement through doctor preflight", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "plugins/installs.json");
+    const measuredStages: string[] = [];
+    const measure: ConfigSnapshotReadMeasure = async (stage, run) => {
+      measuredStages.push(stage);
+      return await run();
+    };
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementationOnce(
+      async (options?: { measure?: ConfigSnapshotReadMeasure }) => {
+        await options?.measure?.("config.snapshot.read.validate", async () => undefined);
+        return { snapshot: makeSnapshot(), baseConfig: {} };
+      },
+    );
+
+    await ensureConfigReady({
+      runtime: makeRuntime() as never,
+      commandPath: ["agent"],
+      measure,
+    });
+
+    expect(measuredStages).toEqual(["config.snapshot.read.validate"]);
   });
 
   it("pins plugin listing config without loading state migration runtime", async () => {

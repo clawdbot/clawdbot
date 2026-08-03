@@ -322,14 +322,18 @@ export function createTelegramDraftController(params: {
         Boolean(split.reasoningText) && suppressReasoning && !split.answerText,
     };
   };
-  const updateDraftFromPartial = (lane: DraftLaneState, update: DraftPartialTextUpdate) => {
+  const updateDraftFromPartial = (
+    lane: DraftLaneState,
+    update: DraftPartialTextUpdate,
+    schedule = true,
+  ): string | undefined => {
     if (!lane.stream || !update.text) {
-      return;
+      return undefined;
     }
     const previousText = lane === answerLane ? lastAnswerPartialText : lane.lastPartialText;
     const nextText = resolveDraftPartialText(previousText, update);
     if (!nextText || (lane === answerLane && params.streamMode === "progress")) {
-      return;
+      return undefined;
     }
     if (lane === answerLane) {
       resetAnswerToolProgressDraft();
@@ -339,12 +343,52 @@ export function createTelegramDraftController(params: {
     lane.hasStreamedMessage = true;
     lane.finalized = false;
     lane.lastPartialText = nextText;
-    lane.stream.update(nextText);
+    if (schedule) {
+      lane.stream.update(nextText);
+    }
+    return nextText;
   };
   const ingestDraftLaneSegments = async (
     update: { text?: string; delta?: string; replace?: true; isReasoningSnapshot?: boolean },
     isReasoning?: boolean,
   ) => {
+    if (isReasoning !== true) {
+      const stream = answerLane.stream;
+      if (!stream) {
+        return;
+      }
+      const rotationPending =
+        params.streamMode !== "progress" &&
+        (activeAnswerDraftIsToolProgressOnly ||
+          answerLane.finalized ||
+          (rotateAnswerLaneWhenQueuedBlocksSettle &&
+            queuedAnswerBlockRotations.length === 0 &&
+            answerLane.hasStreamedMessage));
+      if (rotationPending) {
+        const text = update.text;
+        if (!text) {
+          return;
+        }
+        await prepareAnswerLaneForText();
+        updateDraftFromPartial(answerLane, { text, replace: true });
+        return;
+      }
+      let didMaterialize = false;
+      let materialized: string | undefined;
+      stream.updateLazy(() => {
+        if (!didMaterialize) {
+          const text = update.text;
+          // Partial text is cumulative, so the newest snapshot remains authoritative when
+          // intermediate delta-bearing payloads are coalesced before this flush.
+          materialized = text
+            ? updateDraftFromPartial(answerLane, { text, replace: true }, false)
+            : undefined;
+          didMaterialize = true;
+        }
+        return materialized;
+      });
+      return;
+    }
     const split = splitTextIntoLaneSegments(update, isReasoning);
     for (const segment of split.segments) {
       if (segment.lane === "answer") {

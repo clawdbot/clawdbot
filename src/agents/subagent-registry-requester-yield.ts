@@ -17,7 +17,8 @@ export function markRequesterTurnYieldedInRuns(params: {
   const entries = [...params.runs.values()].filter(
     (entry) =>
       entry.requesterSessionKey === requesterSessionKey &&
-      entry.requesterTurnRunId === requesterTurnRunId,
+      entry.requesterTurnRunId === requesterTurnRunId &&
+      entry.expectsCompletionMessage === true,
   );
   if (entries.every((entry) => entry.requesterTurnYielded === true)) {
     return entries.length;
@@ -55,18 +56,18 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     return false;
   }
 
-  // Registry markers select completion-producing children. Accepted inline or
-  // otherwise non-completion spawns are intentionally outside this batch.
+  // Completion rows keep their original task owner across steer; inline or
+  // non-completion spawns are intentionally outside this batch.
   const entries = [...params.runs.values()].filter(
     (entry) =>
       entry.requesterSessionKey === requesterSessionKey &&
-      entry.requesterTurnRunId === requesterTurnRunId,
+      entry.requesterTurnRunId === requesterTurnRunId &&
+      entry.expectsCompletionMessage === true,
   );
   for (const entry of entries) {
-    const spawn = spawnsByRunId.get(entry.runId);
+    const spawn = spawnsByRunId.get(entry.taskRunId ?? entry.runId);
     if (
       !spawn ||
-      entry.expectsCompletionMessage !== true ||
       entry.childSessionKey !== spawn.childSessionKey ||
       (params.requesterYielded && entry.requesterTurnYielded !== true)
     ) {

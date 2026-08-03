@@ -348,7 +348,10 @@ describe("scripts/changed-lanes", () => {
       name: "rejects unknown changed check options before treating them as paths",
       script: "scripts/check-changed.mjs",
       option: "--dr-run",
-      expected: { stderr: "Unknown option: --dr-run", excludes: ["[check:changed]"] },
+      expected: {
+        stderr: "Unknown option: --dr-run\n[check:changed] FAILED (exit 1)",
+        excludes: [],
+      },
     },
   ])("$name", ({ script, option, expected }) => {
     const result = runRepoScript(script, [option], {

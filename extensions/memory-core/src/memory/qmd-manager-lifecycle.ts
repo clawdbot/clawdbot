@@ -48,6 +48,10 @@ export abstract class QmdManagerLifecycle extends QmdManagerSync {
     watcher.on("add", markDirty);
     watcher.on("change", markDirty);
     watcher.on("unlink", markDirty);
+    watcher.on("error", (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      qmdManagerLog.warn(`qmd watcher error: ${message}`);
+    });
     watcher.once("ready", () => {
       this.warnIfWatchPressure(countChokidarWatchedEntries(watcher));
       qmdManagerLog.info(

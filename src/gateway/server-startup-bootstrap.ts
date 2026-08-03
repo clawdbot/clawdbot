@@ -10,7 +10,6 @@ import {
 } from "../config/config-env-vars.js";
 import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-selection.js";
 import {
-  getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
   readConfigFileSnapshot,
   setAppliedRuntimeConfigSnapshot,
@@ -35,7 +34,6 @@ import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { startDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -339,12 +337,6 @@ export async function prepareGatewayServerBootstrap(input: {
     : resolvedStartupAuthOverride;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   setDiagnosticsEnabledForProcess(diagnosticsEnabled);
-  if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat(undefined, {
-      getConfig: getRuntimeConfig,
-      startupGraceMs: 60_000,
-    });
-  }
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   const activeTaskCount = { get: () => 0 };
   setPreRestartDeferralCheck(
@@ -495,19 +487,15 @@ export async function prepareGatewayServerBootstrap(input: {
       minimalTestGateway,
       ambientEnvTriggers,
       log,
-      loadRuntimePlugins: false,
-      loadSetupRuntimePlugins: true,
     }),
   );
   const {
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
-    deferredConfiguredChannelPluginIds,
     startupPluginIds,
     pluginManifestRecords,
     pluginLookUpTable,
     baseMethods,
-    runtimePluginsLoaded,
     ambientAutostartSuppressedChannelIds,
   } = pluginBootstrap;
   // Plugin activation can return a new runtime config object. Publish that exact object before
@@ -542,8 +530,6 @@ export async function prepareGatewayServerBootstrap(input: {
       ["manifestPluginCount", metrics.manifestPluginCount],
       ["startupPlugins", String(metrics.startupPluginCount)],
       ["startupPluginCount", metrics.startupPluginCount],
-      ["deferredChannelPlugins", String(metrics.deferredChannelPluginCount)],
-      ["deferredChannelPluginCount", metrics.deferredChannelPluginCount],
     ]);
   }
 
@@ -575,12 +561,10 @@ export async function prepareGatewayServerBootstrap(input: {
     pluginBootstrap,
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
-    deferredConfiguredChannelPluginIds,
     startupPluginIds,
     pluginManifestRecords,
     pluginLookUpTable,
     baseMethods,
-    runtimePluginsLoaded,
     ambientAutostartSuppressedChannelIds,
     coreGatewayMethodNames,
     activateRuntimeSecrets,

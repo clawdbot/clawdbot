@@ -23,17 +23,16 @@ import {
 // can inspect a stable process instead of a flap.
 const GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD = 3;
 const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
-// Keep enough history for operator forensics while bounding one-row-per-boot
+// Keep enough history for operator forensics while bounding lifecycle-segment
 // growth. Retention must comfortably exceed GATEWAY_BOOT_LOOP_WINDOW_MS.
 const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 export const GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS = 500;
 export const GATEWAY_CRASH_LOOP_BREAKER_REASON = "gateway.crash_loop_breaker";
 export const GATEWAY_CRASH_LOOP_RECOVERED_REASON = "gateway.crash_loop_recovered";
 /**
- * The breaker never self-clears within its window, so every operator-facing surface must name the
- * manual override command instead of the internal RPC name. Account-scoped suppression must carry
- * its accountId: `channels.start` resolves an omitted account to the channel default, so a hint
- * without it would start a different account than the one the message named.
+ * The breaker only self-clears after the full window drains. Operator surfaces name the manual
+ * override command, not the internal RPC. Account hints carry accountId to avoid starting a
+ * different default account than the warning named.
  */
 export function formatGatewayCrashLoopManualChannelStartHint(target?: {
   channelId: string;
@@ -55,6 +54,7 @@ type GatewayBootLifecycleDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_b
 type GatewayBootLifecycleOutcome =
   | "clean_stop"
   | "planned_restart"
+  | "safe_mode_stable"
   | "startup_failed"
   | "startup_failure_repaired"
   | "forced_stop";
@@ -185,6 +185,58 @@ export function recordGatewayBootStart(
     return bootId;
   } catch (err) {
     gatewayLifecycleLog.warn(`failed to persist gateway boot start; fail-open: ${String(err)}`);
+    return undefined;
+  }
+}
+
+/**
+ * Split a stable safe-mode lifetime before channel autostart resumes. A fresh
+ * open row makes a process death during recovered channel startup count toward
+ * the next breaker decision instead of aging out with the original boot.
+ */
+export function recordGatewayCrashLoopRecovery(
+  bootId: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  nowMs = Date.now(),
+): string | undefined {
+  const recoveredBootId = randomUUID();
+  try {
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
+        if (bootId) {
+          executeSqliteQuerySync(
+            db,
+            kysely
+              .updateTable("gateway_boot_lifecycle")
+              .set({
+                completed_at_ms: nowMs,
+                outcome: "safe_mode_stable",
+                reason: null,
+              })
+              .where("boot_id", "=", bootId),
+          );
+        }
+        executeSqliteQuerySync(
+          db,
+          kysely.insertInto("gateway_boot_lifecycle").values({
+            boot_id: recoveredBootId,
+            pid: process.pid,
+            started_at_ms: nowMs,
+            completed_at_ms: null,
+            outcome: null,
+            startup_reason: GATEWAY_CRASH_LOOP_RECOVERED_REASON,
+            reason: null,
+          }),
+        );
+      },
+      { env },
+    );
+    return recoveredBootId;
+  } catch (err) {
+    gatewayLifecycleLog.warn(
+      `failed to persist gateway crash-loop recovery; fail-safe: ${String(err)}`,
+    );
     return undefined;
   }
 }

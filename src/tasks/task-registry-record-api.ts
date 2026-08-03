@@ -466,6 +466,7 @@ export function recordTaskProgressByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
@@ -474,6 +475,7 @@ export function recordTaskProgressByRunId(params: {
     runId: params.runId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
+    childSessionKey: params.childSessionKey,
     lastEventAt: params.lastEventAt,
     progressSummary: params.progressSummary,
     eventSummary: params.eventSummary,

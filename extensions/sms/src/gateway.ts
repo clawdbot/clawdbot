@@ -1,4 +1,5 @@
 // Sms plugin module implements gateway behavior.
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { createSmsIngressSpool, type SmsIngressLog } from "./ingress-spool.js";
@@ -153,9 +154,12 @@ export async function startSmsGatewayAccount(params: {
   channelRuntime: Parameters<typeof createSmsIngressSpool>[0]["channelRuntime"];
   abortSignal: AbortSignal;
   log?: SmsIngressLog;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
+  params.statusSink?.({ lifecycle: "starting" });
   if (!params.account.enabled) {
     params.log?.info?.(`SMS account ${params.account.accountId} is disabled`);
+    params.statusSink?.({ running: false, connected: false, lifecycle: "stopped" });
     return waitUntilAbort(params.abortSignal);
   }
   const warnings = collectSmsStartupWarnings(params.account);
@@ -163,6 +167,13 @@ export async function startSmsGatewayAccount(params: {
     for (const warning of warnings) {
       params.log?.warn?.(warning);
     }
+    params.statusSink?.({
+      running: true,
+      connected: false,
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: warnings.join("; "),
+    });
     return waitUntilAbort(params.abortSignal);
   }
   for (const warning of warnings) {
@@ -173,6 +184,16 @@ export async function startSmsGatewayAccount(params: {
     params.log?.info?.(
       `Registered SMS webhook route ${params.account.webhookPath} for account ${params.account.accountId}`,
     );
+    params.statusSink?.({
+      running: true,
+      connected: true,
+      lifecycle: "ready",
+      lastConnectedAt: Date.now(),
+      lastError: null,
+      terminalDisconnect: undefined,
+    });
   }
-  return registration.lifecycle;
+  return registration.lifecycle.finally(() => {
+    params.statusSink?.({ running: false, connected: false, lifecycle: "stopped" });
+  });
 }

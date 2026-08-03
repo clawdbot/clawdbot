@@ -14,6 +14,26 @@ const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? messa
 
 const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
+async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
+  const [databasePreflight, agentDatabase, stateDatabase] = await Promise.all([
+    import("../state/openclaw-database-preflight.js"),
+    import("../state/openclaw-agent-db.js"),
+    import("../state/openclaw-state-db.js"),
+  ]);
+  const databaseSchemas = databasePreflight.preflightOpenClawDatabaseSchemas({
+    env: process.env,
+    supportedVersions: {
+      state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
+      agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
+    },
+  });
+  if (databaseSchemas.incompatible.length > 0) {
+    throw new databasePreflight.OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible, {
+      operation: "doctor",
+    });
+  }
+}
+
 function stateDirectoryExistsAtDoctorStart(): boolean {
   try {
     return fs.statSync(resolveStateDir()).isDirectory();
@@ -28,14 +48,10 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
   // Config loading can initialize SQLite-backed state before integrity runs.
   // Preserve the entry fact so doctor can report that automatic initialization.
   const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
-  if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
-    const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
-    assertConfigWriteAllowedInCurrentMode();
-  }
+  intro("OpenClaw doctor");
 
   const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
   const prompter = createDoctorPrompter({ runtime: effectiveRuntime, options });
-  intro("OpenClaw doctor");
 
   const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
   const root = await resolveOpenClawPackageRoot({
@@ -54,6 +70,14 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
   });
   if (updateResult.handled) {
     return;
+  }
+
+  // A stale source checkout may update itself, but no diagnostic or repair may
+  // touch state until the surviving build proves it understands every database.
+  await assertDoctorDatabaseSchemasCompatible();
+  if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
+    const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
+    assertConfigWriteAllowedInCurrentMode();
   }
 
   // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.

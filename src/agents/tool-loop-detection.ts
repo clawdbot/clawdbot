@@ -4,6 +4,7 @@
  * Watches recent tool history for repeated no-progress patterns and circuit-breaker thresholds.
  */
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   normalizeNullableString as nonEmptyStringField,
   normalizeOptionalString as normalizeRunId,
@@ -13,7 +14,6 @@ import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
-import { stableStringify } from "./stable-stringify.js";
 import {
   buildArgumentChurnWarning,
   getArgumentChurnNoProgressStreak,
@@ -310,7 +310,20 @@ function hashToolOutcome(
   if (toolName === "exec") {
     const execHash = hashExecToolOutcome(details, text);
     if (execHash) {
-      return { resultHash: execHash };
+      const exitCode = details.exitCode;
+      const output = nonEmptyStringField(details.aggregated) ?? text;
+      // Normal nonzero exits append this footer even when the command emitted nothing.
+      const terminalFailure =
+        (details.status === "completed" || details.status === "failed") &&
+        typeof exitCode === "number" &&
+        Number.isFinite(exitCode) &&
+        exitCode !== 0 &&
+        details.timedOut !== true &&
+        output !== "" &&
+        output !== `(Command exited with code ${exitCode})`;
+      return terminalFailure
+        ? { resultHash: execHash, outcomeKind: "terminal-exec-failure" }
+        : { resultHash: execHash };
     }
   }
   if (toolName === "write" && isWriteNoProgressOutcome(details)) {
@@ -631,7 +644,7 @@ export function detectToolCallLoop(
       level: "critical",
       detector: "generic_repeat",
       count: noProgressStreak,
-      message: `CRITICAL: Called ${toolName} with identical arguments and identical outcomes ${noProgressStreak} times. Session execution blocked to prevent runaway loops.`,
+      message: `CRITICAL: Called ${toolName} with identical outcomes ${noProgressStreak} times. Session execution blocked to prevent runaway loops.`,
       warningKey: `generic:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
   }

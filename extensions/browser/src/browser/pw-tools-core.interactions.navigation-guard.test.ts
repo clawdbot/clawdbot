@@ -28,9 +28,13 @@ function createMutableFrame(initialUrl: string) {
   };
 }
 
-async function runWithVirtualNavigationGrace<T>(run: () => Promise<T>): Promise<T> {
+async function withFakeTimers<T>(run: () => Promise<T>): Promise<T> {
   vi.useFakeTimers();
-  try {
+  return await run().finally(() => vi.useRealTimers());
+}
+
+async function runWithVirtualNavigationGrace<T>(run: () => Promise<T>): Promise<T> {
+  return await withFakeTimers(async () => {
     // Observe rejection before advancing the production grace timer to avoid a transient
     // unhandled rejection; timing-specific cases below still advance exact durations.
     const settled = run().then(
@@ -43,9 +47,7 @@ async function runWithVirtualNavigationGrace<T>(run: () => Promise<T>): Promise<
       throw result.reason;
     }
     return result.value;
-  } finally {
-    vi.useRealTimers();
-  }
+  });
 }
 
 const strictNavigationOptions = () =>
@@ -134,8 +136,7 @@ function mockDownloadCapture(drain: DownloadCapture["drain"], dispose = vi.fn())
 
 describe("pw-tools-core interaction navigation guard", () => {
   it("waits for the grace window before completing a successful non-navigating click", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const { listeners, page } = createNavigationPage("http://127.0.0.1:9222/json/version");
       const click = vi.fn(async () => {});
       installInteractionPage(page, { click });
@@ -154,14 +155,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       await task;
       expect(completion).toHaveBeenCalledTimes(1);
       expect(listeners.size).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("runs the post-click navigation guard when navigation starts shortly after the click resolves", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const navigation = createNavigationPage("http://127.0.0.1:9222/json/version");
       const click = vi.fn(async () => {
         setTimeout(() => {
@@ -188,14 +186,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         completedNavigationExpectation(page),
       );
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("runs the post-select navigation guard when navigation starts shortly after the select resolves", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const navigation = createNavigationPage("https://example.com/form");
       const selectOption = vi.fn(async () => {
         setTimeout(() => {
@@ -219,14 +214,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         completedNavigationExpectation(page),
       );
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("checks subframe navigations before a later main-frame navigation", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const mainFrame = {};
       const subframe = { url: () => "https://example.com/embed" };
       const navigation = createNavigationPage("http://127.0.0.1:9222/json/version", {
@@ -267,14 +259,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         completedNavigationExpectation(page),
       );
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("blocks subframe-only navigation to a private URL during the post-action grace window", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const mainFrame = {};
       const subframe = { url: () => "http://169.254.169.254/latest/meta-data/" };
       const navigation = createNavigationPage("https://attacker.example.com/page", { mainFrame });
@@ -300,14 +289,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         completedNavigationExpectation(page),
       );
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("snapshots delayed subframe URLs before later rewrites make them look safe", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const mainFrame = {};
       const subframe = createMutableFrame("http://169.254.169.254/latest/meta-data/");
       const navigation = createNavigationPage("https://attacker.example.com/page", { mainFrame });
@@ -334,14 +320,11 @@ describe("pw-tools-core interaction navigation guard", () => {
         ssrfPolicy: { allowPrivateNetwork: false },
         url: "http://169.254.169.254/latest/meta-data/",
       });
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("still quarantines the main frame when a delayed subframe block fires first", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const mainFrame = {};
       const subframe = { url: () => "http://169.254.169.254/latest/meta-data/" };
       const navigation = createNavigationPage("https://attacker.example.com/page", { mainFrame });
@@ -375,14 +358,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         completedNavigationExpectation(page),
       );
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("does not stop watching for a later main-frame navigation after a harmless subframe hop", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const mainFrame = {};
       const subframe = { url: () => "about:blank" };
       const navigation = createNavigationPage("http://127.0.0.1:9222/json/version", {
@@ -412,14 +392,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         completedNavigationExpectation(page),
       );
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("checks delayed subframe navigations in the action-error recovery path", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const mainFrame = {};
       const subframe = { url: () => "http://169.254.169.254/latest/meta-data/" };
       const navigation = createNavigationPage("https://attacker.example.com/page", { mainFrame });
@@ -457,14 +434,11 @@ describe("pw-tools-core interaction navigation guard", () => {
           "navigation request guard invocation",
         ),
       ).toBeLessThan(requireInvocationOrder(page.evaluate.mock, "page evaluation invocation"));
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("snapshots subframe URLs observed during the action before they change", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const mainFrame = {};
       const subframe = createMutableFrame("http://169.254.169.254/latest/meta-data/");
       const navigation = createNavigationPage("https://attacker.example.com/page", { mainFrame });
@@ -493,14 +467,11 @@ describe("pw-tools-core interaction navigation guard", () => {
         ssrfPolicy: { allowPrivateNetwork: false },
         url: "http://169.254.169.254/latest/meta-data/",
       });
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("still quarantines the main frame when an in-flight subframe block fires first", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const mainFrame = {};
       const subframe = { url: () => "http://169.254.169.254/latest/meta-data/" };
       const navigation = createNavigationPage("https://attacker.example.com/page", { mainFrame });
@@ -536,14 +507,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         completedNavigationExpectation(page),
       );
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("deduplicates delayed navigation guards across repeated successful interactions", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const navigation = createNavigationPage("http://127.0.0.1:9222/json/version");
       const click = vi.fn(async () => {});
       const { listeners, page } = navigation;
@@ -566,14 +534,11 @@ describe("pw-tools-core interaction navigation guard", () => {
         getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
       ).toHaveBeenCalledTimes(3);
       expect(listeners.size).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("propagates blocked delayed navigation instead of reporting click success", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const navigation = createNavigationPage("http://127.0.0.1:9222/json/version");
       const click = vi.fn(async () => {
         setTimeout(() => {
@@ -595,9 +560,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       await vi.advanceTimersByTimeAsync(250);
       await rejection;
       expect(listeners.size).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("runs the post-click navigation guard with the resolved SSRF policy", async () => {
@@ -623,8 +586,7 @@ describe("pw-tools-core interaction navigation guard", () => {
   });
 
   it("skips interaction navigation guards when no explicit SSRF policy is provided", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const mainFrame = {};
       const navigation = createNavigationPage("http://127.0.0.1:9222/json/version", {
         mainFrame,
@@ -648,9 +610,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       expect(
         getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
       ).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("runs the post-evaluate navigation guard after page evaluation", async () => {
@@ -722,8 +682,7 @@ describe("pw-tools-core interaction navigation guard", () => {
   });
 
   it("runs the post-keypress navigation guard when navigation starts shortly after the keypress resolves", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const navigation = createNavigationPage("http://127.0.0.1:9222/json/version", {
         extras: {
           keyboard: {
@@ -750,14 +709,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         completedNavigationExpectation(page),
       );
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("defaults non-finite keypress delays before calling Playwright", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const press = vi.fn(async () => {});
       const page = {
         keyboard: { press },
@@ -777,14 +733,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       await task;
 
       expect(press).toHaveBeenCalledWith("Enter", { delay: 0 });
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("propagates blocked delayed submit navigation instead of reporting type success", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const navigation = createNavigationPage("https://example.com/form");
       const locator = {
         fill: vi.fn(async () => {}),
@@ -814,9 +767,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       await vi.advanceTimersByTimeAsync(250);
       await rejection;
       expect(listeners.size).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("runs the final committed-URL check when a click leaves the URL unchanged", async () => {
@@ -914,8 +865,7 @@ describe("pw-tools-core interaction navigation guard", () => {
   });
 
   it("runs the post-evaluate navigation guard when evaluate rejects after triggering navigation", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const navigation = createNavigationPage("http://127.0.0.1:9222/json/version", {
         extras: {
           evaluate: vi.fn(async () => {
@@ -947,9 +897,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         completedNavigationExpectation(page),
       );
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("returns click downloads without adding a second policy grace", async () => {
@@ -1098,8 +1046,7 @@ describe("pw-tools-core interaction navigation guard", () => {
   });
 
   it("does not add a second download grace after a settled guarded failure", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const page = { url: vi.fn(() => "https://example.com") };
       const drain = vi.fn(async () => undefined);
       mockDownloadCapture(drain);
@@ -1118,14 +1065,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       await expectation;
 
       expect(drain).toHaveBeenCalledWith(NO_EXTRA_DOWNLOAD_GRACE);
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("blocks a private final URL after an earlier safe navigation", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       let currentUrl = "https://example.com";
       const blocked = new Error("final browser URL blocked by policy");
       blocked.name = "SsrFBlockedError";
@@ -1165,9 +1109,7 @@ describe("pw-tools-core interaction navigation guard", () => {
         page,
         targetId: "T1",
       });
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("stops a permissive batch and quarantines when source preservation fails", async () => {

@@ -303,10 +303,9 @@ function resolveApkSignerFromSdk(sdkRoot: string | undefined): string | null {
 
   const candidates = readdirSync(buildToolsDir)
     .toSorted((left, right) => right.localeCompare(left))
-    .map((version) => join(buildToolsDir, version, "apksigner"))
-    .filter((candidate) => existsSync(candidate));
+    .map((version) => join(buildToolsDir, version, "apksigner"));
 
-  return candidates[0] ?? null;
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
 function resolveApkSigner(): string {
