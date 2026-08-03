@@ -55,6 +55,18 @@ function pathMayExist(filePath: string): boolean {
   }
 }
 
+function isMissingPath(filePath: string): boolean {
+  try {
+    fs.lstatSync(filePath);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return true;
+    }
+    throw error;
+  }
+}
+
 function resolveLegacyStateDir(options: DeviceIdentityStoreOptions): string {
   if (options.env?.OPENCLAW_STATE_DIR?.trim()) {
     return resolveStateDir(options.env);
@@ -100,7 +112,10 @@ function withDeviceIdentityCoordinator<T>(
     path: resolved.databasePath,
     identityKey: resolved.identityKey,
   };
-  const coordinator = acquireDeviceIdentityCoordinator({ databasePath: resolved.databasePath });
+  const coordinator = acquireDeviceIdentityCoordinator({
+    databasePath: resolved.databasePath,
+    env: options.env,
+  });
   let result: T;
   try {
     result = operation(resolved, resolvedOptions);
@@ -168,6 +183,10 @@ export function loadOrCreateProcessDeviceIdentity(
 export function loadDeviceIdentityIfPresent(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity | null {
+  assertNoPendingLegacyIdentity(options);
+  if (isMissingPath(resolveDeviceIdentityStore(options).databasePath)) {
+    return null;
+  }
   return withDeviceIdentityCoordinator(options, (_resolved, resolvedOptions) => {
     assertNoPendingLegacyIdentity(resolvedOptions);
     const stored = readStoredDeviceIdentityReadOnly(resolvedOptions);

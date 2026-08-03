@@ -293,7 +293,7 @@ function canonicalizeStateDir(stateDir: string): string {
   }
 }
 
-function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, lockDir = resolveGatewayLockDir()) {
+function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, lockDir = resolveGatewayLockDir(env)) {
   const resolvedStateDir = resolveStateDir(env);
   const stateDir = canonicalizeStateDir(resolvedStateDir);
   const configPath = resolveConfigPath(env, resolvedStateDir);

@@ -57,7 +57,7 @@ function ensurePrivateCoordinatorDirectory(lockDir: string): void {
       throw error;
     }
     try {
-      fs.mkdirSync(lockDir, { mode: 0o700 });
+      fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
     } catch (mkdirError) {
       if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") {
         throw mkdirError;
@@ -90,9 +90,13 @@ function ensurePrivateCoordinatorDirectory(lockDir: string): void {
 export function acquireDeviceIdentityCoordinator(params: {
   databasePath: string;
   busyTimeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
   lockDir?: string;
 }): { release: () => void } {
-  const coordinatorPath = resolveDeviceIdentityCoordinatorPath(params.databasePath, params.lockDir);
+  const coordinatorPath = resolveDeviceIdentityCoordinatorPath(
+    params.databasePath,
+    params.lockDir ?? resolveGatewayLockDir(params.env),
+  );
   ensurePrivateCoordinatorDirectory(path.dirname(coordinatorPath));
   const database = openNodeSqliteDatabase(coordinatorPath);
   try {

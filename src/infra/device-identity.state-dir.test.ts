@@ -31,12 +31,25 @@ describe("device identity state dir defaults", () => {
     });
   });
 
+  it("keeps the identity coordinator under the overridden state directory", async () => {
+    await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
+      loadOrCreateDeviceIdentity();
+
+      const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+      const lockDir = path.join(stateDir, "tmp", uid != null ? `openclaw-${uid}` : "openclaw");
+      expect(fs.readdirSync(lockDir)).toContainEqual(
+        expect.stringMatching(/^device-identity\..+\.lock\.sqlite$/u),
+      );
+    });
+  });
+
   it("keeps read-only lookup non-creating when the default database is absent", async () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
 
       expect(loadDeviceIdentityIfPresent()).toBeNull();
       expect(fs.existsSync(databasePath)).toBe(false);
+      expect(fs.existsSync(path.join(stateDir, "tmp"))).toBe(false);
     });
   });
 });
