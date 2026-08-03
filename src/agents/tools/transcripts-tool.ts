@@ -449,6 +449,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
       store,
       abortSignal: abortController.signal,
       startupWaitMs: AUTO_START_PROVIDER_READY_TIMEOUT_MS,
+      configuredLifecycle: true,
       rawParams: {
         action: "start",
         ...entry,

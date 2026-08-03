@@ -121,7 +121,9 @@ Transcript source providers that share an account namespace with an inbound
 channel declare that channel id in `accountBindingChannels`. OpenClaw then
 ignores model-selected account ids for same-channel capture, binds the trusted
 inbound account, and records it as the session owner for later lifecycle
-actions. Provider aliases are lookup names only and must not be used for this
+actions. Providers that support an omitted account implement `resolveAccountId`
+so OpenClaw records the canonical account before starting or persisting live
+capture. Provider aliases are lookup names only and must not be used for this
 declaration.
 
 Worker providers must also declare their id in `contracts.workerProviders`.

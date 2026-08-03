@@ -10,6 +10,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
   afterEach(() => {
     setDiscordTranscriptsVoiceManager({ accountId: "primary", manager: null });
     setDiscordTranscriptsVoiceManager({ accountId: "delayed", manager: null });
+    setDiscordTranscriptsVoiceManager({ accountId: "work", manager: null });
     vi.useRealTimers();
   });
 
@@ -45,6 +46,48 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
         },
       },
     );
+  });
+
+  it("resolves an omitted source account through the configured default", async () => {
+    const primaryJoin = vi.fn(async () => ({ ok: true, message: "joined primary" }));
+    const workJoin = vi.fn(async () => ({ ok: true, message: "joined work" }));
+    setDiscordTranscriptsVoiceManager({
+      accountId: "primary",
+      manager: { join: primaryJoin } as unknown as DiscordVoiceManager,
+    });
+    setDiscordTranscriptsVoiceManager({
+      accountId: "work",
+      manager: { join: workJoin } as unknown as DiscordVoiceManager,
+    });
+    const source = {
+      providerId: "discord-voice",
+      guildId: "g1",
+      channelId: "c1",
+    };
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          accounts: { work: { token: "token-work" } },
+        },
+      },
+    };
+
+    const accountId = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source });
+    expect(accountId).toBe("work");
+    const result = await discordVoiceTranscriptsSourceProvider.start?.({
+      cfg,
+      session: {
+        sessionId: "notes-default",
+        startedAt: new Date().toISOString(),
+        source: { ...source, accountId },
+      },
+      onUtterance: vi.fn(),
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(workJoin).toHaveBeenCalledOnce();
+    expect(primaryJoin).not.toHaveBeenCalled();
   });
 
   it("waits for a deferred voice manager during startup", async () => {
