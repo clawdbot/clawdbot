@@ -1230,8 +1230,14 @@ async function sendSubagentAnnounceDirectly(params: {
             ? {
                 payloads: Array.isArray(directAnnounceResult.payloads)
                   ? directAnnounceResult.payloads.filter((payload) => {
-                      const flags = payload as { isCommentary?: unknown; visible?: unknown };
-                      return flags?.isCommentary !== true && flags?.visible !== false;
+                      const flags = payload as Record<string, unknown>;
+                      return (
+                        flags?.isCommentary !== true &&
+                        flags?.isCompactionNotice !== true &&
+                        flags?.isFallbackNotice !== true &&
+                        flags?.isStatusNotice !== true &&
+                        flags?.visible !== false
+                      );
                     })
                   : [],
               }

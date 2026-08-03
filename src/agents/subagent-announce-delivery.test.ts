@@ -3195,6 +3195,24 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: missingRequesterFinal,
     },
     {
+      name: "rejects a compaction notice instead of a final answer",
+      response: { result: { payloads: [{ text: "compacting", isCompactionNotice: true }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a provider-fallback notice instead of a final answer",
+      response: { result: { payloads: [{ text: "switching providers", isFallbackNotice: true }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a transient status notice instead of a final answer",
+      response: { result: { payloads: [{ text: "still working", isStatusNotice: true }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
       name: "rejects an explicitly hidden assistant payload",
       response: { result: { payloads: [{ text: "not user visible", visible: false }] } },
       requireVisibleReply: true,
