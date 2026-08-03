@@ -284,7 +284,7 @@ async function startRealTransportProxy(gatewayUrl: string): Promise<RealTranspor
   if (!address || typeof address === "string") {
     throw new Error("real-transport proxy did not bind a TCP port");
   }
-  const baseUrl = `ws://127.0.0.1:${address.port}`;
+  const baseUrl = `ws://localhost:${address.port}`;
   return {
     close: async () => {
       for (const socket of activeSockets) {
