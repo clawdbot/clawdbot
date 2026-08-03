@@ -3087,6 +3087,46 @@ describe("memory index", () => {
     expect(status.vector?.available).toBeUndefined();
   });
 
+  it("reports vector store ready from persisted semantic chunks on the unprobed fast path (#92102)", async () => {
+    const cfg = createCfg({ vectorEnabled: true });
+    const manager = await getPersistentManager(cfg);
+    const db = Reflect.get(manager, "db") as DatabaseSync;
+    const vector = Reflect.get(manager, "vector") as { available: boolean | null };
+
+    // The CLI status fast path never live-probes sqlite-vec, so vector.available
+    // stays null (the lazy-init default set in the constructor).
+    vector.available = null;
+
+    // No persisted chunks yet -> still unknown (undefined); the fix does not
+    // fabricate readiness when nothing has been indexed.
+    expect(manager.status().vector?.storeAvailable).toBeUndefined();
+
+    // Persist a real semantic (non-fts-only) chunk as a prior indexing would.
+    db.exec(
+      `INSERT INTO memory_index_chunks
+         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+       VALUES
+         ('chunk-1', 'memory/2026-01-12.md', 'memory', 1, 2, 'h1',
+          'mock-embed', 'semantic chunk body', '[]', 0)`,
+    );
+
+    // Unprobed fast path now reports ready, mirroring --deep, instead of the
+    // misleading "unknown" that made operators think vector search was down.
+    expect(manager.status().vector?.storeAvailable).toBe(true);
+
+    // fts-only chunks are not semantic vectors and must not count as ready.
+    db.exec(
+      `DELETE FROM memory_index_chunks;
+       INSERT INTO memory_index_chunks
+         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+       VALUES
+         ('chunk-fts', 'memory/2026-01-12.md', 'memory', 1, 2, 'h2',
+          'fts-only', 'fts only body', '[]', 0)`,
+    );
+    vector.available = null;
+    expect(manager.status().vector?.storeAvailable).toBeUndefined();
+  });
+
   it("keeps current vector indexes clean after vector store probing", async () => {
     const cfg = createCfg({ provider: "gemini" });
     const manager = await getFreshManager(cfg);
