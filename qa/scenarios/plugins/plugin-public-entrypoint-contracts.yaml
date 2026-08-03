@@ -1,0 +1,28 @@
+title: Plugin public entrypoint contracts
+
+scenario:
+  id: plugin-public-entrypoint-contracts
+  surface: plugins
+  category: plugins.authoring-and-packaging-plugins
+  coverage:
+    primary:
+      - plugins.entrypoint-discovery
+  objective: Verify plugin authors can discover public SDK entrypoints and support status from the maintained catalog and documentation.
+  successCriteria:
+    - Every public SDK catalog entry has a published package export.
+    - Private-local SDK entries stay out of published package exports.
+    - Deprecated entries remain public while their support status is maintained separately.
+    - Documented SDK subpaths resolve to maintained catalog entries.
+  docsRefs:
+    - docs/plugins/sdk-entrypoints.md
+    - docs/plugins/sdk-subpaths.md
+  codeRefs:
+    - scripts/lib/plugin-sdk-entrypoints.json
+    - scripts/lib/plugin-sdk-private-local-only-subpaths.json
+    - scripts/lib/plugin-sdk-deprecated-public-subpaths.json
+    - src/plugin-sdk/entrypoints.ts
+    - src/plugins/contracts/plugin-sdk-subpaths.test.ts
+  execution:
+    kind: vitest
+    path: src/plugins/contracts/plugin-sdk-subpaths.test.ts
+    summary: Run the public SDK catalog, package export, and documentation classification contract.
