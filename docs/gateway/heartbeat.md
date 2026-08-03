@@ -151,10 +151,9 @@ Example: two agents, only the second agent runs heartbeats.
         target: "last", // explicit delivery to last contact (default is "none")
       },
     },
-    list: [
-      { id: "main", default: true },
-      {
-        id: "ops",
+    entries: {
+      main: { default: true },
+      ops: {
         heartbeat: {
           every: "1h",
           target: "whatsapp",
@@ -163,7 +162,7 @@ Example: two agents, only the second agent runs heartbeats.
           prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -210,9 +209,9 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "ops",
+    entries: {
+      ops: {
+        default: true,
         heartbeat: {
           every: "1h",
           target: "telegram",
@@ -220,7 +219,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
           accountId: "ops-bot",
         },
       },
-    ],
+    },
   },
   channels: {
     telegram: {

@@ -91,7 +91,8 @@ function restoreMemoryIndexStateDir(): void {
   }
 }
 
-vi.mock("./embeddings.js", () => {
+vi.mock("./embeddings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./embeddings.js")>();
   const embedText = (text: string) => {
     const lower = text.toLowerCase();
     const alpha = lower.split("alpha").length - 1;
@@ -101,6 +102,7 @@ vi.mock("./embeddings.js", () => {
     return [alpha, beta, image, audio];
   };
   return {
+    ...actual,
     resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
       providerId === "gemini" || providerId === "fallback-provider"
         ? `${providerId}-embed`
