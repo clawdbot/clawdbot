@@ -1123,7 +1123,15 @@ describe("projectRecentChatDisplayMessages", () => {
         errorMessage: privateError,
         errorBody: "private response body",
       },
-      content: [{ type: "text", text: "I read the requested file before the run failed." }],
+      content: [
+        { type: "text", text: "I read the requested file before the run failed." },
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "read",
+          arguments: { path: "README.md" },
+        },
+      ],
     },
   ];
 
@@ -1927,7 +1935,7 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
-  it("keeps visible assistant progress text from mixed tool-use messages", () => {
+  it("preserves structured trace alongside visible assistant progress text", () => {
     const result = projectRecentChatDisplayMessages([
       {
         role: "user",
@@ -1968,7 +1976,16 @@ describe("projectRecentChatDisplayMessages", () => {
 
     expect(result[1]).toEqual({
       role: "assistant",
-      content: [{ type: "text", text: "I will clean that up now." }],
+      content: [
+        { type: "thinking", thinking: "private reasoning" },
+        { type: "text", text: "I will clean that up now." },
+        {
+          type: "toolCall",
+          id: "call-read",
+          name: "read",
+          arguments: { path: "AGENTS.md" },
+        },
+      ],
       timestamp: 2,
       __openclaw: { seq: 2 },
     });

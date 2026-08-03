@@ -157,7 +157,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
   };
 }
 
-function projectAssistantTextFromMixedToolContent(
+function projectAssistantMixedToolContent(
   content: unknown[],
   maxChars: number,
 ): { content: unknown[]; changed: boolean } | null {
@@ -171,23 +171,31 @@ function projectAssistantTextFromMixedToolContent(
     return null;
   }
 
-  const textBlocks: unknown[] = [];
+  let hasVisibleText = false;
+  const projectedContent: unknown[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
     const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text" || typeof entry.text !== "string" || !entry.text.trim()) {
+    if (!isAssistantTextContentType(entry.type)) {
+      projectedContent.push(block);
+      continue;
+    }
+    if (typeof entry.text !== "string" || !entry.text.trim()) {
       continue;
     }
     const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
     const truncated = truncateChatHistoryText(stripped.text, maxChars);
     if (truncated.text.trim()) {
-      textBlocks.push({ type: "text", text: truncated.text });
+      projectedContent.push({ type: "text", text: truncated.text });
+      hasVisibleText = true;
     }
   }
 
-  return textBlocks.length > 0 ? { content: textBlocks, changed: true } : null;
+  // Mixed messages supply both the visible bubble and its reasoning/tool trace.
+  // Keep structured siblings or a history reload loses activity shown while live.
+  return hasVisibleText ? { content: projectedContent, changed: true } : null;
 }
 
 function toFiniteNumber(x: unknown): number | undefined {
@@ -394,9 +402,9 @@ export function sanitizeChatHistoryMessage(
       changed = true;
     }
     if (entry.role === "assistant" && Array.isArray(entry.content)) {
-      const mixedToolText = projectAssistantTextFromMixedToolContent(entry.content, maxChars);
-      if (mixedToolText) {
-        entry.content = mixedToolText.content;
+      const mixedToolContent = projectAssistantMixedToolContent(entry.content, maxChars);
+      if (mixedToolContent) {
+        entry.content = mixedToolContent.content;
         if (entry.phase === "commentary") {
           delete entry.phase;
         }
