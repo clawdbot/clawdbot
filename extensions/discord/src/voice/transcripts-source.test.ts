@@ -75,19 +75,6 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
 
     const accountId = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source });
     expect(accountId).toBe("work");
-    expect(
-      discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
-        cfg: {
-          channels: {
-            discord: {
-              defaultAccount: "primary",
-              accounts: { primary: {}, work: { token: "token-work" } },
-            },
-          },
-        },
-        source,
-      }),
-    ).toBe("work");
     const result = await discordVoiceTranscriptsSourceProvider.start?.({
       cfg,
       session: {
@@ -124,8 +111,8 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
         discord: {
           defaultAccount: "primary",
           accounts: {
-            primary: { enabled: false, token: "token-primary" },
-            work: { token: "token-work" },
+            primary: { enabled: false, token: "a" },
+            work: { token: "b" },
           },
         },
       },
@@ -133,6 +120,19 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
 
     const accountId = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source });
     expect(accountId).toBe("work");
+    expect(
+      discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
+        cfg: {
+          channels: {
+            discord: {
+              defaultAccount: "primary",
+              accounts: { primary: {}, work: { token: "b" } },
+            },
+          },
+        },
+        source,
+      }),
+    ).toBe("work");
     const result = await discordVoiceTranscriptsSourceProvider.start?.({
       cfg,
       session: {
