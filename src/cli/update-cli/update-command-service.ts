@@ -14,6 +14,7 @@ import {
 import { doctorCommand } from "../../commands/doctor.js";
 import { UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveGatewayPort } from "../../config/config.js";
+import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -575,9 +576,16 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   if (!params.preManagedServiceStop?.stopped || !params.preManagedServiceStop.serviceEnv) {
     return;
   }
+  // The package swap can succeed before a later step fails. In that case the
+  // service points at the new on-disk binary even though this updater process
+  // is still the old version, so allow this narrowly scoped recovery restart.
+  const restartEnv = {
+    ...params.preManagedServiceStop.serviceEnv,
+    [ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]: "1",
+  };
   try {
     await resolveGatewayService().restart({
-      env: params.preManagedServiceStop.serviceEnv,
+      env: restartEnv,
       stdout: serviceControlStdoutForMode(params.jsonMode),
     });
     if (!params.jsonMode) {

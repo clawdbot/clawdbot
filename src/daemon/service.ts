@@ -425,7 +425,7 @@ function withGatewayServiceMutationGuards(service: GatewayService): GatewayServi
     },
     restart: async (args) => {
       assertGatewayServiceMutationOwnedByOpenClaw("restart the gateway service", args.env);
-      await assertFutureConfigActionAllowed("restart the gateway service");
+      await assertFutureConfigActionAllowed("restart the gateway service", args.env);
       return await service.restart(args);
     },
   };
