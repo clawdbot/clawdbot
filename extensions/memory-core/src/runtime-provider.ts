@@ -1,6 +1,7 @@
 // Memory Core provider module implements model/runtime integration.
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { configureMemoryCoreDreamingState } from "./dreaming-state.js";
 import {
   closeAllMemorySearchManagers,
   closeMemorySearchManager,
@@ -9,6 +10,10 @@ import {
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 
 export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPluginRuntime {
+  if (host.openKeyedStore) {
+    configureMemoryCoreDreamingState(host.openKeyedStore);
+  }
+
   return {
     async getMemorySearchManager(params) {
       const { manager, debug, error } = await getMemorySearchManager({
