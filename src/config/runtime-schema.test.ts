@@ -303,6 +303,64 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(channelProps).toHaveProperty("matrix");
   });
 
+  it("projects strict heartbeat visibility for external channels and their accounts", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "external-chat",
+          origin: "workspace",
+          channels: ["external-chat"],
+          channelConfigs: {
+            "external-chat": {
+              schema: {
+                type: "object",
+                properties: {
+                  endpoint: { type: "string" },
+                  accounts: {
+                    type: "object",
+                    additionalProperties: {
+                      type: "object",
+                      properties: { endpoint: { type: "string" } },
+                      additionalProperties: false,
+                    },
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const result = loadGatewayRuntimeConfigSchema();
+    const schema = result.schema as { properties?: Record<string, unknown> };
+    const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
+    const heartbeatVisibility = {
+      type: "object",
+      properties: {
+        showOk: { type: "boolean" },
+        showAlerts: { type: "boolean" },
+        useIndicator: { type: "boolean" },
+      },
+      additionalProperties: false,
+    };
+
+    expect(channels.properties?.["external-chat"]).toMatchObject({
+      additionalProperties: false,
+      properties: {
+        heartbeatVisibility,
+        accounts: {
+          additionalProperties: {
+            additionalProperties: false,
+            properties: { heartbeatVisibility },
+          },
+        },
+      },
+    });
+  });
+
   it("reuses the current gateway plugin metadata snapshot for config schema requests", () => {
     mockGetCurrentPluginMetadataSnapshot.mockReturnValueOnce({
       manifestRegistry: {

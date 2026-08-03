@@ -93,6 +93,14 @@ function createExternalFeishuSchemaRegistry(): PluginManifestRegistry {
                 appSecret: { type: "string" },
                 replyMode: { type: "string", enum: ["thread", "direct"] },
                 footer: { type: "string" },
+                accounts: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "object",
+                    properties: { appId: { type: "string" } },
+                    additionalProperties: false,
+                  },
+                },
               },
               required: ["appId", "appSecret"],
               additionalProperties: false,
@@ -591,6 +599,88 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("accepts core-owned heartbeat visibility in closed channel and account schemas", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
+
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        feishu: {
+          appId: "app-id",
+          appSecret: "secret",
+          heartbeatVisibility: { showAlerts: false, useIndicator: true },
+          accounts: {
+            work: { heartbeatVisibility: { showOk: true } },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    { label: "a scalar", value: "enabled" },
+    { label: "a non-boolean visibility flag", value: { showAlerts: 0 } },
+    { label: "an unknown visibility field", value: { showOk: true, unexpected: true } },
+  ])("rejects $label at channel and account heartbeat visibility scopes", ({ value }) => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
+
+    for (const config of [
+      { appId: "app-id", appSecret: "secret", heartbeatVisibility: value },
+      {
+        appId: "app-id",
+        appSecret: "secret",
+        accounts: { work: { heartbeatVisibility: value } },
+      },
+    ]) {
+      const result = validateConfigObjectRawWithPlugins({ channels: { feishu: config } });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const hasHeartbeatVisibilityIssue = result.issues.some((issue) =>
+          issue.path.includes("heartbeatVisibility"),
+        );
+        expect(hasHeartbeatVisibilityIssue).toBe(true);
+      }
+    }
+  });
+
+  it("preserves a stricter heartbeat visibility schema already declared by the plugin", () => {
+    const registry = createExternalFeishuSchemaRegistry();
+    const schema = expectDefined(
+      registry.plugins[0]?.channelConfigs?.feishu?.schema,
+      "external Feishu channel schema",
+    );
+    const properties = expectDefined(
+      schema.properties as Record<string, unknown> | undefined,
+      "external Feishu channel schema properties",
+    );
+    properties.heartbeatVisibility = {
+      type: "object",
+      properties: { showAlerts: { const: true } },
+      additionalProperties: false,
+    };
+    mockLoadPluginManifestRegistry.mockReturnValue(registry);
+
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        feishu: {
+          appId: "app-id",
+          appSecret: "secret",
+          heartbeatVisibility: { showAlerts: false },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const hasHeartbeatVisibilityIssue = result.issues.some((issue) =>
+        issue.path.includes("heartbeatVisibility"),
+      );
+      expect(hasHeartbeatVisibilityIssue).toBe(true);
+    }
   });
 
   it("names the external plugin owner for unsupported channel properties", () => {

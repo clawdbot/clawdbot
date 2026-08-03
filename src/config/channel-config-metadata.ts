@@ -2,9 +2,11 @@
  * Converts plugin manifest metadata into deterministic config UI metadata for docs, validation, and runtime schema.
  * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
+import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 
 type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
   schemaPluginId?: string;
@@ -33,6 +35,48 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   global: 2,
   bundled: 3,
 };
+
+const CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA =
+  ChannelHeartbeatVisibilitySchema.unwrap().toJSONSchema({ target: "draft-07" });
+
+function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const normalizeEntry = (entry: Record<string, unknown>): Record<string, unknown> => {
+    if (entry.additionalProperties !== false) {
+      return entry;
+    }
+    const properties = isRecord(entry.properties) ? entry.properties : {};
+    if (Object.hasOwn(properties, "heartbeatVisibility")) {
+      return entry;
+    }
+    return {
+      ...entry,
+      properties: {
+        ...properties,
+        heartbeatVisibility: CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA,
+      },
+    };
+  };
+
+  // Core owns heartbeat visibility at both scopes, even for older closed plugin schemas.
+  const normalized = normalizeEntry(schema);
+  const properties = isRecord(normalized.properties) ? normalized.properties : undefined;
+  const accounts = properties && isRecord(properties.accounts) ? properties.accounts : undefined;
+  const accountEntry =
+    accounts && isRecord(accounts.additionalProperties) ? accounts.additionalProperties : undefined;
+  if (!accountEntry) {
+    return normalized;
+  }
+  const normalizedAccount = normalizeEntry(accountEntry);
+  return normalizedAccount === accountEntry
+    ? normalized
+    : {
+        ...normalized,
+        properties: {
+          ...properties,
+          accounts: { ...accounts, additionalProperties: normalizedAccount },
+        },
+      };
+}
 
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
 export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): PluginUiMetadata[] {
@@ -109,7 +153,11 @@ export function collectChannelSchemaMetadataWithOwnership(
         id: channelId,
         label: channelConfig.label ?? rootLabel ?? current?.label,
         description: channelConfig.description ?? rootDescription ?? current?.description,
-        configSchema: channelConfig.schema,
+        // Installed plugin schemas can lag core; bundled schemas share its release and identity.
+        configSchema:
+          record.origin === "bundled" || channelConfig.schema === undefined
+            ? channelConfig.schema
+            : normalizeCoreOwnedChannelSchema(channelConfig.schema),
         configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
         schemaPluginId: channelConfig.schema === undefined ? undefined : record.id,
         schemaPluginOrigin: channelConfig.schema === undefined ? undefined : record.origin,
