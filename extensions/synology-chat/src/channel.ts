@@ -483,7 +483,7 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
               ? "  Example: `<https://example.com|Click here>` renders as a clickable link."
               : "  Send the relevant information without a remote URL.",
             "",
-            "**File sharing**: Remote media is safe only when NAS URL fetching is explicitly enabled.",
+            "**File sharing**: Remote media delivery is available only when NAS URL fetching is explicitly enabled.",
             account.dangerouslyAllowNasUrlFetches
               ? "  The NAS is configured to download the URL automatically. Only send URLs the operator trusts the NAS to fetch."
               : `  OpenClaw omits remote media URLs and sends this notice instead: ${SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE}`,

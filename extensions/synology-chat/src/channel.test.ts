@@ -503,6 +503,10 @@ describe("createSynologyChatPlugin", () => {
         "  The NAS is configured to download the URL automatically. Only send URLs the operator trusts the NAS to fetch.",
       );
       expect(hints).toContain("**Links**: Use `<URL|display text>` to create clickable links.");
+      expect(hints).toContain(
+        "**File sharing**: Remote media delivery is available only when NAS URL fetching is explicitly enabled.",
+      );
+      expect(hints.join("\n")).not.toContain("Remote media is safe");
       expect(hints).toContain("- Wrap URLs with `<URL|label>` for user-friendly links");
     });
   });
