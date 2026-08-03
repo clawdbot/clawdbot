@@ -10,7 +10,7 @@ import type {
 import { resolveTtsProvider } from "./tts-provider-resolution.js";
 import { resolveTtsConfig, resolveTtsPrefsPath, resolveTtsRuntimeConfig } from "./tts-settings.js";
 
-export type PreparedTtsRequest = {
+type PreparedTtsRequest = {
   cfg: OpenClawConfig;
   directives: TtsDirectiveParseResult;
 };

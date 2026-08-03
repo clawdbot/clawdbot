@@ -42,11 +42,7 @@ export {
   isTtsProviderConfigured,
   resolveTtsProviderOrder,
 } from "./tts-provider-resolution.js";
-export {
-  prepareTtsRequest,
-  resolveExplicitTtsOverrides,
-  type PreparedTtsRequest,
-} from "./tts-request.js";
+export { prepareTtsRequest, resolveExplicitTtsOverrides } from "./tts-request.js";
 export { streamSpeech, textToSpeechStream } from "./tts-streaming.js";
 export { synthesizeSpeech } from "./tts-synthesis.js";
 export { textToSpeechTelephony } from "./tts-telephony.js";
@@ -74,6 +70,3 @@ export const testApi = {
   formatTtsProviderError,
   sanitizeTtsErrorForLog,
 };
-
-/** @deprecated Use `testApi`. */
-export { testApi as _test };

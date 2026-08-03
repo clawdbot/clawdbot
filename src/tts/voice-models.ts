@@ -1,7 +1,7 @@
 // Voice model catalog helpers shared by TTS and realtime voice plugins.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 
-export type VoiceModelCapability = "tts" | "realtime_transcription" | "realtime_voice";
+type VoiceModelCapability = "tts" | "realtime_transcription" | "realtime_voice";
 
 /** Capability flags advertised by a voice model catalog entry. */
 export type VoiceModelCapabilities = Partial<Record<VoiceModelCapability, true>>;
@@ -23,7 +23,7 @@ export type VoiceModelProvider = {
 };
 
 /** Synthesized voice model catalog row exposed to provider/model selection. */
-export type VoiceModelCatalogEntry = {
+type VoiceModelCatalogEntry = {
   kind: "voice";
   provider: string;
   model: string;
