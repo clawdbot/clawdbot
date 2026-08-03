@@ -251,6 +251,8 @@ the shared outbound loader. Hosted media capacity defaults to
 `overflowPolicy: "evict-oldest"` for compatibility. Use `"reject-new"` when
 issued URLs must remain valid until expiry, and configure both backing keyed
 stores with `"reject-new"` so independent writers cannot evict live rows.
+Authenticate bearer requests with `readMetadata(...)` before calling `read(...)`
+so invalid tokens and `HEAD` requests do not hydrate stored media chunks.
 
 Inbound attachments use ordered facts, not parallel `Media*` fields. Normalize
 channel records with `toInboundMediaFacts(...)` from

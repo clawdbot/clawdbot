@@ -117,9 +117,9 @@ async function registerSmsWebhookRoute(params: {
       throwOnFailure: true,
       log: (msg) => params.log?.info?.(msg),
       handler: async (req, res) => {
-        if (req.method === "GET" || req.method === "HEAD") {
-          const { tryHandleHostedSmsMediaRequest } = await import("./media.js");
-          return await tryHandleHostedSmsMediaRequest(req, res, params.account.accountId);
+        const { tryHandleHostedSmsMediaRequest } = await import("./media.js");
+        if (await tryHandleHostedSmsMediaRequest(req, res, params.account.accountId)) {
+          return true;
         }
         return await webhookHandler(req, res);
       },

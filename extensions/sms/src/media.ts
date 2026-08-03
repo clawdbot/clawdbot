@@ -472,6 +472,11 @@ export async function tryHandleHostedSmsMediaRequest(
   if (tokenCandidates.length === 0) {
     return false;
   }
+  if (tokenCandidates.length !== 1) {
+    res.statusCode = 400;
+    res.end("Bad Request");
+    return true;
+  }
   const method = req.method ?? "GET";
   if (method !== "GET" && method !== "HEAD") {
     res.statusCode = 405;
@@ -481,37 +486,52 @@ export async function tryHandleHostedSmsMediaRequest(
   }
   const routePath = toHostedStoreRoutePath(url.pathname);
   const store = getHostedSmsMediaStore(accountId);
-  let foundEntry = false;
-  for (const candidate of tokenCandidates) {
-    const entry = await store.read(candidate.id);
-    if (!entry || entry.metadata.routePath !== routePath) {
-      continue;
-    }
-    foundEntry = true;
-    if (safeEqualSecret(candidate.token, entry.metadata.token)) {
-      const contentType = entry.metadata.contentType ?? "application/octet-stream";
-      const fileName = hostedSmsMediaFileName(candidate.id, contentType);
-      if (!fileName) {
-        res.statusCode = 415;
-        res.end("Unsupported Media Type");
-        return true;
-      }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", contentType);
-      res.setHeader("Content-Length", String(entry.metadata.byteLength));
-      res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
-      res.setHeader("Cache-Control", "no-store");
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.end(method === "HEAD" ? undefined : entry.buffer);
-      return true;
-    }
+  const candidate = tokenCandidates[0];
+  if (!candidate) {
+    return false;
   }
-  if (foundEntry) {
+  const metadata = await store.readMetadata(candidate.id);
+  if (!metadata || metadata.routePath !== routePath) {
+    res.statusCode = 404;
+    res.end("Not Found");
+    return true;
+  }
+  if (!safeEqualSecret(candidate.token, metadata.token)) {
     res.statusCode = 401;
     res.end("Unauthorized");
     return true;
   }
-  res.statusCode = 404;
-  res.end("Not Found");
+
+  let servedMetadata = metadata;
+  let body: Buffer | undefined;
+  if (method === "GET") {
+    const entry = await store.read(candidate.id);
+    if (
+      !entry ||
+      entry.metadata.routePath !== routePath ||
+      !safeEqualSecret(candidate.token, entry.metadata.token)
+    ) {
+      res.statusCode = 404;
+      res.end("Not Found");
+      return true;
+    }
+    servedMetadata = entry.metadata;
+    body = entry.buffer;
+  }
+
+  const contentType = servedMetadata.contentType ?? "application/octet-stream";
+  const fileName = hostedSmsMediaFileName(candidate.id, contentType);
+  if (!fileName) {
+    res.statusCode = 415;
+    res.end("Unsupported Media Type");
+    return true;
+  }
+  res.statusCode = 200;
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Content-Length", String(servedMetadata.byteLength));
+  res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.end(body);
   return true;
 }

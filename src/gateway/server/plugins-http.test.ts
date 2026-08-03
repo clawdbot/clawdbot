@@ -285,7 +285,8 @@ describe("createGatewayPluginRequestHandler", () => {
   });
 
   it("keeps hosted-media bearer query strings out of route-auth logs", async () => {
-    const log = createPluginLog();
+    const warn = vi.fn();
+    const log = { warn } as unknown as PluginHandlerLog;
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry({
         httpRoutes: [createRoute({ path: "/webhooks/sms", auth: "gateway" })],
@@ -305,11 +306,11 @@ describe("createGatewayPluginRequestHandler", () => {
     );
 
     expect(handled).toBe(false);
-    expect(log.warn).toHaveBeenCalledWith(
+    expect(warn).toHaveBeenCalledWith(
       "plugin http route blocked without gateway auth (/webhooks/sms)",
     );
-    expect(JSON.stringify(log.warn.mock.calls)).not.toContain("proxy-secret");
-    expect(JSON.stringify(log.warn.mock.calls)).not.toContain("media-secret");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("proxy-secret");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("media-secret");
   });
 
   it("allows gateway route fallthrough only after gateway auth succeeds", async () => {

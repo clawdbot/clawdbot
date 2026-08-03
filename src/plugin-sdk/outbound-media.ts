@@ -90,6 +90,7 @@ export type HostedOutboundMediaStore = {
     mediaAccess?: OutboundMediaAccess;
     proxyUrl?: string;
   }) => Promise<string>;
+  readMetadata: (id: string, nowMs?: number) => Promise<HostedOutboundMediaMetadata | null>;
   read: (id: string, nowMs?: number) => Promise<HostedOutboundMediaEntry | null>;
   delete: (id: string) => Promise<void>;
   cleanupExpired: (nowMs?: number) => Promise<void>;
@@ -243,6 +244,21 @@ export function createHostedOutboundMediaStore(
     await deleteHostedOutboundMediaRows(id, options.metadataStore, options.chunkStore, chunkCount);
   }
 
+  async function readMetadataRecord(
+    id: string,
+    nowMs: number,
+  ): Promise<HostedOutboundMediaMetaRecord | null> {
+    const meta = await options.metadataStore.lookup(buildHostedOutboundMediaMetaKey(id));
+    if (!meta) {
+      return null;
+    }
+    if (!isFutureHostedOutboundMediaExpiry(meta.expiresAt, nowMs)) {
+      await withCapacityMutation(async () => await deleteEntry(id));
+      return null;
+    }
+    return meta;
+  }
+
   async function deleteStoredRow(
     row: Awaited<ReturnType<typeof options.metadataStore.entries>>[number],
   ): Promise<void> {
@@ -377,13 +393,13 @@ export function createHostedOutboundMediaStore(
         return `${params.publicBaseUrl}${params.routePath}${id}?token=${token}`;
       });
     },
+    async readMetadata(id, nowMs = Date.now()) {
+      const meta = await readMetadataRecord(id, nowMs);
+      return meta ? createHostedOutboundMediaMetadata(meta) : null;
+    },
     async read(id, nowMs = Date.now()) {
-      const meta = await options.metadataStore.lookup(buildHostedOutboundMediaMetaKey(id));
+      const meta = await readMetadataRecord(id, nowMs);
       if (!meta) {
-        return null;
-      }
-      if (!isFutureHostedOutboundMediaExpiry(meta.expiresAt, nowMs)) {
-        await withCapacityMutation(async () => await deleteEntry(id));
         return null;
       }
       const chunks: Buffer[] = [];

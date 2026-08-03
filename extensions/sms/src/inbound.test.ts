@@ -172,7 +172,8 @@ describe("dispatchSmsInboundEvent", () => {
   });
 
   it("creates and sends a pairing challenge for first-time SMS senders", async () => {
-    const { runtime, readAllowFromStore, saveRemoteMedia, upsertPairingRequest } = createRuntime();
+    const { runtime, readAllowFromStore, run, saveRemoteMedia, upsertPairingRequest } =
+      createRuntime();
 
     await dispatchSmsInboundEvent({
       cfg: {},
@@ -185,7 +186,12 @@ describe("dispatchSmsInboundEvent", () => {
         body: "hello",
         messageSid: "SM-inbound",
         accountSid: "AC123",
-        media: [],
+        media: [
+          {
+            url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/SM-inbound/Media/ME${"a".repeat(32)}`,
+            contentType: "image/jpeg",
+          },
+        ],
       },
     });
 
@@ -207,6 +213,7 @@ describe("dispatchSmsInboundEvent", () => {
       }),
     );
     expect(saveRemoteMedia).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("uses the canonical routed session key for authorized SMS turns", async () => {

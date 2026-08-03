@@ -250,6 +250,11 @@ describe("SMS outbound hosted media", () => {
       mediaUrl: "https://example.com/photo.png",
     });
     const publicUrl = new URL(hostedUrl);
+    const chunkStore = openKeyedStore.mock.results[1]?.value;
+    if (!chunkStore) {
+      throw new Error("expected hosted media chunk store");
+    }
+    const chunkLookup = vi.spyOn(chunkStore, "lookup");
 
     expect(publicUrl.origin).toBe("https://gateway.example.com");
     expect(publicUrl.pathname).toBe("/public/sms");
@@ -274,7 +279,9 @@ describe("SMS outbound hosted media", () => {
       /^inline; filename="mms-[a-f0-9]{10}\.png"$/u,
     );
     expect(getResponse.res.end).toHaveBeenCalledWith(Buffer.from("image-bytes"));
+    expect(chunkLookup).toHaveBeenCalled();
 
+    chunkLookup.mockClear();
     const headResponse = createMockResponse();
     await tryHandleHostedSmsMediaRequest(
       { method: "HEAD", url: internalUrl } as never,
@@ -282,6 +289,7 @@ describe("SMS outbound hosted media", () => {
     );
     expect(headResponse.res.statusCode).toBe(200);
     expect(headResponse.res.end).toHaveBeenCalledWith(undefined);
+    expect(chunkLookup).not.toHaveBeenCalled();
 
     const repeatedGetResponse = createMockResponse();
     await tryHandleHostedSmsMediaRequest(
@@ -289,6 +297,7 @@ describe("SMS outbound hosted media", () => {
       repeatedGetResponse.res as never,
     );
     expect(repeatedGetResponse.res.statusCode).toBe(200);
+    expect(chunkLookup).toHaveBeenCalled();
   });
 
   it.each(TWILIO_MMS_FILENAME_CASES)(
@@ -335,6 +344,11 @@ describe("SMS outbound hosted media", () => {
     const id = tokenEntry?.[0].slice("__openclaw_mms_token_".length) ?? "";
     const tokenParam = `__openclaw_mms_token_${id}`;
     hostedUrl.searchParams.set(tokenParam, "wrong");
+    const chunkStore = openKeyedStore.mock.results[1]?.value;
+    if (!chunkStore) {
+      throw new Error("expected hosted media chunk store");
+    }
+    const chunkLookup = vi.spyOn(chunkStore, "lookup");
     const response = createMockResponse();
 
     await tryHandleHostedSmsMediaRequest(
@@ -347,6 +361,61 @@ describe("SMS outbound hosted media", () => {
 
     expect(response.res.statusCode).toBe(401);
     expect(response.res.end).toHaveBeenCalledWith("Unauthorized");
+    expect(chunkLookup).not.toHaveBeenCalled();
+  });
+
+  it("rejects multiple hosted-media token candidates before reading state", async () => {
+    const response = createMockResponse();
+    const firstId = "a".repeat(24);
+    const secondId = "b".repeat(24);
+
+    await expect(
+      tryHandleHostedSmsMediaRequest(
+        {
+          method: "GET",
+          url: `/internal/sms?__openclaw_mms_token_${firstId}=first&__openclaw_mms_token_${secondId}=second`,
+        } as never,
+        response.res as never,
+      ),
+    ).resolves.toBe(true);
+
+    expect(response.res.statusCode).toBe(400);
+    expect(response.res.end).toHaveBeenCalledWith("Bad Request");
+    expect(openKeyedStore).not.toHaveBeenCalled();
+  });
+
+  it("does not serve media when metadata disappears before chunk hydration", async () => {
+    const hostedUrl = new URL(
+      await prepareHostedSmsMediaUrl({
+        account: createAccount(),
+        mediaUrl: "https://example.com/photo.png",
+      }),
+    );
+    const metadataStore = openKeyedStore.mock.results[0]?.value;
+    const chunkStore = openKeyedStore.mock.results[1]?.value;
+    if (!metadataStore || !chunkStore) {
+      throw new Error("expected hosted media stores");
+    }
+    const originalLookup = metadataStore.lookup.bind(metadataStore);
+    let metadataLookups = 0;
+    vi.spyOn(metadataStore, "lookup").mockImplementation(async (key) => {
+      metadataLookups += 1;
+      return metadataLookups === 1 ? await originalLookup(key) : undefined;
+    });
+    const chunkLookup = vi.spyOn(chunkStore, "lookup");
+    const response = createMockResponse();
+
+    await tryHandleHostedSmsMediaRequest(
+      {
+        method: "GET",
+        url: `/internal/sms${hostedUrl.search}`,
+      } as never,
+      response.res as never,
+    );
+
+    expect(response.res.statusCode).toBe(404);
+    expect(response.res.end).toHaveBeenCalledWith("Not Found");
+    expect(chunkLookup).not.toHaveBeenCalled();
   });
 
   it("ignores tokenless webhook requests before enforcing media methods", async () => {

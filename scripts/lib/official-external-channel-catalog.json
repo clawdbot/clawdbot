@@ -1917,7 +1917,7 @@
     {
       "name": "@openclaw/sms",
       "version": "2026.7.2",
-      "description": "OpenClaw SMS channel plugin for Twilio text messages.",
+      "description": "OpenClaw SMS/MMS channel plugin for Twilio messages.",
       "source": "official",
       "kind": "channel",
       "openclaw": {
@@ -1939,10 +1939,10 @@
           },
           "label": "SMS",
           "selectionLabel": "SMS (Twilio)",
-          "detailLabel": "Twilio SMS",
+          "detailLabel": "Twilio SMS/MMS",
           "docsPath": "/channels/sms",
           "docsLabel": "sms",
-          "blurb": "Twilio-backed SMS with inbound webhooks and outbound replies.",
+          "blurb": "Twilio-backed SMS/MMS with inbound webhooks and outbound replies.",
           "order": 88,
           "quickstartAllowFrom": true,
           "setup": {

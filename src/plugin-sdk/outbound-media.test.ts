@@ -169,6 +169,54 @@ describe("createHostedOutboundMediaStore", () => {
     expect(entry?.buffer.toString("utf8")).toBe("image-bytes");
   });
 
+  it("reads hosted metadata without hydrating chunk rows", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("image-bytes"),
+      kind: "image",
+      contentType: "image/png",
+    });
+    const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
+      "fixture-plugin",
+      {
+        namespace: "metadata-only-media",
+        maxEntries: 10,
+      },
+    );
+    const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
+      "fixture-plugin",
+      {
+        namespace: "metadata-only-media-chunks",
+        maxEntries: 100,
+      },
+    );
+    const store = createHostedOutboundMediaStore({
+      metadataStore,
+      chunkStore,
+      ttlMs: 120_000,
+      resolveExpiresAtMs: () => Date.now() + 120_000,
+      createId: () => "abc123abc123abc123abc123",
+      createToken: () => "token123",
+      rawChunkBytes: 4,
+      maxEntries: 10,
+      maxChunkRows: 100,
+    });
+    await store.prepareUrl({
+      mediaUrl: "https://example.com/photo.png",
+      routePath: "/hook/media/",
+      publicBaseUrl: "https://gateway.example.com",
+      maxBytes: 1024,
+    });
+    const chunkLookup = vi.spyOn(chunkStore, "lookup");
+
+    await expect(store.readMetadata("abc123abc123abc123abc123")).resolves.toMatchObject({
+      routePath: "/hook/media/",
+      token: "token123",
+      contentType: "image/png",
+      byteLength: Buffer.byteLength("image-bytes"),
+    });
+    expect(chunkLookup).not.toHaveBeenCalled();
+  });
+
   it("forwards local media access into hosted media preparation", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("image-bytes"));
     loadWebMediaMock.mockResolvedValueOnce({

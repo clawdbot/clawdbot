@@ -279,11 +279,44 @@ describe("startSmsGatewayAccount", () => {
     expect(tryHandleHostedSmsMediaRequest).toHaveBeenCalledWith(headReq, headRes, "default");
     expect(smsWebhookHandler).not.toHaveBeenCalled();
 
+    tryHandleHostedSmsMediaRequest.mockResolvedValueOnce(false);
     const postReq = { method: "POST" } as IncomingMessage;
     const postRes = {} as ServerResponse;
     await route.handler(postReq, postRes);
     expect(smsWebhookHandler).toHaveBeenCalledWith(postReq, postRes);
-    expect(tryHandleHostedSmsMediaRequest).toHaveBeenCalledTimes(2);
+    expect(tryHandleHostedSmsMediaRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it("falls through tokenless reads but keeps token-bearing non-GET media requests isolated", async () => {
+    await startRoute({
+      cfg: {},
+      account: createAccount("default"),
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+    type RegisteredRoute = {
+      handler: (
+        req: IncomingMessage,
+        res: ServerResponse,
+      ) => Promise<boolean | void> | boolean | void;
+    };
+    const route = registerPluginHttpRoute.mock.calls[0]?.[0] as RegisteredRoute | undefined;
+    if (!route) {
+      throw new Error("SMS route was not registered");
+    }
+
+    tryHandleHostedSmsMediaRequest.mockResolvedValueOnce(false);
+    const tokenlessGet = { method: "GET", url: "/webhooks/sms" } as IncomingMessage;
+    const getRes = {} as ServerResponse;
+    await route.handler(tokenlessGet, getRes);
+    expect(smsWebhookHandler).toHaveBeenCalledWith(tokenlessGet, getRes);
+
+    tryHandleHostedSmsMediaRequest.mockResolvedValueOnce(true);
+    const tokenizedPost = {
+      method: "POST",
+      url: `/webhooks/sms?__openclaw_mms_token_${"a".repeat(24)}=secret`,
+    } as IncomingMessage;
+    await route.handler(tokenizedPost, {} as ServerResponse);
+    expect(smsWebhookHandler).toHaveBeenCalledTimes(1);
   });
 
   it("serializes overlapping replacements of the same webhook route", async () => {
