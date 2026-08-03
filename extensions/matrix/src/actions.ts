@@ -203,6 +203,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       const content = readStringParam(params, "message", {
         required: !mediaUrl,
         allowEmpty: true,
+        trim: false,
       });
       const replyTo = readStringParam(params, "replyTo");
       const threadId = readStringParam(params, "threadId");
@@ -272,7 +273,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "edit") {
       const messageId = readStringParam(params, "messageId", { required: true });
-      const content = readStringParam(params, "message", { required: true });
+      const content = readStringParam(params, "message", { required: true, trim: false });
       return await dispatch({
         action: "editMessage",
         roomId: resolveRoomId(),
