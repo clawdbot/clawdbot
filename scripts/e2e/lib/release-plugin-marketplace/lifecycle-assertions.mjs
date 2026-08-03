@@ -30,12 +30,29 @@ function resolveRecordedPath(value) {
   return path.resolve(value);
 }
 
+function resolveComparablePath(value) {
+  const resolved = resolveRecordedPath(value);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 function assertPathInside(parent, child, label) {
   const relative = path.relative(fs.realpathSync(parent), fs.realpathSync(child));
   assert(
     relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative),
     `${label} escaped ${parent}: ${child}`,
   );
+}
+
+function samePath(left, right) {
+  return resolveComparablePath(left) === resolveComparablePath(right);
+}
+
+function appendUnique(values, additions) {
+  return [...new Set([...(values ?? []), ...additions])];
 }
 
 function assertMarketplaceState() {
@@ -106,6 +123,83 @@ function assertMarketplaceState() {
   }
 }
 
+function seedMarketplaceUninstallState() {
+  const pluginId = process.argv[3];
+  const sentinelPluginId = process.argv[4];
+  const sentinelPath = process.argv[5];
+  const installPathFile = process.argv[6];
+  assert(pluginId, "missing plugin id");
+  assert(sentinelPluginId, "missing sentinel plugin id");
+  assert(sentinelPath, "missing sentinel path");
+  assert(installPathFile, "missing install path file");
+
+  const index = readPluginInstallIndex({ stateDir: stateDir(), configPath: configPath() });
+  const installPath = index.installRecords?.[pluginId]?.installPath;
+  assert(installPath, `install path missing for ${pluginId}`);
+  assert(
+    fs.existsSync(installPath),
+    `managed install path missing before uninstall: ${installPath}`,
+  );
+  assert(fs.existsSync(sentinelPath), `sentinel path missing before uninstall: ${sentinelPath}`);
+
+  const config = readJson(configPath());
+  const plugins = config.plugins ?? {};
+  config.plugins = {
+    ...plugins,
+    allow: appendUnique(plugins.allow, [pluginId, sentinelPluginId]),
+    deny: appendUnique(plugins.deny, [pluginId, sentinelPluginId]),
+    load: {
+      ...plugins.load,
+      paths: appendUnique(plugins.load?.paths, [installPath, sentinelPath]),
+    },
+  };
+  fs.writeFileSync(configPath(), `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  fs.writeFileSync(installPathFile, `${installPath}\n`, "utf8");
+}
+
+function assertMarketplaceUninstalled() {
+  const pluginId = process.argv[3];
+  const sentinelPluginId = process.argv[4];
+  const sentinelPath = process.argv[5];
+  const installPathFile = process.argv[6];
+  assert(pluginId, "missing plugin id");
+  assert(sentinelPluginId, "missing sentinel plugin id");
+  assert(sentinelPath, "missing sentinel path");
+  assert(installPathFile, "missing install path file");
+
+  const installPath = fs.readFileSync(installPathFile, "utf8").trim();
+  const index = readPluginInstallIndex({ stateDir: stateDir(), configPath: configPath() });
+  const config = readJson(configPath());
+  const loadPaths = config.plugins?.load?.paths ?? [];
+
+  assert(!index.installRecords?.[pluginId], `install record still present for ${pluginId}`);
+  assert(
+    !(index.plugins ?? []).some((entry) => entry.pluginId === pluginId),
+    `installed plugin index still includes ${pluginId}`,
+  );
+  assert(!config.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);
+  assert(!config.plugins?.allow?.includes(pluginId), `allowlist still includes ${pluginId}`);
+  assert(!config.plugins?.deny?.includes(pluginId), `denylist still includes ${pluginId}`);
+  assert(
+    config.plugins?.allow?.includes(sentinelPluginId),
+    `allowlist lost sentinel ${sentinelPluginId}`,
+  );
+  assert(
+    config.plugins?.deny?.includes(sentinelPluginId),
+    `denylist lost sentinel ${sentinelPluginId}`,
+  );
+  assert(
+    !loadPaths.some((candidate) => samePath(candidate, installPath)),
+    `load paths still include managed install path ${installPath}`,
+  );
+  assert(
+    loadPaths.some((candidate) => samePath(candidate, sentinelPath)),
+    `load paths lost sentinel path ${sentinelPath}`,
+  );
+  assert(!fs.existsSync(installPath), `managed install path still exists: ${installPath}`);
+  assert(fs.existsSync(sentinelPath), `sentinel path was removed: ${sentinelPath}`);
+}
+
 function assertUpdateLog() {
   const logPath = process.argv[3];
   const expected = process.argv[4];
@@ -117,6 +211,8 @@ function assertUpdateLog() {
 
 const commands = {
   "assert-marketplace-state": assertMarketplaceState,
+  "seed-marketplace-uninstall-state": seedMarketplaceUninstallState,
+  "assert-marketplace-uninstalled": assertMarketplaceUninstalled,
   "assert-update-log": assertUpdateLog,
 };
 

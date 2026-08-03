@@ -126,11 +126,29 @@ node "$marketplace_assertions" \
 openclaw release-market ping >/tmp/openclaw-release-plugin-marketplace-cli-v2.log 2>&1
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-plugin-marketplace-cli-v2.log "release-marketplace-plugin:v2"
 
+sentinel_plugin_id="release-marketplace-other"
+sentinel_path="$marketplace_root/plugins/$sentinel_plugin_id"
+node "$marketplace_assertions" \
+  seed-marketplace-uninstall-state \
+  release-marketplace-plugin \
+  "$sentinel_plugin_id" \
+  "$sentinel_path" \
+  "$install_path_file"
 openclaw plugins uninstall release-marketplace-plugin --force >/tmp/openclaw-release-plugin-marketplace-uninstall.log 2>&1
+node "$marketplace_assertions" \
+  assert-update-log \
+  /tmp/openclaw-release-plugin-marketplace-uninstall.log \
+  "Removed: config entry, install record, allowlist entry, denylist entry, load path, directory."
 if openclaw release-market ping >/tmp/openclaw-release-plugin-marketplace-cli-after-uninstall.log 2>&1; then
   echo "release-market CLI should be gone after uninstall" >&2
   exit 1
 fi
+node "$marketplace_assertions" \
+  assert-marketplace-uninstalled \
+  release-marketplace-plugin \
+  "$sentinel_plugin_id" \
+  "$sentinel_path" \
+  "$install_path_file"
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-plugin-uninstalled release-marketplace-plugin release-market
 
 echo "Release plugin marketplace scenario passed."

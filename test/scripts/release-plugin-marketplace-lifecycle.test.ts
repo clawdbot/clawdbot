@@ -114,6 +114,24 @@ function writeMarketplaceState(home: string, version: string) {
   return { installPath, pluginId };
 }
 
+function clearMarketplaceIndex(home: string) {
+  const databasePath = path.join(home, ".openclaw", "state", "openclaw.sqlite");
+  const db = new DatabaseSync(databasePath);
+  try {
+    db.prepare(
+      `
+        UPDATE installed_plugin_index
+           SET install_records_json = ?,
+               plugins_json = ?,
+               updated_at_ms = ?
+         WHERE index_key = ?
+      `,
+    ).run("{}", "[]", Date.now(), "installed-plugin-index");
+  } finally {
+    db.close();
+  }
+}
+
 describe("release plugin marketplace lifecycle assertions", () => {
   it("checks canonical marketplace metadata and stable managed install paths", () => {
     const home = makeTempDir(tempDirs, "openclaw-marketplace-lifecycle-");
@@ -160,6 +178,49 @@ describe("release plugin marketplace lifecycle assertions", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("expected install record version 0.0.2, got 0.0.1");
+  });
+
+  it("seeds uninstall state and verifies complete cleanup with sentinels preserved", () => {
+    const home = makeTempDir(tempDirs, "openclaw-marketplace-lifecycle-");
+    const { installPath, pluginId } = writeMarketplaceState(home, "0.0.2");
+    const sentinelPluginId = "release-marketplace-other";
+    const sentinelPath = path.join(home, "marketplace", sentinelPluginId);
+    const installPathFile = path.join(home, "install-path.txt");
+    fs.mkdirSync(sentinelPath, { recursive: true });
+
+    const seeded = runHelper(home, [
+      "seed-marketplace-uninstall-state",
+      pluginId,
+      sentinelPluginId,
+      sentinelPath,
+      installPathFile,
+    ]);
+    expect(seeded.stderr).toBe("");
+    expect(seeded.status).toBe(0);
+
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(config.plugins.allow).toEqual([pluginId, sentinelPluginId]);
+    expect(config.plugins.deny).toEqual([pluginId, sentinelPluginId]);
+    expect(config.plugins.load.paths).toEqual([installPath, sentinelPath]);
+
+    delete config.plugins.entries[pluginId];
+    config.plugins.allow = [sentinelPluginId];
+    config.plugins.deny = [sentinelPluginId];
+    config.plugins.load.paths = [sentinelPath];
+    fs.writeFileSync(configPath, `${JSON.stringify(config)}\n`, "utf8");
+    fs.rmSync(installPath, { recursive: true });
+    clearMarketplaceIndex(home);
+
+    const verified = runHelper(home, [
+      "assert-marketplace-uninstalled",
+      pluginId,
+      sentinelPluginId,
+      sentinelPath,
+      installPathFile,
+    ]);
+    expect(verified.stderr).toBe("");
+    expect(verified.status).toBe(0);
   });
 
   it("checks the exact dry-run and update outcome text", () => {
