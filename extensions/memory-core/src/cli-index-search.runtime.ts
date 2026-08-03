@@ -515,8 +515,7 @@ export async function runMemoryPromoteExplain(
           candidate,
           passes: {
             score: candidate.score >= thresholds.minScore,
-            // Engine gate is aggregate signalCount vs minRecallCount (config name unchanged).
-            recallCount: candidate.signalCount >= thresholds.minRecallCount,
+            recallCount: candidate.recallCount >= thresholds.minRecallCount,
             uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
             maxAge:
               thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
