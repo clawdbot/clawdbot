@@ -133,6 +133,7 @@ async function runCliProcess(params: {
   failRunMainImport?: boolean;
   unsupportedRuntime?: boolean;
   allowRespawn?: boolean;
+  enableBundledPlugins?: boolean;
   loggingViaInclude?: boolean;
   loggingViaRootInclude?: boolean;
   stateEnv?: (stateDir: string) => Record<string, string>;
@@ -183,6 +184,9 @@ async function runCliProcess(params: {
         NODE_OPTIONS: undefined,
         NODE_USE_SYSTEM_CA: "1",
         OPENCLAW_CONFIG_PATH: params.useDefaultConfigPaths ? undefined : fixture.configPath,
+        // Most process cases own exit/output behavior, while the root-help sentinel
+        // below keeps one real default startup path with bundled plugins enabled.
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: params.enableBundledPlugins ? undefined : "1",
         OPENCLAW_NO_RESPAWN: params.allowRespawn ? undefined : "1",
         OPENCLAW_STATE_DIR: params.useDefaultConfigPaths ? undefined : fixture.stateDir,
         VITEST: undefined,
@@ -256,12 +260,11 @@ describe("CLI help process exit", () => {
     expect(process.env.ESBUILD_WORKER_THREADS).toBe("0");
   });
 
-  it("exits promptly after root --help", async () => {
-    // Keep this precomputed-help case off plugin discovery; plugin-sensitive root help is covered
-    // separately, so the shared child timeout remains a deadlock guard rather than a startup SLO.
+  it("exits promptly after root --help with bundled plugins enabled", async () => {
     const result = await runCliProcess({
       args: ["--help"],
       config: { logging: { consoleStyle: "json", level: "silent" } },
+      enableBundledPlugins: true,
       forbidTlsImport: true,
     });
 
