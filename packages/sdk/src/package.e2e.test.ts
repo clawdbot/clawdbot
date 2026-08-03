@@ -448,6 +448,52 @@ describe("OpenClaw SDK package e2e", () => {
         payload: { runId: "pack-smoke", stream: "lifecycle", data: { phase: "start" } }
       });
       if (event.type !== "run.started") throw new Error("unexpected event normalization");
+
+      const calls = [];
+      let closed = false;
+      const transport = {
+        async request(method, params, options) {
+          calls.push({ method, params, options });
+          if (method === "agents.list") return { agents: [{ id: "external" }] };
+          if (method === "agent.wait") {
+            return { status: "ok", runId: "packed-run", sessionKey: "agent:main:external" };
+          }
+          if (method === "artifacts.list") {
+            return { artifacts: [{ id: "artifact-packed", type: "file", title: "packed.txt" }] };
+          }
+          if (method === "environments.list") {
+            return { environments: [{ id: "gateway", type: "local", status: "available" }] };
+          }
+          throw new Error(\`unexpected method: \${method}\`);
+        },
+        async *events() {},
+        async close() {
+          closed = true;
+        },
+      };
+      const client = new OpenClaw({ transport });
+      const agents = await client.agents.list();
+      const run = await client.runs.wait("packed-run", { timeoutMs: 25 });
+      const artifacts = await client.artifacts.list({ sessionKey: "agent:main:external" });
+      const environments = await client.environments.list();
+      await client.close();
+
+      if (agents.agents[0]?.id !== "external") throw new Error("custom transport agent call failed");
+      if (run.status !== "completed") throw new Error("custom transport run normalization failed");
+      if (artifacts.artifacts[0]?.id !== "artifact-packed") {
+        throw new Error("custom transport artifact call failed");
+      }
+      if (environments.environments[0]?.id !== "gateway") {
+        throw new Error("custom transport environment call failed");
+      }
+      if (!closed) throw new Error("custom transport was not closed");
+      const expectedMethods = ["agents.list", "agent.wait", "artifacts.list", "environments.list"];
+      if (JSON.stringify(calls.map((call) => call.method)) !== JSON.stringify(expectedMethods)) {
+        throw new Error(\`unexpected custom transport calls: \${JSON.stringify(calls)}\`);
+      }
+      if (calls[1]?.options?.timeoutMs !== null || calls[1]?.params?.timeoutMs !== 25) {
+        throw new Error(\`run wait options were not preserved: \${JSON.stringify(calls[1])}\`);
+      }
     `;
     await runCommand(process.execPath, createNodeEvalArgs(importScript, { evalFlag: "-e" }), {
       cwd: tempDir,

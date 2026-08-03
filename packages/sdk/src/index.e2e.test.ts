@@ -1,14 +1,22 @@
 // OpenClaw SDK tests cover index behavior.
+import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
-import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
+import {
+  installGatewayTestHooks,
+  startServer,
+  testState,
+  writeSessionStore,
+} from "../../../src/gateway/test-helpers.js";
 import { emitAgentEvent } from "../../../src/infra/agent-events.js";
 import { registerAgentRunContext } from "../../../src/infra/agent-run-registry.js";
 import { rawDataToString } from "../../../src/infra/ws.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
-import { GatewayClientTransport, OpenClaw } from "./index.js";
+import { GatewayClientTransport, OpenClaw, type OpenClawEvent } from "./index.js";
 
 type JsonObject = Record<string, unknown>;
 type FakeGatewayRequest = {
@@ -83,7 +91,14 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
               "agents.delete",
               "agents.list",
               "agents.update",
+              "artifacts.download",
+              "artifacts.get",
+              "artifacts.list",
               "connect",
+              "environments.create",
+              "environments.destroy",
+              "environments.list",
+              "environments.status",
               "exec.approval.list",
               "exec.approval.resolve",
               "models.authStatus",
@@ -155,7 +170,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
               runId: "run-sdk-e2e",
               sessionKey: params?.sessionKey,
               stream: "lifecycle",
-              ts: Date.now(),
+              ts: 1_001,
               data: { phase: "start" },
             },
           });
@@ -167,7 +182,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
               runId: "run-sdk-e2e",
               sessionKey: params?.sessionKey,
               stream: "assistant",
-              ts: Date.now(),
+              ts: 1_002,
               data: { delta: "hello from fake gateway" },
             },
           });
@@ -179,7 +194,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
               runId: "run-sdk-e2e",
               sessionKey: params?.sessionKey,
               stream: "lifecycle",
-              ts: Date.now(),
+              ts: 1_003,
               data: { phase: "end" },
             },
           });
@@ -297,6 +312,82 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
         return;
       }
 
+      if (frame.method === "artifacts.list") {
+        reply({
+          artifacts: [
+            {
+              id: "artifact-sdk-e2e",
+              type: "file",
+              title: "sdk-result.txt",
+              download: { mode: "bytes", mimeType: "text/plain", sizeBytes: 5 },
+            },
+          ],
+        });
+        return;
+      }
+
+      if (frame.method === "artifacts.get") {
+        reply({
+          artifact: {
+            id: "artifact-sdk-e2e",
+            type: "file",
+            title: "sdk-result.txt",
+            download: { mode: "bytes", mimeType: "text/plain", sizeBytes: 5 },
+          },
+        });
+        return;
+      }
+
+      if (frame.method === "artifacts.download") {
+        reply({
+          artifact: {
+            id: "artifact-sdk-e2e",
+            type: "file",
+            title: "sdk-result.txt",
+          },
+          encoding: "base64",
+          data: "aGVsbG8=",
+        });
+        return;
+      }
+
+      if (frame.method === "environments.list") {
+        reply({
+          environments: [{ id: "gateway", type: "local", status: "available" }],
+        });
+        return;
+      }
+
+      if (frame.method === "environments.create") {
+        reply({
+          id: "worker-sdk-e2e",
+          type: "worker",
+          status: "starting",
+          worker: { providerId: "testbox", state: "requested" },
+        });
+        return;
+      }
+
+      if (frame.method === "environments.status") {
+        reply({
+          id: (frame.params as { environmentId?: string } | undefined)?.environmentId,
+          type: "worker",
+          status: "available",
+          worker: { providerId: "testbox", state: "ready" },
+        });
+        return;
+      }
+
+      if (frame.method === "environments.destroy") {
+        reply({
+          id: (frame.params as { environmentId?: string } | undefined)?.environmentId,
+          type: "worker",
+          status: "unavailable",
+          worker: { providerId: "testbox", state: "destroyed" },
+        });
+        return;
+      }
+
       if (frame.method === "exec.approval.list") {
         reply({ approvals: [] });
         return;
@@ -366,26 +457,93 @@ describe("OpenClaw SDK websocket e2e", () => {
         sessionKey: "main",
         idempotencyKey: "sdk-e2e",
       });
-      const seenPromise = (async () => {
-        const seen: string[] = [];
-
-        for await (const event of run.events()) {
-          seen.push(event.type);
+      const collectUntilCompleted = async (
+        events: AsyncIterable<OpenClawEvent>,
+      ): Promise<OpenClawEvent[]> => {
+        const seen: OpenClawEvent[] = [];
+        for await (const event of events) {
+          seen.push(event);
           if (event.type === "run.completed") {
             break;
           }
         }
-
         return seen;
-      })();
-
-      const [seen, result] = await Promise.all([
-        withTimeout(seenPromise, 2_000, { message: "timed out waiting for SDK run events" }),
+      };
+      const [appEvents, runEvents, result] = await Promise.all([
+        withTimeout(collectUntilCompleted(oc.events()), 2_000, {
+          message: "timed out waiting for app-wide SDK events",
+        }),
+        withTimeout(collectUntilCompleted(run.events()), 2_000, {
+          message: "timed out waiting for per-run SDK events",
+        }),
         run.wait({ timeoutMs: 2_000 }),
       ]);
+      const expectedEvents: OpenClawEvent[] = [
+        {
+          version: 1,
+          id: "2:agent:run-sdk-e2e:main:1001",
+          ts: 1_001,
+          type: "run.started",
+          runId: "run-sdk-e2e",
+          sessionKey: "main",
+          data: { phase: "start" },
+          raw: {
+            event: "agent",
+            seq: 2,
+            payload: {
+              runId: "run-sdk-e2e",
+              sessionKey: "main",
+              stream: "lifecycle",
+              ts: 1_001,
+              data: { phase: "start" },
+            },
+          },
+        },
+        {
+          version: 1,
+          id: "3:agent:run-sdk-e2e:main:1002",
+          ts: 1_002,
+          type: "assistant.delta",
+          runId: "run-sdk-e2e",
+          sessionKey: "main",
+          data: { delta: "hello from fake gateway" },
+          raw: {
+            event: "agent",
+            seq: 3,
+            payload: {
+              runId: "run-sdk-e2e",
+              sessionKey: "main",
+              stream: "assistant",
+              ts: 1_002,
+              data: { delta: "hello from fake gateway" },
+            },
+          },
+        },
+        {
+          version: 1,
+          id: "4:agent:run-sdk-e2e:main:1003",
+          ts: 1_003,
+          type: "run.completed",
+          runId: "run-sdk-e2e",
+          sessionKey: "main",
+          data: { phase: "end" },
+          raw: {
+            event: "agent",
+            seq: 4,
+            payload: {
+              runId: "run-sdk-e2e",
+              sessionKey: "main",
+              stream: "lifecycle",
+              ts: 1_003,
+              data: { phase: "end" },
+            },
+          },
+        },
+      ];
 
       expect(run.id).toBe("run-sdk-e2e");
-      expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
+      expect(appEvents).toEqual(expectedEvents);
+      expect(runEvents).toEqual(expectedEvents);
       expect(result.runId).toBe("run-sdk-e2e");
       expect(result.sessionKey).toBe("main");
       expect(result.status).toBe("completed");
@@ -485,6 +643,45 @@ describe("OpenClaw SDK websocket e2e", () => {
       expect(toolResult.ok).toBe(true);
       expect(toolResult.toolName).toBe("shell");
       expect(toolResult.output).toEqual({ ok: true });
+
+      const artifacts = await oc.artifacts.list({ runId: "run-sdk-e2e" });
+      expect(artifacts.artifacts).toHaveLength(1);
+      const artifact = artifacts.artifacts[0];
+      expect(artifact?.id).toBe("artifact-sdk-e2e");
+      const artifactDetails = await oc.artifacts.get(artifact?.id ?? "", {
+        runId: "run-sdk-e2e",
+      });
+      expect(artifactDetails.artifact.title).toBe("sdk-result.txt");
+      const artifactDownload = await oc.artifacts.download(artifact?.id ?? "", {
+        runId: "run-sdk-e2e",
+      });
+      expect(artifactDownload).toMatchObject({
+        encoding: "base64",
+        data: "aGVsbG8=",
+      });
+
+      const environments = await oc.environments.list();
+      expect(environments.environments).toEqual([
+        { id: "gateway", type: "local", status: "available" },
+      ]);
+      const createdEnvironment = await oc.environments.create({
+        profileId: "development",
+        idempotencyKey: "sdk-environment-create",
+      });
+      expect(createdEnvironment).toMatchObject({
+        id: "worker-sdk-e2e",
+        type: "worker",
+        status: "starting",
+      });
+      await expect(oc.environments.status("worker-sdk-e2e")).resolves.toMatchObject({
+        id: "worker-sdk-e2e",
+        status: "available",
+      });
+      await expect(oc.environments.destroy("worker-sdk-e2e")).resolves.toMatchObject({
+        id: "worker-sdk-e2e",
+        status: "unavailable",
+      });
+
       const approvals = expectJsonObject(await oc.approvals.list());
       expect(approvals.approvals).toEqual([]);
       const approvalResult = expectJsonObject(
@@ -515,6 +712,13 @@ describe("OpenClaw SDK websocket e2e", () => {
         "tools.catalog",
         "tools.effective",
         "tools.invoke",
+        "artifacts.list",
+        "artifacts.get",
+        "artifacts.download",
+        "environments.list",
+        "environments.create",
+        "environments.status",
+        "environments.destroy",
         "exec.approval.list",
         "exec.approval.resolve",
       ]);
@@ -525,6 +729,26 @@ describe("OpenClaw SDK websocket e2e", () => {
       expect(requestParams.get("sessions.list")).toEqual({});
       expect(requestParams.get("models.list")).toEqual({});
       expect(requestParams.get("tools.catalog")).toEqual({});
+      expect(requestParams.get("artifacts.list")).toEqual({ runId: "run-sdk-e2e" });
+      expect(requestParams.get("artifacts.get")).toEqual({
+        artifactId: "artifact-sdk-e2e",
+        runId: "run-sdk-e2e",
+      });
+      expect(requestParams.get("artifacts.download")).toEqual({
+        artifactId: "artifact-sdk-e2e",
+        runId: "run-sdk-e2e",
+      });
+      expect(requestParams.get("environments.list")).toEqual({});
+      expect(requestParams.get("environments.create")).toEqual({
+        profileId: "development",
+        idempotencyKey: "sdk-environment-create",
+      });
+      expect(requestParams.get("environments.status")).toEqual({
+        environmentId: "worker-sdk-e2e",
+      });
+      expect(requestParams.get("environments.destroy")).toEqual({
+        environmentId: "worker-sdk-e2e",
+      });
       expect(requestParams.get("exec.approval.list")).toEqual({});
     } finally {
       await oc.close();
@@ -560,27 +784,70 @@ describe("OpenClaw SDK websocket e2e", () => {
 describe("OpenClaw SDK real Gateway e2e", () => {
   installGatewayTestHooks({ scope: "test" });
 
-  it("streams real Gateway agent events", async () => {
-    const token = "sdk-real-gateway-token";
-    const started = await startServer(token, { controlUiEnabled: false });
-    const transport = new GatewayClientTransport({
-      url: `ws://127.0.0.1:${started.port}`,
-      token,
-      deviceIdentity: null,
-      requestTimeoutMs: 2_000,
-    });
-    const oc = new OpenClaw({ transport });
-    const runId = "sdk-real-gateway-run";
+  it("validates run results and resource RPCs against a real Gateway", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sdk-gateway-"));
+    const sessionKey = "agent:main:sdk-real-gateway";
+    const sessionId = "sdk-real-gateway-session";
+    const transcriptPath = path.join(tempDir, `${sessionId}.jsonl`);
+    const previousSessionStorePath = testState.sessionStorePath;
+    let started: Awaited<ReturnType<typeof startServer>> | undefined;
+    let oc: OpenClaw | undefined;
+    testState.sessionStorePath = path.join(tempDir, "sessions.json");
 
     try {
+      await fs.writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "message",
+          id: "sdk-artifact-message",
+          parentId: null,
+          timestamp: "2026-08-03T00:00:00.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "file",
+                data: "aGVsbG8=",
+                mimeType: "text/plain",
+                title: "sdk-result.txt",
+              },
+            ],
+            __openclaw: { seq: 2, runId: "sdk-artifact-run" },
+          },
+        })}\n`,
+      );
+      await writeSessionStore({
+        entries: {
+          [sessionKey]: {
+            sessionId,
+            sessionFile: transcriptPath,
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const token = "sdk-real-gateway-token";
+      started = await startServer(token, { controlUiEnabled: false });
+      const transport = new GatewayClientTransport({
+        url: `ws://127.0.0.1:${started.port}`,
+        token,
+        deviceIdentity: null,
+        requestTimeoutMs: 2_000,
+      });
+      oc = new OpenClaw({ transport });
+      const runId = "sdk-real-gateway-run";
       await oc.connect();
 
       registerAgentRunContext(runId, {
-        sessionKey: "agent:main:dashboard:sdk-real-gateway",
+        sessionKey,
         verboseLevel: "off",
       });
 
       const run = await oc.runs.get(runId);
+      await expect(run.wait({ timeoutMs: 0 })).resolves.toMatchObject({
+        runId,
+        status: "accepted",
+      });
       const eventsPromise = (async () => {
         const seen: string[] = [];
         const sessionKeys: Array<string | undefined> = [];
@@ -614,17 +881,95 @@ describe("OpenClaw SDK real Gateway e2e", () => {
         message: "timed out waiting for real Gateway SDK events",
       });
       expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
-      expect(sessionKeys).toEqual([
-        "agent:main:dashboard:sdk-real-gateway",
-        "agent:main:dashboard:sdk-real-gateway",
-        "agent:main:dashboard:sdk-real-gateway",
-      ]);
+      expect(sessionKeys).toEqual([sessionKey, sessionKey, sessionKey]);
+      await expect(run.wait({ timeoutMs: 2_000 })).resolves.toMatchObject({
+        runId,
+        status: "completed",
+        startedAt: 111,
+        endedAt: 222,
+      });
+
+      const timeoutRunId = "sdk-real-gateway-timeout";
+      registerAgentRunContext(timeoutRunId, {
+        sessionKey,
+        verboseLevel: "off",
+      });
+      emitAgentEvent({
+        runId: timeoutRunId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 333 },
+      });
+      emitAgentEvent({
+        runId: timeoutRunId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt: 333,
+          endedAt: 444,
+          aborted: true,
+          stopReason: "timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          error: "provider timed out",
+          fallbackExhaustedFailure: true,
+        },
+      });
+      await expect(oc.runs.wait(timeoutRunId, { timeoutMs: 2_000 })).resolves.toMatchObject({
+        runId: timeoutRunId,
+        status: "timed_out",
+        startedAt: 333,
+        endedAt: 444,
+        error: { message: "provider timed out" },
+      });
+
+      const artifacts = await oc.artifacts.list({ sessionKey });
+      expect(artifacts.artifacts).toHaveLength(1);
+      const artifactId = artifacts.artifacts[0]?.id;
+      expect(artifactId).toEqual(expect.any(String));
+      await expect(oc.artifacts.get(artifactId ?? "", { sessionKey })).resolves.toMatchObject({
+        artifact: {
+          id: artifactId,
+          type: "file",
+          title: "sdk-result.txt",
+          mimeType: "text/plain",
+        },
+      });
+      await expect(oc.artifacts.download(artifactId ?? "", { sessionKey })).resolves.toMatchObject({
+        artifact: { id: artifactId },
+        encoding: "base64",
+        data: "aGVsbG8=",
+      });
+
+      const environments = await oc.environments.list();
+      expect(environments.environments).toContainEqual({
+        id: "gateway",
+        type: "local",
+        label: "Gateway local",
+        status: "available",
+        capabilities: ["agent.run", "sessions", "tools", "workspace"],
+      });
+      await expect(oc.environments.status("gateway")).resolves.toMatchObject({
+        id: "gateway",
+        type: "local",
+        status: "available",
+      });
+      await expect(
+        oc.environments.create({
+          profileId: "development",
+          idempotencyKey: "sdk-real-environment-create",
+        }),
+      ).rejects.toThrow("cloud worker environments are not configured");
+      await expect(oc.environments.destroy("worker-sdk-missing")).rejects.toThrow(
+        "unknown environmentId",
+      );
     } finally {
-      await oc.close();
-      await started.server.close();
-      started.envSnapshot.restore();
+      await oc?.close();
+      await started?.server.close();
+      started?.envSnapshot.restore();
+      testState.sessionStorePath = previousSessionStorePath;
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });
 
 const liveGatewayUrl = process.env.OPENCLAW_SDK_LIVE_GATEWAY_URL;
