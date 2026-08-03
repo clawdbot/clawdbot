@@ -42,6 +42,7 @@ import { optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
 import { isDirectVisibleCatalogTool } from "./tool-search-catalog.js";
+import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
@@ -54,7 +55,7 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchToolContext,
 } from "./tool-search.js";
-import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME };
 export {
@@ -207,22 +208,25 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     ) => {
       const input = readCode(args);
       const executionContext = getAgentToolExecutionContext();
-      return jsonResult(
-        normalizeCodeModeTimeoutResult(
-          await runExec({
-            toolCallId,
-            ctx,
-            code: input.code,
-            assistantTurnId:
-              executionContext?.assistantMessage.responseId?.trim() ||
-              executionContext?.assistantMessage.turnId?.trim(),
-            language: input.language,
-            restartSafe: ctx.forceRestartSafeTools === true || input.restartSafe,
-            signal,
-            onUpdate,
-          }),
-        ),
+      let runtime: ToolSearchRuntime | undefined;
+      const result = normalizeCodeModeTimeoutResult(
+        await runExec({
+          toolCallId,
+          ctx,
+          code: input.code,
+          assistantTurnId:
+            executionContext?.assistantMessage.responseId?.trim() ||
+            executionContext?.assistantMessage.turnId?.trim(),
+          language: input.language,
+          restartSafe: ctx.forceRestartSafeTools === true || input.restartSafe,
+          signal,
+          onUpdate,
+          onRuntime: (value) => {
+            runtime = value;
+          },
+        }),
       );
+      return formatToolSearchControlResult(result, runtime);
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
@@ -238,18 +242,22 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       args: unknown,
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
-    ) =>
-      jsonResult(
-        normalizeCodeModeTimeoutResult(
-          await runWait({
-            toolCallId,
-            ctx,
-            runId: readRunId(args),
-            signal,
-            onUpdate,
-          }),
-        ),
-      ),
+    ) => {
+      let runtime: ToolSearchRuntime | undefined;
+      const result = normalizeCodeModeTimeoutResult(
+        await runWait({
+          toolCallId,
+          ctx,
+          runId: readRunId(args),
+          signal,
+          onUpdate,
+          onRuntime: (value) => {
+            runtime = value;
+          },
+        }),
+      );
+      return formatToolSearchControlResult(result, runtime);
+    },
   } as AnyAgentTool);
   return [execTool, waitTool];
 }

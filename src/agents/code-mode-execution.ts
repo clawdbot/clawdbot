@@ -57,6 +57,7 @@ export async function runExec(params: {
   restartSafe: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
+  onRuntime?: (runtime: ToolSearchRuntime) => void;
 }) {
   removeExpiredRuns();
   const config = resolveCodeModeConfig(
@@ -69,6 +70,7 @@ export async function runExec(params: {
     throw new ToolInputError("code mode is disabled.");
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
+  params.onRuntime?.(runtime);
   const bridgeDispatch = { started: false };
   if (params.signal?.aborted) {
     return {
@@ -522,6 +524,7 @@ export async function runWait(params: {
   runId: string;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
+  onRuntime?: (runtime: ToolSearchRuntime) => void;
 }) {
   removeExpiredRuns();
   const state = activeRuns.get(params.runId);
@@ -541,6 +544,7 @@ export async function runWait(params: {
   if (resumingRunIds.has(state.runId)) {
     throw new ToolInputError("code mode run is already being resumed.");
   }
+  params.onRuntime?.(state.runtime);
   resumingRunIds.add(state.runId);
   // One wait call shares a single wall-clock deadline across draining the prior
   // pending calls, the resume worker, and the inline settle phase.
