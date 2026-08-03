@@ -57,12 +57,25 @@ function createTailscaleForwardedReq(): TailscaleForwardedRequest {
       "x-forwarded-host": "ai-hub.bone-egret.ts.net",
       "tailscale-user-login": "peter",
       "tailscale-user-name": "Peter",
+      "sec-fetch-site": "same-origin",
     },
   } as unknown as TailscaleForwardedRequest;
 }
 
 function createTailscaleWhois() {
   return async () => ({ login: "peter", name: "Peter" });
+}
+
+function createAvatarBrowserOriginPolicy(
+  req: TailscaleForwardedRequest,
+  allowedOrigins: string[] = [],
+) {
+  return {
+    requestHost: req.headers.host,
+    origin: req.headers.origin,
+    fetchSite: req.headers["sec-fetch-site"],
+    allowedOrigins,
+  };
 }
 
 describe("gateway auth", () => {
@@ -94,11 +107,13 @@ describe("gateway auth", () => {
       | typeof authorizeWsControlUiGatewayConnect;
     expected: { ok: false; reason: string } | { ok: true; method: string; user: string };
   }) {
+    const req = createTailscaleForwardedReq();
     const res = await params.authorize({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
       tailscaleWhois: createTailscaleWhois(),
-      req: createTailscaleForwardedReq(),
+      req,
+      browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
     });
     expect(res.ok).toBe(params.expected.ok);
     if (!params.expected.ok) {
@@ -487,20 +502,82 @@ describe("gateway auth", () => {
     expect(res.user).toBe("peter");
   });
 
-  it("allows verified tailscale identity on the profile avatar HTTP surface", async () => {
+  it("allows an origin-less same-origin image through the profile avatar surface", async () => {
     const limiter = createLimiterSpy();
+    const req = createTailscaleForwardedReq();
     const res = await authorizeUserProfileAvatarHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
       tailscaleWhois: createTailscaleWhois(),
-      req: createTailscaleForwardedReq(),
+      req,
       rateLimiter: limiter,
+      browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
     });
 
     expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter" });
     expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
     expect(limiter.reset).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
   });
+
+  it("rejects a cross-origin page before verifying Tailscale avatar identity", async () => {
+    const req = createTailscaleForwardedReq();
+    req.headers.origin = "https://evil.example";
+    req.headers["sec-fetch-site"] = "cross-site";
+    const tailscaleWhois = vi.fn(createTailscaleWhois());
+
+    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois,
+      req,
+      browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["https://control.example.com"]),
+    });
+
+    expect(res).toMatchObject({ ok: false, reason: "origin_not_allowed" });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+  });
+
+  it("allows an approved Control UI origin before verifying Tailscale avatar identity", async () => {
+    const req = createTailscaleForwardedReq();
+    req.headers.origin = "https://control.example.com";
+    req.headers["sec-fetch-site"] = "cross-site";
+    const tailscaleWhois = vi.fn(createTailscaleWhois());
+
+    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois,
+      req,
+      browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["https://control.example.com"]),
+    });
+
+    expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter" });
+    expect(tailscaleWhois).toHaveBeenCalledOnce();
+  });
+
+  it.each(["cross-site", "same-site", "none", undefined])(
+    "rejects an origin-less avatar request with fetch-site %s",
+    async (fetchSite) => {
+      const req = createTailscaleForwardedReq();
+      if (fetchSite === undefined) {
+        delete req.headers["sec-fetch-site"];
+      } else {
+        req.headers["sec-fetch-site"] = fetchSite;
+      }
+      const tailscaleWhois = vi.fn(createTailscaleWhois());
+
+      const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: true },
+        connectAuth: null,
+        tailscaleWhois,
+        req,
+        browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
+      });
+
+      expect(res).toMatchObject({ ok: false, reason: "origin_not_allowed" });
+      expect(tailscaleWhois).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
@@ -538,6 +615,7 @@ describe("gateway auth", () => {
       connectAuth: null,
       tailscaleWhois: whois,
       req,
+      browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
     });
 
     expect(res).toMatchObject({ ok: false, reason: "token_missing" });
@@ -555,7 +633,14 @@ describe("gateway auth", () => {
       method: "password",
     },
   ])("keeps $method auth on the profile avatar HTTP surface", async (testCase) => {
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect(testCase);
+    const req = createTailscaleForwardedReq();
+    req.headers.origin = "https://evil.example";
+    req.headers["sec-fetch-site"] = "cross-site";
+    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+      ...testCase,
+      req,
+      browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
+    });
 
     expect(res).toMatchObject({ ok: true, method: testCase.method });
   });

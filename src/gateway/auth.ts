@@ -84,6 +84,7 @@ type AuthorizeGatewayConnectParams = {
   browserOriginPolicy?: {
     requestHost?: string;
     origin?: string;
+    fetchSite?: string;
     allowedOrigins?: string[];
     allowHostHeaderOriginFallback?: boolean;
   };
@@ -332,6 +333,7 @@ function authorizeHttpBrowserOrigin(params: {
   browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
   isLocalClient: boolean;
   reason: string;
+  requireSameOriginFetchWithoutOrigin?: boolean;
 }): { ok: false; reason: string } | null {
   if (params.authSurface === "ws-control-ui") {
     return null;
@@ -339,7 +341,10 @@ function authorizeHttpBrowserOrigin(params: {
 
   const origin = params.browserOriginPolicy?.origin?.trim();
   if (!origin) {
-    return null;
+    return params.requireSameOriginFetchWithoutOrigin &&
+      normalizeLowercaseStringOrEmpty(params.browserOriginPolicy?.fetchSite) !== "same-origin"
+      ? { ok: false, reason: params.reason }
+      : null;
   }
 
   const originCheck = checkBrowserOrigin({
@@ -534,6 +539,20 @@ async function authorizeGatewayConnectCore(
     !localDirect &&
     !hasExplicitSharedSecretAuth(connectAuth)
   ) {
+    if (authSurface === "http-user-profile-avatar") {
+      // Same-origin <img> loads may omit Origin, but Fetch Metadata still identifies
+      // their source. Ambient identity accepts that omission only for same-origin loads.
+      const originResult = authorizeHttpBrowserOrigin({
+        authSurface,
+        browserOriginPolicy: params.browserOriginPolicy,
+        isLocalClient: localDirect,
+        reason: "origin_not_allowed",
+        requireSameOriginFetchWithoutOrigin: true,
+      });
+      if (originResult) {
+        return originResult;
+      }
+    }
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,
