@@ -6,7 +6,7 @@ import {
   type ChannelBotLoopProtectionFacts,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -497,6 +497,19 @@ async function monitorGoogleChatProvider(
 
   const audienceType = normalizeAudienceType(options.account.config.audienceType);
   const audience = options.account.config.audience?.trim();
+  if (!audienceType || !audience) {
+    const error =
+      "Google Chat webhook authentication requires channels.googlechat.audienceType and channels.googlechat.audience.";
+    options.runtime.error?.(`[${options.account.accountId}] ${error}`);
+    options.statusSink?.(
+      channelBlockedPatch(error, {
+        running: true,
+        connected: false,
+        webhookPath: undefined,
+      }),
+    );
+    return async () => {};
+  }
   const mediaMaxMb = options.account.config.mediaMaxMb ?? 20;
 
   warnAppPrincipalMisconfiguration({
