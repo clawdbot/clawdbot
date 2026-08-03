@@ -109,7 +109,7 @@ describe("resolveWorkerToolAuthority", () => {
         sessionKey: "agent:main:worker-sandboxed",
         config: { agents: { defaults: { sandbox: { mode: "all" } } } },
       }),
-    ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
+    ).toEqual(["read", "write", "edit", "apply_patch"]);
     expect(
       authority({
         sessionKey: "agent:main:worker-sandboxed",
@@ -119,9 +119,12 @@ describe("resolveWorkerToolAuthority", () => {
         },
       }),
     ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
+  });
+
+  it("keeps explicitly unconditional sandbox shell authority", () => {
     expect(
       authority({
-        sessionKey: "agent:main:worker-sandboxed",
+        sessionKey: "agent:main:worker-sandboxed-full",
         config: {
           agents: { defaults: { sandbox: { mode: "all" } } },
           tools: { exec: { host: "sandbox", mode: "full" } },
@@ -146,7 +149,7 @@ describe("resolveWorkerToolAuthority", () => {
   });
 
   it.each(["auto", "ask", "allowlist"] as const)(
-    "keeps sandbox-local shell authority for mode %s",
+    "gates sandbox-local shell authority that the worker cannot preserve for mode %s",
     (mode) => {
       expect(
         authority({
@@ -156,7 +159,7 @@ describe("resolveWorkerToolAuthority", () => {
             tools: { exec: { mode } },
           },
         }),
-      ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
+      ).toEqual(["read", "write", "edit", "apply_patch"]);
     },
   );
 

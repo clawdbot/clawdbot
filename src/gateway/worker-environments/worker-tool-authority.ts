@@ -93,7 +93,7 @@ export function resolveWorkerToolAuthority(params: {
   if (!projected.includes("exec") && !projected.includes("process")) {
     return { allowedToolNames: projected };
   }
-  const { executionDisposition } = resolveExecDefaults({
+  const { executionDisposition, security, ask } = resolveExecDefaults({
     cfg: turn.config,
     agentId: turn.agentId,
     sessionKey: sandboxSessionKey,
@@ -101,10 +101,11 @@ export function resolveWorkerToolAuthority(params: {
     sandboxAvailable: sandbox.sandboxed,
     elevatedRequested: resolveExecElevatedMode({ defaults: turn.bashElevated }) !== "off",
   });
-  // Node exec combines Gateway policy with node-owned approval state. A cloud worker
-  // cannot honor that route, so only Gateway/sandbox-local unconditional exec transfers.
+  // A cloud worker reconstructs shell tools as full/off and cannot carry source
+  // policy or node authority. Transfer only equally unconditional authority;
+  // implicit sandbox defaults remain local to their source runtime.
   if (
-    executionDisposition.kind === "sandbox-local" ||
+    (executionDisposition.kind === "sandbox-local" && security === "full" && ask === "off") ||
     (executionDisposition.kind === "host-unconditional" && executionDisposition.host !== "node")
   ) {
     return { allowedToolNames: projected };
