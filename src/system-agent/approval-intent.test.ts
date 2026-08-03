@@ -8,6 +8,7 @@ import {
 } from "./approval-intent.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentClaudeCliBackendTestFixture,
   installSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
@@ -44,9 +45,11 @@ async function createVerifiedInference(
 }
 
 let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
+let restoreCliBackendFixture: (() => void) | undefined;
 let cliPluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 beforeAll(async () => {
+  restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
   const defaultSnapshot = installSystemAgentPluginMetadataTestSnapshot(
     verifiedInferenceConfig(DEFAULT_MODEL),
   );
@@ -61,6 +64,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  restoreCliBackendFixture?.();
   cliPluginMetadataSnapshot?.restore();
 });
 

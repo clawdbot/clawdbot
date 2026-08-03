@@ -6,7 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -28,10 +28,17 @@ import {
   type SessionTranscriptReadScope,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import {
+  disposeOpenClawAgentDatabaseByPath,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -44,6 +51,7 @@ type ProjectedDispatchParams = Parameters<
 
 const mockState = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
+  storePath: "",
   transcriptPath: "",
   sessionId: "sess-1",
   mainSessionKey: "main",
@@ -140,6 +148,11 @@ const mockState = vi.hoisted(() => ({
   deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
 }));
 
+let suiteFixtureRoot = "";
+let suiteDatabasePath = "";
+let suiteFixtureEnv: NodeJS.ProcessEnv = {};
+let suiteFixtureSeq = 0;
+
 function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
   const sqliteEvents = loadTranscriptEventsSync(transcriptScope()).filter(
     (event): event is Record<string, unknown> =>
@@ -204,7 +217,7 @@ vi.mock("../session-utils.js", async () => {
           mainKey: mockState.mainSessionKey,
         },
       },
-      storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+      storePath: mockState.storePath,
       store: entry ? { [canonicalKey]: entry } : {},
       entry,
       canonicalKey,
@@ -381,7 +394,7 @@ dispatchInboundMessageMock.mockImplementation(
       };
       if (mockState.disposedTranscriptWriteContext) {
         const sessionKey = mockState.mainSessionKey;
-        const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
+        const storePath = mockState.storePath;
         await withOwnedSessionTranscriptWrites(
           {
             sessionKey,
@@ -564,9 +577,16 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 5_000, stepMs
   await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
 }
 
-async function createTranscriptFixture(prefix: string) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+function createFixturePaths(prefix: string): { dir: string; transcriptPath: string } {
+  const dir = fs.mkdtempSync(path.join(suiteFixtureRoot, `${suiteFixtureSeq++}-${prefix}`));
   const transcriptPath = path.join(dir, "sess.jsonl");
+  mockState.sessionId = `chat-directive-${suiteFixtureSeq}`;
+  mockState.transcriptPath = transcriptPath;
+  return { dir, transcriptPath };
+}
+
+async function createTranscriptFixture(prefix: string) {
+  const { dir, transcriptPath } = createFixturePaths(prefix);
   fs.writeFileSync(
     transcriptPath,
     `${JSON.stringify({
@@ -578,28 +598,27 @@ async function createTranscriptFixture(prefix: string) {
     })}\n`,
     "utf-8",
   );
-  mockState.transcriptPath = transcriptPath;
   // The accessor resolves transcript targets from the persisted store, so the
   // fixture seeds a real entry instead of relying on the mocked gateway wrapper.
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey: "main", storePath: path.join(dir, "sessions.json") },
-    { sessionId: mockState.sessionId, sessionFile: transcriptPath, updatedAt: Date.now() },
-  );
+  await replaceSessionEntry(sessionEntryScope(), {
+    sessionId: mockState.sessionId,
+    sessionFile: transcriptPath,
+    updatedAt: Date.now(),
+  });
   return dir;
 }
 
-function createSqliteTranscriptFixture(prefix: string) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  mockState.transcriptPath = path.join(dir, "sess.jsonl");
+async function createSqliteTranscriptFixture(prefix: string) {
+  const { dir } = createFixturePaths(prefix);
+  await replaceSessionEntry(sessionEntryScope(), {
+    sessionId: mockState.sessionId,
+    updatedAt: 1,
+  });
   return dir;
 }
 
 async function createGatewayUserTurnSqliteFixture(prefix: string) {
-  const dir = createSqliteTranscriptFixture(prefix);
-  await seedSqliteSessionEntry({
-    updatedAt: 1,
-  });
-  return dir;
+  return await createSqliteTranscriptFixture(prefix);
 }
 
 async function withTranscriptFixtureState(
@@ -607,15 +626,15 @@ async function withTranscriptFixtureState(
   run: (fixtureDir: string) => Promise<void>,
 ): Promise<void> {
   const fixtureDir = await createTranscriptFixture(prefix);
-  await withEnvAsync({ OPENCLAW_STATE_DIR: fixtureDir }, async () => await run(fixtureDir));
+  await withEnvAsync({ OPENCLAW_STATE_DIR: suiteFixtureRoot }, async () => await run(fixtureDir));
 }
 
 async function withSqliteTranscriptFixtureState(
   prefix: string,
   run: (fixtureDir: string) => Promise<void>,
 ): Promise<void> {
-  const fixtureDir = createSqliteTranscriptFixture(prefix);
-  await withEnvAsync({ OPENCLAW_STATE_DIR: fixtureDir }, async () => await run(fixtureDir));
+  const fixtureDir = await createSqliteTranscriptFixture(prefix);
+  await withEnvAsync({ OPENCLAW_STATE_DIR: suiteFixtureRoot }, async () => await run(fixtureDir));
 }
 
 function transcriptScope(): SessionTranscriptReadScope {
@@ -623,7 +642,7 @@ function transcriptScope(): SessionTranscriptReadScope {
     agentId: "main",
     sessionId: mockState.sessionId,
     sessionKey: "main",
-    storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+    storePath: mockState.storePath,
   };
 }
 
@@ -631,7 +650,7 @@ function sessionEntryScope(): SessionAccessScope {
   return {
     agentId: "main",
     sessionKey: "main",
-    storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+    storePath: mockState.storePath,
   };
 }
 
@@ -810,7 +829,7 @@ function expectUserUpdateIdentity(update: ReturnType<typeof findUserUpdate>) {
     agentId: "main",
     sessionId: mockState.sessionId,
     sessionKey: "main",
-    storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+    storePath: mockState.storePath,
   });
   expect(update?.sessionKey).toBe("main");
   expect(update?.agentId).toBe("main");
@@ -1148,6 +1167,33 @@ async function expectImageOnlyFinal(params: {
   expect(content[0]).toEqual({ type: "text", text: "Image reply" });
   expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
 }
+
+beforeAll(() => {
+  suiteFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-directive-suite-"));
+  suiteDatabasePath = path.join(suiteFixtureRoot, "openclaw-agent.sqlite");
+  suiteFixtureEnv = { ...process.env, OPENCLAW_STATE_DIR: suiteFixtureRoot };
+  mockState.storePath = suiteDatabasePath;
+  openOpenClawAgentDatabase({
+    agentId: "main",
+    env: suiteFixtureEnv,
+    path: suiteDatabasePath,
+  });
+});
+
+afterAll(async () => {
+  try {
+    expect(getTotalPendingReplies()).toBe(0);
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      env: suiteFixtureEnv,
+      path: suiteDatabasePath,
+    });
+  } finally {
+    disposeOpenClawAgentDatabaseByPath(suiteDatabasePath, { env: suiteFixtureEnv });
+    closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(suiteFixtureEnv));
+    fs.rmSync(suiteFixtureRoot, { recursive: true, force: true });
+  }
+});
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
@@ -3677,7 +3723,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("chat.inject rechecks archive state after lifecycle admission waits", async () => {
     await createTranscriptFixture("openclaw-chat-inject-archive-race-");
-    const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
+    const storePath = mockState.storePath;
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
     const mutation = runExclusiveSessionLifecycleMutation({
@@ -3869,7 +3915,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("chat.inject advances the session registry marker after transcript append", async () => {
-    const fixtureDir = await createTranscriptFixture("openclaw-chat-inject-registry-marker-");
+    await createTranscriptFixture("openclaw-chat-inject-registry-marker-");
     const updatedAt = Date.parse("2026-05-18T11:00:00.000Z");
     const appendedAt = Date.parse("2026-05-18T11:05:00.000Z");
     await seedSqliteSessionEntry({
@@ -3893,7 +3939,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(entry?.status).toBe("done");
     } finally {
       vi.useRealTimers();
-      fs.rmSync(fixtureDir, { recursive: true, force: true });
     }
   });
 
