@@ -1378,7 +1378,10 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...auditNonDeep.collectNodeDenyCommandPatternFindings(cfg));
   findings.push(...auditNonDeep.collectNodeDangerousAllowCommandFindings(cfg));
   findings.push(...auditNonDeep.collectMinimalProfileOverrideFindings(cfg));
-  findings.push(...auditNonDeep.collectSecretsInConfigFindings(cfg));
+  // "Secret stored in config" must inspect the on-disk source config: the resolved
+  // config materializes SecretRefs into plaintext, which would false-positive every
+  // externalized credential.
+  findings.push(...auditNonDeep.collectSecretsInConfigFindings(context.sourceConfig));
   findings.push(...auditNonDeep.collectModelHygieneFindings(cfg));
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));
