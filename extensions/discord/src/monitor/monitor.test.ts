@@ -245,10 +245,7 @@ describe("discord component interactions", () => {
   });
 
   const createGuildComponentContext = (allowFrom: string[]) =>
-    createComponentContext({
-      cfg: { ...createCfg(), commands: { useAccessGroups: true } },
-      allowFrom,
-    });
+    createComponentContext({ cfg: createCfg(), allowFrom });
   const createGuildPluginButton = (allowFrom: string[]) =>
     createDiscordComponentButton(createGuildComponentContext(allowFrom));
 
