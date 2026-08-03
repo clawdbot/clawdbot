@@ -72,6 +72,35 @@ describe("update.run package self-upgrade producer", () => {
     );
   });
 
+  it("proves the authenticated setup lifecycle before updating", async () => {
+    const script = await fs.readFile(
+      path.join(
+        process.cwd(),
+        "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh",
+      ),
+      "utf8",
+    );
+
+    expect(script).toContain(
+      'gateway_call wizard.start \'{"mode":"local"}\' "$WIZARD_START_JSON" "$WIZARD_START_ERR"',
+    );
+    expect(script).toContain(
+      'gateway_call wizard.status "$wizard_session_params" "$WIZARD_STATUS_JSON" "$WIZARD_STATUS_ERR"',
+    );
+    expect(script).toContain(
+      'gateway_call wizard.next "$wizard_next_params" "$WIZARD_NEXT_JSON" "$WIZARD_NEXT_ERR"',
+    );
+    expect(script).toContain('grep -Fq "wizard already running" "$WIZARD_DUPLICATE_ERR"');
+    expect(script).toContain(
+      'gateway_call wizard.cancel "$wizard_session_params" "$WIZARD_CANCEL_JSON" "$WIZARD_CANCEL_ERR"',
+    );
+    expect(script).toContain('grep -Fq "wizard not found" "$WIZARD_CANCELLED_STATUS_ERR"');
+    expect(script).toContain('step.sensitive === true && Object.hasOwn(step, "initialValue")');
+    expect(script.indexOf("Exercising authenticated Gateway wizard RPC lifecycle")).toBeLessThan(
+      script.indexOf("Invoking authenticated Gateway RPC update.run"),
+    );
+  });
+
   it("falls back to the exact tag clone when commit or tag objects are missing", async () => {
     const script = await fs.readFile(
       path.join(process.cwd(), "scripts/e2e/update-run-package-self-upgrade-docker.sh"),
@@ -92,13 +121,19 @@ describe("update.run package self-upgrade producer", () => {
         installedVersion: "2026.7.2",
         source: { version: "2026.4.26" },
         target: { resolvedVersion: "2026.7.2", tag: "latest" },
+        wizardFlow: {
+          authenticated: true,
+          cancelledSessionPurged: true,
+          duplicateStartRejected: true,
+          status: "passed",
+        },
         restartSentinel: {
           message: "QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
           status: "ok",
         },
       }),
     ).toBe(
-      "source=2026.4.26; target=latest:2026.7.2; installed=2026.7.2; sentinel=ok:QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
+      "wizard=passed:authenticated:exclusive:purged; source=2026.4.26; target=latest:2026.7.2; installed=2026.7.2; sentinel=ok:QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
     );
   });
 });

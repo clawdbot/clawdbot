@@ -23,6 +23,12 @@ type UpdateRunSelfUpgradeSummary = {
   source?: { version?: string };
   target?: { resolvedVersion?: string; tag?: string };
   restartSentinel?: { message?: string; status?: string };
+  wizardFlow?: {
+    authenticated?: boolean;
+    duplicateStartRejected?: boolean;
+    cancelledSessionPurged?: boolean;
+    status?: string;
+  };
 };
 
 function formatErrorMessage(error: unknown) {
@@ -63,6 +69,7 @@ export function resolveUpdateRunSelfUpgradePermission(
 
 export function formatUpdateRunSelfUpgradeDetails(summary: UpdateRunSelfUpgradeSummary) {
   return [
+    `wizard=${summary.wizardFlow?.status ?? "unknown"}:${summary.wizardFlow?.authenticated === true ? "authenticated" : "unauthenticated"}:${summary.wizardFlow?.duplicateStartRejected === true ? "exclusive" : "overlap-unknown"}:${summary.wizardFlow?.cancelledSessionPurged === true ? "purged" : "cleanup-unknown"}`,
     `source=${summary.source?.version ?? "unknown"}`,
     `target=${summary.target?.tag ?? "unknown"}:${summary.target?.resolvedVersion ?? "unknown"}`,
     `installed=${summary.installedVersion ?? "unknown"}`,
@@ -111,7 +118,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: "update-run-package-self-upgrade.log",
-    primaryModel: "gateway/update.run",
+    primaryModel: "gateway/update-and-setup",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {
@@ -122,6 +129,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
         "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
         "scripts/lib/docker-e2e-scenarios.mjs",
         "src/gateway/server-methods/update.ts",
+        "src/gateway/server-methods/wizard.ts",
       ],
       docsRefs: [
         "docs/cli/update.md",
@@ -159,6 +167,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
     return await writer.write({
       artifacts: [
         { kind: "summary", filePath: path.join("lane", "summary.json") },
+        { kind: "rpc", filePath: path.join("lane", "wizard-flow.json") },
         { kind: "rpc", filePath: path.join("lane", "update-rpc.json") },
         { kind: "sentinel", filePath: path.join("lane", "update-status.json") },
         {

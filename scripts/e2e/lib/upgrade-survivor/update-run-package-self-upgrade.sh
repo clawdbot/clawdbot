@@ -57,6 +57,25 @@ GATEWAY_STATUS_JSON="$ARTIFACT_DIR/gateway-status.json"
 GATEWAY_STATUS_ERR="$ARTIFACT_DIR/gateway-status.err"
 CHANNELS_STATUS_JSON="$ARTIFACT_DIR/channels-status.json"
 CHANNELS_STATUS_ERR="$ARTIFACT_DIR/channels-status.err"
+WIZARD_START_JSON="$ARTIFACT_DIR/wizard-start.json"
+WIZARD_START_ERR="$ARTIFACT_DIR/wizard-start.err"
+WIZARD_STATUS_JSON="$ARTIFACT_DIR/wizard-status.json"
+WIZARD_STATUS_ERR="$ARTIFACT_DIR/wizard-status.err"
+WIZARD_NEXT_JSON="$ARTIFACT_DIR/wizard-next.json"
+WIZARD_NEXT_ERR="$ARTIFACT_DIR/wizard-next.err"
+WIZARD_DUPLICATE_JSON="$ARTIFACT_DIR/wizard-duplicate-start.json"
+WIZARD_DUPLICATE_ERR="$ARTIFACT_DIR/wizard-duplicate-start.err"
+WIZARD_CANCEL_JSON="$ARTIFACT_DIR/wizard-cancel.json"
+WIZARD_CANCEL_ERR="$ARTIFACT_DIR/wizard-cancel.err"
+WIZARD_CANCELLED_STATUS_JSON="$ARTIFACT_DIR/wizard-cancelled-status.json"
+WIZARD_CANCELLED_STATUS_ERR="$ARTIFACT_DIR/wizard-cancelled-status.err"
+WIZARD_REPLACEMENT_START_JSON="$ARTIFACT_DIR/wizard-replacement-start.json"
+WIZARD_REPLACEMENT_START_ERR="$ARTIFACT_DIR/wizard-replacement-start.err"
+WIZARD_REPLACEMENT_CANCEL_JSON="$ARTIFACT_DIR/wizard-replacement-cancel.json"
+WIZARD_REPLACEMENT_CANCEL_ERR="$ARTIFACT_DIR/wizard-replacement-cancel.err"
+WIZARD_REPLACEMENT_STATUS_JSON="$ARTIFACT_DIR/wizard-replacement-status.json"
+WIZARD_REPLACEMENT_STATUS_ERR="$ARTIFACT_DIR/wizard-replacement-status.err"
+WIZARD_FLOW_JSON="$ARTIFACT_DIR/wizard-flow.json"
 SUMMARY_JSON="$ARTIFACT_DIR/summary.json"
 SYSTEMCTL_SHIM_LOG="$ARTIFACT_DIR/systemctl-shim.log"
 SYSTEMCTL_SHIM_SETUP_LOG="$ARTIFACT_DIR/systemctl-shim-setup.log"
@@ -86,6 +105,7 @@ rm -f \
   "$UPDATE_STATUS_JSON" \
   "$UPDATE_STATUS_ERR" \
   "$ARTIFACT_DIR/update-status.candidate.json" \
+  "$WIZARD_FLOW_JSON" \
   "$SUMMARY_JSON"
 : >"$SYSTEMCTL_SHIM_DAEMON_LOG"
 
@@ -334,6 +354,197 @@ gateway_call channels.status '{"probe":false,"timeoutMs":2000}' \
   "$ARTIFACT_DIR/channels-status-before.json" \
   "$ARTIFACT_DIR/channels-status-before.err"
 
+echo "Exercising authenticated Gateway wizard RPC lifecycle"
+gateway_call wizard.start '{"mode":"local"}' "$WIZARD_START_JSON" "$WIZARD_START_ERR"
+wizard_session_id="$(
+  node -e '
+    const fs = require("node:fs");
+    const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (
+      typeof payload?.sessionId !== "string" ||
+      !payload.sessionId ||
+      payload.done !== false ||
+      payload.status !== "running" ||
+      typeof payload.step?.id !== "string"
+    ) {
+      throw new Error(`unexpected wizard.start result: ${JSON.stringify(payload)}`);
+    }
+    process.stdout.write(payload.sessionId);
+  ' "$WIZARD_START_JSON"
+)"
+wizard_step_id="$(
+  node -e '
+    const fs = require("node:fs");
+    const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(payload.step.id);
+  ' "$WIZARD_START_JSON"
+)"
+wizard_session_params="$(
+  WIZARD_SESSION_ID="$wizard_session_id" node -e '
+    process.stdout.write(JSON.stringify({ sessionId: process.env.WIZARD_SESSION_ID }));
+  '
+)"
+gateway_call wizard.status "$wizard_session_params" "$WIZARD_STATUS_JSON" "$WIZARD_STATUS_ERR"
+wizard_next_params="$(
+  WIZARD_SESSION_ID="$wizard_session_id" WIZARD_STEP_ID="$wizard_step_id" node -e '
+    process.stdout.write(
+      JSON.stringify({
+        sessionId: process.env.WIZARD_SESSION_ID,
+        answer: { stepId: process.env.WIZARD_STEP_ID, value: null },
+      }),
+    );
+  '
+)"
+gateway_call wizard.next "$wizard_next_params" "$WIZARD_NEXT_JSON" "$WIZARD_NEXT_ERR"
+
+if gateway_call wizard.start '{"mode":"local"}' \
+  "$WIZARD_DUPLICATE_JSON" "$WIZARD_DUPLICATE_ERR"; then
+  echo "wizard.start unexpectedly allowed an overlapping setup session" >&2
+  exit 1
+fi
+if ! grep -Fq "wizard already running" "$WIZARD_DUPLICATE_ERR"; then
+  echo "overlapping wizard.start failed without the expected rejection" >&2
+  openclaw_e2e_print_log "$WIZARD_DUPLICATE_ERR" >&2
+  exit 1
+fi
+
+gateway_call wizard.cancel "$wizard_session_params" "$WIZARD_CANCEL_JSON" "$WIZARD_CANCEL_ERR"
+if gateway_call wizard.status "$wizard_session_params" \
+  "$WIZARD_CANCELLED_STATUS_JSON" "$WIZARD_CANCELLED_STATUS_ERR"; then
+  echo "cancelled wizard session remained reachable" >&2
+  exit 1
+fi
+if ! grep -Fq "wizard not found" "$WIZARD_CANCELLED_STATUS_ERR"; then
+  echo "cancelled wizard cleanup failed without the expected not-found result" >&2
+  openclaw_e2e_print_log "$WIZARD_CANCELLED_STATUS_ERR" >&2
+  exit 1
+fi
+
+gateway_call wizard.start '{"mode":"local"}' \
+  "$WIZARD_REPLACEMENT_START_JSON" "$WIZARD_REPLACEMENT_START_ERR"
+replacement_session_id="$(
+  node -e '
+    const fs = require("node:fs");
+    const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (
+      typeof payload?.sessionId !== "string" ||
+      !payload.sessionId ||
+      payload.done !== false ||
+      payload.status !== "running"
+    ) {
+      throw new Error(`unexpected replacement wizard.start result: ${JSON.stringify(payload)}`);
+    }
+    process.stdout.write(payload.sessionId);
+  ' "$WIZARD_REPLACEMENT_START_JSON"
+)"
+replacement_session_params="$(
+  WIZARD_SESSION_ID="$replacement_session_id" node -e '
+    process.stdout.write(JSON.stringify({ sessionId: process.env.WIZARD_SESSION_ID }));
+  '
+)"
+gateway_call wizard.cancel "$replacement_session_params" \
+  "$WIZARD_REPLACEMENT_CANCEL_JSON" "$WIZARD_REPLACEMENT_CANCEL_ERR"
+if gateway_call wizard.status "$replacement_session_params" \
+  "$WIZARD_REPLACEMENT_STATUS_JSON" "$WIZARD_REPLACEMENT_STATUS_ERR"; then
+  echo "replacement wizard session remained reachable after cancellation" >&2
+  exit 1
+fi
+if ! grep -Fq "wizard not found" "$WIZARD_REPLACEMENT_STATUS_ERR"; then
+  echo "replacement wizard cleanup failed without the expected not-found result" >&2
+  openclaw_e2e_print_log "$WIZARD_REPLACEMENT_STATUS_ERR" >&2
+  exit 1
+fi
+
+WIZARD_START_JSON="$WIZARD_START_JSON" \
+  WIZARD_STATUS_JSON="$WIZARD_STATUS_JSON" \
+  WIZARD_NEXT_JSON="$WIZARD_NEXT_JSON" \
+  WIZARD_CANCEL_JSON="$WIZARD_CANCEL_JSON" \
+  WIZARD_REPLACEMENT_START_JSON="$WIZARD_REPLACEMENT_START_JSON" \
+  WIZARD_REPLACEMENT_CANCEL_JSON="$WIZARD_REPLACEMENT_CANCEL_JSON" \
+  WIZARD_FLOW_JSON="$WIZARD_FLOW_JSON" \
+  node -e '
+    const fs = require("node:fs");
+    const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+    const sanitizeStep = (step, label) => {
+      if (!step || typeof step.id !== "string" || !step.id) {
+        throw new Error(`${label} omitted its wizard step`);
+      }
+      const allowedTypes = new Set([
+        "note",
+        "select",
+        "text",
+        "confirm",
+        "multiselect",
+        "progress",
+        "action",
+      ]);
+      if (!allowedTypes.has(step.type)) {
+        throw new Error(`${label} returned unsupported step type ${String(step.type)}`);
+      }
+      if (step.sensitive === true && Object.hasOwn(step, "initialValue")) {
+        throw new Error(`${label} exposed a sensitive initial value`);
+      }
+      for (const field of ["title", "message", "placeholder"]) {
+        if (step[field] !== undefined && typeof step[field] !== "string") {
+          throw new Error(`${label} returned non-string ${field}`);
+        }
+        if (step[field]?.length > 8192) {
+          throw new Error(`${label} returned oversized ${field}`);
+        }
+      }
+      if (step.options !== undefined && !Array.isArray(step.options)) {
+        throw new Error(`${label} returned malformed options`);
+      }
+      return {
+        type: step.type,
+        executor: step.executor,
+        sensitive: step.sensitive === true,
+        initialValuePresent: Object.hasOwn(step, "initialValue"),
+        titleLength: step.title?.length ?? 0,
+        messageLength: step.message?.length ?? 0,
+        optionCount: step.options?.length ?? 0,
+      };
+    };
+    const start = readJson(process.env.WIZARD_START_JSON);
+    const status = readJson(process.env.WIZARD_STATUS_JSON);
+    const next = readJson(process.env.WIZARD_NEXT_JSON);
+    const cancel = readJson(process.env.WIZARD_CANCEL_JSON);
+    const replacementStart = readJson(process.env.WIZARD_REPLACEMENT_START_JSON);
+    const replacementCancel = readJson(process.env.WIZARD_REPLACEMENT_CANCEL_JSON);
+    if (status.status !== "running") {
+      throw new Error(`wizard.status was not running: ${JSON.stringify(status)}`);
+    }
+    if (next.done !== false || next.status !== "running") {
+      throw new Error(`wizard.next did not advance a running session: ${JSON.stringify(next)}`);
+    }
+    if (cancel.status !== "cancelled" || replacementCancel.status !== "cancelled") {
+      throw new Error("wizard.cancel did not cancel both sessions");
+    }
+    fs.writeFileSync(
+      process.env.WIZARD_FLOW_JSON,
+      `${JSON.stringify(
+        {
+          status: "passed",
+          authenticated: true,
+          start: { status: start.status, step: sanitizeStep(start.step, "wizard.start") },
+          statusPoll: status.status,
+          next: { status: next.status, step: sanitizeStep(next.step, "wizard.next") },
+          duplicateStartRejected: true,
+          cancelStatus: cancel.status,
+          cancelledSessionPurged: true,
+          replacement: {
+            status: replacementStart.status,
+            step: sanitizeStep(replacementStart.step, "replacement wizard.start"),
+            cancelStatus: replacementCancel.status,
+            purged: true,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  '
+
 update_params="$(
   RESTART_NOTE="$RESTART_NOTE" node -e '
     process.stdout.write(
@@ -491,6 +702,7 @@ SOURCE_VERSION="$SOURCE_VERSION" \
   POST_RESTART_OBSERVED_AT_MS="$post_restart_observed_at_ms" \
   UPDATE_RPC_JSON="$UPDATE_RPC_JSON" \
   UPDATE_STATUS_JSON="$UPDATE_STATUS_JSON" \
+  WIZARD_FLOW_JSON="$WIZARD_FLOW_JSON" \
   QA_CHANNEL_INSTALL_RECORD_JSON="$QA_CHANNEL_INSTALL_RECORD_JSON" \
   TARGET_PLUGIN_INDEX_JSON="$TARGET_PLUGIN_INDEX_JSON" \
   SOURCE_PLUGIN_INSPECT_JSON="$SOURCE_PLUGIN_INSPECT_JSON" \
@@ -533,6 +745,7 @@ SOURCE_VERSION="$SOURCE_VERSION" \
       expectedRestartNote: process.env.RESTART_NOTE,
       updateRpcCompletedAtMs: Number(process.env.UPDATE_RPC_COMPLETED_AT_MS),
       postRestartObservedAtMs: postRestartAtMs,
+      wizardFlow: readJson(process.env.WIZARD_FLOW_JSON),
       updateRpcResult: readJson(process.env.UPDATE_RPC_JSON),
       restartSentinel: updateStatus.sentinel,
       qaChannelInstallRecord: readJson(process.env.QA_CHANNEL_INSTALL_RECORD_JSON),
