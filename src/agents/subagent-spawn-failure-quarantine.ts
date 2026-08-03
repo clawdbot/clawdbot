@@ -27,9 +27,10 @@ const RETAINED_FAILED_SPAWN_ADMISSION_RETRY_MS = 1_000;
 const RETAINED_FAILED_SPAWN_ADMISSION_MAX_ATTEMPTS = 30;
 
 type RetainedFailedSpawnAdmissionStatus = "retrying" | "exhausted";
+type RetainableAdmissionSlot = Pick<SubagentSpawnAdmissionSlot, "id" | "release">;
 
 type RetainedFailedSpawnAdmission = {
-  slot: SubagentSpawnAdmissionSlot;
+  slot: RetainableAdmissionSlot;
   childSessionKey: string;
   retryTimer?: ReturnType<typeof setTimeout>;
   inFlight: boolean;
@@ -143,7 +144,7 @@ async function reconcileRetainedFailedSpawnAdmission(
 }
 
 function retainFailedSpawnAdmissionSlotUntilDeletion(params: {
-  slot: SubagentSpawnAdmissionSlot;
+  slot: RetainableAdmissionSlot;
   childSessionKey: string;
   sessionIdentity?: ProvisionalSessionCleanupIdentity;
 }): void {
@@ -222,7 +223,7 @@ export function resolveSpawnPipelineFailure(error: unknown, phase: string) {
 }
 
 function recordIndeterminateFailedSubagentSpawn(
-  admissionSlot: SubagentSpawnAdmissionSlot | undefined,
+  admissionSlot: RetainableAdmissionSlot | undefined,
   params: {
     runId: string;
     childSessionKey: string;
@@ -266,7 +267,7 @@ function recordIndeterminateFailedSubagentSpawn(
 }
 
 export function recordSpawnPipelineIndeterminateFailedSubagentSpawn(
-  admissionSlot: SubagentSpawnAdmissionSlot | undefined,
+  admissionSlot: RetainableAdmissionSlot | undefined,
   params: {
     runId: string;
     childSessionKey: string;

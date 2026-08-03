@@ -23,6 +23,7 @@ import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mjs";
 import {
   acquireLocalHeavyCheckLockSync,
   resolveLocalHeavyCheckEnv,
@@ -1080,14 +1081,15 @@ function isDirectRun() {
   return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
-if (isDirectRun()) {
+async function main() {
   const argv = process.argv.slice(2);
   let args;
   try {
     args = parseArgs(argv);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   if (args.help) {
     printUsage();
@@ -1158,4 +1160,8 @@ if (isDirectRun()) {
       }
     }
   }
+}
+
+if (isDirectRun()) {
+  await runWithFailedTrailer("check:changed", main);
 }

@@ -328,6 +328,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
   "tools.web.fetch.useTrustedEnvProxy": "Web Fetch Trusted Env Proxy",
   "tools.web.fetch.ssrfPolicy": "Web Fetch SSRF Policy",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Web Fetch Dangerously Allow Private Network",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames": "Web Fetch Allowed Hostnames",
   "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
     "Web Fetch Allow RFC 2544 Benchmark Range",
   "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange": "Web Fetch Allow IPv6 Unique Local Range",
@@ -707,6 +710,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.ssrfPolicy": "Browser SSRF Policy",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": "Browser Dangerously Allow Private Network",
   "browser.ssrfPolicy.allowedHostnames": "Browser Allowed Hostnames",
+  "browser.ssrfPolicy.allowRfc2544BenchmarkRange": "Browser Allow RFC 2544 Benchmark Range",
+  "browser.ssrfPolicy.allowIpv6UniqueLocalRange": "Browser Allow IPv6 Unique Local Range",
   "tools.exec.timeoutSeconds": "Exec Timeout (Seconds)",
   "agents.entries.*.tools.exec.timeoutSeconds": "Agent Exec Timeout (Seconds)",
   session: "Session",
@@ -754,6 +759,14 @@ export const FIELD_LABELS: Record<string, string> = {
   cron: "Automations",
   "cron.enabled": "Automations Enabled",
   "cron.webhookToken": "Automations Webhook Bearer Token",
+  "cron.webhookSsrfPolicy": "Automations Webhook SSRF Policy",
+  "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Automations Webhook Dangerously Allow Private Network",
+  "cron.webhookSsrfPolicy.allowedHostnames": "Automations Webhook Allowed Hostnames",
+  "cron.webhookSsrfPolicy.allowRfc2544BenchmarkRange":
+    "Automations Webhook Allow RFC 2544 Benchmark Range",
+  "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":
+    "Automations Webhook Allow IPv6 Unique Local Range",
   "cron.sessionRetention": "Automations Session Retention",
   transcripts: "Transcripts",
   "transcripts.enabled": "Transcripts Enabled",

@@ -10,13 +10,9 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { listAgentIds } from "./agent-scope-config.js";
+import { reserveChildAdmissionSlot } from "./child-admission.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "./spawn-plan.js";
 import { listSwarmRunsForGroup } from "./subagent-registry.js";
-import {
-  countPendingSubagentSpawnAdmissionSlots,
-  reserveSubagentSpawnAdmissionSlot,
-  type SubagentSpawnAdmissionSlot,
-} from "./subagent-spawn-admission.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
 import type {
   SpawnSubagentContext,
@@ -58,9 +54,12 @@ type ResolvedSubagentSpawnRequest = {
     reservationPending: boolean;
   };
   admission: {
-    resolve: () => ReturnType<typeof resolveSpawnAdmission>;
+    resolve: (
+      pendingChildren?: number,
+      pendingChildSessionKeys?: ReadonlySet<string>,
+    ) => ReturnType<typeof resolveSpawnAdmission>;
     initial: ReturnType<typeof resolveSpawnAdmission> & { ok: true };
-    slot?: SubagentSpawnAdmissionSlot;
+    reservation?: { id: string; release: () => void };
     childDepth: number;
     maxSpawnDepth: number;
   };
@@ -279,8 +278,7 @@ export function resolveSubagentSpawnRequest(
   const swarmSchedulerGroupKey = swarmGroupId
     ? JSON.stringify([requesterInternalKey, swarmGroupId])
     : undefined;
-  let admissionSlot: SubagentSpawnAdmissionSlot | undefined;
-  const resolveAdmission = () => {
+  const resolveAdmission = (pendingChildren = 0) => {
     const collectorRuns = params.collect
       ? swarmGroupId
         ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey)
@@ -302,15 +300,17 @@ export function resolveSubagentSpawnRequest(
       requestedAgentId: effectiveRequestedAgentId,
       configuredAgentIds,
       authorizedTargetAgentId,
-      additionalActiveChildren:
-        params.collect === true
-          ? 0
-          : countPendingSubagentSpawnAdmissionSlots(requesterInternalKey, {
-              exclude: admissionSlot,
-            }),
+      additionalActiveChildren: params.collect === true ? 0 : pendingChildren,
     });
   };
-  const admission = resolveAdmission();
+  const admissionReservation = params.collect
+    ? undefined
+    : reserveChildAdmissionSlot({
+        controllerSessionKey: ownership.controllerSessionKey,
+        childSessionKey: preallocatedChildSessionKey,
+        resolveAdmission,
+      });
+  const admission = admissionReservation ?? resolveAdmission();
   if (!admission.ok) {
     return rejectSubagentSpawnRequest(
       "forbidden",
@@ -338,13 +338,6 @@ export function resolveSubagentSpawnRequest(
           .digest("hex")
           .slice(0, 32)}`
       : crypto.randomUUID());
-  if (params.collect !== true) {
-    admissionSlot = reserveSubagentSpawnAdmissionSlot({
-      requesterSessionKey: requesterInternalKey,
-      runId: childIdem,
-      ...(preallocatedChildSessionKey ? { childSessionKey: preallocatedChildSessionKey } : {}),
-    });
-  }
   let reservationPending = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
     const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey);
@@ -394,7 +387,7 @@ export function resolveSubagentSpawnRequest(
       admission: {
         resolve: resolveAdmission,
         initial: admission,
-        ...(admissionSlot ? { slot: admissionSlot } : {}),
+        reservation: admissionReservation?.ok ? admissionReservation : undefined,
         childDepth,
         maxSpawnDepth,
       },

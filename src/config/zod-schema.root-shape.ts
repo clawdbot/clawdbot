@@ -12,6 +12,7 @@ import {
   ModelsConfigSchema,
   SecretInputSchema,
   SecretsConfigSchema,
+  SsrFPolicyConfigSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
@@ -151,12 +152,7 @@ export const OpenClawSchemaShape = {
       attachOnly: z.boolean().optional(),
       defaultProfile: z.string().optional(),
       snapshotDefaults: BrowserSnapshotDefaultsSchema,
-      ssrfPolicy: z
-        .strictObject({
-          dangerouslyAllowPrivateNetwork: z.boolean().optional(),
-          allowedHostnames: z.array(z.string()).optional(),
-        })
-        .optional(),
+      ssrfPolicy: SsrFPolicyConfigSchema.optional(),
       profiles: z
         .record(
           z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
@@ -317,6 +313,7 @@ export const OpenClawSchemaShape = {
         })
         .optional(),
       webhookToken: SecretInputSchema.optional().register(sensitive),
+      webhookSsrfPolicy: SsrFPolicyConfigSchema.optional(),
       sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
       failureAlert: z
         .strictObject({

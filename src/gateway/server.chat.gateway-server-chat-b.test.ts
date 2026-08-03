@@ -5192,7 +5192,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history keeps visible assistant progress text from mixed tool-use transcript messages", async () => {
+  test("chat.history preserves assistant trace from mixed tool-use transcript messages", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       await writeMainSessionTranscript([
@@ -5240,7 +5240,14 @@ describe("gateway server chat", () => {
       };
       expect(assistantMessage.role).toBe("assistant");
       expect(assistantMessage.content).toEqual([
+        { type: "thinking", thinking: "private reasoning" },
         { type: "text", text: "I will clean that up now." },
+        {
+          type: "toolCall",
+          id: "call-read",
+          name: "read",
+          arguments: { path: "AGENTS.md" },
+        },
       ]);
       expect(assistantMessage.timestamp).toBe(2);
     });

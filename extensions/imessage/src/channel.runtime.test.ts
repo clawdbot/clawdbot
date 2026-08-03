@@ -52,7 +52,7 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
         },
       },
     } as never;
-    const { ctx, abort, logEvents } = makeCtx({ cfg, accountId: "default" });
+    const { ctx, abort, logEvents, statusEvents } = makeCtx({ cfg, accountId: "default" });
 
     const settled = vi.fn();
     const task = startIMessageGatewayAccount(ctx).then(settled);
@@ -63,6 +63,8 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
     expect(settled).not.toHaveBeenCalled();
     expect(logEvents.some((e) => e.line.includes("skipping watcher"))).toBe(true);
     expect(logEvents.some((e) => e.line.includes('using account "swang430-gmail-com"'))).toBe(true);
+    expect(statusEvents).not.toEqual([]);
+    expect(statusEvents.every((event) => !(event as Record<string, unknown>).lifecycle)).toBe(true);
 
     abort();
     await task;
@@ -83,10 +85,16 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
         },
       },
     } as never;
-    const { ctx } = makeCtx({ cfg, accountId: "swang430-gmail-com" });
+    const { ctx, statusEvents } = makeCtx({ cfg, accountId: "swang430-gmail-com" });
 
     await startIMessageGatewayAccount(ctx);
     expect(monitorMock).toHaveBeenCalledTimes(1);
+    expect(statusEvents).toContainEqual(
+      expect.objectContaining({ lifecycle: "starting", accountId: "swang430-gmail-com" }),
+    );
+    expect(monitorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ statusSink: expect.any(Function) }),
+    );
   });
 
   it("starts monitorIMessageProvider when an account has no duplicate sibling", async () => {

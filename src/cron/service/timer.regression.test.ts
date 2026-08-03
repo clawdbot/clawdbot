@@ -2844,7 +2844,7 @@ describe("cron service timer regressions", () => {
       state,
       job,
       { status: "error", error: "ninth failure", startedAt, endedAt: startedAt + 10 },
-      { deferredAutoDisableNotifications: deferredNotifications },
+      { deferredNotifications },
     );
     expect(job.enabled).toBe(true);
     expect(job.state.consecutiveErrors).toBe(9);
@@ -2860,7 +2860,7 @@ describe("cron service timer regressions", () => {
         startedAt: startedAt + 60_000,
         endedAt: startedAt + 60_010,
       },
-      { deferredAutoDisableNotifications: deferredNotifications },
+      { deferredNotifications },
     );
     expect(job.enabled).toBe(false);
     expect(job.state.nextRunAtMs).toBeUndefined();
@@ -2901,7 +2901,7 @@ describe("cron service timer regressions", () => {
           startedAt: startedAt + run * 60_000,
           endedAt: startedAt + run * 60_000 + 10,
         },
-        { deferredAutoDisableNotifications: [] },
+        { deferredNotifications: [] },
       );
 
     for (let run = 0; run < 9; run += 1) {
@@ -2945,7 +2945,7 @@ describe("cron service timer regressions", () => {
       state,
       job,
       { status: "error", error: "tenth failure", startedAt, endedAt: startedAt + 10 },
-      { ...opts, deferredAutoDisableNotifications: deferredNotifications },
+      { ...opts, deferredNotifications },
     );
 
     expect(job.enabled).toBe(true);
@@ -3168,6 +3168,37 @@ describe("cron service timer regressions", () => {
       status: "error",
       error: "cron script payload failed (timeout): wall-clock timeout exceeded",
       errorClassification: { kind: "reason", reason: "timeout" },
+      executionStarted: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(job.state.lastErrorReason).toBe("timeout");
+    expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
+    expect(job.enabled).toBe(true);
+  });
+
+  it("classifies interrupted agent transport before applying bounded retry", () => {
+    const startedAt = Date.parse("2026-07-21T12:00:00.000Z");
+    const endedAt = startedAt + 500;
+    const job = createIsolatedRegressionJob({
+      id: "transient-agent-transport",
+      name: "transient-agent-transport",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { runningAtMs: startedAt },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-transient-agent-transport.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      jobs: [job],
+    });
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "stream disconnected before completion: upstream reset",
       executionStarted: true,
       startedAt,
       endedAt,

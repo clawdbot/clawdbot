@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
   formatUserProfileAvatarEtag,
   getProfileAvatar,
@@ -14,7 +15,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 import {
-  authorizeScopedGatewayHttpRequestOrReply,
+  authorizeScopedUserProfileAvatarHttpRequestOrReply,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
@@ -244,22 +245,18 @@ async function resolveGravatar(
   if (cached) {
     return cached;
   }
-  const inFlight = gravatarRequests.get(hash);
-  if (inFlight) {
-    return await inFlight;
-  }
-  const request = fetchGravatar(hash, options.fetchImpl, options.deadline).then((result) => {
-    if (result.kind !== "error") {
-      cacheGravatar(hash, result, options.nowMs());
-    }
-    return result;
-  });
-  gravatarRequests.set(hash, request);
-  try {
-    return await request;
-  } finally {
-    gravatarRequests.delete(hash);
-  }
+  return await getOrCreatePromise(
+    gravatarRequests,
+    hash,
+    async () => {
+      const result = await fetchGravatar(hash, options.fetchImpl, options.deadline);
+      if (result.kind !== "error") {
+        cacheGravatar(hash, result, options.nowMs());
+      }
+      return result;
+    },
+    { evictOnSettled: true },
+  );
 }
 
 function sendAvatar(
@@ -284,7 +281,7 @@ function sendAvatar(
   res.end(req.method === "HEAD" ? undefined : avatar.bytes);
 }
 
-/** Serves a profile avatar with the same HTTP operator auth as sibling gateway endpoints. */
+/** Serves a profile avatar to authenticated HTTP or verified Tailscale UI sessions. */
 export async function handleUserProfileAvatarHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -321,7 +318,7 @@ export async function handleUserProfileAvatarHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const authResult = await authorizeScopedGatewayHttpRequestOrReply({
+  const authResult = await authorizeScopedUserProfileAvatarHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,

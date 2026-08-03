@@ -3495,6 +3495,32 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it("keeps the canonical current owner in bounded reply-run prompt guidance", async () => {
+    const ownerIds = Array.from({ length: 24 }, (_, index) =>
+      String(100_000_000_000_000_000n + BigInt(index)),
+    );
+    const currentOwnerId = ownerIds.at(-1)!;
+    const params = ownerParams();
+    params.command = {
+      ...params.command,
+      ownerList: ownerIds,
+      senderId: currentOwnerId,
+      senderIsOwner: true,
+    };
+    params.sessionCtx = {
+      ...params.sessionCtx,
+      SenderId: `<@!${currentOwnerId}>`,
+    };
+
+    await runPreparedReply(params);
+
+    const run = requireRunReplyAgentCall().followupRun.run;
+    expect(run.senderId).toBe(`<@!${currentOwnerId}>`);
+    expect(run.ownerNumbers).toHaveLength(16);
+    expect(run.ownerNumbers?.at(-1)).toBe(currentOwnerId);
+    expect(params.command.ownerList).toHaveLength(24);
+  });
+
   it("keeps sender ownership when drained system events are present", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Trusted event.");
     const params = ownerParams();

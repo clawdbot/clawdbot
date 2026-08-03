@@ -53,6 +53,7 @@ const mocks = vi.hoisted(() => ({
   runSetupMemoryImportStep: vi.fn(),
   writeWizardConfigFile: vi.fn(),
   runCollectedChannelOnboardingPostWriteHooks: vi.fn(async () => {}),
+  sharedVerifiedInference: undefined as SystemAgentVerifiedInferenceBinding | undefined,
 }));
 
 type MemoryImportStepParams = Parameters<typeof runSetupMemoryImportStep>[0];
@@ -93,6 +94,23 @@ vi.mock("../plugins/providers.js", async (importOriginal) => ({
   resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
 }));
+
+vi.mock("./verified-inference.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./verified-inference.js")>();
+  return {
+    ...actual,
+    resolveSystemAgentVerifiedInferenceRoute: (
+      ...args: Parameters<typeof actual.resolveSystemAgentVerifiedInferenceRoute>
+    ) => {
+      // Most cases own chat state, not inference ownership. Explicit bindings
+      // still run the real resolver so every drift and apply-boundary test stays end-to-end.
+      if (args[0] === mocks.sharedVerifiedInference) {
+        return Promise.resolve(args[0].execution);
+      }
+      return actual.resolveSystemAgentVerifiedInferenceRoute(...args);
+    },
+  };
+});
 
 const tempDirs: string[] = [];
 
@@ -311,6 +329,7 @@ beforeAll(async () => {
     sharedVerifiedInferenceConfig,
   );
   sharedVerifiedInference = fixture.binding;
+  mocks.sharedVerifiedInference = fixture.binding;
   sharedVerifiedInferenceDeps = fixture.deps;
   mocks.readConfigFileSnapshot.mockResolvedValue(
     configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,
@@ -468,6 +487,8 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: "before",
       configHashAfter: "after",
       bootstrapPending: true,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/hatch-work"],
     }));
     const engine = new SystemAgentChatEngine({
@@ -532,6 +553,8 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: "before",
       configHashAfter: "after",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/established-work"],
     }));
     const engine = new SystemAgentChatEngine({
@@ -573,6 +596,8 @@ describe("SystemAgentChatEngine", () => {
         configHashBefore: "before",
         configHashAfter: "after",
         bootstrapPending: true,
+        workspaceReady: true,
+        gateway: { status: "ready" as const, action: "reused" as const },
         lines: ["Workspace: /tmp/hatch-work"],
       };
     });
@@ -668,6 +693,8 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: null,
       configHashAfter: "after",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/work"],
     }));
     expect(
@@ -1357,11 +1384,13 @@ describe("SystemAgentChatEngine", () => {
         },
       },
     };
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
     // The route flips between the final turn's entry gate and the
     // persistent-apply recheck; only the apply boundary can catch it.
     let baseReadsRemaining = Number.POSITIVE_INFINITY;
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
+      verifiedInference,
       runAgentTurn: async () => null,
       planWithAssistant: async () => null,
       deps: {
@@ -2536,6 +2565,8 @@ describe("SystemAgentChatEngine", () => {
       configHashBefore: "before",
       configHashAfter: "after",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/new-work"],
     }));
     let pendingOperation = "";

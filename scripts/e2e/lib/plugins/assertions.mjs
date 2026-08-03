@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readBoundedResponseText } from "../bounded-response-text.mjs";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText,
+} from "../../../lib/bounded-response.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
   readPluginInstallIndex,
@@ -864,7 +867,7 @@ async function assertClawHubPreflight() {
           response,
           `ClawHub package preflight response for ${packageName}`,
           limits.bodyMaxBytes,
-          timeoutPromise,
+          { createTooLargeError: createBoundedResponseTooLargeError, timeoutPromise },
         ),
     );
     throw new Error(
@@ -879,7 +882,7 @@ async function assertClawHubPreflight() {
         response,
         `ClawHub package preflight response for ${packageName}`,
         limits.bodyMaxBytes,
-        timeoutPromise,
+        { createTooLargeError: createBoundedResponseTooLargeError, timeoutPromise },
       ),
   );
   const detail = await withTimeout(

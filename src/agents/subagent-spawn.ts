@@ -2,15 +2,13 @@ import { promises as fs } from "node:fs";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
 import { runSpawnPipeline, type SpawnBackendAdapter } from "./spawn-pipeline.js";
 import {
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
-import { handleCollectorLaunchStartFailure } from "./subagent-collector-launch-failure.js";
-import { startQueuedSubagentRun } from "./subagent-registry.js";
+import { activateCollectorLaunch } from "./subagent-collector-launch-failure.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
@@ -20,7 +18,6 @@ import {
   applyReservedCleanupState,
   refreshProvisionalSessionCleanupIdentity,
   type ProvisionalSessionDeletionOutcome,
-  terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
 import {
   prepareContextEngineSubagentSpawn,
@@ -58,7 +55,7 @@ import {
   mergeDeliveryContext,
   throwIfSpawnAborted,
 } from "./subagent-spawn.runtime.js";
-import { activateSwarmRun, removeQueuedSwarmRun } from "./swarm-scheduler.js";
+import { removeQueuedSwarmRun } from "./swarm-scheduler.js";
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
 export async function spawnSubagentDirect(
@@ -104,7 +101,7 @@ export async function spawnSubagentDirect(
     admission: {
       resolve: resolveAdmission,
       initial: admission,
-      slot: admissionSlot,
+      reservation: admissionReservation,
       childDepth,
       maxSpawnDepth,
     },
@@ -116,15 +113,24 @@ export async function spawnSubagentDirect(
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
   let swarmReservationPending = reservationPending;
-  let retainAdmissionSlotAfterReturn = false;
-  const releaseAdmissionSlot = () => admissionSlot?.release();
+  let retainAdmissionReservationAfterReturn = false;
+  const releaseAdmissionReservation = () => admissionReservation?.release();
+  const pipelineAdmissionReservation = admissionReservation
+    ? {
+        release() {
+          if (!retainAdmissionReservationAfterReturn) {
+            admissionReservation.release();
+          }
+        },
+      }
+    : undefined;
   try {
     releaseReservedDirectSpawnInFlight = claimReservedDirectSpawnInFlight({
       preallocatedRunId: ctx.preallocatedRunId,
       preallocatedChildSessionKey: ctx.preallocatedChildSessionKey,
     });
   } catch (error) {
-    releaseAdmissionSlot();
+    releaseAdmissionReservation();
     return {
       status: "error",
       error: error instanceof Error ? error.message : String(error),
@@ -223,7 +229,7 @@ export async function spawnSubagentDirect(
         emitLifecycleHooks: options?.emitLifecycleHooks,
         deleteTranscript: options?.deleteTranscript,
         ...cleanupIdentityOption(provisionalSessionCleanupIdentity),
-        waitForSessionDeletion: Boolean(admissionSlot),
+        waitForSessionDeletion: Boolean(admissionReservation),
       });
       recordReservedCleanupOutcome(cleanupResult.sessionDeletion);
       return cleanupResult;
@@ -481,6 +487,7 @@ export async function spawnSubagentDirect(
             emitLifecycleHooks: threadBindingReady,
             deleteTranscript: true,
           });
+          retainAdmissionReservationAfterReturn = failureCleanupOutcome === "indeterminate";
           return;
         }
         await rollbackPreparedContextEngine(state?.contextEnginePreparation);
@@ -527,13 +534,15 @@ export async function spawnSubagentDirect(
           ...cleanupIdentityOption(provisionalSessionCleanupIdentity),
           // A timed-out in-process dispatch keeps running. Reserved identities
           // cannot be released until deletion proves no accepted child survives.
-          waitForSessionDeletion: Boolean(admissionSlot),
+          waitForSessionDeletion: Boolean(admissionReservation),
         });
         recordReservedCleanupOutcome(cleanupResult.sessionDeletion);
+        retainAdmissionReservationAfterReturn = cleanupResult.sessionDeletion === "indeterminate";
       },
     };
     const pipelineResult = await runSpawnPipeline({
       adapter,
+      admissionReservation: pipelineAdmissionReservation,
       progressOrigin,
       progressSessionKey: requesterInternalKey,
       buildRegistration: (_state, runId) => {
@@ -587,10 +596,8 @@ export async function spawnSubagentDirect(
     if (!pipelineResult.ok) {
       const runId = pipelineResult.runId ?? acceptedDispatchRunId ?? childIdem;
       const failure = resolveSpawnPipelineFailure(pipelineResult.error, pipelineResult.phase);
-      retainAdmissionSlotAfterReturn =
-        admissionSlot !== undefined &&
-        failureCleanupOutcome === "indeterminate" &&
-        !recordSpawnPipelineIndeterminateFailedSubagentSpawn(admissionSlot, {
+      if (admissionReservation && failureCleanupOutcome === "indeterminate") {
+        const recorded = recordSpawnPipelineIndeterminateFailedSubagentSpawn(admissionReservation, {
           runId,
           childSessionKey,
           controllerSessionKey: ownership.controllerSessionKey,
@@ -616,6 +623,11 @@ export async function spawnSubagentDirect(
           retainAttachmentsOnKeep: retainOnSessionKeep,
           createdAt: provisionalSessionCreatedAt,
         });
+        retainAdmissionReservationAfterReturn = !recorded;
+        if (recorded) {
+          releaseAdmissionReservation();
+        }
+      }
       return withReservedCleanupResult({
         status: failure.status,
         error: failure.message,
@@ -624,44 +636,20 @@ export async function spawnSubagentDirect(
       });
     }
     childRunId = pipelineResult.runId;
-    releaseAdmissionSlot();
+    releaseAdmissionReservation();
     let collectorSessionKey: string | undefined;
     if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
-      let launchTerminationConfirmed = false;
-      activateSwarmRun({
+      activateCollectorLaunch({
         groupId: swarmSchedulerGroupKey,
-        runId: childRunId,
-        start: async () => {
-          await runWithGatewayIndependentRootWorkContinuation(async () => {
-            const response = await launchChildRun();
-            const gatewayRunId = readGatewayRunId(response) ?? childRunId;
-            try {
-              if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
-                throw new Error(
-                  "collector registry row could not transition from queued to running",
-                );
-              }
-            } catch (error) {
-              await terminateAcceptedCollectorRun({ childSessionKey, gatewayRunId });
-              launchTerminationConfirmed = true;
-              throw error;
-            }
-            await emitSpawnLifecycleHooks(gatewayRunId);
-          });
-        },
-        onStartFailure: async (error) => {
-          return await handleCollectorLaunchStartFailure({
-            error,
-            contextEnginePreparation: pipelineResult.state.contextEnginePreparation,
-            childSessionKey,
-            childRunId,
-            attachmentAbsDir,
-            sessionIdentity: provisionalSessionCleanupIdentity,
-            threadBindingReady,
-            launchTerminationConfirmed,
-            requesterInternalKey,
-          });
-        },
+        childRunId,
+        launchChildRun,
+        emitSpawnLifecycleHooks,
+        contextEnginePreparation: pipelineResult.state.contextEnginePreparation,
+        childSessionKey,
+        attachmentAbsDir,
+        sessionIdentity: provisionalSessionCleanupIdentity,
+        threadBindingReady,
+        requesterInternalKey,
       });
       swarmReservationPending = false;
       collectorSessionKey = childSessionKey;
@@ -694,8 +682,8 @@ export async function spawnSubagentDirect(
     };
   } finally {
     releaseReservedDirectSpawnInFlight?.();
-    if (!retainAdmissionSlotAfterReturn) {
-      releaseAdmissionSlot();
+    if (!retainAdmissionReservationAfterReturn) {
+      releaseAdmissionReservation();
     }
     if (swarmReservationPending) {
       removeQueuedSwarmRun(childRunId);

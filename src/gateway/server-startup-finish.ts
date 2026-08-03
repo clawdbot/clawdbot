@@ -164,6 +164,7 @@ export async function finishGatewayStartup(params: {
     tailscaleMode,
     tailscaleConfig,
     controlUiBasePath,
+    controlUiRootLifecycle,
     sidecarStartup,
     workerLiveEvents,
     earlyRuntime,
@@ -285,6 +286,14 @@ export async function finishGatewayStartup(params: {
       broadcastVoiceWakeRoutingChanged,
     });
   });
+  const sessionChangeSidecar = {
+    stop: async () => {
+      const { flushPendingSessionsChangedEvents } =
+        await import("./server-methods/session-change-event.js");
+      flushPendingSessionsChangedEvents(gatewayRequestContext);
+    },
+  };
+  runtimeState.gatewayLifetimeSidecars.push(sessionChangeSidecar);
   pluginGatewayContext.current = gatewayRequestContext;
   const { createGatewayInstanceRuntime } = await import("./server-instance-runtime.js");
   const gatewayInstanceRuntimeLocal = createGatewayInstanceRuntime({
@@ -413,6 +422,7 @@ export async function finishGatewayStartup(params: {
           serviceName: tailscaleConfig.serviceName,
           preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
           controlUiBasePath,
+          controlUiRootLifecycle,
           logTailscale,
           gatewayPluginConfigAtStart,
           activationSourceConfig: startupActivationSourceConfig,
@@ -469,9 +479,10 @@ export async function finishGatewayStartup(params: {
             }
           },
           onGatewayLifetimeSidecars: (gatewayLifetimeSidecars) => {
-            runtimeState.gatewayLifetimeSidecars = gatewayLifetimeSidecars;
+            const lifetimeSidecars = [sessionChangeSidecar, ...gatewayLifetimeSidecars];
+            runtimeState.gatewayLifetimeSidecars = lifetimeSidecars;
             stopPostReadySidecarsAfterCloseStarted({
-              postReadySidecars: gatewayLifetimeSidecars,
+              postReadySidecars: lifetimeSidecars,
               closeStarted: lifecycle.closePreludeStarted,
             });
             if (lifecycle.closePreludeStarted) {

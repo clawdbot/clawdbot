@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createContext,
@@ -12,8 +13,11 @@ import {
   createSessions,
 } from "./sessions-page.test-support.ts";
 
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
+
 afterEach(() => {
   document.body.replaceChildren();
+  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
@@ -50,7 +54,7 @@ describe("sessions page archived deletion", () => {
       } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
     await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
@@ -58,7 +62,11 @@ describe("sessions page archived deletion", () => {
     expect(sessions.list).toHaveBeenCalledWith(
       expect.objectContaining({ archivedFilter: "archived", limit: 1000 }),
     );
-    expect(confirm).toHaveBeenCalledWith("Delete 2 archived threads and their transcripts?");
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      message: "Delete 2 archived threads and their transcripts?",
+      confirmLabel: "Delete",
+      danger: true,
+    });
     expect(sessions.deleteMany).toHaveBeenCalledWith([
       {
         key: archivedKeys[0],
@@ -89,7 +97,7 @@ describe("sessions page archived deletion", () => {
       count: 1,
       sessions: [{ key, archived: false }],
     } as SessionsListResult);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteSessionFromMenu({ key, archived: false } as SessionsListResult["sessions"][0]);
 
@@ -112,12 +120,12 @@ describe("sessions page archived deletion", () => {
       } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
     await vi.waitFor(() => expect(sessions.list).toHaveBeenCalledOnce());
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(showConfirmDialog).not.toHaveBeenCalled();
     expect(sessions.deleteMany).not.toHaveBeenCalled();
   });
 
@@ -155,14 +163,18 @@ describe("sessions page archived deletion", () => {
       } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
     await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
 
     expect(list).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ offset: 2 }));
-    expect(confirm).toHaveBeenCalledWith("Delete 3 archived threads and their transcripts?");
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      message: "Delete 3 archived threads and their transcripts?",
+      confirmLabel: "Delete",
+      danger: true,
+    });
     expect(sessions.deleteMany).toHaveBeenCalledWith(
       [...pageOne, ...pageTwo].map((key) => ({
         key,
@@ -217,13 +229,17 @@ describe("sessions page archived deletion", () => {
       { count: 1, sessions: [archived(keys[0])] } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
     await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
 
     expect(list).toHaveBeenCalledTimes(3);
-    expect(confirm).toHaveBeenCalledWith("Delete 3 archived threads and their transcripts?");
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      message: "Delete 3 archived threads and their transcripts?",
+      confirmLabel: "Delete",
+      danger: true,
+    });
     expect(sessions.deleteMany).toHaveBeenCalledWith(
       keys.map((key) => ({
         key,
@@ -254,11 +270,11 @@ describe("sessions page archived deletion", () => {
       { count: 1, sessions: [archived] } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteAllArchived();
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(showConfirmDialog).not.toHaveBeenCalled();
     expect(sessions.deleteMany).not.toHaveBeenCalled();
     expect(page.error).toContain("archived session enumeration");
   });
@@ -283,11 +299,11 @@ describe("sessions page archived deletion", () => {
       { count: 1, sessions: [archived] } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteAllArchived();
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(showConfirmDialog).not.toHaveBeenCalled();
     expect(sessions.deleteMany).not.toHaveBeenCalled();
     expect(page.error).toContain("archived session enumeration was incomplete");
   });
@@ -322,7 +338,7 @@ describe("sessions page archived deletion", () => {
         "archived",
         linked.key,
       );
-      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
       await page.deleteAllArchived();
 
@@ -333,7 +349,11 @@ describe("sessions page archived deletion", () => {
       } else {
         expect(options).not.toHaveProperty("agentId");
       }
-      expect(confirm).toHaveBeenCalledWith("Delete 2 archived threads and their transcripts?");
+      expect(showConfirmDialog).toHaveBeenCalledWith({
+        message: "Delete 2 archived threads and their transcripts?",
+        confirmLabel: "Delete",
+        danger: true,
+      });
       expect(sessions.deleteMany).toHaveBeenCalledWith(
         [linked.key, other.key].map((key) => ({
           key,

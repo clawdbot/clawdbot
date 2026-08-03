@@ -2,7 +2,7 @@ import { hasValidIsoCalendarComponents } from "../../shared/iso-time.js";
 
 // Offsetless zoned datetime parsing interprets local wall-clock ISO strings in
 // an explicit IANA time zone and rejects impossible DST times.
-const OFFSETLESS_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/;
+const OFFSETLESS_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}(?:[Tt]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)?$/;
 
 type OffsetlessIsoDateTimeParts = {
   year: number;
@@ -23,9 +23,7 @@ export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: stri
     return null;
   }
   try {
-    getZonedDateTimeParts(Date.now(), timeZone);
-
-    const naiveDate = new Date(`${raw}Z`);
+    const naiveDate = new Date(`${raw}${raw.length === 10 ? "T00:00:00" : ""}Z`);
     const naiveMs = naiveDate.getTime();
     if (Number.isNaN(naiveMs)) {
       return null;
@@ -42,16 +40,16 @@ export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: stri
       millisecond: naiveDate.getUTCMilliseconds(),
     };
 
-    // Re-check the offset at the first candidate instant so DST boundaries
-    // land on the intended wall-clock time instead of drifting by one hour.
-    const firstOffsetMs = getTimeZoneOffsetMs(naiveMs, timeZone);
-    const candidateMs = naiveMs - firstOffsetMs;
-    const finalOffsetMs = getTimeZoneOffsetMs(candidateMs, timeZone);
-    const resolvedMs = naiveMs - finalOffsetMs;
-    if (!matchesOffsetlessIsoDateTimeParts(resolvedMs, timeZone, expectedParts)) {
-      return null;
-    }
-    return new Date(resolvedMs).toISOString();
+    // Probe both sides of the local day so non-hour DST folds use their first
+    // real occurrence while nonexistent spring-forward times remain rejected.
+    const matchingInstants = [-86_400_000, 0, 86_400_000]
+      .map((shiftMs) => naiveMs - getTimeZoneOffsetMs(naiveMs + shiftMs, timeZone))
+      .filter((candidateMs) =>
+        matchesOffsetlessIsoDateTimeParts(candidateMs, timeZone, expectedParts),
+      );
+    return matchingInstants.length > 0
+      ? new Date(Math.min(...matchingInstants)).toISOString()
+      : null;
   } catch {
     return null;
   }
@@ -102,7 +100,6 @@ function getZonedDateTimeParts(utcMs: number, timeZone: string): OffsetlessIsoDa
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    hour12: false,
     hourCycle: "h23",
   }).formatToParts(utcDate);
   const getNumericPart = (type: string) => {

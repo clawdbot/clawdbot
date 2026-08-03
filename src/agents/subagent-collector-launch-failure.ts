@@ -1,22 +1,80 @@
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { GatewayDrainingError } from "../process/gateway-work-admission.js";
+import {
+  GatewayDrainingError,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../process/gateway-work-admission.js";
 import { summarizeSpawnError } from "./spawn-pipeline.js";
 import {
   completeCollectorLaunchCleanup,
   settleFailedQueuedSubagentLaunch,
+  startQueuedSubagentRun,
 } from "./subagent-registry.js";
 import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
-import { cleanupFailedSpawnBeforeAgentStart } from "./subagent-spawn-cleanup.js";
+import {
+  cleanupFailedSpawnBeforeAgentStart,
+  terminateAcceptedCollectorRun,
+} from "./subagent-spawn-cleanup.js";
 import { rollbackPreparedContextEngine } from "./subagent-spawn-context.js";
+import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { emitSessionLifecycleEvent } from "./subagent-spawn.runtime.js";
-import type { SwarmStartFailureDisposition } from "./swarm-scheduler.js";
+import { activateSwarmRun, type SwarmStartFailureDisposition } from "./swarm-scheduler.js";
 
 const log = createSubsystemLogger("agents/subagent-collector-launch-failure");
 const COLLECTOR_LAUNCH_SETTLEMENT_MAX_ATTEMPTS = isFastTestRuntimeEnv() ? 3 : 30;
 
-export async function handleCollectorLaunchStartFailure(params: {
+export function activateCollectorLaunch(params: {
+  groupId: string;
+  childRunId: string;
+  launchChildRun: () => Promise<unknown>;
+  emitSpawnLifecycleHooks: (runId: string) => Promise<void>;
+  contextEnginePreparation?: SubagentSpawnPreparation;
+  childSessionKey: string;
+  attachmentAbsDir?: string;
+  sessionIdentity?: ProvisionalSessionCleanupIdentity;
+  threadBindingReady: boolean;
+  requesterInternalKey: string;
+}): void {
+  let launchTerminationConfirmed = false;
+  activateSwarmRun({
+    groupId: params.groupId,
+    runId: params.childRunId,
+    start: async () => {
+      await runWithGatewayIndependentRootWorkContinuation(async () => {
+        const response = await params.launchChildRun();
+        const gatewayRunId = readGatewayRunId(response) ?? params.childRunId;
+        try {
+          if (!startQueuedSubagentRun(params.childRunId, gatewayRunId)) {
+            throw new Error("collector registry row could not transition from queued to running");
+          }
+        } catch (error) {
+          await terminateAcceptedCollectorRun({
+            childSessionKey: params.childSessionKey,
+            gatewayRunId,
+          });
+          launchTerminationConfirmed = true;
+          throw error;
+        }
+        await params.emitSpawnLifecycleHooks(gatewayRunId);
+      });
+    },
+    onStartFailure: async (error) =>
+      await handleCollectorLaunchStartFailure({
+        error,
+        contextEnginePreparation: params.contextEnginePreparation,
+        childSessionKey: params.childSessionKey,
+        childRunId: params.childRunId,
+        attachmentAbsDir: params.attachmentAbsDir,
+        sessionIdentity: params.sessionIdentity,
+        threadBindingReady: params.threadBindingReady,
+        launchTerminationConfirmed,
+        requesterInternalKey: params.requesterInternalKey,
+      }),
+  });
+}
+
+async function handleCollectorLaunchStartFailure(params: {
   error: unknown;
   contextEnginePreparation?: SubagentSpawnPreparation;
   childSessionKey: string;

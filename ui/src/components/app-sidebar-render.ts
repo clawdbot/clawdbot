@@ -101,6 +101,15 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .approvalCount=${approvalCount}
         .switcherAvailable=${cardAgents.length > 1}
         .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
+        @contextmenu=${(event: MouseEvent) => {
+          event.preventDefault();
+          if (host.sidebarMenus.agentMenuPosition !== null) {
+            return;
+          }
+          const card = event.currentTarget as HTMLElement;
+          const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
+          host.sidebarMenus.toggleAgentMenu(trigger);
+        }}
       ></openclaw-sidebar-agent-card>
       <div class="sidebar-brand__actions">
         <openclaw-tooltip

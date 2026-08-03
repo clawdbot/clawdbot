@@ -9,7 +9,7 @@ import {
   restoreFinalizedStartupRun,
   STARTUP_INTERRUPTED_ERROR,
 } from "./startup-run-repair.js";
-import type { CronServiceState } from "./state.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import { tryFindCronTaskRunIdForRecovery, tryFindFinalizedCronTaskRun } from "./task-runs.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
@@ -26,7 +26,7 @@ export async function start(state: CronServiceState) {
   const interruptedRuns: InterruptedStartupRun[] = [];
   const completedJobIdsToDelete = new Set<string>();
   let repairedAnyStartupRun = false;
-  const postPersistAutoDisableNotifications: Array<() => void> = [];
+  const postPersistNotifications: DeferredCronNotifications = [];
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (state.stopped) {
@@ -57,7 +57,7 @@ export async function start(state: CronServiceState) {
             entry: finalized.entry,
             ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
             ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
-            deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+            deferredNotifications: postPersistNotifications,
           });
           // Skip only the old invocation; a distinct overdue replacement
           // must remain eligible for normal one-shot startup catch-up.
@@ -77,7 +77,7 @@ export async function start(state: CronServiceState) {
           taskRunId,
           runningAtMs,
           nowMs,
-          deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+          deferredNotifications: postPersistNotifications,
         });
         if (interrupted.replacementAtMs === undefined) {
           interruptedJobIds.add(job.id);
@@ -94,10 +94,10 @@ export async function start(state: CronServiceState) {
         state,
         repairedAnyStartupRun ? undefined : { stateOnly: true },
       );
-      // Recovery alerts describe the repaired durable row, so never publish
-      // them until the startup write has committed successfully.
+      // Recovery notifications describe repaired durable rows, so never
+      // publish them until the startup write has committed successfully.
       if (persisted) {
-        for (const notify of postPersistAutoDisableNotifications) {
+        for (const notify of postPersistNotifications) {
           notify();
         }
       }
@@ -120,10 +120,10 @@ export async function start(state: CronServiceState) {
     if (state.stopped) {
       return;
     }
-    const postPersistMaintenanceNotifications: Array<() => void> = [];
+    const postPersistMaintenanceNotifications: DeferredCronNotifications = [];
     const changed = recomputeNextRunsForMaintenance(state, {
       recomputeExpired: true,
-      deferredAutoDisableNotifications: postPersistMaintenanceNotifications,
+      deferredNotifications: postPersistMaintenanceNotifications,
     });
     if (changed) {
       const persisted = await persist(state);

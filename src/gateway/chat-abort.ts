@@ -264,7 +264,7 @@ function normalizeActiveAgentId(agentId: string | undefined): string | undefined
  */
 export function resolveInFlightRunSnapshot(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunState: Pick<ChatRunState, "runs">;
+  chatRunState: Pick<ChatRunState, "resolveBuffer" | "runs">;
   requestedSessionKey: string;
   canonicalSessionKey: string;
   agentId?: string;
@@ -330,10 +330,10 @@ export function resolveInFlightRunSnapshot(params: {
   // should still adopt the run and show a `streaming` status (not idle) and
   // render the result cleanly when it lands.
   const run = params.chatRunState.runs.get(best.runId);
-  const bufferedText = run?.buffer ?? "";
-  const projected = projectLiveAssistantBufferedText(bufferedText, {
-    suppressLeadFragments: true,
-  });
+  const projected = projectLiveAssistantBufferedText(
+    params.chatRunState.resolveBuffer(best.runId).text,
+    { suppressLeadFragments: true },
+  );
   const plan = run?.planSnapshot;
   return {
     runId: best.runId,
@@ -383,7 +383,7 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
 
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunState: Pick<ChatRunState, "clearRun" | "getOrCreate" | "runs">;
+  chatRunState: Pick<ChatRunState, "clearRun" | "getOrCreate" | "resolveBuffer" | "runs">;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -533,7 +533,7 @@ export function abortChatRunById(
     return { aborted: false };
   }
 
-  const bufferedText = ops.chatRunState.runs.get(runId)?.buffer;
+  const bufferedText = ops.chatRunState.resolveBuffer(runId).text;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
   if (stopReason) {

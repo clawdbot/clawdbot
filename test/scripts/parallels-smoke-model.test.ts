@@ -1246,15 +1246,19 @@ kill -TERM "$$"`,
 
     withEnv(fakePrlctlEnv(tempDir), () => {
       const linuxPhases = new ExhaustedCleanupPhaseRunner();
-      const linux = new LinuxGuest("Linux VM", linuxPhases as unknown as PhaseRunner);
+      const cleanupLinux = new LinuxGuest("Linux VM", linuxPhases as unknown as PhaseRunner);
 
-      expect(() => linux.bash("echo linux")).toThrow("Linux guest command failed with exit code 1");
+      expect(() => cleanupLinux.bash("echo linux")).toThrow(
+        "Linux guest command failed with exit code 1",
+      );
       expect(linuxPhases.remainingTimeoutCalls).toBe(2);
 
       const macosPhases = new ExhaustedCleanupPhaseRunner();
-      const macos = createMacosGuest(macosPhases as unknown as PhaseRunner);
+      const cleanupMacos = createMacosGuest(macosPhases as unknown as PhaseRunner);
 
-      expect(() => macos.sh("echo macos")).toThrow("macOS guest command failed with exit code 1");
+      expect(() => cleanupMacos.sh("echo macos")).toThrow(
+        "macOS guest command failed with exit code 1",
+      );
       expect(macosPhases.remainingTimeoutCalls).toBe(2);
     });
 
@@ -1274,9 +1278,9 @@ kill -TERM "$$"`,
         append: () => undefined,
         remainingTimeoutMs: (fallbackMs?: number) => fallbackMs ?? 30_000,
       };
-      const macos = createMacosGuest(phases as unknown as PhaseRunner);
+      const unavailableMacos = createMacosGuest(phases as unknown as PhaseRunner);
 
-      expect(() => macos.exec(["true"])).toThrow(
+      expect(() => unavailableMacos.exec(["true"])).toThrow(
         "macOS guest command failed: Parallels guest session unavailable",
       );
     });
@@ -1284,7 +1288,7 @@ kill -TERM "$$"`,
 
   it("streams full phase logs to disk while bounding the failure tail", async () => {
     const runDir = makeTempDir(tempDirs, "openclaw-parallels-phase-");
-    const phaseRunner = new PhaseRunner(runDir, 128);
+    const logPhaseRunner = new PhaseRunner(runDir, 128);
     const writes: string[] = [];
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
       writes.push(String(chunk));
@@ -1293,9 +1297,9 @@ kill -TERM "$$"`,
 
     try {
       await expect(
-        phaseRunner.phase("noisy", 30, () => {
-          phaseRunner.append(`old-${"x".repeat(256)}`);
-          phaseRunner.append("recent failure");
+        logPhaseRunner.phase("noisy", 30, () => {
+          logPhaseRunner.append(`old-${"x".repeat(256)}`);
+          logPhaseRunner.append("recent failure");
           throw new Error("phase failed");
         }),
       ).rejects.toThrow("phase failed");
@@ -1314,12 +1318,12 @@ kill -TERM "$$"`,
 
   it("clamps oversized phase timers before scheduling", async () => {
     const runDir = makeTempDir(tempDirs, "openclaw-parallels-phase-timeout-");
-    const phaseRunner = new PhaseRunner(runDir, 128);
+    const timerPhaseRunner = new PhaseRunner(runDir, 128);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
     try {
       await expect(
-        phaseRunner.phase("oversized", MAX_TIMER_TIMEOUT_SECONDS + 1, () => undefined),
+        timerPhaseRunner.phase("oversized", MAX_TIMER_TIMEOUT_SECONDS + 1, () => undefined),
       ).resolves.toBeUndefined();
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
       expect(readFileSync(join(runDir, "phase-timings.json"), "utf8")).toContain(

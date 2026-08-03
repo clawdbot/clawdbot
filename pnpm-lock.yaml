@@ -96,6 +96,9 @@ importers:
       '@silvia-odwyer/photon-node':
         specifier: 0.3.4
         version: 0.3.4
+      '@trycua/cua-driver':
+        specifier: 0.14.1
+        version: 0.14.1
       acorn:
         specifier: 8.17.0
         version: 8.17.0
@@ -1279,6 +1282,9 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
+      '@openclaw/memory-core':
+        specifier: workspace:*
+        version: link:../memory-core
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk

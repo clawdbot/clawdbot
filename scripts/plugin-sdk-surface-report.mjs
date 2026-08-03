@@ -269,7 +269,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      82,
+      // -1: text-runtime now names its global-singleton exports explicitly.
+      81,
       env,
     ),
   };

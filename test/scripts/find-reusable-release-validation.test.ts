@@ -316,24 +316,27 @@ function normalizedEvidence(options: {
     ["productPerformance", "204", 3, 2, "OpenClaw Performance", "openclaw-performance.yml", ""],
   ] as const;
   const children = roles.map(
-    ([role, childRunId, runAttempt, sourceParentAttempt, name, workflow, suffix]) => ({
-      conclusion: "success",
-      dispatchNonce: `full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
-      displayTitle: `${name} full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
-      event: "workflow_dispatch",
-      headBranch: workflowRef,
-      parentJobId: `job-${role}`,
-      path: `.github/workflows/${workflow}`,
-      role,
-      runAttempt,
-      runId: childRunId,
-      sourceParentAttempt,
-      sourceParentRunId: runId,
-      status: "completed",
-      url: `https://example.test/runs/${childRunId}`,
-      workflowSha: producerSha,
-      ...(role === "productPerformance" ? { reportPublication: "artifact-only" } : {}),
-    }),
+    ([role, childRunId, runAttempt, sourceParentAttempt, name, workflow, suffix]) =>
+      Object.assign(
+        {
+          conclusion: "success",
+          dispatchNonce: `full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
+          displayTitle: `${name} full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
+          event: "workflow_dispatch",
+          headBranch: workflowRef,
+          parentJobId: `job-${role}`,
+          path: `.github/workflows/${workflow}`,
+          role,
+          runAttempt,
+          runId: childRunId,
+          sourceParentAttempt,
+          sourceParentRunId: runId,
+          status: "completed",
+          url: `https://example.test/runs/${childRunId}`,
+          workflowSha: producerSha,
+        },
+        role === "productPerformance" ? { reportPublication: "artifact-only" } : {},
+      ),
   );
   return {
     children,
@@ -485,11 +488,15 @@ function runResolver(args: {
         `repos/${REPOSITORY}/compare/${args.compareBaseSha}...${args.targetSha}`,
       ),
       JSON.stringify({
-        files: (args.compareFiles ?? ["CHANGELOG.md"]).map((filename, index) => ({
-          filename,
-          status: args.compareRenamed && index === 0 ? "renamed" : "modified",
-          ...(args.compareRenamed && index === 0 ? { previous_filename: "src/index.ts" } : {}),
-        })),
+        files: (args.compareFiles ?? ["CHANGELOG.md"]).map((filename, index) =>
+          Object.assign(
+            {
+              filename,
+              status: args.compareRenamed && index === 0 ? "renamed" : "modified",
+            },
+            args.compareRenamed && index === 0 ? { previous_filename: "src/index.ts" } : {},
+          ),
+        ),
         merge_base_commit: { sha: args.compareBaseSha },
         status: args.compareStatus ?? "ahead",
       }),
@@ -819,10 +826,10 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
         record.current.artifact.digest = "sha256:not-a-digest";
       },
     },
-  ])("rejects normalized evidence that is not reusable: $label", ({ mutate }) => {
+  ])("rejects normalized evidence that is not reusable: $label", (testCase) => {
     const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({ targetSha: priorSha });
-    mutate(record);
+    testCase.mutate(record);
     const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
     const result = runResolver({

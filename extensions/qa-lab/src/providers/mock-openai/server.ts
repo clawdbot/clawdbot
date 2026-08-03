@@ -9,6 +9,7 @@ import {
   listMockOpenAiServerModelIds,
 } from "../shared/mock-model-config.js";
 import { buildMessagesPayload } from "./mock-anthropic-messages.js";
+import { convertAnthropicMessagesToResponsesInput } from "./mock-anthropic-wire.js";
 import {
   buildAssistantText,
   isCanonicalCompactionRetryWriteResult,
@@ -172,6 +173,7 @@ const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
 const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
 const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
+const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -541,6 +543,10 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
+  const isActiveFailedToolTerminalRecovery =
+    QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt) ||
+    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+      QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(allInputText));
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
@@ -754,6 +760,19 @@ async function buildResponsesPayload(
       });
     }
     return buildAssistantEvents("");
+  }
+  if (isActiveFailedToolTerminalRecovery) {
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      if (!allInputText.includes("state that failure plainly and do not claim it succeeded")) {
+        return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
+      }
+      const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
+      return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
+    }
+    if (!hasCompletedToolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "qa-failed-terminal-missing-file.txt" });
+    }
+    return buildAssistantEvents("FAILED-TOOL-TERMINAL-WAS-REPLAYED");
   }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
@@ -1807,12 +1826,32 @@ export async function startQaMockOpenAiServer(params?: {
 }) {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
-  const scenarioState: MockScenarioState = {
-    anthropicThinkingErrorScenarioKeys: new Set<string>(),
-    subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
-    subagentFanoutPhase: 0,
-    subagentHandoffSpawned: false,
-    toolLoopReadAttempts: 0,
+  const scenarioStates = new Map<string, MockScenarioState>();
+  const scenarioStateFor = (body: Record<string, unknown>): MockScenarioState => {
+    const input = Array.isArray(body.input)
+      ? body.input
+      : convertAnthropicMessagesToResponsesInput({
+          system: body.system as AnthropicMessagesRequest["system"],
+          messages: [],
+        });
+    const systemPrompt = extractAllRequestTexts(
+      input.filter((item) => item.role === "developer" || item.role === "system"),
+      body,
+    );
+    const sessionId =
+      /\bRuntime:\s*[^\n]*\bsessionId=([^\s|]+)/u.exec(systemPrompt)?.[1] ??
+      (body.client_metadata as { session_id?: unknown } | undefined)?.session_id;
+    const key = typeof sessionId === "string" ? sessionId : "";
+    // Runtime session identity survives provider switches and cache-boundary changes.
+    const state = scenarioStates.get(key) ?? {
+      anthropicThinkingErrorScenarioKeys: new Set<string>(),
+      subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
+      subagentFanoutPhase: 0,
+      subagentHandoffSpawned: false,
+      toolLoopReadAttempts: 0,
+    };
+    scenarioStates.set(key, state);
+    return state;
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
@@ -1845,7 +1884,7 @@ export async function startQaMockOpenAiServer(params?: {
     inflightRequests.set(inflightRequestId, { prompt, allInputText });
     let events: StreamEvent[];
     try {
-      events = await buildResponsesPayload(request.body, scenarioState);
+      events = await buildResponsesPayload(request.body, scenarioStateFor(request.body));
     } finally {
       inflightRequests.delete(inflightRequestId);
     }
@@ -2067,6 +2106,7 @@ export async function startQaMockOpenAiServer(params?: {
           });
           return;
         }
+        const scenarioState = scenarioStateFor(body as Record<string, unknown>);
         const {
           events,
           input,

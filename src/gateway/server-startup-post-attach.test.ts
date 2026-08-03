@@ -887,6 +887,70 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
+  it("starts and can cancel Control UI preparation while startup plugins are pending", async () => {
+    let finishPluginStartup: (() => void) | undefined;
+    const pluginStartup = new Promise<void>((resolve) => {
+      finishPluginStartup = resolve;
+    });
+    let buildSignal: AbortSignal | undefined;
+    const startControlUiBuild = vi.fn(
+      async (_isStopped: () => boolean, signal: AbortSignal) =>
+        await new Promise<void>((resolve) => {
+          buildSignal = signal;
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    const stopControlUiBuild = vi.fn(async () => {});
+    const onGatewayLifetimeSidecars = vi.fn();
+    const startGatewaySidecarsPending = vi.fn(async () => ({
+      pluginServices: null,
+      postReadySidecars: [],
+    }));
+    const baseParams = createPostAttachParams();
+    const loadStartupPlugins = vi.fn(async () => {
+      await pluginStartup;
+      return { pluginRegistry: baseParams.pluginRegistry, gatewayMethods: [] };
+    });
+
+    const runtimePromise = startGatewayPostAttachRuntime(
+      {
+        ...baseParams,
+        loadStartupPlugins,
+        onGatewayLifetimeSidecars,
+        controlUiRootLifecycle: {
+          state: { kind: "preparing" },
+          start: startControlUiBuild,
+          stop: stopControlUiBuild,
+        },
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsPending }),
+    );
+
+    // Publication is synchronous, so shutdown can observe ownership even
+    // while the first CA/plugin startup await has not completed.
+    expect(onGatewayLifetimeSidecars).toHaveBeenCalledOnce();
+    const earlySidecar = onGatewayLifetimeSidecars.mock.calls[0]?.[0]?.[0];
+    expect(earlySidecar).toBeDefined();
+
+    await waitForGatewayTestState(() => {
+      expect(loadStartupPlugins).toHaveBeenCalledOnce();
+      expect(startControlUiBuild).toHaveBeenCalledOnce();
+    });
+    expect(startGatewaySidecarsPending).not.toHaveBeenCalled();
+    expect(buildSignal?.aborted).toBe(false);
+
+    await earlySidecar.stop();
+    expect(buildSignal?.aborted).toBe(true);
+    expect(stopControlUiBuild).toHaveBeenCalledOnce();
+
+    finishPluginStartup?.();
+    await runtimePromise;
+
+    expect(onGatewayLifetimeSidecars).toHaveBeenCalledTimes(2);
+    expect(onGatewayLifetimeSidecars.mock.calls[1]?.[0]).toContain(earlySidecar);
+    expect(startControlUiBuild).toHaveBeenCalledOnce();
+  });
+
   it("loads startup plugins after bind and before channel sidecars", async () => {
     const events: string[] = [];
     const trace = createStartupTraceRecorder();

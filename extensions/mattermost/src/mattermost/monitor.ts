@@ -60,6 +60,17 @@ type MonitorMattermostOpts = {
   webSocketFactory?: MattermostWebSocketFactory;
 };
 
+function publishMattermostRecoveringStatus(
+  statusSink: MonitorMattermostOpts["statusSink"],
+  error: unknown,
+): void {
+  statusSink?.({
+    lastError: String(error),
+    connected: false,
+    lifecycle: "recovering",
+  });
+}
+
 export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}): Promise<void> {
   const core = getMattermostRuntime();
   const runtime =
@@ -112,7 +123,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       shouldReconnect: ({ outcome }) => outcome === "rejected",
       onError: (err) => {
         runtime.error?.(`mattermost: API auth failed: ${String(err)}`);
-        opts.statusSink?.({ lastError: String(err), connected: false });
+        publishMattermostRecoveringStatus(opts.statusSink, err);
       },
       onReconnect: (delayMs) => {
         runtime.log?.(`mattermost: API not accessible, retrying in ${Math.round(delayMs / 1000)}s`);
@@ -348,7 +359,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       jitterRatio: 0.2,
       onError: (err) => {
         runtime.error?.(`mattermost connection failed: ${String(err)}`);
-        opts.statusSink?.({ lastError: String(err), connected: false });
+        publishMattermostRecoveringStatus(opts.statusSink, err);
       },
       onReconnect: (delayMs) => {
         runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);

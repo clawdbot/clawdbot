@@ -14,7 +14,7 @@ import {
 import type { SpawnSubagentResult } from "../agents/subagent-spawn-contract.js";
 import { resolveSubagentTargetPolicy } from "../agents/subagent-target-policy.js";
 import { normalizeSubagentTaskName } from "../agents/subagent-task-name.js";
-import { getAgentRunContext } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import {
   getPluginRuntimeGatewayRequestScope,

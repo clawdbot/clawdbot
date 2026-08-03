@@ -504,6 +504,7 @@ enum class GatewayMethod(
   MemorySearch("memory.search"),
   SkillsProposalsEventsList("skills.proposals.events.list"),
   SkillsProposalsEvaluate("skills.proposals.evaluate"),
+  HooksStatus("hooks.status"),
 }
 
 enum class GatewayEvent(

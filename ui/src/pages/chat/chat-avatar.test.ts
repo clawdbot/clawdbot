@@ -86,6 +86,22 @@ describe("renderChatAvatar", () => {
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent?.trim()).toBe("AB");
   });
+
+  it("swaps a failing local user image to initials instead of a broken image", () => {
+    const container = document.createElement("div");
+    render(
+      renderChatAvatar("user", undefined, { name: "Buns", avatar: "/avatar/user" }),
+      container,
+    );
+    const slot = container.querySelector<HTMLElement>(".chat-avatar-slot");
+    const image = slot?.querySelector("img");
+    expect(image?.getAttribute("src")).toBe("/avatar/user");
+    expect(slot?.classList.contains("is-fallback")).toBe(false);
+
+    image?.dispatchEvent(new Event("error"));
+    expect(slot?.classList.contains("is-fallback")).toBe(true);
+    expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("B");
+  });
 });
 
 describe("refreshChatAvatar", () => {

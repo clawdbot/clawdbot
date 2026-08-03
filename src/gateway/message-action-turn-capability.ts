@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isDeliverableMessageChannel,
@@ -88,13 +89,6 @@ function copyToolContext(
   };
 }
 
-function evictOldestCapability(): void {
-  const oldest = capabilitiesByToken.keys().next().value;
-  if (typeof oldest === "string") {
-    capabilitiesByToken.delete(oldest);
-  }
-}
-
 function sweepExpiredMessageActionTurnCapabilities(nowMs: number = Date.now()): number {
   let removed = 0;
   for (const [token, capability] of capabilitiesByToken) {
@@ -131,11 +125,9 @@ export function mintMessageActionTurnCapability(params: {
   }
   const nowMs = params.nowMs ?? Date.now();
   sweepExpiredMessageActionTurnCapabilities(nowMs);
-  while (capabilitiesByToken.size >= MAX_ACTIVE_CAPABILITIES) {
-    // A bounded fail-closed store prevents abandoned long-running turns from
-    // growing process memory without creating a second persistent state path.
-    evictOldestCapability();
-  }
+  // A bounded fail-closed store prevents abandoned long-running turns from
+  // growing process memory without creating a second persistent state path.
+  pruneMapToMaxSize(capabilitiesByToken, MAX_ACTIVE_CAPABILITIES - 1);
   const token = randomBytes(32).toString("base64url");
   capabilitiesByToken.set(token, {
     agentId,

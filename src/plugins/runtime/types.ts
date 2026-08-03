@@ -45,7 +45,7 @@ type SubagentRunResult = {
 };
 
 type SubagentSpawnReservedParams = {
-  /** Existing requester session whose policy and lineage the child inherits. */
+  /** Existing requester session whose policy and lineage the child inherits. Raw UTF-8 must fit within 1024 bytes. */
   requesterSessionKey: string;
   /** Configured target agent authorized by the plugin-owned lease. */
   targetAgentId: string;
@@ -54,6 +54,7 @@ type SubagentSpawnReservedParams = {
   /** Run identity reserved by the plugin before calling core. Raw UTF-8 must fit within 1024 bytes. */
   runId: string;
   task: string;
+  /** Optional stable task alias matching [a-z][a-z0-9_-]{0,63}; "all" and "last" are reserved. */
   taskName?: string;
   /** Optional display label. Raw UTF-8 must fit within 1024 bytes. */
   label?: string;

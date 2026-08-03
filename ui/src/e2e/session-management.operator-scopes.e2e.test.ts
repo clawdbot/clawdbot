@@ -14,6 +14,14 @@ const archived = sessionRow(
   { archived: true },
 );
 
+async function confirmDelete(page: import("playwright").Page) {
+  await page
+    .locator("openclaw-modal-dialog")
+    .last()
+    .getByRole("button", { name: "Delete", exact: true })
+    .click();
+}
+
 async function openArchivedPage(operatorScopes: string[]) {
   const context = await suite.browser.newContext({
     locale: "en-US",
@@ -43,9 +51,9 @@ suite.define(() => {
       "operator.write",
     ]);
     try {
-      page.on("dialog", (dialog) => void dialog.accept());
       await expect.poll(() => deleteAll.isEnabled()).toBe(true);
       await deleteAll.click();
+      await confirmDelete(page);
 
       await expect(gateway.waitForRequest("sessions.delete")).resolves.toMatchObject({
         params: {

@@ -9,6 +9,7 @@ import {
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TaskSuggestion } from "../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { selectListTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
@@ -203,8 +204,6 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
   let activeActionKey: string | null = null;
   let revision = 0;
   let disposed = false;
-  let refreshInFlight: Promise<void> | null = null;
-  let refreshAgain = false;
 
   const closeActive = () => {
     if (activeOverlay) {
@@ -359,51 +358,46 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
     deps.requestRender();
   };
 
-  const refresh = async (): Promise<void> => {
-    if (disposed || !deps.client.listTaskSuggestions) {
-      return;
-    }
-    if (refreshInFlight) {
-      refreshAgain = true;
-      return await refreshInFlight;
-    }
-    refreshInFlight = (async () => {
-      do {
-        refreshAgain = false;
-        const startRevision = revision;
-        const listed = await deps.client.listTaskSuggestions?.();
-        if (disposed || !listed) {
-          return;
+  const refreshRunner = createTuiRefreshCoalescer(
+    async (requestRerun) => {
+      const startRevision = revision;
+      const listed = await deps.client.listTaskSuggestions?.();
+      if (disposed || !listed) {
+        return false;
+      }
+      // An event raced this snapshot. Retry instead of resurrecting resolved work.
+      if (revision !== startRevision) {
+        requestRerun();
+        return true;
+      }
+      suggestions.clear();
+      for (const value of listed) {
+        const suggestion = parseTuiTaskSuggestion(value);
+        if (suggestion) {
+          suggestions.set(suggestion.id, suggestion);
         }
-        // An event raced this snapshot. Retry instead of resurrecting resolved work.
-        if (revision !== startRevision) {
-          refreshAgain = true;
-          continue;
+      }
+      for (const id of hiddenIds) {
+        if (!suggestions.has(id)) {
+          hiddenIds.delete(id);
         }
-        suggestions.clear();
-        for (const value of listed) {
-          const suggestion = parseTuiTaskSuggestion(value);
-          if (suggestion) {
-            suggestions.set(suggestion.id, suggestion);
-          }
-        }
-        for (const id of hiddenIds) {
-          if (!suggestions.has(id)) {
-            hiddenIds.delete(id);
-          }
-        }
-      } while (refreshAgain);
+      }
+      return true;
+    },
+    () => {
       if (activeId && !suggestions.has(activeId)) {
         closeActive();
       }
       presentNext();
       deps.requestRender();
-    })();
-    try {
-      await refreshInFlight;
-    } finally {
-      refreshInFlight = null;
+    },
+  );
+
+  const refresh = async (): Promise<void> => {
+    if (disposed || !deps.client.listTaskSuggestions) {
+      return;
     }
+    await refreshRunner.run();
   };
 
   return {

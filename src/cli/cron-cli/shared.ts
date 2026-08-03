@@ -367,18 +367,7 @@ const formatIsoMinute = (iso: string) => {
   return `${isoStr.slice(0, 10)} ${isoStr.slice(11, 16)}Z`;
 };
 
-const formatSpan = (ms: number) => {
-  if (ms < 60_000) {
-    return "<1m";
-  }
-  if (ms < 3_600_000) {
-    return `${Math.round(ms / 60_000)}m`;
-  }
-  if (ms < 86_400_000) {
-    return `${Math.round(ms / 3_600_000)}h`;
-  }
-  return `${Math.round(ms / 86_400_000)}d`;
-};
+const formatSpan = (ms: number) => (ms < 60_000 ? "<1m" : formatDurationHuman(ms));
 
 const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   if (!ms) {

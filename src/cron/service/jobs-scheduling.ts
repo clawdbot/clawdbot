@@ -1,6 +1,7 @@
 /** Scheduling state and next-run computation for cron jobs. */
 import crypto from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
@@ -11,10 +12,10 @@ import {
 import { resolveCronStaggerMs } from "../stagger.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
-import { autoDisableCronJob, type DeferredAutoDisableNotifications } from "./auto-disable.js";
+import { autoDisableCronJob } from "./auto-disable.js";
 import { normalizePayloadToSystemText } from "./normalize.js";
 import { isQueuedCronRun, isQueuedForceCronRun } from "./run-admission.js";
-import type { CronServiceState } from "./state.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
@@ -99,14 +100,8 @@ function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   }
   const digest = crypto.createHash("sha256").update(jobId).digest();
   const offset = digest.readUInt32BE(0) % staggerMs;
-  if (staggerOffsetCache.size >= STAGGER_OFFSET_CACHE_MAX) {
-    // The offset is deterministic, so the cache can evict oldest entries
-    // without changing scheduling semantics for future lookups.
-    const first = staggerOffsetCache.keys().next();
-    if (!first.done) {
-      staggerOffsetCache.delete(first.value);
-    }
-  }
+  // The offset is deterministic, so FIFO eviction does not change future scheduling semantics.
+  pruneMapToMaxSize(staggerOffsetCache, STAGGER_OFFSET_CACHE_MAX - 1);
   staggerOffsetCache.set(cacheKey, offset);
   return offset;
 }
@@ -359,7 +354,7 @@ export function recordScheduleComputeError(params: {
   state: CronServiceState;
   job: CronJob;
   err: unknown;
-  deferredAutoDisableNotifications?: DeferredAutoDisableNotifications;
+  deferredNotifications?: DeferredCronNotifications;
 }): boolean {
   const { state, job, err } = params;
   const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
@@ -377,7 +372,7 @@ export function recordScheduleComputeError(params: {
       atMs: state.deps.nowMs(),
       consecutiveErrors: errorCount,
       error: errText,
-      deferredNotifications: params.deferredAutoDisableNotifications,
+      deferredNotifications: params.deferredNotifications,
     });
     state.deps.log.error(
       { jobId: job.id, name: job.name, errorCount, err: errText },
@@ -539,7 +534,7 @@ function recomputeJobNextRunAtMs(params: {
   state: CronServiceState;
   job: CronJob;
   nowMs: number;
-  deferredAutoDisableNotifications?: DeferredAutoDisableNotifications;
+  deferredNotifications?: DeferredCronNotifications;
 }) {
   let changed = false;
   try {
@@ -572,7 +567,7 @@ function recomputeJobNextRunAtMs(params: {
         state: params.state,
         job: params.job,
         err,
-        deferredAutoDisableNotifications: params.deferredAutoDisableNotifications,
+        deferredNotifications: params.deferredNotifications,
       })
     ) {
       changed = true;
@@ -615,7 +610,7 @@ export function recomputeNextRunsForMaintenance(
     nowMs?: number;
     repairFutureCronNextRunAtMs?: boolean;
     preserveExpiredPacedNextRunJobId?: string;
-    deferredAutoDisableNotifications?: DeferredAutoDisableNotifications;
+    deferredNotifications?: DeferredCronNotifications;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
@@ -625,7 +620,7 @@ export function recomputeNextRunsForMaintenance(
       state,
       job,
       nowMs,
-      deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
+      deferredNotifications: opts?.deferredNotifications,
     });
   return walkSchedulableJobs(
     state,

@@ -9,11 +9,32 @@ import {
   logAnnounceGiveUp,
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
+  resolveAnnounceRetryDelayMs,
   resolveSubagentArchiveAtMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
+import {
+  activateSwarmRun,
+  releaseSwarmRun,
+  removeQueuedSwarmRun,
+  reserveSwarmRun,
+} from "./swarm-scheduler.js";
+
+const ORPHAN_RECONCILE_SCHEDULER_TEST_RUN_IDS = [
+  "run-orphan-held-collector",
+  "run-orphan-next-collector",
+  "run-stale-orphan-held-collector",
+  "run-stale-orphan-next-collector",
+];
+
+afterEach(() => {
+  for (const runId of ORPHAN_RECONCILE_SCHEDULER_TEST_RUN_IDS) {
+    removeQueuedSwarmRun(runId);
+    releaseSwarmRun(runId);
+  }
+});
 
 function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
@@ -29,6 +50,14 @@ function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRun
     ...overrides,
   };
 }
+
+describe("resolveAnnounceRetryDelayMs", () => {
+  it("preserves the exact retry schedule through attempt 10", () => {
+    expect(
+      Array.from({ length: 10 }, (_, index) => resolveAnnounceRetryDelayMs(index + 1)),
+    ).toEqual([1_000, 2_000, 4_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000]);
+  });
+});
 
 describe("capFrozenResultText", () => {
   it("preserves a valid UTF-8 prefix within the frozen-result byte budget", () => {
@@ -215,6 +244,128 @@ describe("reconcileOrphanedRun", () => {
     expect(entry.execution).toEqual({ status: "running", startedAt: 1_000 });
     expect(runs.has(entry.runId)).toBe(false);
     expect(resumedRuns.has(entry.runId)).toBe(false);
+  });
+
+  it("releases an orphaned collector scheduler slot so the next queued collector starts", async () => {
+    const firstRunId = "run-orphan-held-collector";
+    const secondRunId = "run-orphan-next-collector";
+    const groupId = "orphan-reconcile-held-slot";
+    const firstStart = vi.fn(async () => {
+      throw new Error("collector launch settlement unresolved");
+    });
+    const secondStart = vi.fn(async () => {});
+
+    expect(
+      reserveSwarmRun({ groupId, runId: firstRunId, maxConcurrent: 1, activeRunIds: [] }),
+    ).toBe(true);
+    expect(
+      activateSwarmRun({
+        groupId,
+        runId: firstRunId,
+        start: firstStart,
+        onStartFailure: () => "hold",
+      }),
+    ).toBe("started");
+    await vi.waitFor(() => expect(firstStart).toHaveBeenCalledTimes(1));
+
+    expect(
+      reserveSwarmRun({ groupId, runId: secondRunId, maxConcurrent: 1, activeRunIds: [] }),
+    ).toBe(true);
+    expect(
+      activateSwarmRun({
+        groupId,
+        runId: secondRunId,
+        start: secondStart,
+        onStartFailure: () => "hold",
+      }),
+    ).toBe("queued");
+    expect(secondStart).not.toHaveBeenCalled();
+
+    const entry = createRunEntry({
+      runId: firstRunId,
+      collect: true,
+      swarmRunId: firstRunId,
+      schedulerSlotId: firstRunId,
+    });
+    const runs = new Map([[firstRunId, entry]]);
+
+    expect(
+      reconcileOrphanedRun({
+        runId: firstRunId,
+        entry,
+        reason: "missing-session-id",
+        source: "resume",
+        runs,
+        resumedRuns: new Set([firstRunId]),
+      }),
+    ).toBe(true);
+
+    expect(runs.has(firstRunId)).toBe(false);
+    await vi.waitFor(() => expect(secondStart).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not release a collector scheduler slot when the orphan row identity was replaced", async () => {
+    const firstRunId = "run-stale-orphan-held-collector";
+    const secondRunId = "run-stale-orphan-next-collector";
+    const groupId = "orphan-reconcile-stale-row";
+    const firstStart = vi.fn(async () => {
+      throw new Error("collector launch settlement unresolved");
+    });
+    const secondStart = vi.fn(async () => {});
+
+    expect(
+      reserveSwarmRun({ groupId, runId: firstRunId, maxConcurrent: 1, activeRunIds: [] }),
+    ).toBe(true);
+    expect(
+      activateSwarmRun({
+        groupId,
+        runId: firstRunId,
+        start: firstStart,
+        onStartFailure: () => "hold",
+      }),
+    ).toBe("started");
+    await vi.waitFor(() => expect(firstStart).toHaveBeenCalledTimes(1));
+    expect(
+      reserveSwarmRun({ groupId, runId: secondRunId, maxConcurrent: 1, activeRunIds: [] }),
+    ).toBe(true);
+    expect(
+      activateSwarmRun({
+        groupId,
+        runId: secondRunId,
+        start: secondStart,
+        onStartFailure: () => "hold",
+      }),
+    ).toBe("queued");
+
+    const staleEntry = createRunEntry({
+      runId: firstRunId,
+      collect: true,
+      swarmRunId: firstRunId,
+      schedulerSlotId: firstRunId,
+    });
+    const replacement = createRunEntry({
+      runId: firstRunId,
+      childSessionKey: "agent:main:subagent:replacement",
+      collect: true,
+      swarmRunId: firstRunId,
+      schedulerSlotId: firstRunId,
+    });
+    const runs = new Map([[firstRunId, replacement]]);
+
+    expect(
+      reconcileOrphanedRun({
+        runId: firstRunId,
+        entry: staleEntry,
+        reason: "missing-session-id",
+        source: "resume",
+        runs,
+        resumedRuns: new Set([firstRunId]),
+      }),
+    ).toBe(false);
+
+    expect(runs.get(firstRunId)).toBe(replacement);
+    await Promise.resolve();
+    expect(secondStart).not.toHaveBeenCalled();
   });
 });
 

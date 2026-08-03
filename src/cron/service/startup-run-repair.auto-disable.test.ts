@@ -46,7 +46,7 @@ describe("startup run repair auto-disable", () => {
       job,
       runningAtMs,
       nowMs,
-      deferredAutoDisableNotifications: deferredNotifications,
+      deferredNotifications,
     });
 
     expect(job).toMatchObject({

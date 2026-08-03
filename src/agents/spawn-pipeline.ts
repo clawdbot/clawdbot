@@ -38,8 +38,9 @@ export function summarizeSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
 }
 
-export async function runSpawnPipeline<TState>(params: {
+type SpawnPipelineParams<TState> = {
   adapter: SpawnBackendAdapter<TState>;
+  admissionReservation?: { release: () => void };
   buildRegistration: (state: TState, runId: string) => RegisterSubagentRunInput;
   hookRunner?: SubagentLifecycleHookRunner | null;
   progressOrigin?: SpawnProgressOrigin;
@@ -47,7 +48,21 @@ export async function runSpawnPipeline<TState>(params: {
       purpose: native passes the controller-side requester key, ACP its
       historical completion-owner key; do not collapse them. */
   progressSessionKey: string;
-}): Promise<SpawnPipelineResult<TState>> {
+};
+
+export async function runSpawnPipeline<TState>(
+  params: SpawnPipelineParams<TState>,
+): Promise<SpawnPipelineResult<TState>> {
+  try {
+    return await executeSpawnPipeline(params);
+  } finally {
+    params.admissionReservation?.release();
+  }
+}
+
+async function executeSpawnPipeline<TState>(
+  params: SpawnPipelineParams<TState>,
+): Promise<SpawnPipelineResult<TState>> {
   let state: TState;
   try {
     state = await params.adapter.initialize();
@@ -70,6 +85,8 @@ export async function runSpawnPipeline<TState>(params: {
     // can revalidate shared admission state without an interleaving await.
     registration = params.buildRegistration(state, runId);
     registerSubagentRun(registration);
+    // Registry insertion takes ownership synchronously; keeping the slot would double-count it.
+    params.admissionReservation?.release();
   } catch (error) {
     await params.adapter.cleanupOnFailure({ phase: "register", state, error });
     return { ok: false, phase: "register", state, runId, error };

@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../security/scan-paths.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
 
@@ -114,22 +115,12 @@ function getCachedFileScanResult(params: {
 }
 
 function setCachedFileScanResult(filePath: string, entry: FileScanCacheEntry): void {
-  if (FILE_SCAN_CACHE.size >= FILE_SCAN_CACHE_MAX) {
-    const oldest = FILE_SCAN_CACHE.keys().next();
-    if (!oldest.done) {
-      FILE_SCAN_CACHE.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(FILE_SCAN_CACHE, FILE_SCAN_CACHE_MAX - 1);
   FILE_SCAN_CACHE.set(filePath, entry);
 }
 
 function setCachedDirEntries(dirPath: string, entry: DirEntryCacheEntry): void {
-  if (DIR_ENTRY_CACHE.size >= DIR_ENTRY_CACHE_MAX) {
-    const oldest = DIR_ENTRY_CACHE.keys().next();
-    if (!oldest.done) {
-      DIR_ENTRY_CACHE.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(DIR_ENTRY_CACHE, DIR_ENTRY_CACHE_MAX - 1);
   DIR_ENTRY_CACHE.set(dirPath, entry);
 }
 
