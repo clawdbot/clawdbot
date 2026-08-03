@@ -6224,7 +6224,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             gatewayB.approvalId,
             gatewayDeviceId: "gateway-device-b")
 
-        await appModel.handleExecApprovalResolvedForCurrentGateway(
+        await appModel._test_handleExecApprovalResolvedForCurrentGateway(
             approvalId: gatewayA.approvalId,
             recoveryPushGatewayDeviceID: gatewayA.gatewayDeviceId)
 
@@ -6448,7 +6448,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             "approval-guidance-resolved",
             commandText: "echo guarded"))
 
-        await appModel.handleExecApprovalResolvedForCurrentGateway(
+        await appModel._test_handleExecApprovalResolvedForCurrentGateway(
             approvalId: "approval-guidance-resolved",
             recoveryPushGatewayDeviceID: nil)
 

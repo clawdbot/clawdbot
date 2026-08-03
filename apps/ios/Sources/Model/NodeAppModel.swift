@@ -7708,7 +7708,7 @@ extension NodeAppModel {
     }
 
     @discardableResult
-    func handleExecApprovalResolvedForCurrentGateway(
+    private func handleExecApprovalResolvedForCurrentGateway(
         approvalId: String,
         approvalKind: ApprovalKind = .exec,
         recoveryPushGatewayDeviceID: String? = nil,
@@ -10542,6 +10542,15 @@ extension NodeAppModel {
         self.watchExecApprovalPromptsByID.keys
             .map(\.rawValue)
             .sorted(by: Self.approvalIDSortsBefore)
+    }
+
+    func _test_handleExecApprovalResolvedForCurrentGateway(
+        approvalId: String,
+        recoveryPushGatewayDeviceID: String?) async
+    {
+        await self.handleExecApprovalResolvedForCurrentGateway(
+            approvalId: approvalId,
+            recoveryPushGatewayDeviceID: recoveryPushGatewayDeviceID)
     }
 
     func _test_refreshWatchExecApprovalSnapshotOnDemand(
