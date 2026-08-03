@@ -12,7 +12,7 @@ import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recover
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export const SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT = 25;
 export const SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP = 50;
 

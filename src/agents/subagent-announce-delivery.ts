@@ -204,6 +204,7 @@ function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
     reason: "source_owner_changed",
     error: "subagent source lifecycle changed before completion delivery",
     terminal: true,
+    disposition: "intentional_non_delivery",
   };
 }
 

@@ -118,6 +118,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         path: "none",
         reason: "source_owner_changed",
         terminal: true,
+        disposition: "intentional_non_delivery",
       };
     }
     // The delivery mock preserves the key branch: active Discord requester

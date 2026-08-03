@@ -34,6 +34,9 @@ export type SubagentAnnounceDeliveryResult = {
   enqueuedAt?: number;
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
+  // Stops fallback delivery when ownership changed or another terminal result
+  // makes trying a second path unsafe.
+  terminal?: boolean;
   disposition?: SubagentAnnounceDeliveryDisposition;
   missingMediaUrls?: string[];
   phases?: SubagentAnnounceDispatchPhaseResult[];
@@ -70,6 +73,7 @@ function mapSteerOutcomeToDeliveryResult(
       reason: "source_owner_changed",
       error: "subagent source lifecycle changed before completion delivery",
       terminal: true,
+      disposition: "intentional_non_delivery",
     };
   }
   return {
