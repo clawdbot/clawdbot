@@ -222,39 +222,38 @@ export function resolveConversationCapabilityProfile(
     params.runtimeToolAllowlist
       ? { allow: params.runtimeToolAllowlist }
       : undefined;
-  // The signed handoff projection already includes sender/group policy. Treat
-  // it as delegated authority so missing ingress identity cannot select wildcards.
-  const requesterPolicies = sessionHandoffPolicy
-    ? {
-        delegated: true as const,
-        requesterPolicySource: "session-handoff" as const,
-        inheritedToolPolicy: sessionHandoffPolicy,
-      }
-    : resolveRequesterToolPolicies({
-        config: params.config,
-        sessionKey: params.sessionKey,
-        subagentSessionKey,
-        agentId: effective.agentId,
-        spawnedBy: params.spawnedBy,
-        messageProvider,
-        groupId: trustedGroup.groupId,
-        groupChannel: trustedGroupChannel,
-        groupSpace: trustedGroupSpace,
-        accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-        inputProvenance: params.inputProvenance,
-        trustedInternalHandoff: params.trustedInternalHandoff,
-        sessionId: params.sessionId,
-        modelProvider: params.modelProvider,
-        modelId: params.modelId,
-        senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
-        groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
-        requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
-      });
-  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const resolvedRequesterPolicies = resolveRequesterToolPolicies({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    subagentSessionKey,
+    agentId: effective.agentId,
+    spawnedBy: params.spawnedBy,
+    messageProvider,
+    groupId: trustedGroup.groupId,
+    groupChannel: trustedGroupChannel,
+    groupSpace: trustedGroupSpace,
+    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+    inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
+    sessionId: params.sessionId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+    senderPolicyMode:
+      sessionHandoffPolicy || params.scheduledToolPolicy || isOwnerInternalSession
+        ? "never"
+        : "always",
+    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
+    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
+  });
+  // The signed projection already includes source sender/group policy. Keep
+  // target-owned subagent/inherited restrictions, but never select wildcards.
+  const groupPolicy = sessionHandoffPolicy ? undefined : resolvedRequesterPolicies.groupPolicy;
+  const senderPolicy = sessionHandoffPolicy ? undefined : resolvedRequesterPolicies.senderPolicy;
+  const { subagentPolicy, inheritedToolPolicy } = resolvedRequesterPolicies;
   const profilePolicy = resolveToolProfilePolicy(effective.profile);
   const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
   const configuredOverridePolicies = [
@@ -266,6 +265,7 @@ export function resolveConversationCapabilityProfile(
     senderPolicy,
     params.sandboxToolPolicy,
     subagentPolicy,
+    sessionHandoffPolicy,
   ];
   const runtimeToolPolicy = params.runtimeToolAllowlist
     ? { allow: params.runtimeToolAllowlist }
@@ -285,6 +285,7 @@ export function resolveConversationCapabilityProfile(
     providerProfilePolicy,
     ...configuredOverridePolicies,
     inheritedToolPolicy,
+    sessionHandoffPolicy,
     runtimeToolPolicy,
   ];
   const inheritancePolicies = [
@@ -292,6 +293,7 @@ export function resolveConversationCapabilityProfile(
     providerProfilePolicy,
     ...configuredOverridePolicies,
     inheritedToolPolicy,
+    sessionHandoffPolicy,
     runtimeToolPolicyForInheritance,
   ];
 
@@ -387,8 +389,10 @@ export function resolveConversationCapabilityProfile(
       sandboxPolicy: params.sandboxToolPolicy,
       subagentPolicy,
       inheritedToolPolicy,
-      delegated: requesterPolicies.delegated,
-      requesterPolicySource: requesterPolicies.requesterPolicySource,
+      delegated: sessionHandoffPolicy ? true : resolvedRequesterPolicies.delegated,
+      requesterPolicySource: sessionHandoffPolicy
+        ? "session-handoff"
+        : resolvedRequesterPolicies.requesterPolicySource,
       runtimeToolPolicyForInheritance,
       inheritancePolicies,
       explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),

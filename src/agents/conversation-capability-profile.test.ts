@@ -293,6 +293,20 @@ describe("resolveConversationCapabilityProfile", () => {
       expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
       expect(profile.policy.delegated).toBe(true);
       expect(profile.policy.requesterPolicySource).toBe("persisted-child");
+
+      const handoffProfile = resolveConversationCapabilityProfile({
+        config: { session: { store: storePath } },
+        sessionKey,
+        agentId: "main",
+        runtimeToolAllowlist: ["read", "sessions_send"],
+        trustedSessionHandoff: true,
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      });
+      expect(handoffProfile.policy.requesterPolicySource).toBe("session-handoff");
+      expect(handoffProfile.policy.inheritedToolPolicy).toEqual({ allow: ["image_generate"] });
+      expect(handoffProfile.policy.explicitToolAllowlist).toEqual(
+        expect.arrayContaining(["image_generate", "read", "sessions_send"]),
+      );
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -345,9 +359,8 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.requesterPolicySource).toBe("session-handoff");
     expect(profile.policy.senderPolicy).toBeUndefined();
     expect(profile.policy.groupPolicy).toBeUndefined();
-    expect(profile.policy.inheritedToolPolicy).toEqual({
-      allow: ["read", "sessions_send"],
-    });
+    expect(profile.policy.inheritedToolPolicy).toBeUndefined();
+    expect(profile.policy.explicitToolAllowlist).toContain("read");
   });
 
   it("does not classify the conversation as shared from a dropped caller group id", () => {

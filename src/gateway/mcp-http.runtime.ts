@@ -2,9 +2,11 @@
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
+import { replaceWithEffectiveToolAllowlist } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import type { AgentRuntimeSessionHandoffContext } from "./agent-runtime-identity-token.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   buildMcpToolSchema,
@@ -85,6 +87,9 @@ function resolveMcpLoopbackTools(
     excludeToolNames.delete("exec");
   }
   const { toolsAllow: _toolsAllow, ...scopeParams } = params;
+  const sessionsSendToolPolicy:
+    | AgentRuntimeSessionHandoffContext["inheritedToolPolicy"]
+    | undefined = params.toolsAllow ? { version: 1, allow: [], deny: [] } : undefined;
   const scoped = resolveGatewayScopedTools({
     ...scopeParams,
     conversationReadOrigin: "delegated",
@@ -92,14 +97,19 @@ function resolveMcpLoopbackTools(
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,
     includeNodeExecTool,
+    sessionsSendToolPolicy,
   });
+  const tools =
+    mode === "exact"
+      ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
+      : applyPolicyToolsAllow(scoped.tools, params.toolsAllow);
+  if (sessionsSendToolPolicy) {
+    replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, tools);
+  }
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,
-    tools:
-      mode === "exact"
-        ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
-        : applyPolicyToolsAllow(scoped.tools, params.toolsAllow),
+    tools,
   };
 }
 

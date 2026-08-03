@@ -51,6 +51,7 @@ import {
 } from "../security/dangerous-tools.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
+import type { AgentRuntimeSessionHandoffContext } from "./agent-runtime-identity-token.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -107,6 +108,7 @@ export function resolveGatewayScopedTools(params: {
   groupSpace?: string;
   spawnedBy?: string;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  sessionsSendToolPolicy?: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"];
 }) {
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
   const {
@@ -246,6 +248,11 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolPolicy,
     gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
   ].some(hasRestrictiveAllowPolicy);
+  const sessionsSendToolPolicy =
+    params.sessionsSendToolPolicy ??
+    (shouldInheritEffectiveToolAllowlist || inheritedToolDenylist.length > 0
+      ? { version: 1 as const, allow: [], deny: [...inheritedToolDenylist] }
+      : undefined);
 
   const openClawTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
@@ -293,6 +300,7 @@ export function resolveGatewayScopedTools(params: {
     cronCreatorToolAllowlist,
     inheritedToolAllowlist,
     inheritedToolDenylist,
+    sessionsSendToolPolicy,
   });
   const execDefaults =
     nodeExecSurface || mediatedToolNames.size > 0
@@ -493,6 +501,9 @@ export function resolveGatewayScopedTools(params: {
     : tools;
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
+  }
+  if (sessionsSendToolPolicy) {
+    replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, inheritableTools);
   }
   replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, inheritableTools, (tool) =>
     getPluginToolMeta(tool),
