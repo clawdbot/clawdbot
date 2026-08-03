@@ -10,7 +10,6 @@ import {
 import type {
   OtelHttpAgentFactory,
   OtelHttpAgentOptions,
-  OtelLogger,
   OtelSignalIdentifier,
 } from "./service-types.js";
 
@@ -75,8 +74,7 @@ function readOtelEnvFile(params: {
   signalIdentifier: OtelSignalIdentifier;
   signalSuffix: "CERTIFICATE" | "CLIENT_CERTIFICATE" | "CLIENT_KEY";
   sharedEnvName: string;
-  logger: OtelLogger;
-  warning: string;
+  label: string;
 }): Buffer | undefined {
   const signalEnvName = `OTEL_EXPORTER_OTLP_${params.signalIdentifier}_${params.signalSuffix}`;
   const filePath =
@@ -86,48 +84,53 @@ function readOtelEnvFile(params: {
     return undefined;
   }
   try {
-    return readFileSync(nodePath.resolve(process.cwd(), filePath));
+    const material = readFileSync(nodePath.resolve(process.cwd(), filePath));
+    if (material.length > 0) {
+      return material;
+    }
   } catch {
-    params.logger.warn(`diagnostics-otel: ${params.warning}`);
-    return undefined;
+    // Never expose certificate paths or silently downgrade to system trust.
   }
+  throw new Error(
+    `Configured OpenTelemetry ${params.label} file is missing, empty, or unreadable; refusing insecure export`,
+  );
 }
 
 function normalizeOtelEnvValue(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return value?.trim() ? value : undefined;
 }
 
 export function resolveOtelHttpAgentOptions(params: {
   url: string | undefined;
   signalIdentifier: OtelSignalIdentifier;
-  logger: OtelLogger;
-}): OtelHttpAgentFactory | undefined {
-  const { url, signalIdentifier, logger } = params;
-  if (!url) {
-    return undefined;
-  }
+}): OtelHttpAgentFactory | OtelHttpAgentOptions | undefined {
+  const { url, signalIdentifier } = params;
   const ca = readOtelEnvFile({
     signalIdentifier,
     signalSuffix: "CERTIFICATE",
     sharedEnvName: OTEL_EXPORTER_OTLP_CERTIFICATE_ENV,
-    logger,
-    warning: "failed to read root certificate file",
+    label: "TLS root certificate",
   });
   const cert = readOtelEnvFile({
     signalIdentifier,
     signalSuffix: "CLIENT_CERTIFICATE",
     sharedEnvName: OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE_ENV,
-    logger,
-    warning: "failed to read client certificate chain file",
+    label: "mTLS client certificate",
   });
   const key = readOtelEnvFile({
     signalIdentifier,
     signalSuffix: "CLIENT_KEY",
     sharedEnvName: OTEL_EXPORTER_OTLP_CLIENT_KEY_ENV,
-    logger,
-    warning: "failed to read client certificate private key file",
+    label: "mTLS client private key",
   });
+  if ((cert === undefined) !== (key === undefined)) {
+    throw new Error(
+      "Configured OpenTelemetry mTLS requires both a client certificate and private key; refusing insecure export",
+    );
+  }
+  if (!url) {
+    return undefined;
+  }
   const agentOptions: OtelHttpAgentOptions = {
     keepAlive: true,
     ...(ca !== undefined ? { ca } : {}),
@@ -136,10 +139,13 @@ export function resolveOtelHttpAgentOptions(params: {
   };
   try {
     const agent = createNodeProxyAgent({ mode: "env", targetUrl: url, agentOptions });
-    return agent ? () => agent : undefined;
+    if (agent) {
+      return () => agent;
+    }
   } catch {
     throw new Error("Configured telemetry proxy is invalid or unsupported; refusing direct export");
   }
+  return (ca || cert || key) && new URL(url).protocol === "https:" ? agentOptions : undefined;
 }
 
 export function resolveSampleRate(value: number | undefined): number | undefined {
