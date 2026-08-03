@@ -1046,6 +1046,48 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
+  it("reports the progress clock, not the older session clock, for idle-queued stalls", () => {
+    const recoverStuckSession = vi.fn();
+
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticToolStartedForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      runId: "run-1",
+      toolName: "bash",
+      toolCallId: "cmd-1",
+    });
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "q1" });
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "q2" });
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "q3" });
+    // Last touch of state.lastActivity. Run progress keeps arriving after it, so
+    // the session clock ends up OLDER than the progress clock.
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+    startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+
+    for (let i = 0; i < 3; i += 1) {
+      vi.advanceTimersByTime(25_000);
+      markDiagnosticRunProgressForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        reason: "tool_call:progress",
+      });
+      vi.advanceTimersByTime(5_000);
+    }
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+
+    // Progress stops at t=85s; the tick at t=120s sees progressAge=35s against a
+    // session clock of 120s.
+    vi.advanceTimersByTime(30_000);
+
+    const params = requireFirstMockCallArg(recoverStuckSession, "recoverStuckSession");
+    // The ownerless-lane release window in the recovery runtime is measured from
+    // this age, so it must stay the progress clock.
+    expect(params.ageMs).toBeGreaterThanOrEqual(30_000);
+    expect(params.ageMs).toBeLessThan(60_000);
+  });
+
   it("recovers stale native tool calls through the active-run abort path", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();

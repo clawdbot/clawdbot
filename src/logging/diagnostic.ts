@@ -1317,11 +1317,16 @@ export function startDiagnosticHeartbeat(
       // the run that created them, so a finished run's row would otherwise make a
       // healthy ACP turn read as stale forever.
       const progressAgeMs = activity.lastProgressAgeMs ?? ageMs;
-      const attentionAgeMs = activity.activeWorkKind ? Math.max(ageMs, progressAgeMs) : ageMs;
+      const observedAgeMs = activity.activeWorkKind ? Math.max(ageMs, progressAgeMs) : ageMs;
       if (
-        (state.state === "processing" && attentionAgeMs > stuckSessionWarnMs) ||
+        (state.state === "processing" && observedAgeMs > stuckSessionWarnMs) ||
         idleQueuedRecoverableStall
       ) {
+        // The idle-queued branch keeps reporting the progress clock alone: the
+        // recovery runtime measures its ownerless-lane release window from this
+        // value, so letting an older session clock win there would release a lane
+        // before its no-progress safety window and re-run work still in flight.
+        const attentionAgeMs = idleQueuedRecoverableStall ? progressAgeMs : observedAgeMs;
         const classification = logSessionAttention({
           sessionId: state.sessionId,
           sessionKey: state.sessionKey,
