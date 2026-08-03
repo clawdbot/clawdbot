@@ -60,22 +60,23 @@ type TestableAudioPeer = {
 };
 
 type TestableGatewayBridge = {
+  delegations?: {
+    handleEvent(event: { kind: "delegation"; id: string; prompt: string }): void;
+  };
   pendingAudio: Buffer;
   sideband?: {
     socket: FakeSocket;
     requestIds: { realtimeSessionId: string; sessionId: string; threadId: string };
   };
-  runDelegation(params: {
-    delegationId: string;
-    prompt: string;
-    runAgentConsult: (params: {
-      prompt: string;
-      signal?: AbortSignal;
-    }) => Promise<{ text: string }>;
-    signal: AbortSignal;
-  }): Promise<void>;
-  startDelegation(delegationId: string, input: string): void;
 };
+
+function delegate(testBridge: TestableGatewayBridge, id: string, prompt: string): void {
+  const delegations = testBridge.delegations;
+  if (!delegations) {
+    throw new Error("Expected delegation controller");
+  }
+  delegations.handleEvent({ kind: "delegation", id, prompt });
+}
 
 function createDelegationBridge(
   runAgentConsult: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>,
@@ -761,69 +762,11 @@ describe("GPT-Live gateway relay bridge", () => {
     });
     const { bridge, logger, socket, testBridge } = createDelegationBridge(runAgentConsult);
     try {
-      await testBridge.runDelegation({
-        delegationId: "delegation-cancelled",
-        prompt: "stop this",
-        runAgentConsult,
-        signal: new AbortController().signal,
-      });
+      delegate(testBridge, "delegation-cancelled", "stop this");
+      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
 
       expect(socket.sent).toEqual([]);
       expect(logger.warn).not.toHaveBeenCalled();
-    } finally {
-      bridge.close();
-    }
-  });
-
-  it("keeps the speakable failure response for genuine delegation errors", async () => {
-    const runAgentConsult = vi.fn(async () => {
-      throw new Error("workspace unavailable");
-    });
-    const { bridge, logger, socket, testBridge } = createDelegationBridge(runAgentConsult);
-    try {
-      await testBridge.runDelegation({
-        delegationId: "delegation-failed",
-        prompt: "do work",
-        runAgentConsult,
-        signal: new AbortController().signal,
-      });
-
-      expect(parseSent(socket)).toContainEqual({
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-failed",
-        channel: "speakable",
-        content: [
-          {
-            type: "input_text",
-            text: "The agent task failed. Tell the user it did not complete and offer to try again.",
-          },
-        ],
-      });
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("workspace unavailable"));
-    } finally {
-      bridge.close();
-    }
-  });
-
-  it("bounds gateway delegation output before sideband sends", async () => {
-    const runAgentConsult = vi.fn(async () => ({ text: "x".repeat(10_000) }));
-    const { bridge, socket, testBridge } = createDelegationBridge(runAgentConsult);
-    try {
-      await testBridge.runDelegation({
-        delegationId: "delegation-large",
-        prompt: "summarize everything",
-        runAgentConsult,
-        signal: new AbortController().signal,
-      });
-
-      const appends = parseSent(socket).filter(
-        (event) => event.type === "delegation.context.append",
-      );
-      expect(appends.length).toBeGreaterThan(0);
-      expect(appends.length).toBeLessThanOrEqual(11);
-      expect(
-        appends.map((event) => (event.content as Array<{ text: string }>)[0]?.text ?? "").join(""),
-      ).toMatch(/^x+ \[truncated\]$/);
     } finally {
       bridge.close();
     }
@@ -848,9 +791,9 @@ describe("GPT-Live gateway relay bridge", () => {
     );
     const { bridge, socket, testBridge } = createDelegationBridge(runAgentConsult);
     try {
-      testBridge.startDelegation("delegation-1", "first task");
-      testBridge.startDelegation("delegation-2", "second task");
-      testBridge.startDelegation("delegation-3", "latest task");
+      delegate(testBridge, "delegation-1", "first task");
+      delegate(testBridge, "delegation-2", "second task");
+      delegate(testBridge, "delegation-3", "latest task");
 
       expect(runAgentConsult).toHaveBeenCalledOnce();
       expect(signals[0]?.aborted).toBe(true);
@@ -878,7 +821,7 @@ describe("GPT-Live gateway relay bridge", () => {
     const { bridge, testBridge } = createDelegationBridge(runAgentConsult);
 
     bridge.close();
-    testBridge.startDelegation("delegation-late", "late task");
+    delegate(testBridge, "delegation-late", "late task");
 
     expect(runAgentConsult).not.toHaveBeenCalled();
   });

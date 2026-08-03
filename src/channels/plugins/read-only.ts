@@ -13,6 +13,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -105,15 +106,10 @@ function rememberReadOnlyChannelPluginResolution(
     readOnlyChannelPluginResolutionCache.delete(key);
   }
   readOnlyChannelPluginResolutionCache.set(key, cloneReadOnlyChannelPluginResolution(resolution));
-  while (
-    readOnlyChannelPluginResolutionCache.size > MAX_READ_ONLY_CHANNEL_PLUGIN_RESOLUTION_CACHE_SIZE
-  ) {
-    const oldestKey = readOnlyChannelPluginResolutionCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    readOnlyChannelPluginResolutionCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(
+    readOnlyChannelPluginResolutionCache,
+    MAX_READ_ONLY_CHANNEL_PLUGIN_RESOLUTION_CACHE_SIZE,
+  );
 }
 
 function resolveReadOnlyChannelPluginResolutionCacheKey(params: {

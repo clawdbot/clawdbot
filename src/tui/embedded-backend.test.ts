@@ -2289,8 +2289,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("surfaces canonical error-only thrown outcomes without exposing the wrapped cause", async () => {
-    const { AgentRunTerminalOutcomeError } =
-      await import("../agents/agent-run-terminal-outcome.js");
+    const { AgentRunTerminalOutcomeError } = await import("../agents/agent-run-terminal-error.js");
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
     agentCommandFromIngressMock.mockRejectedValueOnce(
       new AgentRunTerminalOutcomeError(new Error(`hidden provider credential ${secret}`), {
@@ -2325,8 +2324,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("preserves a wrapped canonical cancellation without redundant abort metadata", async () => {
-    const { AgentRunTerminalOutcomeError } =
-      await import("../agents/agent-run-terminal-outcome.js");
+    const { AgentRunTerminalOutcomeError } = await import("../agents/agent-run-terminal-error.js");
     agentCommandFromIngressMock.mockRejectedValueOnce(
       new AgentRunTerminalOutcomeError(new Error("underlying cancellation"), {
         reason: "cancelled",

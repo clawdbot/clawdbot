@@ -17,7 +17,7 @@ import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
-import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-outcome.js";
+import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";

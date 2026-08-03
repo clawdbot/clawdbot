@@ -20,6 +20,7 @@ import { streamSessionTranscriptLines } from "../config/sessions/transcript-stre
 import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcript-tree.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
@@ -566,9 +567,7 @@ async function readSessionTranscriptIndex(
     if (opts.cache !== "skip") {
       transcriptIndexes.delete(filePath);
       transcriptIndexes.set(filePath, cached);
-      if (transcriptIndexes.size > MAX_TRANSCRIPT_INDEXES) {
-        transcriptIndexes.delete(transcriptIndexes.keys().next().value ?? "");
-      }
+      pruneMapToMaxSize(transcriptIndexes, MAX_TRANSCRIPT_INDEXES);
     }
   }
   let index: SessionTranscriptIndex;

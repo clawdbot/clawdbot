@@ -111,9 +111,38 @@ describe("gateway concurrency benchmark script", () => {
         error: "sessions.list failed: unauthorized",
         ok: false,
       });
-      expect(() => testing.assertBaselineProbes(sample)).toThrow(
-        /readyz\(ok=false status=503 error=none .*sessionsList\(ok=false status=failed error="sessions\.list failed: unauthorized" .*controlUi\(ok=false status=200 error="response body did not contain <html"/u,
+      const failure = testing.formatRunFailure(
+        new Error(testing.formatProbeFailure(sample)),
+        {
+          readOutput: () => "gateway output",
+          readStderrTail: () => testing.tailLines("old\nfirst retained\nlast retained\n", 2),
+        },
+        { readOutput: () => "mock output" },
       );
+      expect(failure).toMatch(
+        /readyz: ok=false status=503 latencyMs=\d+\.\d error=none\n  sessionsList: ok=false status=n\/a latencyMs=\d+\.\d error="sessions\.list failed: unauthorized"\n  controlUi: ok=false status=200 latencyMs=\d+\.\d error="response body did not contain <html"/u,
+      );
+      expect(failure).toContain("gateway stderr tail:\nfirst retained\nlast retained");
+      expect(failure).not.toContain("old");
+
+      const healthySlow = {
+        controlUi: { ...sample.controlUi, error: null, latencyMs: 200, ok: true },
+        readyz: { ...sample.readyz, latencyMs: 200, ok: true, status: 200 },
+        sessionsList: { ...sample.sessionsList, error: null, latencyMs: 200, ok: true },
+      };
+      const healthyFast = {
+        controlUi: { ...healthySlow.controlUi, latencyMs: 10 },
+        readyz: { ...healthySlow.readyz, latencyMs: 10 },
+        sessionsList: { ...healthySlow.sessionsList, latencyMs: 10 },
+      };
+      const samples = [sample, healthySlow, healthyFast];
+      const warmed = await testing.warmGatewayProbes({
+        deadlineAt: performance.now() + 5_000,
+        retryDelayMs: 0,
+        sample: async () => samples.shift() ?? healthyFast,
+        targetMs: 100,
+      });
+      expect(warmed.samples).toHaveLength(3);
     } finally {
       server.close();
     }

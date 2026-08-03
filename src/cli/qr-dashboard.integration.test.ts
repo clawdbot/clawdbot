@@ -36,6 +36,11 @@ vi.mock("../commands/gateway-readiness.js", () => ({
   ensureGatewayReadyForOperation: ensureGatewayReadyForOperationMock,
 }));
 
+vi.mock("../commands/control-ui-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/control-ui-handoff.js")>()),
+  waitForControlUiDocument: vi.fn(async () => ({ ready: true })),
+}));
+
 vi.mock("../infra/device-bootstrap.js", () => ({
   issueDeviceBootstrapToken: vi.fn(async () => ({
     token: "bootstrap-123",

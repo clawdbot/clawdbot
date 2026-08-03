@@ -173,6 +173,7 @@ const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
 const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
 const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
+const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -542,6 +543,10 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
+  const isActiveFailedToolTerminalRecovery =
+    QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt) ||
+    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+      QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(allInputText));
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
@@ -755,6 +760,19 @@ async function buildResponsesPayload(
       });
     }
     return buildAssistantEvents("");
+  }
+  if (isActiveFailedToolTerminalRecovery) {
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      if (!allInputText.includes("state that failure plainly and do not claim it succeeded")) {
+        return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
+      }
+      const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
+      return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
+    }
+    if (!hasCompletedToolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "qa-failed-terminal-missing-file.txt" });
+    }
+    return buildAssistantEvents("FAILED-TOOL-TERMINAL-WAS-REPLAYED");
   }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
