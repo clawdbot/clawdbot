@@ -97,7 +97,9 @@ describe("createSmsIngressSpool", () => {
   it("retries acknowledged MMS provider outages before adopting later same-sender messages", async () => {
     const stateDir = await createStateDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    disposers.push(() => vi.unstubAllEnvs());
+    disposers.push(() => {
+      vi.unstubAllEnvs();
+    });
     const mediaBytes = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a0cAAAAASUVORK5CYII=",
       "base64",
@@ -156,13 +158,21 @@ describe("createSmsIngressSpool", () => {
         buildContext: (input: Parameters<SmsChannelRuntime["inbound"]["buildContext"]>[0]) => {
           deliveries.push({
             id: String(input.extra?.MessageSid),
-            body: input.message.bodyForAgent,
+            body: input.message.bodyForAgent ?? input.message.rawBody,
             attachments: input.media?.length ?? 0,
           });
           return {};
         },
         run: async (input: Parameters<SmsChannelRuntime["inbound"]["run"]>[0]) => {
-          await input.adapter.resolveTurn(input.adapter.ingest(input.raw));
+          const turnInput = await input.adapter.ingest(input.raw);
+          if (!turnInput) {
+            throw new Error("expected normalized SMS turn");
+          }
+          await input.adapter.resolveTurn(
+            turnInput,
+            { kind: "message", canStartAgentTurn: true },
+            {},
+          );
           await input.turnAdoptionLifecycle?.onAdopted();
         },
       },
