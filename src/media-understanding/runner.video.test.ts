@@ -481,7 +481,8 @@ describe("runCapability provider output decisions", () => {
       (output.text.trim() ? [true] : [true, false]).map((configureFallback) => ({
         capability,
         configureFallback,
-        ...output,
+        label: output.label,
+        text: output.text,
       })),
     ),
   );
