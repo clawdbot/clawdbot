@@ -270,7 +270,10 @@ async function uploadMediaWithEncryption(
     encrypted: boolean;
   },
 ): Promise<{ url: string; file?: EncryptedFile }> {
-  if (params.encrypted && client.crypto) {
+  if (params.encrypted) {
+    if (!client.crypto) {
+      throw new Error("Encrypted Matrix room: enable encryption before uploading media");
+    }
     const encrypted = await client.crypto.encryptMedia(buffer);
     const mxc = await client.uploadContent(encrypted.buffer, params.contentType, params.filename);
     const file: EncryptedFile = { url: mxc, ...encrypted.file };
@@ -296,8 +299,9 @@ export async function uploadMediaMaybeEncrypted(
     filename?: string;
   },
 ): Promise<{ url: string; file?: EncryptedFile }> {
-  // Check if room is encrypted and crypto is available
-  const isEncrypted = Boolean(client.crypto && (await client.crypto.isRoomEncrypted(roomId)));
+  const isEncrypted = client.crypto
+    ? await client.crypto.isRoomEncrypted(roomId)
+    : (await client.getMessageWireEventType(roomId)) === "m.room.encrypted";
   return await uploadMediaWithEncryption(client, buffer, {
     ...params,
     encrypted: isEncrypted,

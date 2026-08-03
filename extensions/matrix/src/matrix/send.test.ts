@@ -595,6 +595,22 @@ describe("sendMessageMatrix media", () => {
     expect(content.url).toBe("mxc://example/file");
   });
 
+  it("rejects encrypted-room media before upload when encryption is unavailable", async () => {
+    const { client, sendMessage, uploadContent } = makeClient();
+    vi.mocked(client.getMessageWireEventType).mockResolvedValue("m.room.encrypted");
+
+    await expect(
+      sendMessageMatrix("room:!room:example", "caption", {
+        client,
+        cfg: {} as never,
+        mediaUrl: "file:///tmp/photo.png",
+      }),
+    ).rejects.toThrow(/enable encryption/i);
+
+    expect(uploadContent).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("records each media and overflow event with its actual kind and reply relation", async () => {
     const { client, sendMessage } = makeClient();
     resolveTextChunkLimitMock.mockReturnValue(6);
