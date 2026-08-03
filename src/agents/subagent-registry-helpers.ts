@@ -263,9 +263,8 @@ export async function safeRemoveAttachmentsPath(params: {
   }
 }
 
-export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
-  return safeRemoveAttachmentsPath(entry);
-}
+export const safeRemoveAttachmentsDir: (entry: SubagentRunRecord) => Promise<boolean> =
+  safeRemoveAttachmentsPath;
 
 function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
