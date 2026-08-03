@@ -8,6 +8,7 @@ type SynologyChatConfigFields = {
   incomingUrl?: string;
   nasHost?: string;
   webhookPath?: string;
+  dangerouslyAllowFileUrlFetch?: boolean;
   dangerouslyAllowNameMatching?: boolean;
   dangerouslyAllowInheritedWebhookPath?: boolean;
   dmPolicy?: "open" | "allowlist" | "disabled";
@@ -36,6 +37,7 @@ export interface ResolvedSynologyChatAccount {
   nasHost: string;
   webhookPath: string;
   webhookPathSource: SynologyWebhookPathSource;
+  dangerouslyAllowFileUrlFetch: boolean;
   dangerouslyAllowNameMatching: boolean;
   dangerouslyAllowInheritedWebhookPath: boolean;
   dmPolicy: "open" | "allowlist" | "disabled";

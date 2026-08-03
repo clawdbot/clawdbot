@@ -21,10 +21,24 @@ vi.mock("node:http", async () => {
   return { ...actual, default: httpModule, request: httpRequest, get: httpGet };
 });
 
+const ssrfMocks = vi.hoisted(() => ({
+  resolvePinnedHostnameWithPolicy: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
+  };
+});
+
 const https = await import("node:https");
 let fakeNowMs = 1_700_000_000_000;
 let sendMessage: typeof import("./client.js").sendMessage;
-let sendFileLink: typeof import("./client.js").sendFileLink;
+let sendFileReference: typeof import("./client.js").sendFileReference;
 let resolveLegacyWebhookNameToChatUserId: typeof import("./client.js").resolveLegacyWebhookNameToChatUserId;
 
 type RequestCallback = (res: IncomingMessage) => void;
@@ -99,12 +113,16 @@ function mockFailureResponse(statusCode = 500) {
 
 function installFakeTimerHarness() {
   beforeAll(async () => {
-    ({ sendMessage, sendFileLink, resolveLegacyWebhookNameToChatUserId } =
+    ({ sendMessage, sendFileReference, resolveLegacyWebhookNameToChatUserId } =
       await import("./client.js"));
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
+      hostname: "mutable.example",
+      addresses: ["93.184.216.34"],
+    });
     vi.useFakeTimers();
     fakeNowMs += 10_000;
     vi.setSystemTime(fakeNowMs);
@@ -121,8 +139,9 @@ const tlsVerificationDefaultCases = [
     invoke: () => sendMessage("https://nas.example.com/incoming", "Hello"),
   },
   {
-    name: "sendFileLink",
-    invoke: () => sendFileLink("https://nas.example.com/incoming", "https://example.com/file.png"),
+    name: "sendFileReference",
+    invoke: () =>
+      sendFileReference("https://nas.example.com/incoming", "https://example.com/file.png"),
   },
 ];
 
@@ -244,13 +263,13 @@ describe("sendMessage", () => {
   });
 });
 
-describe("sendFileLink", () => {
+describe("sendFileReference", () => {
   installFakeTimerHarness();
 
   it("returns true on success", async () => {
     mockSuccessResponse();
     const result = await settleTimers(
-      sendFileLink("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileReference("https://nas.example.com/incoming", "https://example.com/file.png"),
     );
     expect(result).toBe(true);
   });
@@ -258,7 +277,7 @@ describe("sendFileLink", () => {
   it("returns false on failure", async () => {
     mockFailureResponse(500);
     const result = await settleTimers(
-      sendFileLink("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileReference("https://nas.example.com/incoming", "https://example.com/file.png"),
     );
     expect(result).toBe(false);
   });
@@ -267,7 +286,7 @@ describe("sendFileLink", () => {
     mockResponse(200, JSON.stringify({ success: false, error: { code: 105 } }));
 
     const result = await settleTimers(
-      sendFileLink("https://nas.example.com/incoming", "https://example.com/file.png"),
+      sendFileReference("https://nas.example.com/incoming", "https://example.com/file.png"),
     );
 
     expect(result).toBe(false);
@@ -279,7 +298,7 @@ describe("sendFileLink", () => {
     await settleTimers(sendMessage("https://nas.example.com/incoming", "hello"));
     vi.mocked(https.request).mockClear();
 
-    const promise = sendFileLink(
+    const promise = sendFileReference(
       "https://nas.example.com/incoming",
       "https://example.com/file.png",
     );
@@ -296,7 +315,7 @@ describe("sendFileLink", () => {
 
   it("rejects malformed file URLs before making a request", async () => {
     const result = await settleTimers(
-      sendFileLink("https://nas.example.com/incoming", "not-a-url"),
+      sendFileReference("https://nas.example.com/incoming", "not-a-url"),
     );
     expect(result).toBe(false);
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
@@ -304,7 +323,7 @@ describe("sendFileLink", () => {
 
   it("rejects non-http file URLs before making a request", async () => {
     const result = await settleTimers(
-      sendFileLink("https://nas.example.com/incoming", "file:///tmp/secret.txt"),
+      sendFileReference("https://nas.example.com/incoming", "file:///tmp/secret.txt"),
     );
     expect(result).toBe(false);
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
@@ -313,7 +332,11 @@ describe("sendFileLink", () => {
   it("sends remote media as text without asking Synology to fetch it", async () => {
     mockSuccessResponse();
     const result = await settleTimers(
-      sendFileLink("https://nas.example.com/incoming", "https://mutable.example/file.png", "42"),
+      sendFileReference(
+        "https://nas.example.com/incoming",
+        "https://mutable.example/file.png",
+        "42",
+      ),
     );
     expect(result).toBe(true);
     const request = vi.mocked(https.request).mock.results[0]?.value as ClientRequest | undefined;
@@ -326,6 +349,34 @@ describe("sendFileLink", () => {
     }
     expect(JSON.parse(decodeURIComponent(body.replace(/^payload=/, "")))).toEqual({
       text: "https://mutable.example/file.png",
+      user_ids: [42],
+    });
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).not.toHaveBeenCalled();
+  });
+
+  it("uses file_url only when the operator explicitly enables NAS fetching", async () => {
+    mockSuccessResponse();
+    const result = await settleTimers(
+      sendFileReference(
+        "https://nas.example.com/incoming",
+        "https://mutable.example/file.png",
+        "42",
+        false,
+        true,
+      ),
+    );
+    expect(result).toBe(true);
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("mutable.example");
+    const request = vi.mocked(https.request).mock.results[0]?.value as ClientRequest | undefined;
+    if (!request) {
+      throw new Error("expected Synology Chat webhook request");
+    }
+    const body = vi.mocked(request["write"]).mock.calls[0]?.[0];
+    if (typeof body !== "string") {
+      throw new Error("expected Synology Chat webhook body");
+    }
+    expect(JSON.parse(decodeURIComponent(body.replace(/^payload=/, "")))).toEqual({
+      file_url: "https://mutable.example/file.png",
       user_ids: [42],
     });
   });

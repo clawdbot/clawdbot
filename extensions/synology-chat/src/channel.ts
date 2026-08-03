@@ -46,7 +46,7 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
-import { SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT, sendFileLink, sendMessage } from "./client.js";
+import { SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT, sendFileReference, sendMessage } from "./client.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
   collectSynologyGatewayRoutingWarnings,
@@ -107,6 +107,7 @@ const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynol
     "incomingUrl",
     "nasHost",
     "webhookPath",
+    "dangerouslyAllowFileUrlFetch",
     "dangerouslyAllowNameMatching",
     "dangerouslyAllowInheritedWebhookPath",
     "dmPolicy",
@@ -130,6 +131,9 @@ const collectSynologyChatSecurityWarnings =
     (account) =>
       account.allowInsecureSsl &&
       "- Synology Chat: SSL verification is disabled (allowInsecureSsl=true). Only use this for local NAS with self-signed certificates.",
+    (account) =>
+      account.dangerouslyAllowFileUrlFetch &&
+      "- Synology Chat: dangerouslyAllowFileUrlFetch=true lets the NAS download remote media outside OpenClaw's network controls. Prefer the default visible links.",
     (account) =>
       account.dangerouslyAllowNameMatching &&
       "- Synology Chat: dangerouslyAllowNameMatching=true re-enables mutable username/nickname recipient matching for replies. Prefer stable numeric user IDs.",
@@ -209,7 +213,7 @@ type SynologyChatPlugin = Omit<
     stopAccount: (ctx: SynologyChannelGatewayContext) => Promise<void>;
   };
   agentPrompt: {
-    messageToolHints: () => string[];
+    messageToolHints: (ctx: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
   };
 };
 
@@ -292,7 +296,13 @@ async function sendSynologyChatMedia(
 ): Promise<SynologyChatOutboundResult> {
   const account = resolveOutboundAccount(ctx.cfg ?? {}, ctx.accountId);
   const incomingUrl = requireIncomingUrl(account);
-  const ok = await sendFileLink(incomingUrl, ctx.mediaUrl, ctx.to, account.allowInsecureSsl);
+  const ok = await sendFileReference(
+    incomingUrl,
+    ctx.mediaUrl,
+    ctx.to,
+    account.allowInsecureSsl,
+    account.dangerouslyAllowFileUrlFetch,
+  );
   if (!ok) {
     throw new Error("Failed to send media to Synology Chat");
   }
@@ -448,29 +458,34 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
         },
       },
       agentPrompt: {
-        messageToolHints: () => [
-          "",
-          "### Synology Chat Formatting",
-          "Synology Chat supports limited formatting. Use these patterns:",
-          "",
-          "**Links**: Use `<URL|display text>` to create clickable links.",
-          "  Example: `<https://example.com|Click here>` renders as a clickable link.",
-          "",
-          "**File sharing**: Include an HTTP or HTTPS URL to share files or images.",
-          "  OpenClaw sends the URL as a clickable link; the NAS does not download it automatically.",
-          "",
-          "**Limitations**:",
-          "- No markdown, bold, italic, or code blocks",
-          "- No buttons, cards, or interactive elements",
-          "- No message editing after send",
-          "- Keep messages under 2000 characters for best readability",
-          "",
-          "**Best practices**:",
-          "- Use short, clear responses (Synology Chat has a minimal UI)",
-          "- Use line breaks to separate sections",
-          "- Use numbered or bulleted lists for clarity",
-          "- Wrap URLs with `<URL|label>` for user-friendly links",
-        ],
+        messageToolHints: ({ cfg, accountId }) => {
+          const account = resolveAccount(cfg, accountId);
+          return [
+            "",
+            "### Synology Chat Formatting",
+            "Synology Chat supports limited formatting. Use these patterns:",
+            "",
+            "**Links**: Use `<URL|display text>` to create clickable links.",
+            "  Example: `<https://example.com|Click here>` renders as a clickable link.",
+            "",
+            "**File sharing**: Include an HTTP or HTTPS URL to share files or images.",
+            account.dangerouslyAllowFileUrlFetch
+              ? "  The NAS is configured to download the URL automatically. Only send URLs the operator trusts the NAS to fetch."
+              : "  OpenClaw sends the URL as a clickable link; the NAS does not download it automatically.",
+            "",
+            "**Limitations**:",
+            "- No markdown, bold, italic, or code blocks",
+            "- No buttons, cards, or interactive elements",
+            "- No message editing after send",
+            "- Keep messages under 2000 characters for best readability",
+            "",
+            "**Best practices**:",
+            "- Use short, clear responses (Synology Chat has a minimal UI)",
+            "- Use line breaks to separate sections",
+            "- Use numbered or bulleted lists for clarity",
+            "- Wrap URLs with `<URL|label>` for user-friendly links",
+          ];
+        },
       },
       message: synologyChatMessageAdapter,
     },

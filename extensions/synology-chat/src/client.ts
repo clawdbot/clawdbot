@@ -9,7 +9,10 @@ import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sd
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  formatErrorMessage,
+  resolvePinnedHostnameWithPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { z } from "zod";
@@ -45,6 +48,7 @@ type ChatUserCacheEntry = {
 
 type ChatWebhookPayload = {
   text?: string;
+  file_url?: string;
   user_ids?: number[];
 };
 
@@ -140,21 +144,27 @@ async function sendMessageChunk(
 }
 
 /**
- * Send a file URL to Synology Chat as a visible link.
+ * Send a file URL to Synology Chat as a visible link by default.
  *
  * Synology's file_url field makes the NAS resolve and download the URL after
  * OpenClaw returns, so OpenClaw cannot keep that request on a validated DNS
  * destination. A text link leaves the fetch under the recipient's control.
  */
-export async function sendFileLink(
+export async function sendFileReference(
   incomingUrl: string,
   fileUrl: string,
   userId?: string | number,
   allowInsecureSsl = false,
+  dangerouslyAllowFileUrlFetch = false,
 ): Promise<boolean> {
   try {
-    const safeFileUrl = normalizeWebhookFileLink(fileUrl);
-    const body = buildWebhookBody({ text: safeFileUrl }, userId);
+    const safeFileUrl = dangerouslyAllowFileUrlFetch
+      ? await assertSafeWebhookFileUrl(fileUrl)
+      : normalizeWebhookFileLink(fileUrl);
+    const body = buildWebhookBody(
+      dangerouslyAllowFileUrlFetch ? { file_url: safeFileUrl } : { text: safeFileUrl },
+      userId,
+    );
 
     await waitForSendSlot();
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
@@ -297,6 +307,12 @@ function normalizeWebhookFileLink(fileUrl: string): string {
     throw new Error("Synology Chat file URL must use HTTP or HTTPS");
   }
 
+  return parsed.toString();
+}
+
+async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
+  const parsed = new URL(normalizeWebhookFileLink(fileUrl));
+  await resolvePinnedHostnameWithPolicy(parsed.hostname);
   return parsed.toString();
 }
 

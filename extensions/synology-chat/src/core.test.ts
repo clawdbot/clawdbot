@@ -91,12 +91,13 @@ describe("synology-chat core", () => {
     delete process.env.OPENCLAW_BOT_NAME;
   });
 
-  it("exports dangerouslyAllowNameMatching in the JSON schema", () => {
+  it("exports dangerous compatibility controls in the JSON schema", () => {
     const properties = (SynologyChatChannelConfigSchema.schema.properties ?? {}) as Record<
       string,
       { type?: string }
     >;
 
+    expect(properties.dangerouslyAllowFileUrlFetch?.type).toBe("boolean");
     expect(properties.dangerouslyAllowNameMatching?.type).toBe("boolean");
   });
 
@@ -222,6 +223,7 @@ describe("synology-chat account resolution", () => {
     expect(account.enabled).toBe(true);
     expect(account.webhookPath).toBe("/webhook/synology");
     expect(account.webhookPathSource).toBe("default");
+    expect(account.dangerouslyAllowFileUrlFetch).toBe(false);
     expect(account.dangerouslyAllowNameMatching).toBe(false);
     expect(account.dangerouslyAllowInheritedWebhookPath).toBe(false);
     expect(account.dmPolicy).toBe("allowlist");
@@ -340,6 +342,23 @@ describe("synology-chat account resolution", () => {
       "work",
     );
     expect(optedIn.dangerouslyAllowInheritedWebhookPath).toBe(true);
+  });
+
+  it("inherits automatic file fetching and lets accounts disable it", () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          dangerouslyAllowFileUrlFetch: true,
+          accounts: {
+            inherited: {},
+            safe: { dangerouslyAllowFileUrlFetch: false },
+          },
+        },
+      },
+    };
+
+    expect(resolveAccount(cfg, "inherited").dangerouslyAllowFileUrlFetch).toBe(true);
+    expect(resolveAccount(cfg, "safe").dangerouslyAllowFileUrlFetch).toBe(false);
   });
 
   it("parses allowedUserIds strings, arrays, and rate limits", () => {

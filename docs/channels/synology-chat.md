@@ -69,6 +69,7 @@ Minimal config:
       dmPolicy: "allowlist",
       allowedUserIds: ["123456"],
       rateLimitPerMinute: 30,
+      dangerouslyAllowFileUrlFetch: false,
       allowInsecureSsl: false,
     },
   },
@@ -113,6 +114,8 @@ openclaw message send --channel synology-chat --target synology:123456 --message
 
 Outbound text is chunked at 2000 characters. Media sends post an `http` or `https` URL as a clickable link. OpenClaw does not ask the NAS to download and attach the remote file because that later NAS-side fetch cannot retain OpenClaw's network-destination checks.
 
+If you require the previous automatic-attachment behavior, set `dangerouslyAllowFileUrlFetch: true`. This sends the URL through Synology Chat's `file_url` field, causing the NAS to resolve and download it outside OpenClaw's network controls. Use this only when every media URL is trusted by the NAS operator.
+
 ## Multi-account
 
 Multiple Synology Chat accounts are supported under `channels.synology-chat.accounts`.
@@ -152,6 +155,7 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
 
 - Keep `token` secret and rotate it if leaked.
 - Keep `allowInsecureSsl: false` unless you explicitly trust a self-signed local NAS cert.
+- Keep `dangerouslyAllowFileUrlFetch` off unless you explicitly accept NAS-side downloads of remote media URLs outside OpenClaw's network controls.
 - Inbound webhook requests are token-verified and rate-limited per sender (`rateLimitPerMinute`, default 30).
 - Invalid token checks use constant-time secret comparison and fail closed; repeated invalid-token attempts temporarily lock out the source IP.
 - Inbound message text is sanitized against known prompt-injection patterns and truncated at 4000 characters.
