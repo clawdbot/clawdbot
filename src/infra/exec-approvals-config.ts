@@ -157,13 +157,38 @@ function isValidPersistedExecApprovals(value: unknown): value is ExecApprovalsFi
 export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (isValidPersistedExecApprovals(parsed)) {
-      return normalizeExecApprovalsInternal(parsed);
+    // Older OpenClaw versions wrote null for unused optional fields (e.g.
+    // lastUsedAt: null, lastUsedCommand: null). The validator accepts absent
+    // (undefined) but rejects null, which blocks migration on upgrade. Normalize
+    // null → undefined for optional fields before validation so legacy files
+    // migrate cleanly (#118242).
+    const normalized = normalizeLegacyNullOptionalFields(parsed);
+    if (isValidPersistedExecApprovals(normalized)) {
+      return normalizeExecApprovalsInternal(normalized);
     }
   } catch {
     // A partial Windows fallback write is existing state, not a missing policy.
   }
   return null;
+}
+
+/**
+ * Recursively converts null-valued optional fields to undefined in legacy exec
+ * approvals data. Only touches fields the validator treats as optional; required
+ * fields (pattern, version) are left untouched.
+ */
+function normalizeLegacyNullOptionalFields(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeLegacyNullOptionalFields);
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(value)) {
+    result[key] = val === null ? undefined : normalizeLegacyNullOptionalFields(val);
+  }
+  return result;
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
