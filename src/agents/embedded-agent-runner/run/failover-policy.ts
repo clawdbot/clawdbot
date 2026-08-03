@@ -142,7 +142,7 @@ function assistantFallbackReason(params: AssistantDecisionParams): FailoverReaso
   if (params.failoverFailure && failoverReason && failoverReason !== "timeout") {
     return failoverReason;
   }
-  return isAssistantTimeoutFailure(params) ? "timeout" : (failoverReason ?? "unknown");
+  return isAssistantTimeoutFailure(params) ? "timeout" : (failoverReason ?? "unclassified");
 }
 
 /** Preserves an existing retry reason unless the current attempt produced a stronger signal. */
@@ -169,7 +169,7 @@ export function resolveRunFailoverDecision(
 export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): RunFailoverDecision {
   if (params.stage === "retry_limit") {
     if (params.fallbackConfigured && shouldEscalateRetryLimit(params.failoverReason)) {
-      const fallbackReason = params.failoverReason ?? "unknown";
+      const fallbackReason = params.failoverReason ?? "unclassified";
       return {
         action: "fallback_model",
         reason: fallbackReason,
@@ -224,7 +224,7 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     if (params.fallbackConfigured && params.failoverFailure && !isTerminalFormatFailure(params)) {
       return {
         action: "fallback_model",
-        reason: params.failoverReason ?? "unknown",
+        reason: params.failoverReason ?? "unclassified",
       };
     }
     return {

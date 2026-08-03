@@ -250,7 +250,7 @@ export async function handleEmbeddedPromptFailure(input: {
     };
   }
   if (failoverDecision.action === "fallback_model") {
-    const fallbackReason = failoverDecision.reason ?? "unknown";
+    const fallbackReason = failoverDecision.reason ?? "unclassified";
     const status = resolveFailoverStatus(fallbackReason);
     input.traceAttempts.push({
       provider: input.provider,

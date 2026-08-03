@@ -95,6 +95,26 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("falls back with 'unclassified' instead of 'unknown' when no reason was classified (#117366)", () => {
+    // A transient stream disconnect that the message classifier could not tag
+    // must not read as "unknown" in the user-visible fallback notice: that
+    // wrongly implies the selected model itself is unrecognized/unavailable.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: null,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "unclassified",
+    });
+  });
+
   it("sends prompt TLS certificate failures directly to model fallback", () => {
     expect(
       resolveRunFailoverDecision({
@@ -265,6 +285,22 @@ describe("resolveRunFailoverDecision", () => {
     ).toEqual({
       action: "fallback_model",
       reason: "rate_limit",
+    });
+  });
+
+  it("falls back with 'unclassified' instead of 'unknown' for an unclassified assistant failure (#117366)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        terminal: { kind: "ok" },
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: null,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "unclassified",
     });
   });
 
