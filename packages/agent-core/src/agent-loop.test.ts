@@ -1035,6 +1035,7 @@ describe("agentLoop tool termination", () => {
           ...config,
           beforeToolBatch: async ({ calls }) => {
             const first = calls[0];
+            expect(first?.tool?.name).toBe("read");
             return first ? { intervention: criticalLoopFor(first.toolCall) } : undefined;
           },
         },

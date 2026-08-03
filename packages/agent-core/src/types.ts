@@ -60,6 +60,8 @@ export interface BeforeToolCallResult {
 export interface InternalToolBatchCall {
   toolCall: AgentToolCall;
   args: unknown;
+  /** Resolved tool identity for OpenClaw-owned argument canonicalization. */
+  tool?: AgentTool;
 }
 
 /** Typed core signal used to recover once from a critical tool loop. */

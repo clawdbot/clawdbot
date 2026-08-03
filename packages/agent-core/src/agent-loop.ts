@@ -633,7 +633,9 @@ async function executeToolCalls(
     }
     const calls = toolCalls.flatMap((toolCall) => {
       const validation = validatedToolCalls.get(toolCall);
-      return validation?.kind === "validated" ? [{ toolCall, args: validation.prepared.args }] : [];
+      return validation?.kind === "validated"
+        ? [{ toolCall, args: validation.prepared.args, tool: validation.prepared.tool }]
+        : [];
     });
     if (calls.length > 0 && !signal?.aborted) {
       const admission = await config.beforeToolBatch(
