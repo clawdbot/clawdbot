@@ -10431,6 +10431,10 @@ extension NodeAppModel {
         self.pttVoiceWakeLeaseCaptureId.map { [$0] } ?? []
     }
 
+    func _test_forceTalkPermissionUpgradeRequest() -> Bool {
+        self.forceOperatorTalkPermissionUpgradeRequest
+    }
+
     func _test_admitTalkAfterSessionHydration() async {
         if let chatSessionRoutingRestoreTask {
             await chatSessionRoutingRestoreTask.value

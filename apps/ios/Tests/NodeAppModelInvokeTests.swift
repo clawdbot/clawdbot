@@ -2999,11 +2999,11 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         appModel.setTalkEnabled(true)
         await waitForTalkCondition { talkMode.gatewayTalkPermissionState == .requestingUpgrade }
 
-        #expect(appModel.forceOperatorTalkPermissionUpgradeRequest)
+        #expect(appModel._test_forceTalkPermissionUpgradeRequest())
         appModel.gatewayAutoReconnectEnabled = false
         appModel.gatewayPairingPaused = true
         appModel.setTalkEnabled(false)
-        #expect(!appModel.forceOperatorTalkPermissionUpgradeRequest)
+        #expect(!appModel._test_forceTalkPermissionUpgradeRequest())
         #expect(appModel.gatewayAutoReconnectEnabled)
         #expect(!appModel.gatewayPairingPaused)
 
