@@ -215,6 +215,7 @@ export function recordCodexTrajectoryCompletion(
     promptError: normalizeCodexTrajectoryError(terminal.promptError),
     usage: params.result.attemptUsage,
     assistantTexts: params.result.assistantTexts,
+    stopReason: params.result.lastAssistant?.stopReason,
     messagesSnapshot: params.result.messagesSnapshot,
   });
 }

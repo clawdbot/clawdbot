@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-describe("finalizeEmbeddedAttempt media trajectory capture", () => {
+describe("finalizeEmbeddedAttempt trajectory capture", () => {
   it("records canonical message snapshots without reprojecting them", () => {
     const recordEvent = vi.fn();
     const result = {
@@ -16,6 +16,7 @@ describe("finalizeEmbeddedAttempt media trajectory capture", () => {
       messagingToolSentTargets: [],
       acceptedSessionSpawns: [],
       clientToolCalls: [],
+      lastAssistant: { stopReason: "length" },
       messagesSnapshot: [
         {
           role: "user",
@@ -37,8 +38,11 @@ describe("finalizeEmbeddedAttempt media trajectory capture", () => {
 
     const modelCompleted = recordEvent.mock.calls.find(
       ([type]) => type === "model.completed",
-    )?.[1] as { messagesSnapshot?: Array<Record<string, unknown>> } | undefined;
+    )?.[1] as
+      | { messagesSnapshot?: Array<Record<string, unknown>>; stopReason?: string }
+      | undefined;
     const captured = modelCompleted?.messagesSnapshot?.[0];
+    expect(modelCompleted?.stopReason).toBe("length");
     expect(captured).not.toHaveProperty("MediaPath");
     expect(captured).not.toHaveProperty("MediaType");
     expect(captured?.["__openclaw"]).toMatchObject({

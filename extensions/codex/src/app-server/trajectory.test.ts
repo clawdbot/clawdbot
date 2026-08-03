@@ -236,6 +236,26 @@ describe("Codex trajectory recorder", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("records the canonical assistant stop reason on model completion", async () => {
+    const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
+
+    recordCodexTrajectoryCompletion(recorder, {
+      attempt: {} as never,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      timedOut: false,
+      result: {
+        terminal: { kind: "ok" },
+        assistantTexts: ["truncated"],
+        lastAssistant: { stopReason: "length" },
+        messagesSnapshot: [],
+      } as never,
+    });
+    await recorder.flush();
+
+    expect(events[0]?.data?.stopReason).toBe("length");
+  });
+
   it("preserves usage when truncating oversized model completion events", async () => {
     const attempt = {
       sessionId: "session-1",

@@ -69,6 +69,7 @@ export function finalizeEmbeddedAttempt(
     promptCache: result.promptCache,
     compactionCount: result.compactionCount,
     assistantTexts: result.assistantTexts,
+    stopReason: result.lastAssistant?.stopReason,
     finalPromptText: result.finalPromptText,
     messagesSnapshot: result.messagesSnapshot,
   });
