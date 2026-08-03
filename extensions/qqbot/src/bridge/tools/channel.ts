@@ -22,9 +22,12 @@ function createChannelTool(
   // Bind credentials when the per-run tool is built; a process-wide account
   // selection would let one QQBot ingress account exercise another account's API authority.
   const activeConfig = context.runtimeConfig ?? cfg;
+  const activeChannel = context.messageChannel ?? context.deliveryContext?.channel;
   const account = resolveQQBotAccount(
     activeConfig,
-    context.agentAccountId ?? context.deliveryContext?.accountId,
+    activeChannel === "qqbot"
+      ? (context.agentAccountId ?? context.deliveryContext?.accountId)
+      : undefined,
   );
   if (!account.appId || !account.clientSecret) {
     return null;

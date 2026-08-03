@@ -78,7 +78,7 @@ describe("bridge/tools/channel", () => {
   });
 
   it("uses the active QQBot account for token acquisition and API authorization", async () => {
-    const tool = registerToolFactory()({ agentAccountId: "bot2" });
+    const tool = registerToolFactory()({ messageChannel: "qqbot", agentAccountId: "bot2" });
     expect(tool).not.toBeNull();
 
     await tool?.execute("call-b", { method: "GET", path: "/users/@me/guilds" });
@@ -124,7 +124,19 @@ describe("bridge/tools/channel", () => {
   });
 
   it("does not expose the tool when the active account has no credentials", () => {
-    expect(registerToolFactory()({ agentAccountId: "missing" })).toBeNull();
+    expect(
+      registerToolFactory()({ messageChannel: "qqbot", agentAccountId: "missing" }),
+    ).toBeNull();
     expect(getAccessTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("does not treat another channel's account ID as a QQBot account", async () => {
+    const tool = registerToolFactory()({ messageChannel: "discord", agentAccountId: "bot2" });
+    expect(tool).not.toBeNull();
+
+    await tool?.execute("call-discord", { method: "GET", path: "/users/@me/guilds" });
+
+    expect(getAccessTokenMock).toHaveBeenCalledWith("app-a", "secret-a");
+    expect(getAccessTokenMock).not.toHaveBeenCalledWith("app-b", "secret-b");
   });
 });
