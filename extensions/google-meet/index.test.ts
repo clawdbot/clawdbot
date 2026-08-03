@@ -677,9 +677,15 @@ type TwilioSetupCredentials = {
   fromNumber: string;
 };
 
-type SetupFullConfig = NonNullable<GoogleMeetSetupOptions["fullConfig"]>;
-type SetupPluginEntries = NonNullable<NonNullable<SetupFullConfig["plugins"]>["entries"]>;
-type TwilioVoiceCallEntry = SetupPluginEntries[string];
+type TwilioVoiceCallEntry = {
+  enabled: boolean;
+  config?: {
+    provider?: string;
+    publicUrl?: string;
+    fromNumber?: string;
+    twilio?: { accountSid?: string; authToken?: string };
+  };
+};
 
 async function runTwilioSetupStatus(params: {
   env?: TwilioSetupCredentials;

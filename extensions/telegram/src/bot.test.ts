@@ -229,7 +229,7 @@ function createTelegramPluginCallbackHandler(params: {
   registerPluginInteractiveHandler(params.pluginId ?? "codex-plugin", {
     channel: "telegram",
     namespace: params.namespace ?? "codexapp",
-    handler: params.handler,
+    handler: params.handler as never,
   });
   createTelegramBot({
     token: "tok",
