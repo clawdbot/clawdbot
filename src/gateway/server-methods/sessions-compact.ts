@@ -10,7 +10,6 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { stagedPostCompactionDelegateCount } from "../../auto-reply/continuation/delegate-store-post-compaction.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
