@@ -26,6 +26,7 @@ import {
   testState,
   writeSessionStore,
 } from "../test-helpers.js";
+import { sessionHandlerTestSurface } from "./server-sessions-handlers.test-support.js";
 
 export const getSessionManagerModule = createLazyRuntimeModule(
   () => import("../../agents/sessions/index.js"),
@@ -36,9 +37,7 @@ export const getGatewayConfigModule = createLazyRuntimeModule(
 );
 
 export async function getSessionsHandlers() {
-  return (
-    await import("./server-sessions-handlers.test-support.js")
-  ).getSessionHandlerTestSurface();
+  return sessionHandlerTestSurface;
 }
 
 type TestTranscriptMessage = Record<string, unknown> & {

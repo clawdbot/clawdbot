@@ -332,7 +332,7 @@ describe("session sharing handlers", () => {
           client,
           context: {
             ...context(vi.fn()),
-            loadGatewayModelCatalog: async () => {
+            readPreparedGatewayModelCatalog: async () => {
               await patchSessionEntry({ agentId: "main", sessionKey }, () => ({
                 visibility: "draft",
               }));
@@ -408,7 +408,7 @@ describe("session sharing handlers", () => {
         client: identifiedClient("outsider@example.com"),
         context: {
           ...context(vi.fn()),
-          loadGatewayModelCatalog: async () => {
+          readPreparedGatewayModelCatalog: async () => {
             await patchSessionEntry({ agentId: "main", sessionKey: hiddenKey }, () => ({
               visibility: "draft",
             }));
