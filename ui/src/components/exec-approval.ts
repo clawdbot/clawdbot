@@ -1,4 +1,5 @@
 // Control UI modal queues approvals that are not currently inline in chat.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import { modalApprovalQueue } from "../app/approval-presentation.ts";
@@ -27,7 +28,7 @@ type ExecApprovalProps = {
 
 function compactCommand(command: string): string {
   const singleLine = command.replace(/\s+/g, " ").trim();
-  return singleLine.length > 64 ? `${singleLine.slice(0, 61)}…` : singleLine;
+  return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
 }
 
 function renderApprovalQueueList(params: {
