@@ -711,6 +711,33 @@ report public networking with no Tailscale state before uploading any script.
 Owned AWS/Hetzner capacity also remains the fallback for Blacksmith outages,
 quota issues, or explicit owned-capacity testing.
 
+Automatic `ci-fast`, `ci-proof`, `ci-docker`, and `release-proof` routing admits new
+Blacksmith work only while the organization-wide inventory reports fewer than
+six active Testboxes. The wrapper requires Crabbox doctor output with
+`inventory_scope=all` and a numeric `active_leases`; a saturated, unavailable,
+or older inventory contract moves to the next eligible provider.
+
+| Workload                    | Automatic provider order        | Notes                                                                                                    |
+| --------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `ci-fast` (`ci`, `check`)   | Blacksmith, Daytona, Azure, AWS | Normal changed checks and short CI.                                                                      |
+| `ci-proof`                  | Blacksmith, Daytona, Azure, AWS | Broader non-Docker CI proof.                                                                             |
+| `ci-docker` (`docker`)      | Blacksmith, Azure, AWS          | Skips the standard non-DIND Daytona snapshot and upgrades generic Actions hydration to `hydrate-docker`. |
+| `release-proof` (`release`) | Blacksmith, Azure, AWS          | Keeps release evidence on established backends until Daytona has release-grade proof.                    |
+| `interactive`               | Daytona, Azure, AWS             | Prefers the fast sandbox path without reserving a warm pool.                                             |
+| `desktop` or `untrusted`    | Azure, AWS                      | Requires VM isolation or desktop capability; untrusted runs retain their separate fresh-lease rules.     |
+| Windows target              | Azure, AWS                      | Native Windows and WSL2 never route to Blacksmith or Daytona.                                            |
+| macOS target                | AWS                             | Uses the brokered macOS capacity path.                                                                   |
+
+Automatic Linux cloud fallbacks use bounded workload sizes: `ci-fast` pins
+Azure `Standard_D4ads_v6` or AWS `c7a.4xlarge`, while `ci-proof`, `ci-docker`,
+and `release-proof` pin Azure `Standard_D16ads_v6` or AWS `c7a.8xlarge`.
+Daytona keeps CPU, memory, and disk ownership in its configured snapshot.
+Explicit `--provider blacksmith-testbox` requests and reuse of an owned
+`--id` bypass this admission policy. This is load shedding rather than an
+atomic hard cap, and it does not create or retain a warm pool. Update Crabbox
+when automatic routing reports that the all-scope inventory contract is
+missing.
+
 Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
 first heavy command is ready, reuse the returned `tbx_...` id for later heavy
 commands, sync the current checkout on every run, and stop it before handoff.
@@ -732,7 +759,13 @@ Before a first run, check the wrapper from the repo root:
 pnpm crabbox:run -- --help | sed -n '1,120p'
 ```
 
-The repo wrapper refuses a stale Crabbox binary that does not advertise the selected provider, and Blacksmith-backed runs require Crabbox 0.22.0 or newer so the wrapper gets the current Testbox sync, queue, and cleanup behavior. In Codex worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script because pnpm may reconcile dependencies before Crabbox starts; invoke the node wrapper directly instead:
+The repo wrapper refuses a stale Crabbox binary that does not advertise the
+selected provider. Blacksmith-backed runs require Crabbox 0.41.0 or newer so
+admission can use all-organization inventory and a nonterminal active Testbox
+count, in addition to the current sync, queue, and cleanup behavior. In Codex
+worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script
+because pnpm may reconcile dependencies before Crabbox starts; invoke the node
+wrapper directly instead:
 
 ```bash
 node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"

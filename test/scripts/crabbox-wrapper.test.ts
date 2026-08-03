@@ -97,14 +97,22 @@ const optionValue = (name) => {
   return index >= 0 ? args[index + 1] || "" : assigned?.slice(assigned.indexOf("=") + 1) || "";
 };
 async function main() {
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.22.1"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.41.0"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "doctor") {
     const provider = optionValue("provider"); const target = optionValue("target"); const windowsMode = optionValue("windows-mode");
     if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET && target !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET) { process.stderr.write("doctor target mismatch: got=" + target + "\n"); process.exit(64); }
     if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE && windowsMode !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE) { process.stderr.write("doctor windows mode mismatch: got=" + windowsMode + "\n"); process.exit(64); }
     const unready = new Set((process.env.OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS || "").split(",").filter(Boolean));
-    const ready = !unready.has(provider); process[ready ? "stdout" : "stderr"].write(JSON.stringify({ ok: ready, provider }) + "\n");
+    const ready = !unready.has(provider);
+    if (Object.hasOwn(process.env, "OPENCLAW_FAKE_CRABBOX_DOCTOR_JSON")) {
+      process[ready ? "stdout" : "stderr"].write(process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_JSON + "\n");
+      process.exit(ready ? 0 : 1);
+    }
+    const details = provider === "blacksmith-testbox"
+      ? { provider, inventory_scope: "all", active_leases: process.env.OPENCLAW_FAKE_BLACKSMITH_ACTIVE_LEASES || "0" }
+      : { provider };
+    process[ready ? "stdout" : "stderr"].write(JSON.stringify({ ok: ready, provider, checks: [{ status: ready ? "ok" : "failed", check: "provider", provider, details }] }) + "\n");
     process.exit(ready ? 0 : 1);
   }
   if (args[0] === "run" || args[0] === "warmup") { ${stampClaimScript} }
@@ -175,7 +183,7 @@ function makeSlowCrabbox(helpText: string, mode: "help" | "version", delayMs: nu
 const args = process.argv.slice(2); const mode = ${JSON.stringify(mode)};
 if (args[0] === "--version") {
   if (mode === "version") setTimeout(() => process.exit(0), ${delayMs});
-  else console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.22.1");
+  else console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.41.0");
 } else if (args[0] === "run" && args[1] === "--help") {
   if (mode === "help") setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
   else process.stdout.write(${JSON.stringify(runHelpText)});
@@ -399,7 +407,7 @@ function runSuccessfulWrapper(helpText: string, args: string[], options: Wrapper
 function runBrokerWrapper(args: string[], options: WrapperOptions = {}) {
   return runWrapper(brokerProviderHelp, args, {
     ...options,
-    env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0", ...options.env },
+    env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.41.0", ...options.env },
   });
 }
 
@@ -730,8 +738,37 @@ describe("scripts/crabbox-wrapper", () => {
       },
     );
     expect(output.args).toContain("daytona");
+    expect(output.args).not.toContain("--type");
     expect(result.stderr).toContain(
       "route workload=ci-fast selected=daytona chain=blacksmith-testbox,daytona,azure,aws",
+    );
+  });
+
+  it("routes away from Blacksmith at the active Testbox admission limit", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      ["run", "--workload", "ci-fast", "--", "echo ok"],
+      {
+        env: {
+          OPENCLAW_FAKE_BLACKSMITH_ACTIVE_LEASES: "6",
+        },
+      },
+    );
+    expect(output.args).toContain("daytona");
+    expect(result.stderr).toContain("blacksmith-testbox:active Testboxes 6/6");
+  });
+
+  it("fails closed to Daytona when Blacksmith all-scope inventory is unavailable", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      ["run", "--workload", "ci-fast", "--", "echo ok"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_DOCTOR_JSON: '{"ok":true,"provider":"blacksmith-testbox"}',
+        },
+      },
+    );
+    expect(output.args).toContain("daytona");
+    expect(result.stderr).toContain(
+      "blacksmith-testbox:doctor lacks all-scope Blacksmith active lease inventory",
     );
   });
 
@@ -745,7 +782,123 @@ describe("scripts/crabbox-wrapper", () => {
       },
     );
     expect(output.args).toContain("aws");
+    expect(output.args).toContain("c7a.4xlarge");
     expect(result.stderr).toContain("selected=aws");
+  });
+
+  it.each([
+    {
+      workload: "ci-fast",
+      provider: "azure",
+      unavailable: "blacksmith-testbox,daytona",
+      type: "Standard_D4ads_v6",
+    },
+    {
+      workload: "ci-fast",
+      provider: "aws",
+      unavailable: "blacksmith-testbox,daytona,azure",
+      type: "c7a.4xlarge",
+    },
+    {
+      workload: "ci-proof",
+      provider: "azure",
+      unavailable: "blacksmith-testbox,daytona",
+      type: "Standard_D16ads_v6",
+    },
+    {
+      workload: "ci-proof",
+      provider: "aws",
+      unavailable: "blacksmith-testbox,daytona,azure",
+      type: "c7a.8xlarge",
+    },
+    {
+      workload: "ci-docker",
+      provider: "azure",
+      unavailable: "blacksmith-testbox",
+      type: "Standard_D16ads_v6",
+    },
+    {
+      workload: "ci-docker",
+      provider: "aws",
+      unavailable: "blacksmith-testbox,azure",
+      type: "c7a.8xlarge",
+    },
+    {
+      workload: "release-proof",
+      provider: "azure",
+      unavailable: "blacksmith-testbox",
+      type: "Standard_D16ads_v6",
+    },
+    {
+      workload: "release-proof",
+      provider: "aws",
+      unavailable: "blacksmith-testbox,azure",
+      type: "c7a.8xlarge",
+    },
+  ])(
+    "pins automatic $workload $provider fallback to $type",
+    ({ workload, provider, unavailable, type }) => {
+      const { output } = runSuccessfulBrokerWrapper(
+        ["run", "--workload", workload, "--", "echo ok"],
+        {
+          env: {
+            OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: unavailable,
+          },
+        },
+      );
+
+      expect(output.args).toContain(provider);
+      expect(output.args).toContain("--type");
+      expect(output.args).toContain(type);
+    },
+  );
+
+  it.each([
+    {
+      name: "explicit provider",
+      args: ["run", "--workload", "ci-fast", "--provider", "azure", "--", "echo ok"],
+    },
+    {
+      name: "explicit type",
+      args: [
+        "run",
+        "--workload",
+        "ci-fast",
+        "--provider",
+        "aws",
+        "--type",
+        "c7a.12xlarge",
+        "--",
+        "echo ok",
+      ],
+    },
+    {
+      name: "explicit class",
+      args: [
+        "run",
+        "--workload",
+        "ci-fast",
+        "--provider",
+        "aws",
+        "--class",
+        "fast",
+        "--",
+        "echo ok",
+      ],
+    },
+  ])("preserves $name capacity intent", ({ args }) => {
+    const { output } = runSuccessfulBrokerWrapper(args, {
+      env: {
+        OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "blacksmith-testbox,daytona",
+      },
+    });
+
+    if (args.includes("--type")) {
+      expect(output.args.filter((arg: string) => arg === "--type")).toHaveLength(1);
+      expect(output.args).toContain("c7a.12xlarge");
+    } else {
+      expect(output.args).not.toContain("--type");
+    }
   });
 
   it("keeps the configured provider when no workload is requested", () => {
@@ -812,7 +965,7 @@ describe("scripts/crabbox-wrapper", () => {
         "--workload",
         "ci-fast",
         "--idle-timeout",
-        "90m",
+        "30m",
         "--ttl",
         "240m",
         "--timing-json",
@@ -831,7 +984,7 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(output.args).toContain("daytona");
     expect(output.args).not.toContain("blacksmith-testbox");
-    expect(output.args).toContain("90m");
+    expect(output.args).toContain("30m");
     expect(output.args).toContain("240m");
     expect(output.args.slice(-3)).toEqual(["corepack", "pnpm", "check:changed"]);
     expect(result.stderr).toContain("route workload=ci-fast selected=daytona");
@@ -918,6 +1071,7 @@ describe("scripts/crabbox-wrapper", () => {
       },
     );
     expect(output.args).toContain("aws");
+    expect(output.args).not.toContain("--type");
     expect(result.stderr).toContain("chain=aws");
   });
 
@@ -942,6 +1096,7 @@ describe("scripts/crabbox-wrapper", () => {
       },
     );
     expect(output.args).toContain("azure");
+    expect(output.args).not.toContain("--type");
     expect(result.stderr).toContain("chain=azure,aws");
   });
 
@@ -950,6 +1105,17 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("workload=windows requires target=windows");
+    expect(result.stdout).toBe("");
+  });
+
+  it("rejects Docker CI on non-Linux targets", () => {
+    const result = runBrokerWrapper(
+      ["run", "--workload", "ci-docker", "--target", "windows", "--", "echo ok"],
+      {},
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("workload=ci-docker requires target=linux");
     expect(result.stdout).toBe("");
   });
 
@@ -983,12 +1149,12 @@ describe("scripts/crabbox-wrapper", () => {
     const { output, result } = runSuccessfulBrokerWrapper(
       ["run", "--workload", "ci-fast", "--", "echo ok"],
       {
-        env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.21.9" },
+        env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
       },
     );
-    expect(output.args).toContain("azure");
+    expect(output.args).toContain("daytona");
     expect(result.stderr).toContain(
-      "blacksmith-testbox:requires Crabbox >= 0.22.0 for Blacksmith Testbox",
+      "blacksmith-testbox:requires Crabbox >= 0.41.0 for Blacksmith all-scope inventory",
     );
   });
 
@@ -1025,7 +1191,7 @@ describe("scripts/crabbox-wrapper", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("crabbox 0.22.1");
+    expect(result.stdout.trim()).toBe("crabbox 0.41.0");
     expect(result.stderr).not.toContain("route workload=");
   });
 
@@ -1033,7 +1199,7 @@ describe("scripts/crabbox-wrapper", () => {
     const result = runDefaultWrapper(["--version", "--workload", "surprise"]);
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("crabbox 0.22.1");
+    expect(result.stdout.trim()).toBe("crabbox 0.41.0");
     expect(result.stderr).not.toContain("unsupported Crabbox workload");
   });
 
@@ -1242,7 +1408,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("no ready provider for workload=ci-fast");
     expect(result.stderr).toContain("provider readiness");
-    expect(result.stderr).toContain('{"ok":false,"provider":"blacksmith-testbox"}');
+    expect(result.stderr).toContain('{"ok":false,"provider":"blacksmith-testbox"');
     expect(result.stderr).toMatch(
       /recovery: run `\S+crabbox doctor --provider blacksmith-testbox --json`/u,
     );
@@ -1290,31 +1456,31 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("requires a current Crabbox binary for Blacksmith Testbox runs", () => {
     const result = runDefaultWrapper(["run", "--provider", "blacksmith-testbox", "--", "echo ok"], {
-      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.21.9" },
+      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
     });
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=blacksmith-testbox requires Crabbox >= 0.22.0");
-    expect(result.stderr).toContain("selected binary reported version=crabbox 0.21.9");
+    expect(result.stderr).toContain("provider=blacksmith-testbox requires Crabbox >= 0.41.0");
+    expect(result.stderr).toContain("selected binary reported version=crabbox 0.40.0");
   });
 
   it("applies the Blacksmith version gate to provider aliases", () => {
     const result = runDefaultWrapper(["run", "--provider", "blacksmith", "--", "echo ok"], {
-      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.21.9" },
+      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
     });
 
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("provider=blacksmith-testbox requires Crabbox >= 0.22.0");
+    expect(result.stderr).toContain("provider=blacksmith-testbox requires Crabbox >= 0.41.0");
   });
 
   it("rejects prerelease Crabbox builds at the Blacksmith minimum boundary", () => {
     const result = runDefaultWrapper(["run", "--provider", "blacksmith-testbox", "--", "echo ok"], {
-      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.0-rc.1" },
+      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.41.0-rc.1" },
     });
 
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("selected binary reported version=crabbox 0.22.0-rc.1");
+    expect(result.stderr).toContain("selected binary reported version=crabbox 0.41.0-rc.1");
   });
 
   it("rejects unsafe Crabbox version numbers at the Blacksmith minimum gate", () => {
@@ -1330,7 +1496,7 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("accepts post-release Crabbox describe builds at the Blacksmith minimum boundary", () => {
     const result = runDefaultWrapper(["run", "--provider", "blacksmith-testbox", "--", "echo ok"], {
-      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.0-3-gabc1234" },
+      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.41.0-3-gabc1234" },
     });
 
     expect(result.status).toBe(0);
@@ -1361,7 +1527,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("direct `blacksmith testbox warmup` leases");
   });
 
-  it("allows reused Blacksmith Testboxes when the Crabbox SSH key exists", () => {
+  it("allows owned Blacksmith lease reuse to bypass automatic admission", () => {
     const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
     tempDirs.push(home);
     const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", "tbx_owned", "id_ed25519");
@@ -1369,8 +1535,23 @@ describe("scripts/crabbox-wrapper", () => {
     writeFileSync(keyPath, "fake test key\n", "utf8");
 
     const result = runDefaultWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--id", "tbx_owned", "--", "echo ok"],
-      { env: testHomeEnv(home) },
+      [
+        "run",
+        "--workload",
+        "ci-fast",
+        "--provider",
+        "blacksmith-testbox",
+        "--id",
+        "tbx_owned",
+        "--",
+        "echo ok",
+      ],
+      {
+        env: {
+          ...testHomeEnv(home),
+          OPENCLAW_FAKE_BLACKSMITH_ACTIVE_LEASES: "99",
+        },
+      },
     );
 
     expect(result.status).toBe(0);
@@ -1820,6 +2001,56 @@ describe("scripts/crabbox-wrapper", () => {
     const { output } = runSuccessfulWindowsHydrate(...args);
 
     expect(output.args).toEqual(windowsHydrateArgs(...args));
+  });
+
+  it("upgrades generic Docker CI hydration to the Docker-required job", () => {
+    const { output } = runSuccessfulBrokerWrapper([
+      "actions",
+      "hydrate",
+      "--workload",
+      "ci-docker",
+      "--provider",
+      "azure",
+      "--target",
+      "linux",
+      "--id",
+      "cbx_existing",
+      "--job",
+      "hydrate",
+    ]);
+
+    expect(output.args).toEqual([
+      "actions",
+      "hydrate",
+      "--provider",
+      "azure",
+      "--target",
+      "linux",
+      "--id",
+      "cbx_existing",
+      "--job",
+      "hydrate-docker",
+    ]);
+  });
+
+  it("preserves an explicit specialized Docker CI hydration job", () => {
+    const { output } = runSuccessfulBrokerWrapper([
+      "actions",
+      "hydrate",
+      "--workload",
+      "ci-docker",
+      "--provider",
+      "azure",
+      "--target",
+      "linux",
+      "--id",
+      "cbx_existing",
+      "--job",
+      "hydrate-github",
+    ]);
+
+    expect(output.args).toContain("hydrate-github");
+    expect(output.args).not.toContain("hydrate-docker");
   });
 
   it("keeps WSL2 hydrate actions on the requested job", () => {

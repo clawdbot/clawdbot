@@ -228,7 +228,7 @@ export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
     // Keep workload-routed calls provider-neutral. Blacksmith reads its workflow
     // defaults from .crabbox.yaml; cloud fallbacks must not receive its flags.
     "--idle-timeout",
-    "90m",
+    "30m",
     "--ttl",
     "240m",
     "--timing-json",

@@ -21,7 +21,12 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
-import { crabboxProviderChain, normalizeCrabboxWorkload } from "./crabbox-routing-policy.mjs";
+import {
+  crabboxProviderChain,
+  crabboxWorkloadHydrateJob,
+  crabboxWorkloadServerType,
+  normalizeCrabboxWorkload,
+} from "./crabbox-routing-policy.mjs";
 import {
   canonicalProviderName,
   isProviderAdvertised,
@@ -37,6 +42,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
 const MAX_TIMING_JSON_LINE_CHARS = 1024 * 1024;
 const REMOTE_CHANGED_GATE_BUNDLE_FILE = ".openclaw-crabbox-changed-gate.bundle";
+const BLACKSMITH_TESTBOX_ADMISSION_LIMIT = 6;
 // A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
 // exceed the snappy default probe timeout while it renders `run --help` or does
 // first-run init. Retry the metadata probes once with this generous timeout so a
@@ -266,7 +272,7 @@ const awsMacosPackageManagerScriptTargets = new Set([
   "scripts/package-mac-dist.sh",
   "scripts/restart-mac.sh",
 ]);
-const minimumBlacksmithCrabboxVersion = [0, 22, 0];
+const minimumBlacksmithCrabboxVersion = [0, 41, 0];
 const minimumBrokeredDaytonaCrabboxVersion = [0, 40, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
@@ -708,6 +714,15 @@ function selectedProvider(commandArgs, advertisedProviders = [], versionText = "
       error: "Crabbox workload=windows requires target=windows",
     };
   }
+  if (workload === "ci-docker" && (targetContext.target || "linux") !== "linux") {
+    return {
+      provider: "",
+      source: "policy",
+      workload,
+      chain: [],
+      error: "Crabbox workload=ci-docker requires target=linux",
+    };
+  }
   const configured = canonicalProviderName(configProvider());
   const chain = workload
     ? crabboxProviderChain({
@@ -822,7 +837,7 @@ function crabboxProviderReadiness(providerName, versionText, targetContext) {
   ) {
     return {
       ready: false,
-      reason: `requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for Blacksmith Testbox`,
+      reason: `requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for Blacksmith all-scope inventory`,
       recovery: "update Crabbox, then retry",
     };
   }
@@ -860,7 +875,58 @@ function crabboxProviderReadiness(providerName, versionText, targetContext) {
       recovery: `run \`${recoveryCommand(doctorArgs)}\``,
     };
   }
+  if (canonicalProvider === "blacksmith-testbox") {
+    return blacksmithTestboxReadiness(doctor.stdout, doctorArgs);
+  }
   return { ready: true, reason: "doctor-ready" };
+}
+
+function blacksmithTestboxReadiness(output, doctorArgs) {
+  let parsed;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    return {
+      ready: false,
+      reason: "doctor did not return valid JSON inventory",
+      recovery: `run \`${recoveryCommand(doctorArgs)}\``,
+    };
+  }
+  const providerCheck = Array.isArray(parsed?.checks)
+    ? parsed.checks.find(
+        (check) =>
+          check?.check === "provider" &&
+          canonicalProviderName(check?.provider ?? check?.details?.provider ?? "") ===
+            "blacksmith-testbox",
+      )
+    : undefined;
+  const inventoryScope = providerCheck?.details?.inventory_scope;
+  const rawActiveLeases = providerCheck?.details?.active_leases;
+  if (inventoryScope !== "all" || !/^\d+$/u.test(`${rawActiveLeases ?? ""}`)) {
+    return {
+      ready: false,
+      reason: "doctor lacks all-scope Blacksmith active lease inventory",
+      recovery: "update Crabbox, then retry",
+    };
+  }
+  const activeLeases = Number.parseInt(rawActiveLeases, 10);
+  if (!Number.isSafeInteger(activeLeases)) {
+    return {
+      ready: false,
+      reason: "doctor returned an invalid Blacksmith active lease count",
+      recovery: `run \`${recoveryCommand(doctorArgs)}\``,
+    };
+  }
+  if (activeLeases >= BLACKSMITH_TESTBOX_ADMISSION_LIMIT) {
+    return {
+      ready: false,
+      reason: `active Testboxes ${activeLeases}/${BLACKSMITH_TESTBOX_ADMISSION_LIMIT}`,
+    };
+  }
+  return {
+    ready: true,
+    reason: `doctor-ready active=${activeLeases}/${BLACKSMITH_TESTBOX_ADMISSION_LIMIT}`,
+  };
 }
 
 function compactDiagnosticText(value, maxLength = 500) {
@@ -1028,6 +1094,29 @@ function ensurePolicyProvider(commandArgs, selection) {
   return normalizedArgs;
 }
 
+function ensurePolicyCapacity(commandArgs, selection, targetContext) {
+  if (
+    selection.source !== "policy" ||
+    !selection.provider ||
+    hasOption(commandArgs, "--id") ||
+    hasOption(commandArgs, "--class") ||
+    hasOption(commandArgs, "--type")
+  ) {
+    return commandArgs;
+  }
+  const serverType = crabboxWorkloadServerType({
+    workload: selection.workload,
+    provider: canonicalProviderName(selection.provider),
+    target: targetContext.target,
+  });
+  if (!serverType) {
+    return commandArgs;
+  }
+  const normalizedArgs = [...commandArgs];
+  normalizedArgs.splice(commandOptionEnd(normalizedArgs), 0, "--type", serverType);
+  return normalizedArgs;
+}
+
 function ensureAwsMacOnDemandMarket(commandArgs, providerName) {
   if (
     !["run", "warmup"].includes(commandArgs[0]) ||
@@ -1054,13 +1143,26 @@ function ensureNativeWindowsHydrateJob(commandArgs) {
     return commandArgs;
   }
 
+  return replaceGenericHydrateJob(commandArgs, "hydrate-windows-daemon");
+}
+
+function ensureWorkloadHydrateJob(commandArgs, selection, targetContext) {
+  if (commandArgs[0] !== "actions" || commandArgs[1] !== "hydrate") {
+    return commandArgs;
+  }
+  const replacementJob = crabboxWorkloadHydrateJob({
+    workload: selection.workload,
+    target: targetContext.target,
+  });
+  return replacementJob ? replaceGenericHydrateJob(commandArgs, replacementJob) : commandArgs;
+}
+
+function replaceGenericHydrateJob(commandArgs, replacementJob) {
   const currentJob = optionValue(commandArgs, "--job");
   if (currentJob && currentJob !== "hydrate") {
     return commandArgs;
   }
-
   const normalizedArgs = [...commandArgs];
-  const replacementJob = "hydrate-windows-daemon";
   const optionEnd = commandOptionEnd(normalizedArgs);
   for (let index = 0; index < optionEnd; index += 1) {
     const arg = normalizedArgs[index];
@@ -3670,10 +3772,19 @@ if (providerSelection.error) {
 const provider = providerSelection.provider;
 const canonicalProvider = canonicalProviderName(provider);
 const commandProviderValue = commandProvider(args);
+const targetContext = effectiveTargetContext(args);
 let normalizedArgs = ensureAwsMacOnDemandMarket(
-  ensurePolicyProvider(
-    ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
+  ensurePolicyCapacity(
+    ensurePolicyProvider(
+      ensureWorkloadHydrateJob(
+        ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
+        providerSelection,
+        targetContext,
+      ),
+      providerSelection,
+    ),
     providerSelection,
+    targetContext,
   ),
   provider,
 );
@@ -3714,7 +3825,7 @@ if (canonicalProvider === "blacksmith-testbox") {
   if (!satisfiesMinimumCrabboxVersion(version.text, minimumBlacksmithCrabboxVersion)) {
     console.error(
       [
-        `[crabbox] provider=blacksmith-testbox requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for current Testbox sync, queue, and cleanup behavior.`,
+        `[crabbox] provider=blacksmith-testbox requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for all-scope Testbox inventory and current sync, queue, and cleanup behavior.`,
         `[crabbox] selected binary reported version=${version.text || "unknown"}.`,
         "[crabbox] if using ../crabbox, rebuild it: version=$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//') && go build -C ../crabbox -trimpath -ldflags \"-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}\" -o bin/crabbox ./cmd/crabbox",
       ].join("\n"),

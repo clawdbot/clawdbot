@@ -1,4 +1,5 @@
 export type CrabboxWorkload =
+  | "ci-docker"
   | "ci-fast"
   | "ci-proof"
   | "desktop"
@@ -13,6 +14,17 @@ export type CrabboxProviderReadiness = {
 };
 
 export function normalizeCrabboxWorkload(value: unknown): CrabboxWorkload | "" | null;
+
+export function crabboxWorkloadServerType(options: {
+  workload: CrabboxWorkload | "";
+  provider: string;
+  target: string;
+}): string;
+
+export function crabboxWorkloadHydrateJob(options: {
+  workload: CrabboxWorkload | "";
+  target: string;
+}): string;
 
 export function crabboxProviderChain(options: {
   workload: CrabboxWorkload | "";

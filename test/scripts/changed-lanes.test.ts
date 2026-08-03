@@ -1147,7 +1147,7 @@ describe("scripts/changed-lanes", () => {
       "--workload",
       "ci-fast",
       "--idle-timeout",
-      "90m",
+      "30m",
       "--ttl",
       "240m",
       "--timing-json",
