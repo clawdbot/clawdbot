@@ -3313,6 +3313,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
         promptBudgetBeforeReserve: 7000,
         overflowTokens: 2000,
         toolResultReducibleChars: 0,
+        toolResultAggregateBudgetChars: 10_000,
         effectiveReserveTokens: 1000,
       });
       return () => {};
@@ -3355,6 +3356,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
       estimatedPromptTokens: 9000,
       promptBudgetBeforeReserve: 7000,
       overflowTokens: 2000,
+      toolResultAggregateBudgetChars: 10_000,
     });
     expect(result.messagesSnapshot).toEqual([seedMessage]);
   });

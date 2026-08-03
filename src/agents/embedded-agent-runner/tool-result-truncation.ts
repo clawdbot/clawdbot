@@ -636,6 +636,7 @@ export function truncateOversizedToolResultsInMessages(
   maxCharsOverride?: number,
   aggregateMaxCharsOverride?: number,
   projectionState?: ToolResultPromptProjectionState,
+  protectTrailingToolResults = Boolean(projectionState),
 ): {
   messages: AgentMessage[];
   truncatedCount: number;
@@ -667,7 +668,7 @@ export function truncateOversizedToolResultsInMessages(
     maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
-    protectTrailingToolResults: Boolean(projectionState),
+    protectTrailingToolResults,
   });
   const replacedBranch = plan.branch;
   if (projectionState) {
@@ -1364,6 +1365,7 @@ export function sessionLikelyHasOversizedToolResults(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
 }): boolean {
   const estimate = estimateToolResultReductionPotential(params);
   return estimate.oversizedCount > 0 || estimate.aggregateReducibleChars > 0;

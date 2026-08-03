@@ -626,6 +626,12 @@ describe("installContextEngineLoopHook", () => {
       contextTokenBudget?: number;
       reserveTokens?: number;
       toolResultMaxChars?: number;
+      projectionState?: {
+        replacements: Map<string, AgentMessage>;
+        frozen: Set<string>;
+        ambiguousBaseKeys: Set<string>;
+        sourceTextByKey: Map<string, string[]>;
+      };
     } = {},
   ): () => void {
     // Install engine assembly before the generic guard to prove owner compaction
@@ -639,6 +645,7 @@ describe("installContextEngineLoopHook", () => {
         contextTokenBudget: options.contextTokenBudget ?? 20_000,
         reserveTokens: () => options.reserveTokens ?? 12_000,
         toolResultMaxChars: options.toolResultMaxChars,
+        projectionState: options.projectionState,
         getSystemPrompt: () => "sys",
         ...(options.prePromptCount !== undefined
           ? { getPrePromptMessageCount: () => options.prePromptCount as number }
@@ -720,6 +727,112 @@ describe("installContextEngineLoopHook", () => {
     expect(transformed).toBe(compactedView);
     expect(engine.afterTurn).toHaveBeenCalledTimes(1);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses raw tool results as the recovery budget when ownsCompaction assembly still overflows", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({
+      assemble: async () => ({
+        messages: [makeUser("assembled summary ".repeat(5_000))],
+        estimatedTokens: 20_000,
+      }),
+    });
+    installOwnsCompactionHookWithGuard(agent, engine, {
+      prePromptCount: 1,
+      contextWindowTokens: 200_000,
+      contextTokenBudget: 20_000,
+      reserveTokens: 12_000,
+      toolResultMaxChars: 16_000,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
+
+    try {
+      await callTransform(agent, messages);
+      throw new Error("expected mid-turn precheck signal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
+      const request = (err as MidTurnPrecheckSignal).request;
+      expect(request.route).not.toBe("compact_only");
+      expect(request.toolResultReducibleChars).toBeGreaterThan(0);
+      expect(request.toolResultAggregateBudgetChars).toBeGreaterThan(0);
+    }
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("tightens an assembled-view truncation budget using raw tool results", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({
+      assemble: async () => ({
+        messages: [
+          makeUser("summary ".repeat(3_000)),
+          makeToolResult("assembled", "y".repeat(50_000)),
+        ],
+        estimatedTokens: 20_000,
+      }),
+    });
+    installOwnsCompactionHookWithGuard(agent, engine, {
+      prePromptCount: 1,
+      contextWindowTokens: 200_000,
+      contextTokenBudget: 20_000,
+      reserveTokens: 12_000,
+      toolResultMaxChars: 16_000,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
+
+    try {
+      await callTransform(agent, messages);
+      throw new Error("expected mid-turn precheck signal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
+      const request = (err as MidTurnPrecheckSignal).request;
+      expect(request.route).not.toBe("compact_only");
+      expect(request.toolResultAggregateBudgetChars).toBeDefined();
+    }
+  });
+
+  it("recovers an oversized owner-assembled tool tail in memory without rewriting history", async () => {
+    const agent = makeGuardableAgent();
+    const assembledMessages = [
+      makeUser("assembled summary"),
+      ...Array.from({ length: 12 }, (_, index) =>
+        makeToolResult(`call_${index}`, String(index % 10).repeat(30_000)),
+      ),
+    ];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: assembledMessages, estimatedTokens: 200_000 }),
+    });
+    const projectionState = {
+      replacements: new Map<string, AgentMessage>(),
+      frozen: new Set<string>(),
+      ambiguousBaseKeys: new Set<string>(),
+      sourceTextByKey: new Map<string, string[]>(),
+    };
+    installOwnsCompactionHookWithGuard(agent, engine, {
+      prePromptCount: 1,
+      contextWindowTokens: 200_000,
+      contextTokenBudget: 200_000,
+      reserveTokens: 36_000,
+      toolResultMaxChars: 64_000,
+      projectionState,
+    });
+
+    const rawMessages = [
+      makeUser("first"),
+      ...Array.from({ length: 12 }, (_, index) =>
+        makeToolResult(`call_${index}`, String(index % 10).repeat(30_000)),
+      ),
+    ];
+    const transformed = (await callTransform(agent, rawMessages)) as AgentMessage[];
+
+    expect(transformed).not.toBe(assembledMessages);
+    expect(transformed.some((message) => getToolResultText(message).length < 30_000)).toBe(true);
+    expect(
+      assembledMessages.slice(1).every((message) => getToolResultText(message).length === 30_000),
+    ).toBe(true);
+    expect(projectionState.replacements.size).toBeGreaterThan(0);
   });
 
   it("processes the first call when messages already exceed the pre-prompt baseline", async () => {

@@ -31,6 +31,21 @@ const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
 const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
+export function resolveOverflowToolResultAggregateBudget(params: {
+  overflowTokens: number;
+  totalToolResultChars: number;
+}): { aggregateBudgetChars: number; requiredReductionChars: number } {
+  const requiredReductionChars = Math.ceil(
+    ((Math.max(0, params.overflowTokens) + TRUNCATION_ROUTE_BUFFER_TOKENS) *
+      TOOL_RESULT_CHARS_PER_TOKEN) /
+      SAFETY_MARGIN,
+  );
+  return {
+    aggregateBudgetChars: Math.max(1, params.totalToolResultChars - requiredReductionChars),
+    requiredReductionChars,
+  };
+}
+
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
 export type PreemptiveCompactionDecision = {
   route: PreemptiveCompactionRoute;
@@ -40,6 +55,7 @@ export type PreemptiveCompactionDecision = {
   promptBudgetBeforeReserve: number;
   overflowTokens: number;
   toolResultReducibleChars: number;
+  toolResultAggregateBudgetChars?: number;
   effectiveReserveTokens: number;
 };
 
@@ -318,17 +334,31 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   );
   const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
-  const toolResultPotential = estimateToolResultReductionPotential({
+  const defaultToolResultPotential = estimateToolResultReductionPotential({
     messages: messagesForPressure,
     contextWindowTokens: params.contextTokenBudget,
     maxCharsOverride: params.toolResultMaxChars,
   });
-  const overflowChars = overflowTokens * ESTIMATED_CHARS_PER_TOKEN;
-  const truncationBufferChars = TRUNCATION_ROUTE_BUFFER_TOKENS * ESTIMATED_CHARS_PER_TOKEN;
-  const truncateOnlyThresholdChars = Math.max(
-    overflowChars + truncationBufferChars,
-    Math.ceil(overflowChars * 1.5),
-  );
+  // Route and truncation must use the same conservative tool-result ratio as the
+  // prompt estimate. The default aggregate cap uses a broader 4 chars/token
+  // history heuristic, which can otherwise report zero reducible bytes for an
+  // already-overflowing prompt made of many individually valid results.
+  const overflowBudget = resolveOverflowToolResultAggregateBudget({
+    overflowTokens,
+    totalToolResultChars: defaultToolResultPotential.totalToolResultChars,
+  });
+  const toolResultPotential =
+    overflowTokens > 0 && defaultToolResultPotential.totalToolResultChars > 0
+      ? estimateToolResultReductionPotential({
+          messages: messagesForPressure,
+          contextWindowTokens: params.contextTokenBudget,
+          maxCharsOverride: params.toolResultMaxChars,
+          aggregateMaxCharsOverride: Math.min(
+            defaultToolResultPotential.aggregateBudgetChars,
+            overflowBudget.aggregateBudgetChars,
+          ),
+        })
+      : defaultToolResultPotential;
   const toolResultReducibleChars = toolResultPotential.maxReducibleChars;
 
   let route: PreemptiveCompactionRoute = "fits";
@@ -336,7 +366,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     // Choose truncate-only only when available reduction comfortably exceeds the overflow.
     if (toolResultReducibleChars <= 0) {
       route = "compact_only";
-    } else if (toolResultReducibleChars >= truncateOnlyThresholdChars) {
+    } else if (toolResultReducibleChars >= overflowBudget.requiredReductionChars) {
       route = "truncate_tool_results_only";
     } else {
       route = "compact_then_truncate";
@@ -350,6 +380,9 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     promptBudgetBeforeReserve,
     overflowTokens,
     toolResultReducibleChars,
+    ...(overflowTokens > 0 && defaultToolResultPotential.totalToolResultChars > 0
+      ? { toolResultAggregateBudgetChars: toolResultPotential.aggregateBudgetChars }
+      : {}),
     effectiveReserveTokens,
   };
 }

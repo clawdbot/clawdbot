@@ -24,6 +24,7 @@ const request = {
   promptBudgetBeforeReserve: 100,
   overflowTokens: 50,
   toolResultReducibleChars: 0,
+  toolResultAggregateBudgetChars: 20_000,
   effectiveReserveTokens: 20,
 };
 
@@ -62,6 +63,7 @@ describe("attempt prompt preflight", () => {
         estimatedPromptTokens: 150,
         promptBudgetBeforeReserve: 100,
         overflowTokens: 50,
+        toolResultAggregateBudgetChars: 20_000,
       },
       promptError: expect.objectContaining({ message: PREEMPTIVE_OVERFLOW_ERROR_TEXT }),
     });

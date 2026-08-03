@@ -182,6 +182,7 @@ export type EmbeddedRunAttemptResult = {
         estimatedPromptTokens?: number;
         promptBudgetBeforeReserve?: number;
         overflowTokens?: number;
+        toolResultAggregateBudgetChars?: number;
         handled: true;
         truncatedCount?: number;
       }
@@ -191,6 +192,7 @@ export type EmbeddedRunAttemptResult = {
         estimatedPromptTokens?: number;
         promptBudgetBeforeReserve?: number;
         overflowTokens?: number;
+        toolResultAggregateBudgetChars?: number;
         handled?: false;
       };
   sessionIdUsed: string;

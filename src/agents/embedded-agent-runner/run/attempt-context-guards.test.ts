@@ -88,6 +88,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
       promptBudgetBeforeReserve: 1_024,
       overflowTokens: 176,
       toolResultReducibleChars: 800,
+      toolResultAggregateBudgetChars: 4_000,
       effectiveReserveTokens: 64,
     };
     guardOptions.midTurnPrecheck.onMidTurnPrecheck(request);

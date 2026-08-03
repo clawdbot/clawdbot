@@ -181,6 +181,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionAgentId: input.sessionManager.sessionAgentId,
     sessionManager,
     settingsManager,
+    toolResultPromptProjectionState,
     sandbox: input.transport.sandbox,
   });
   input.lifecycle.onContextGuardsInstalled(contextGuards.remove);

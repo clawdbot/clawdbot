@@ -11,7 +11,11 @@ import type { AgentMessage } from "../runtime/index.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
-import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
+import {
+  resolveOverflowToolResultAggregateBudget,
+  shouldPreemptivelyCompactBeforePrompt,
+} from "./run/preemptive-compaction.js";
+import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
 import {
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
@@ -20,7 +24,10 @@ import {
   getToolResultText,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
-import { truncateToolResultText } from "./tool-result-truncation.js";
+import {
+  truncateOversizedToolResultsInMessages,
+  truncateToolResultText,
+} from "./tool-result-truncation.js";
 
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
@@ -43,6 +50,7 @@ type MidTurnPrecheckOptions = {
   toolResultMaxChars?: number;
   getSystemPrompt?: () => string | undefined;
   getPrePromptMessageCount?: () => number;
+  projectionState?: ToolResultPromptProjectionState;
   onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
 };
 
@@ -209,6 +217,17 @@ function hasNewToolResultAfterFence(params: {
   return false;
 }
 
+function estimateAggregateToolResultChars(messages: AgentMessage[]): number {
+  const estimateCache = createMessageCharEstimateCache();
+  let total = 0;
+  for (const message of messages) {
+    if (isToolResultMessage(message)) {
+      total += estimateMessageCharsCached(message, estimateCache);
+    }
+  }
+  return total;
+}
+
 function toMidTurnPrecheckRequest(
   result: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>,
 ): MidTurnPrecheckRequest | null {
@@ -221,6 +240,7 @@ function toMidTurnPrecheckRequest(
     promptBudgetBeforeReserve: result.promptBudgetBeforeReserve,
     overflowTokens: result.overflowTokens,
     toolResultReducibleChars: result.toolResultReducibleChars,
+    toolResultAggregateBudgetChars: result.toolResultAggregateBudgetChars,
     effectiveReserveTokens: result.effectiveReserveTokens,
   };
 }
@@ -405,20 +425,25 @@ export function installToolResultContextGuard(params: {
       maxSingleToolResultChars,
     });
     if (params.midTurnPrecheck?.enabled) {
+      const configuredPrePromptMessageCount =
+        lastSeenLength ?? params.midTurnPrecheck.getPrePromptMessageCount?.();
       const prePromptMessageCount = Math.max(
         0,
-        Math.min(
-          contextMessages.length,
-          lastSeenLength ??
-            params.midTurnPrecheck.getPrePromptMessageCount?.() ??
-            contextMessages.length,
-        ),
+        Math.min(contextMessages.length, configuredPrePromptMessageCount ?? contextMessages.length),
+      );
+      const rawPrePromptMessageCount = Math.max(
+        0,
+        Math.min(messages.length, configuredPrePromptMessageCount ?? messages.length),
       );
       lastSeenLength = prePromptMessageCount;
       if (
         hasNewToolResultAfterFence({
           messages: contextMessages,
           prePromptMessageCount,
+        }) ||
+        hasNewToolResultAfterFence({
+          messages,
+          prePromptMessageCount: rawPrePromptMessageCount,
         })
       ) {
         // Use the same post-truncation view the runtime will send to the next model call.
@@ -433,7 +458,109 @@ export function installToolResultContextGuard(params: {
           reserveTokens: params.midTurnPrecheck.reserveTokens(),
           toolResultMaxChars: params.midTurnPrecheck.toolResultMaxChars,
         });
-        const request = toMidTurnPrecheckRequest(precheck);
+        let request = toMidTurnPrecheckRequest(precheck);
+        // A compaction-owning context engine may return an assembled view whose
+        // tool results are summarized or represented as ordinary messages. If
+        // that view still overflows, retain the engine's first chance to compact
+        // but derive a truncate-only recovery budget from the raw transcript.
+        // The budget can then be applied to a provider-only projection, so this
+        // remains compatible with both owner-compaction engines and the built-in
+        // context path without discarding recallable history.
+        if (
+          request &&
+          sourceMessages !== messages &&
+          hasNewToolResultAfterFence({
+            messages,
+            prePromptMessageCount: rawPrePromptMessageCount,
+          })
+        ) {
+          const rawMessages = enforceToolResultLimit({
+            messages,
+            maxSingleToolResultChars,
+          });
+          const rawPrecheck = shouldPreemptivelyCompactBeforePrompt({
+            messages: rawMessages,
+            systemPrompt: params.midTurnPrecheck.getSystemPrompt?.(),
+            prompt: "",
+            contextTokenBudget: params.midTurnPrecheck.contextTokenBudget,
+            reserveTokens: params.midTurnPrecheck.reserveTokens(),
+            toolResultMaxChars: params.midTurnPrecheck.toolResultMaxChars,
+          });
+          const rawRequest = toMidTurnPrecheckRequest(rawPrecheck);
+          const rawToolResultChars = estimateAggregateToolResultChars(rawMessages);
+          const rawOverflowBudget = resolveOverflowToolResultAggregateBudget({
+            overflowTokens: request.overflowTokens,
+            totalToolResultChars: rawToolResultChars,
+          });
+          const rawAggregateBudgetChars = Math.min(
+            rawRequest?.toolResultAggregateBudgetChars ?? Number.POSITIVE_INFINITY,
+            rawOverflowBudget.aggregateBudgetChars,
+          );
+          if (rawToolResultChars > rawAggregateBudgetChars) {
+            const aggregateBudgetChars = Math.min(
+              request.toolResultAggregateBudgetChars ?? Number.POSITIVE_INFINITY,
+              rawAggregateBudgetChars,
+            );
+            request = {
+              ...request,
+              route:
+                request.route === "compact_only"
+                  ? rawToolResultChars - aggregateBudgetChars >=
+                    rawOverflowBudget.requiredReductionChars
+                    ? "truncate_tool_results_only"
+                    : "compact_then_truncate"
+                  : request.route,
+              toolResultReducibleChars: Math.max(
+                request.toolResultReducibleChars,
+                rawToolResultChars - aggregateBudgetChars,
+              ),
+              toolResultAggregateBudgetChars: aggregateBudgetChars,
+            };
+            log.info(
+              `[context-overflow-midturn-precheck] context-engine assembled view still overflowed; ` +
+                `using raw tool-result recovery route=${request.route} ` +
+                `aggregateBudgetChars=${aggregateBudgetChars}`,
+            );
+          }
+        }
+        if (
+          request?.toolResultAggregateBudgetChars !== undefined &&
+          (request.route === "truncate_tool_results_only" ||
+            request.route === "compact_then_truncate")
+        ) {
+          // Apply the recovery budget directly to the provider-boundary view. This is
+          // essential for compaction-owning engines: they may have already ingested the
+          // full tool payload into their private store, so truncating the transcript and
+          // retrying would simply make assemble() return the same oversized payload again.
+          // The projection preserves the full transcript/engine history for later recall.
+          const projected = truncateOversizedToolResultsInMessages(
+            contextMessages,
+            contextWindowTokens,
+            params.midTurnPrecheck.toolResultMaxChars,
+            request.toolResultAggregateBudgetChars,
+            params.midTurnPrecheck.projectionState,
+            false,
+          );
+          if (projected.messages !== contextMessages) {
+            const projectedPrecheck = shouldPreemptivelyCompactBeforePrompt({
+              messages: projected.messages,
+              systemPrompt: params.midTurnPrecheck.getSystemPrompt?.(),
+              prompt: "",
+              contextTokenBudget: params.midTurnPrecheck.contextTokenBudget,
+              reserveTokens: params.midTurnPrecheck.reserveTokens(),
+              toolResultMaxChars: params.midTurnPrecheck.toolResultMaxChars,
+            });
+            if (projectedPrecheck.route === "fits") {
+              log.info(
+                `[context-overflow-midturn-precheck] recovered in memory with provider-boundary ` +
+                  `tool-result projection truncatedCount=${projected.truncatedCount} ` +
+                  `aggregateBudgetChars=${projected.aggregateBudgetChars}`,
+              );
+              lastSeenLength = contextMessages.length;
+              return projected.messages;
+            }
+          }
+        }
         log.debug(
           `[context-overflow-midturn-precheck] tool-result-guard check route=${precheck.route} ` +
             `messages=${contextMessages.length} prePromptMessageCount=${prePromptMessageCount} ` +

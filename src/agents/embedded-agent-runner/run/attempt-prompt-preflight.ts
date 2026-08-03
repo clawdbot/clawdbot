@@ -38,7 +38,10 @@ type AttemptPromptPreflightState = {
 
 type PreflightRecoveryBudgetSnapshot = Pick<
   MidTurnPrecheckRequest,
-  "estimatedPromptTokens" | "promptBudgetBeforeReserve" | "overflowTokens"
+  | "estimatedPromptTokens"
+  | "promptBudgetBeforeReserve"
+  | "overflowTokens"
+  | "toolResultAggregateBudgetChars"
 >;
 
 // Carries the measured prompt budget into the outer recovery loop. The synthetic
@@ -49,6 +52,7 @@ function buildPreflightRecoveryBudgetSnapshot(snapshot: PreflightRecoveryBudgetS
     estimatedPromptTokens: snapshot.estimatedPromptTokens,
     promptBudgetBeforeReserve: snapshot.promptBudgetBeforeReserve,
     overflowTokens: snapshot.overflowTokens,
+    toolResultAggregateBudgetChars: snapshot.toolResultAggregateBudgetChars,
   };
 }
 
@@ -88,6 +92,7 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
       sessionManager: input.sessionManager,
       contextWindowTokens: contextTokenBudget,
       maxCharsOverride: toolResultMaxChars,
+      aggregateMaxCharsOverride: request.toolResultAggregateBudgetChars,
       sessionFile: attempt.sessionFile,
       sessionId: attempt.sessionId,
       sessionKey: attempt.sessionKey,
