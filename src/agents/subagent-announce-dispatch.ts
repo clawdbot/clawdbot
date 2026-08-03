@@ -19,6 +19,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "requester_abandoned"
+  | "session_file_changed"
   | "source_owner_changed"
   | "visible_reply_missing";
 

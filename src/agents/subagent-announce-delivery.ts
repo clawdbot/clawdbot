@@ -80,7 +80,7 @@ import type { SubagentCompletionToolHandoffRegistration } from "./subagent-annou
 import {
   inferDeliveryTargetChatType,
   resolveCompletionDeliveryOrigins,
-  resolveGeneratedMediaSessionDeliveryRoute,
+  resolveCompletionSessionDeliveryRoute,
   type DeliveryContext,
 } from "./subagent-announce-origin.js";
 import { admitCorrelatedSubagentSessionDelivery } from "./subagent-completion-delivery.js";
@@ -1296,6 +1296,7 @@ async function sendSubagentAnnounceDirectly(params: {
     return {
       delivered: false,
       path: "direct",
+      ...(hasSessionFileChangedAnnounceError(err) ? { reason: "session_file_changed" } : {}),
       error: summarizeDeliveryError(err),
       disposition,
     };
@@ -1332,17 +1333,14 @@ export async function deliverSubagentAnnouncement(params: {
   if (sourceOwnerChanged()) {
     return sourceOwnerChangedResult();
   }
-  const durableGeneratedMediaHandoff =
-    params.expectsCompletionMessage &&
-    isAgentMediatedCompletionSourceTool(params.sourceTool) &&
-    hasGeneratedMediaCompletionEvent(params.internalEvents);
-  let durableQueueId: string | undefined;
-  let durableQueueClaimed = false;
-  if (durableGeneratedMediaHandoff) {
+  const queueDurableCompletionHandoff = async (): Promise<SubagentAnnounceDeliveryResult> => {
+    if (sourceOwnerChanged()) {
+      return sourceOwnerChangedResult();
+    }
     try {
       const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
       const canonicalSessionKey = resolveRequesterStoreKey(cfg, params.targetRequesterSessionKey);
-      const queuedRoute = resolveGeneratedMediaSessionDeliveryRoute({
+      const queuedRoute = resolveCompletionSessionDeliveryRoute({
         sessionKey: canonicalSessionKey,
         completionDirectOrigin: params.completionDirectOrigin,
         directOrigin: params.directOrigin,
@@ -1400,43 +1398,45 @@ export async function deliverSubagentAnnouncement(params: {
           delivered: false,
           path: "queued",
           reason: "completion_handoff_unavailable",
-          error: "generated media session handoff was already dead-lettered",
+          error: "completion session handoff was already dead-lettered",
           disposition: "permanent_failure",
         };
       }
       if (queued.status === "completed") {
         return { delivered: true, path: "queued", disposition: "delivered" };
       }
-      durableQueueId = queued.id;
-      durableQueueClaimed = queued.claimed;
+      if (queued.claimed) {
+        await releaseSessionDeliveryClaim(queued.id).catch((error: unknown) => {
+          defaultRuntime.log(
+            `[warn] Completion session handoff lease release failed; durable recovery remains pending: ${summarizeDeliveryError(error)}`,
+          );
+        });
+      }
+      await scheduleSessionDelivery(queued.id).catch((error: unknown) => {
+        defaultRuntime.log(
+          `[warn] Completion session handoff retry scheduling failed; durable recovery remains pending: ${summarizeDeliveryError(error)}`,
+        );
+      });
+      return { delivered: false, path: "queued", disposition: "session_queued" };
     } catch (error) {
       defaultRuntime.log(
-        `[warn] Generated media session handoff could not be persisted; refusing ambiguous fallback: ${summarizeDeliveryError(error)}`,
+        `[warn] Completion session handoff could not be persisted; refusing ambiguous fallback: ${summarizeDeliveryError(error)}`,
       );
       return {
         delivered: false,
         path: "queued",
         reason: "completion_handoff_unavailable",
-        error: "generated media session handoff could not be persisted",
+        error: "completion session handoff could not be persisted",
         disposition: "retryable",
       };
     }
-  }
-
-  if (durableQueueId) {
-    if (durableQueueClaimed) {
-      await releaseSessionDeliveryClaim(durableQueueId).catch((error: unknown) => {
-        defaultRuntime.log(
-          `[warn] Generated media session handoff lease release failed; durable recovery remains pending: ${summarizeDeliveryError(error)}`,
-        );
-      });
-    }
-    await scheduleSessionDelivery(durableQueueId).catch((error: unknown) => {
-      defaultRuntime.log(
-        `[warn] Generated media session handoff retry scheduling failed; durable recovery remains pending: ${summarizeDeliveryError(error)}`,
-      );
-    });
-    return { delivered: false, path: "queued", disposition: "session_queued" };
+  };
+  const durableGeneratedMediaHandoff =
+    params.expectsCompletionMessage &&
+    isAgentMediatedCompletionSourceTool(params.sourceTool) &&
+    hasGeneratedMediaCompletionEvent(params.internalEvents);
+  if (durableGeneratedMediaHandoff) {
+    return await queueDurableCompletionHandoff();
   }
 
   return await runSubagentAnnounceDispatch({
@@ -1461,7 +1461,7 @@ export async function deliverSubagentAnnouncement(params: {
       if (sourceOwnerChanged()) {
         return sourceOwnerChangedResult();
       }
-      return await sendSubagentAnnounceDirectly({
+      const direct = await sendSubagentAnnounceDirectly({
         requesterSessionKey: params.requesterSessionKey,
         targetRequesterSessionKey: params.targetRequesterSessionKey,
         triggerMessage: params.triggerMessage,
@@ -1481,6 +1481,17 @@ export async function deliverSubagentAnnouncement(params: {
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       });
+      if (
+        params.expectsCompletionMessage &&
+        normalizeOptionalLowercaseString(params.sourceTool) === "subagent_announce" &&
+        params.sourceRunId &&
+        direct.delivered === false &&
+        direct.disposition === "permanent_failure" &&
+        direct.reason === "session_file_changed"
+      ) {
+        return await queueDurableCompletionHandoff();
+      }
+      return direct;
     },
   });
 }

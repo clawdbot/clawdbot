@@ -281,8 +281,8 @@ export function inferDeliveryTargetChatType(target: {
     : undefined;
 }
 
-/** Resolve the durable generated-media handoff route from the canonical completion origin. */
-export function resolveGeneratedMediaSessionDeliveryRoute(params: {
+/** Resolve a durable completion handoff route from the canonical completion origin. */
+export function resolveCompletionSessionDeliveryRoute(params: {
   sessionKey: string;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;

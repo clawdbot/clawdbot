@@ -3425,6 +3425,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sessionId: "requester-session-lock-race-evidence",
       isActive: true,
       directIdempotencyKey: "announce-permanent-lock-error-evidence",
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
     });
 
     expect(result.delivered).toBe(false);
@@ -3433,6 +3435,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
+    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).not.toHaveBeenCalled();
   });
 
   it("does not fallback-steer after wrapped prompt-lock takeover with send evidence", async () => {
@@ -3498,6 +3501,102 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(result.delivered).toBe(true);
     expect(result.path).toBe("direct");
     expect(callGatewaySpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("queues a no-send completion after session-file retries are exhausted", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("session file changed while embedded prompt lock was released");
+    }) as unknown as typeof runtimeCallGateway;
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-durable-session-takeover",
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        taskLabel: "durable takeover completion",
+      }),
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "queued",
+      disposition: "session_queued",
+      phases: [{ phase: "direct-primary", delivered: false, path: "queued" }],
+    });
+    expect(callGateway).toHaveBeenCalledTimes(4);
+    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agentTurn",
+        inputProvenance: expect.objectContaining({ sourceTool: "subagent_announce" }),
+        expectedMediaUrls: [],
+        idempotencyKey: "announce-durable-session-takeover:agent-loop",
+      }),
+      expect.any(Number),
+    );
+    expect(sessionDeliveryQueueMocks.scheduleSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media",
+    );
+  });
+
+  it("queues a wrapped no-send session-file takeover after retries are exhausted", async () => {
+    const takeover = new Error("session file changed while embedded prompt lock was released");
+    const callGateway = vi.fn(async () => {
+      throw new Error("agent command failed", { cause: takeover });
+    }) as unknown as typeof runtimeCallGateway;
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-durable-wrapped-session-takeover",
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        taskLabel: "wrapped durable takeover completion",
+      }),
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "queued",
+      disposition: "session_queued",
+      phases: [{ phase: "direct-primary", delivered: false, path: "queued" }],
+    });
+    expect(callGateway).toHaveBeenCalledTimes(4);
+    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "announce-durable-wrapped-session-takeover:agent-loop",
+      }),
+      expect.any(Number),
+    );
+  });
+
+  it("does not queue a completion after its source owner changes on the final retry", async () => {
+    let sourceEffectsAllowed = true;
+    let attempts = 0;
+    const callGateway = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 4) {
+        sourceEffectsAllowed = false;
+      }
+      throw new Error("session file changed while embedded prompt lock was released");
+    }) as unknown as typeof runtimeCallGateway;
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-stale-durable-session-takeover",
+      sourceTool: "subagent_announce",
+      isSourceSessionEffectsAllowed: () => sourceEffectsAllowed,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        taskLabel: "stale durable takeover completion",
+      }),
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "none",
+      reason: "source_owner_changed",
+      terminal: true,
+    });
+    expect(callGateway).toHaveBeenCalledTimes(4);
+    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).not.toHaveBeenCalled();
   });
 
   it("stops a direct Gateway retry when source ownership changes after the first attempt", async () => {
