@@ -59,6 +59,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
             handled: true,
             truncatedCount: 0,
           },
+          toolMetas: [{ toolName: "read", meta: "step=1" }],
           latestMcpAppChannelView: { viewId: "view-before-retry" },
         }),
       )
