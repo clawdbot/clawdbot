@@ -4,6 +4,7 @@
  * Runs bounded ping-pong delivery, waits for target replies, and suppresses control-token messages.
  */
 import crypto from "node:crypto";
+import type { AgentRuntimeSessionHandoffContext } from "../../gateway/agent-runtime-identity-token.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -18,6 +19,7 @@ import {
   waitForAgentRun,
 } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
+import type { GatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   type AnnounceTarget,
@@ -94,6 +96,8 @@ export async function runSessionsSendA2AFlow(params: {
   roundOneReply?: string;
   waitRunId?: string;
   notifyRequesterOnWaitFailure?: boolean;
+  authority?: GatewayToolCallerIdentity;
+  handoffContext?: AgentRuntimeSessionHandoffContext;
 }) {
   const runContextId = params.waitRunId ?? "unknown";
   try {
@@ -134,6 +138,8 @@ export async function runSessionsSendA2AFlow(params: {
             lane: resolveNestedAgentLaneForSession(params.requesterSessionKey),
             sourceSessionKey: params.targetSessionKey,
             sourceTool: "sessions_send",
+            authority: params.authority,
+            handoffContext: params.handoffContext,
           });
         }
         return;
@@ -205,6 +211,8 @@ export async function runSessionsSendA2AFlow(params: {
           sourceChannel:
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
+          authority: params.authority,
+          handoffContext: params.handoffContext,
         });
         if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
           break;
@@ -236,6 +244,8 @@ export async function runSessionsSendA2AFlow(params: {
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
+      authority: params.authority,
+      handoffContext: params.handoffContext,
     });
     if (
       announceTarget &&

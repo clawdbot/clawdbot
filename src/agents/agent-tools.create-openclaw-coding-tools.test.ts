@@ -1664,6 +1664,28 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
   });
 
+  it("snapshots sender-scoped denies for sessions_send derived runs", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:speaker-1": { deny: ["message"] },
+          },
+        },
+      },
+      messageProvider: "discord",
+      senderId: "speaker-1",
+    });
+    const policy = latestCreateOpenClawToolsOptions().sessionsSendToolPolicy;
+
+    expect(tools.map((tool) => tool.name)).not.toContain("message");
+    expect(policy?.deny).toContain("message");
+    expect(policy?.allow).toContain("sessions_send");
+    expect(policy?.allow).not.toContain("message");
+  });
+
   it("filters session tools for sub-agent sessions by default", () => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",

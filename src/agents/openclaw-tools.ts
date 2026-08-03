@@ -10,6 +10,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AgentRuntimeSessionHandoffContext } from "../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -134,6 +135,7 @@ export function createOpenClawTools(
     clientCaps?: string[];
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
+    sessionsSendToolPolicy?: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"];
     /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
     cronCreatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
     /** Current channel ID for auto-threading. */
@@ -652,6 +654,7 @@ export function createOpenClawTools(
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
+            toolPolicy: options?.sessionsSendToolPolicy,
           }),
         ]),
     ...(includeSubagentSpawnTool

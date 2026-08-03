@@ -29,6 +29,7 @@ export type AgentRuntimeIdentity = {
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+  sessionHandoffContext?: AgentRuntimeSessionHandoffContext;
 };
 
 export type AgentRuntimeSessionSpawnContext = {
@@ -40,6 +41,10 @@ export type AgentRuntimeSessionSpawnContext = {
   };
 };
 
+export type AgentRuntimeSessionHandoffContext = {
+  inheritedToolPolicy: AgentRuntimeSessionSpawnContext["inheritedToolPolicy"];
+};
+
 type AgentRuntimeIdentityTokenPayload = {
   kind: typeof AGENT_RUNTIME_IDENTITY_TOKEN_KIND;
   agentId: string;
@@ -48,6 +53,7 @@ type AgentRuntimeIdentityTokenPayload = {
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+  sessionHandoffContext?: AgentRuntimeSessionHandoffContext;
 };
 
 function decodeStringList(value: unknown): string[] | undefined {
@@ -75,6 +81,16 @@ function decodeSessionSpawnContext(value: unknown): AgentRuntimeSessionSpawnCont
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolPolicy: { version: 1, allow, deny },
   };
+}
+
+function decodeSessionHandoffContext(
+  value: unknown,
+): AgentRuntimeSessionHandoffContext | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const decoded = decodeSessionSpawnContext({ inheritedToolPolicy: value.inheritedToolPolicy });
+  return decoded ? { inheritedToolPolicy: decoded.inheritedToolPolicy } : undefined;
 }
 
 async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {
@@ -214,6 +230,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       messageActionContext?: unknown;
       cronSelfManagementContext?: unknown;
       sessionSpawnContext?: unknown;
+      sessionHandoffContext?: unknown;
     };
     if (
       raw.kind !== AGENT_RUNTIME_IDENTITY_TOKEN_KIND ||
@@ -265,6 +282,13 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     if (raw.sessionSpawnContext !== undefined && !sessionSpawnContext) {
       return undefined;
     }
+    const sessionHandoffContext =
+      raw.sessionHandoffContext === undefined
+        ? undefined
+        : decodeSessionHandoffContext(raw.sessionHandoffContext);
+    if (raw.sessionHandoffContext !== undefined && !sessionHandoffContext) {
+      return undefined;
+    }
     return {
       kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
       agentId,
@@ -273,6 +297,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       ...(messageActionContext ? { messageActionContext } : {}),
       ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
       ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+      ...(sessionHandoffContext ? { sessionHandoffContext } : {}),
     };
   } catch {
     return undefined;
@@ -287,6 +312,7 @@ export async function mintAgentRuntimeIdentityToken(params: {
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementJobId?: string;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+  sessionHandoffContext?: AgentRuntimeSessionHandoffContext;
 }): Promise<string> {
   if (
     params.messageActionContext?.sourceReplyFinal === true &&
@@ -321,6 +347,9 @@ export async function mintAgentRuntimeIdentityToken(params: {
     ...(messageActionContext ? { messageActionContext } : {}),
     ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
     ...(params.sessionSpawnContext ? { sessionSpawnContext: params.sessionSpawnContext } : {}),
+    ...(params.sessionHandoffContext
+      ? { sessionHandoffContext: params.sessionHandoffContext }
+      : {}),
   });
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
   return `${payload}.${signature}`;
@@ -357,5 +386,8 @@ export async function verifyAgentRuntimeIdentityToken(
       ? { cronSelfManagementContext: payload.cronSelfManagementContext }
       : {}),
     ...(payload.sessionSpawnContext ? { sessionSpawnContext: payload.sessionSpawnContext } : {}),
+    ...(payload.sessionHandoffContext
+      ? { sessionHandoffContext: payload.sessionHandoffContext }
+      : {}),
   };
 }

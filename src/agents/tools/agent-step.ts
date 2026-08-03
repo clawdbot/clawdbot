@@ -4,12 +4,16 @@
  * Sends annotated inter-session messages through in-process or Gateway execution and reads the assistant reply.
  */
 import crypto from "node:crypto";
+import type { AgentRuntimeSessionHandoffContext } from "../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../gateway/call.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
+import { isToolAllowedByPolicyName } from "../tool-policy-match.js";
+import type { GatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { callSessionHandoffAgent } from "./session-handoff-agent-call.js";
 
 type GatewayCaller = typeof callGateway;
 type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
@@ -67,6 +71,8 @@ export async function runAgentStep(params: {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  authority?: GatewayToolCallerIdentity;
+  handoffContext?: AgentRuntimeSessionHandoffContext;
 }): Promise<string | undefined> {
   const stepIdem = crypto.randomUUID();
   const inputProvenance = {
@@ -79,6 +85,10 @@ export async function runAgentStep(params: {
   const message = annotateInterSessionPromptText(params.message, inputProvenance);
   const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
   const channel = params.channel ?? INTERNAL_MESSAGE_CHANNEL;
+  const handoffPolicy = params.handoffContext?.inheritedToolPolicy;
+  const handoffAllowsMessage = handoffPolicy
+    ? isToolAllowedByPolicyName("message", handoffPolicy)
+    : true;
   if (params.transcriptMessage !== undefined) {
     // Transcript-message mode must use the in-process command path to preserve transcript text.
     const result = await agentStepDeps.agentCommandFromIngress({
@@ -93,6 +103,8 @@ export async function runAgentStep(params: {
       extraSystemPrompt: params.extraSystemPrompt,
       inputProvenance,
       allowModelOverride: false,
+      ...(handoffPolicy ? { toolsAllow: [...handoffPolicy.allow] } : {}),
+      ...(handoffPolicy && !handoffAllowsMessage ? { disableMessageTool: true } : {}),
     });
     await retireSessionMcpRuntimeForSessionKey({
       sessionKey: params.sessionKey,
@@ -100,7 +112,7 @@ export async function runAgentStep(params: {
     });
     return extractAgentCommandReply(result);
   }
-  const response = await agentStepDeps.callGateway({
+  const request = {
     method: "agent",
     params: {
       message,
@@ -114,7 +126,18 @@ export async function runAgentStep(params: {
       inputProvenance,
     },
     timeoutMs: 10_000,
-  });
+  };
+  const response = params.handoffContext
+    ? params.authority
+      ? await callSessionHandoffAgent<{ runId?: string }>({
+          request,
+          authority: params.authority,
+          context: params.handoffContext,
+        })
+      : (() => {
+          throw new Error("session handoff step requires trusted caller identity");
+        })()
+    : await agentStepDeps.callGateway(request);
 
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;

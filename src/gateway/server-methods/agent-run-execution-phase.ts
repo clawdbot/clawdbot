@@ -21,6 +21,7 @@ import {
 } from "../../agents/main-session-recovery-store.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import {
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,
@@ -348,6 +349,12 @@ export function startAgentRunExecution(params: {
         restartRecoveryChannelContext?.sameChannelThreadRequired,
       );
 
+      const sessionHandoffPolicy =
+        params.inputProvenance?.kind === "inter_session" &&
+        params.inputProvenance.sourceTool === "sessions_send"
+          ? params.client?.internal?.agentRuntimeIdentity?.sessionHandoffContext
+              ?.inheritedToolPolicy
+          : undefined;
       dispatchAgentRunFromGateway({
         ingressOpts: {
           message,
@@ -388,7 +395,7 @@ export function startAgentRunExecution(params: {
           extraSystemPrompt: params.request.extraSystemPrompt,
           bootstrapContextMode: params.request.bootstrapContextMode,
           bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
-          toolsAllow: params.restoredCronContinuation?.toolsAllow,
+          toolsAllow: params.restoredCronContinuation?.toolsAllow ?? sessionHandoffPolicy?.allow,
           runtimePluginToolGrant,
           trustedInternalHandoff: prepared.trustedInternalHandoff,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
@@ -414,7 +421,10 @@ export function startAgentRunExecution(params: {
           sourceReplyDeliveryMode: params.restoredCronContinuation
             ? params.restoredCronContinuation.cliSessionBindingFacts?.sourceReplyDeliveryMode
             : params.request.sourceReplyDeliveryMode,
-          disableMessageTool: params.request.disableMessageTool,
+          disableMessageTool:
+            params.request.disableMessageTool === true ||
+            (sessionHandoffPolicy !== undefined &&
+              !isToolAllowedByPolicyName("message", sessionHandoffPolicy)),
           swarmCollector: params.request.swarmCollector,
           swarmOutputSchema: params.request.swarmOutputSchema,
           forceRestartSafeTools: params.request.forceRestartSafeTools,

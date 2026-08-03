@@ -115,6 +115,32 @@ describe("agent runtime identity token", () => {
     });
   });
 
+  it("round-trips a signed session handoff policy", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:alice",
+      sessionHandoffContext: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: [" sessions_send ", "read"],
+          deny: ["message"],
+        },
+      },
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+      sessionHandoffContext: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["sessions_send", "read"],
+          deny: ["message"],
+        },
+      },
+    });
+  });
+
   it("round-trips a short-lived cron self-management capability", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
