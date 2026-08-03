@@ -176,6 +176,24 @@ describe("PDF document extractor", () => {
     );
   });
 
+  it("rejects selected pages outside the PDF page count before extraction", async () => {
+    pdfDocument.pageCount = 1;
+    pdfDocument.extract.mockResolvedValueOnce({ text: "", images: [] });
+    const extractor = createPdfDocumentExtractor();
+
+    await expect(extractor.extract(request({ pageNumbers: [2] }))).rejects.toThrow(
+      "No requested PDF pages exist in this 1-page document.",
+    );
+    expect(pdfDocument.extract).not.toHaveBeenCalled();
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+
+    await expect(extractor.extract(request({ pageNumbers: [] }))).resolves.toEqual({
+      text: "",
+      images: [],
+    });
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(2);
+  });
+
   it("reports image fallback failures and returns extracted text", async () => {
     const onImageExtractionError = vi.fn();
     const failure = new Error("render failed");

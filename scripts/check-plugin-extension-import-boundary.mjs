@@ -11,7 +11,8 @@ import {
   runBaselineInventoryCheck,
   resolveRepoSpecifier,
 } from "./lib/guard-inventory-utils.mjs";
-import { resolveRepoRoot, runAsScript } from "./lib/ts-guard-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const baselinePath = path.join(

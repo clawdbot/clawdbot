@@ -70,6 +70,9 @@ async function extractPdfContent(
           .filter((p) => Number.isInteger(p) && p >= 1 && p <= pdf.pageCount)
           .slice(0, request.maxPages)
       : undefined;
+    if (request.pageNumbers?.length && pages?.length === 0) {
+      throw new Error(`No requested PDF pages exist in this ${pdf.pageCount}-page document.`);
+    }
     const pageSelection = pages ? { pages } : { maxPages: request.maxPages };
 
     const textResult = await pdf.extract({
