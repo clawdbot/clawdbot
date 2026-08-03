@@ -4,6 +4,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   createProviderOperationDeadline,
   executeProviderOperationWithRetry,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
@@ -33,7 +34,6 @@ const MAX_POLL_ATTEMPTS = 120;
 const GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
   "Google video generation response missing generated videos";
-const googleVideoOperationJsonDecoder = new TextDecoder("utf-8", { fatal: true });
 
 function resolveConfiguredGoogleVideoBaseUrl(req: VideoGenerationRequest): string | undefined {
   const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
@@ -62,17 +62,6 @@ function resolveGoogleVideoRestModelPath(model: string): string {
     return `models/${trimmed.slice("google/".length)}`;
   }
   return `models/${trimmed}`;
-}
-
-function parseGoogleVideoOperationPayload(buffer: Uint8Array): unknown {
-  if (buffer.byteLength === 0) {
-    return {};
-  }
-  try {
-    return JSON.parse(googleVideoOperationJsonDecoder.decode(buffer)) as unknown;
-  } catch (cause) {
-    throw new Error("Google video operation response returned malformed JSON", { cause });
-  }
 }
 
 function parseVideoSize(size: string | undefined): { width: number; height: number } | undefined {
@@ -359,16 +348,13 @@ async function requestGoogleVideoJson(params: {
           signal: controller.signal,
         });
         try {
-          const buffer = await readResponseWithLimit(
-            response,
-            GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES,
-            {
-              onOverflow: ({ maxBytes }) =>
-                new Error(`Google video operation response exceeds ${maxBytes} bytes`),
-            },
-          );
-          const text = new TextDecoder().decode(buffer);
           if (!response.ok) {
+            const text = new TextDecoder().decode(
+              await readResponseWithLimit(response, GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES, {
+                onOverflow: ({ maxBytes }) =>
+                  new Error(`Google video operation response exceeds ${maxBytes} bytes`),
+              }),
+            );
             let detail: unknown = text;
             if (text) {
               try {
@@ -379,7 +365,9 @@ async function requestGoogleVideoJson(params: {
             }
             throw createHttpError(response, detail);
           }
-          return parseGoogleVideoOperationPayload(buffer);
+          return await readProviderJsonResponse(response, "Google video operation response", {
+            maxBytes: GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES,
+          });
         } finally {
           await release();
         }

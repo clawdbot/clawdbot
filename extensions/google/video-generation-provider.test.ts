@@ -705,7 +705,7 @@ describe("google video generation provider", () => {
         cfg: {},
         durationSeconds: 3,
       }),
-    ).rejects.toThrow("Google video operation response exceeds 16777216 bytes");
+    ).rejects.toThrow("Google video operation response: JSON response exceeds 16777216 bytes");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(streamed.getReadCount()).toBeLessThan(64);
@@ -729,7 +729,7 @@ describe("google video generation provider", () => {
         cfg: {},
         durationSeconds: 3,
       }),
-    ).rejects.toThrow("Google video operation response returned malformed JSON");
+    ).rejects.toThrow("Google video operation response: malformed JSON response");
   });
 
   it("rejects invalid UTF-8 in Google REST operation JSON before parsing", async () => {
@@ -754,7 +754,7 @@ describe("google video generation provider", () => {
         cfg: {},
         durationSeconds: 3,
       }),
-    ).rejects.toThrow("Google video operation response returned malformed JSON");
+    ).rejects.toThrow("Google video operation response: malformed JSON response");
   });
 
   it("retries transient Google REST poll failures with empty bodies", async () => {
