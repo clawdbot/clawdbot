@@ -1,5 +1,6 @@
 // QA Lab mock provider tool planning and memory fixtures.
 import { createHash } from "node:crypto";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
 
@@ -214,6 +215,21 @@ export function extractActiveMemorySummary(text: string) {
 export function extractToolSearchTarget(text: string): string | null {
   const match = /\btarget=([A-Za-z0-9_.:-]+)\b/.exec(text);
   return match?.[1]?.trim() || null;
+}
+
+export function toolSearchOutputHasCandidate(output: unknown, targetTool: string): boolean {
+  if (!isRecord(output) || !Array.isArray(output.results)) {
+    return false;
+  }
+  return output.results.some(
+    (result) =>
+      isRecord(result) &&
+      Array.isArray(result.candidates) &&
+      result.candidates.some(
+        (candidate) =>
+          isRecord(candidate) && (candidate.name === targetTool || candidate.id === targetTool),
+      ),
+  );
 }
 
 export function buildQaToolSearchArgs(

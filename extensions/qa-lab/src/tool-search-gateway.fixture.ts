@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   countSessionLogMentions,
@@ -32,6 +33,7 @@ type LaneResult = {
   providerSystemPromptChars: number;
   providerInputSnippet: string;
   providerToolOutputSnippet: string;
+  providerToolSearchResult?: unknown;
   providerDeclaredToolCount: number;
   providerDirectoryContainsTarget: boolean;
   providerPlannedTools: string[];
@@ -50,6 +52,7 @@ type LaneResultSummary = Pick<
   | "providerDirectoryContainsTarget"
   | "providerPlannedTools"
   | "providerRawBytes"
+  | "providerToolSearchResult"
   | "gatewayOutputText"
   | "sessionLogToolMentions"
   | "targetToolIdentity"
@@ -73,6 +76,17 @@ export type ToolSearchGatewayFetchLimits = {
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
+  }
+}
+
+function parseJson(text: string | undefined): unknown {
+  if (!text) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
   }
 }
 
@@ -455,6 +469,9 @@ export async function runToolSearchGatewayLane(params: {
     .map((request) => request.toolOutput)
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
+  const providerToolSearchResult = parseJson(
+    laneRequests.find((request) => request.plannedToolName === "tool_call")?.toolOutput,
+  );
   // Responses providers may carry system text in instructions or input items;
   // inspect the full recorded prompt so late directory entries are not lost.
   const providerPromptText = [lastRequest.instructions, lastRequest.allInputText]
@@ -481,6 +498,7 @@ export async function runToolSearchGatewayLane(params: {
       500,
     ),
     providerToolOutputSnippet: truncateUtf16Safe(providerToolOutputs, 4_000),
+    providerToolSearchResult,
     providerDeclaredToolCount: Array.isArray(lastRequest.body?.tools)
       ? lastRequest.body.tools.length
       : 0,
@@ -581,7 +599,7 @@ export function assertToolSearchLaneResults(params: {
 }
 
 export function assertToolSearchBatchLaneResult(params: {
-  tools: LaneResultSummary;
+  tools: LaneResultSummary & Pick<LaneResult, "status">;
   targetTool: string;
 }) {
   const { targetTool, tools } = params;
@@ -596,15 +614,32 @@ export function assertToolSearchBatchLaneResult(params: {
       null,
       2,
     );
+  assert(tools.status === "completed", `structured lane did not complete successfully: ${debug()}`);
   assert(
     tools.providerPlannedTools.filter((name) => name === "tool_search").length === 1 &&
-      tools.providerPlannedTools.filter((name) => name === "tool_call").length === 1,
+      tools.providerPlannedTools.filter((name) => name === "tool_call").length === 1 &&
+      tools.providerPlannedTools.indexOf("tool_search") <
+        tools.providerPlannedTools.indexOf("tool_call"),
     `structured lane did not use one batch search followed by one catalog call: ${debug()}`,
   );
+  const batchResult = tools.providerToolSearchResult;
+  const groups =
+    isRecord(batchResult) && Array.isArray(batchResult.results) ? batchResult.results : [];
+  const targetGroup = groups[0];
+  const catalogGroup = groups[1];
   assert(
-    tools.providerToolOutputSnippet?.includes('"results"') === true &&
-      tools.providerToolOutputSnippet.includes(targetTool) &&
-      tools.providerToolOutputSnippet.includes("large plugin tool catalog"),
+    groups.length === 2 &&
+      isRecord(targetGroup) &&
+      targetGroup.query === targetTool &&
+      Array.isArray(targetGroup.candidates) &&
+      targetGroup.candidates.some(
+        (candidate) =>
+          isRecord(candidate) && (candidate.name === targetTool || candidate.id === targetTool),
+      ) &&
+      isRecord(catalogGroup) &&
+      catalogGroup.query === "large plugin tool catalog" &&
+      Array.isArray(catalogGroup.candidates) &&
+      catalogGroup.candidates.length > 0,
     `structured lane did not return both grouped search results: ${debug()}`,
   );
   assert(
@@ -612,6 +647,11 @@ export function assertToolSearchBatchLaneResult(params: {
       tools.gatewayOutputText.includes(targetTool) &&
       (tools.sessionLogToolMentions[targetTool] ?? 0) > 0,
     `structured lane did not call ${targetTool}: ${debug()}`,
+  );
+  assert(
+    (tools.sessionLogToolMentions.tool_search ?? 0) > 0 &&
+      (tools.sessionLogToolMentions.tool_call ?? 0) > 0,
+    `structured lane session log did not record search and call mentions: ${debug()}`,
   );
   assert(
     !tools.providerPlannedTools.includes(targetTool),

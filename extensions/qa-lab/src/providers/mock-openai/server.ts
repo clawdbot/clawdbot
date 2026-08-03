@@ -167,6 +167,7 @@ import {
   buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
   extractOrbitCode,
   extractToolSearchTarget,
+  toolSearchOutputHasCandidate,
   buildQaToolSearchArgs,
   isActiveMemorySubagentPrompt,
   isSnackRecallPrompt,
@@ -794,8 +795,9 @@ async function buildResponsesPayload(
     if (
       targetTool &&
       hasCompletedToolOutput &&
+      completedToolName === "tool_search" &&
       !toolOutput.includes("FAKE_PLUGIN_OK") &&
-      toolOutput.includes(targetTool) &&
+      toolSearchOutputHasCandidate(parseToolOutputJson(toolOutput), targetTool) &&
       hasDeclaredTool(body, "tool_call")
     ) {
       return buildToolCallEventsWithArgs("tool_call", { id: targetTool, args: plannedArgs });
@@ -818,7 +820,12 @@ async function buildResponsesPayload(
         ].join("\n"),
       });
     }
-    if (!hasCompletedToolOutput && targetTool && hasDeclaredTool(body, "tool_search")) {
+    if (
+      !hasCompletedToolOutput &&
+      targetTool &&
+      !hasDeclaredTool(body, targetTool) &&
+      hasDeclaredTool(body, "tool_search")
+    ) {
       return buildToolCallEventsWithArgs("tool_search", {
         queries: [
           { query: targetTool, limit: 1 },

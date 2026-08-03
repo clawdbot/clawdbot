@@ -208,7 +208,7 @@ describe("Tool Search", () => {
     expect(Value.Check(limitSearchTool.parameters, { queries: [] })).toBe(false);
     expect(
       Value.Check(limitSearchTool.parameters, {
-        queries: Array.from({ length: 51 }, (_, index) => ({ query: `query ${index}`, limit: 1 })),
+        queries: Array.from({ length: 17 }, (_, index) => ({ query: `query ${index}`, limit: 1 })),
       }),
     ).toBe(false);
   });
@@ -239,6 +239,11 @@ describe("Tool Search", () => {
       label: "empty batch query",
       input: { queries: [{ query: "  " }] },
       error: "queries[0].query must be a non-empty string",
+    },
+    {
+      label: "empty scalar query",
+      input: { query: "  " },
+      error: "query must be a non-empty string",
     },
     {
       label: "top-level batch limit",
@@ -272,6 +277,157 @@ describe("Tool Search", () => {
         queries: Array.from({ length: 7 }, (_, index) => ({ query: `surface ${index}` })),
       }),
     ).rejects.toThrow("batch queries may request at most 50 results in total");
+  });
+
+  it("bounds the query text echoed by a batch response", async () => {
+    await expect(
+      limitSearchTool.execute("call-long-query", { query: "q".repeat(4097) }),
+    ).rejects.toThrow("query must not exceed 4096 characters");
+    await expect(
+      limitSearchTool.execute("call-long-batch-query", {
+        queries: [{ query: "q".repeat(512) }, { query: "r" }],
+      }),
+    ).rejects.toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
+    await expect(
+      limitSearchTool.execute("call-multibyte-batch-query", {
+        queries: [{ query: "😀".repeat(128) }],
+      }),
+    ).rejects.toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
+  });
+
+  it("uses the schema's grapheme length semantics at runtime", async () => {
+    const query = "😀".repeat(3_000);
+    expect(Value.Check(limitSearchTool.parameters, { query })).toBe(true);
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [pluginTool("fake_unicode", "unicode search surface")],
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ catalogRef }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
+      "unicode query search tool",
+    );
+
+    await expect(searchTool.execute("call-unicode-query", { query })).resolves.toBeDefined();
+  });
+
+  it("accepts the documented batch boundaries without deduplicating queries", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: {
+        toolSearch: {
+          enabled: true,
+          mode: "tools",
+          searchDefaultLimit: 1,
+          maxSearchLimit: 10,
+        },
+      },
+    } as never;
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        pluginTool("fake_boundary", "boundary duplicate surface"),
+      ],
+      config,
+      catalogRef,
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ config, catalogRef }).find(
+        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+      ),
+      "boundary batch search tool",
+    );
+
+    const duplicateQueries = Array.from({ length: 16 }, () => ({
+      query: "boundary duplicate",
+    }));
+    const duplicateResult = await searchTool.execute("call-sixteen-queries", {
+      queries: duplicateQueries,
+    });
+    expect(resultDetails(duplicateResult).results).toHaveLength(16);
+    expect(catalogRef.current?.searchCount).toBe(16);
+
+    const clampedResult = await searchTool.execute("call-exact-result-budget", {
+      queries: Array.from({ length: 5 }, (_, index) => ({
+        query: `boundary ${index}`,
+        limit: 999,
+      })),
+    });
+    expect(resultDetails(clampedResult).results).toHaveLength(5);
+    expect(catalogRef.current?.searchCount).toBe(21);
+  });
+
+  it("validates every batch item before executing any search", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never;
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        pluginTool("fake_atomic", "atomic validation surface"),
+      ],
+      config,
+      catalogRef,
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ config, catalogRef }).find(
+        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+      ),
+      "atomic batch search tool",
+    );
+
+    await expect(
+      searchTool.execute("call-invalid-later-item", {
+        queries: [{ query: "atomic validation" }, { query: " " }],
+      }),
+    ).rejects.toThrow("queries[1].query must be a non-empty string");
+    expect(catalogRef.current?.searchCount).toBe(0);
+  });
+
+  it("compacts descriptions and bounds the serialized batch response", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { toolSearch: { enabled: true, mode: "tools", maxSearchLimit: 10 } },
+    } as never;
+    const longDescription = `large surface ${"description ".repeat(200)}`;
+    const catalogTools = Array.from({ length: 10 }, (_, index) =>
+      pluginTool(`fake_large_${index}`, `${longDescription}${index}`),
+    );
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        ...catalogTools,
+      ],
+      config,
+      catalogRef,
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ config, catalogRef }).find(
+        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+      ),
+      "bounded response search tool",
+    );
+
+    const scalar = await searchTool.execute("call-full-scalar-description", {
+      query: "fake_large_0",
+      limit: 1,
+    });
+    expect(scalar.details).toEqual([
+      expect.objectContaining({ description: `${longDescription}0` }),
+    ]);
+
+    const result = await searchTool.execute("call-bounded-response", {
+      queries: Array.from({ length: 5 }, () => ({ query: "large surface", limit: 10 })),
+    });
+    const details = resultDetails(result);
+    expect(details.truncated).toBe(true);
+    expect(JSON.stringify(details, null, 2).length).toBeLessThanOrEqual(16_000);
+    expect(JSON.stringify(details)).not.toContain("description ".repeat(20));
   });
 
   it("searches batch queries independently while preserving scalar results", async () => {
@@ -310,7 +466,7 @@ describe("Tool Search", () => {
 
     const batch = await searchTool.execute("call-batch-search", {
       queries: [
-        { query: "calendar events", limit: 1 },
+        { query: "  calendar events  ", limit: 1 },
         { query: "Slack messages", limit: 1 },
         { query: "zzzzunmatched", limit: 1 },
       ],

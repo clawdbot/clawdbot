@@ -253,6 +253,11 @@ describe("tool search gateway e2e lane result", () => {
             body: { tools: [] },
             plannedToolName: "tool_search",
             raw: "{}",
+          },
+          {
+            body: { tools: [] },
+            plannedToolName: "tool_call",
+            raw: "{}",
             toolOutput: searchOutput,
           },
           {
@@ -408,6 +413,7 @@ describe("tool search gateway e2e lane assertions", () => {
       assertToolSearchBatchLaneResult({
         targetTool,
         tools: {
+          status: "completed",
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
           providerDirectoryContainsTarget: false,
@@ -419,6 +425,12 @@ describe("tool search gateway e2e lane assertions", () => {
               { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
             ],
           }),
+          providerToolSearchResult: {
+            results: [
+              { query: targetTool, candidates: [{ name: targetTool }] },
+              { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+            ],
+          },
           sessionLogToolMentions: {
             tool_search: 1,
             tool_call: 1,
@@ -434,6 +446,7 @@ describe("tool search gateway e2e lane assertions", () => {
       assertToolSearchBatchLaneResult({
         targetTool,
         tools: {
+          status: "completed",
           gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
           providerDeclaredToolCount: 3,
           providerDirectoryContainsTarget: false,
@@ -451,6 +464,89 @@ describe("tool search gateway e2e lane assertions", () => {
       }),
     ).toThrow("structured lane did not use one batch search");
   });
+
+  it.each([
+    {
+      label: "omits a grouped result",
+      status: "completed",
+      plannedTools: ["tool_search", "tool_call"],
+      result: { results: [{ query: targetTool, candidates: [{ name: targetTool }] }] },
+      mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
+      error: "did not return both grouped search results",
+    },
+    {
+      label: "reorders grouped results",
+      status: "completed",
+      plannedTools: ["tool_search", "tool_call"],
+      result: {
+        results: [
+          { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+          { query: targetTool, candidates: [{ name: targetTool }] },
+        ],
+      },
+      mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
+      error: "did not return both grouped search results",
+    },
+    {
+      label: "calls before searching",
+      status: "completed",
+      plannedTools: ["tool_call", "tool_search"],
+      result: {
+        results: [
+          { query: targetTool, candidates: [{ name: targetTool }] },
+          { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+        ],
+      },
+      mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
+      error: "did not use one batch search followed by one catalog call",
+    },
+    {
+      label: "omits bridge telemetry",
+      status: "completed",
+      plannedTools: ["tool_search", "tool_call"],
+      result: {
+        results: [
+          { query: targetTool, candidates: [{ name: targetTool }] },
+          { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+        ],
+      },
+      mentions: { tool_search: 0, tool_call: 0, [targetTool]: 1 },
+      error: "session log did not record search and call mentions",
+    },
+    {
+      label: "returns an incomplete response",
+      status: "incomplete",
+      plannedTools: ["tool_search", "tool_call"],
+      result: {
+        results: [
+          { query: targetTool, candidates: [{ name: targetTool }] },
+          { query: "large plugin tool catalog", candidates: [{ name: "fake_plugin_tool_01" }] },
+        ],
+      },
+      mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
+      error: "did not complete successfully",
+    },
+  ])(
+    "rejects structured proof that $label",
+    ({ status, plannedTools, result, mentions, error }) => {
+      expect(() =>
+        assertToolSearchBatchLaneResult({
+          targetTool,
+          tools: {
+            status,
+            gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+            providerDeclaredToolCount: 3,
+            providerDirectoryContainsTarget: false,
+            providerPlannedTools: plannedTools,
+            providerRawBytes: 4_000,
+            providerToolOutputSnippet: JSON.stringify(result),
+            providerToolSearchResult: result,
+            sessionLogToolMentions: mentions,
+          },
+        }),
+      ).toThrow(error);
+    },
+  );
 
   it("preserves surrogate pairs in both lane debug output snippets", () => {
     const outputPrefix = `FAKE_PLUGIN_OK ${targetTool} `;

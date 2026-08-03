@@ -3,6 +3,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { Guard } from "typebox/guard";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   truncateSanitizedExternalContent,
@@ -36,6 +37,10 @@ import {
 } from "./tool-search-ranking.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import {
+  MAX_TOOL_SEARCH_BATCH_QUERIES,
+  MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
+  MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
+  MAX_TOOL_SEARCH_QUERY_GRAPHEMES,
   MAX_TOOL_SEARCH_RESULTS,
   type CatalogSource,
   type CatalogVisibilityOptions,
@@ -222,15 +227,23 @@ function readToolSearchLimit(value: unknown, config: ToolSearchConfig): number {
   return Math.min(value, config.maxSearchLimit);
 }
 
+function readToolSearchQuery(value: unknown, field: string, maxGraphemes: number): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new ToolInputError(`${field} must be a non-empty string.`);
+  }
+  const query = value.trim();
+  if (!Guard.IsMaxLength(query, maxGraphemes)) {
+    throw new ToolInputError(`${field} must not exceed ${maxGraphemes} characters.`);
+  }
+  return query;
+}
+
 function readToolSearchArgs(
   args: unknown,
   config: ToolSearchConfig,
 ): { query: string; limit: number } {
   const params = asToolParamsRecord(args);
-  const query = params.query;
-  if (typeof query !== "string") {
-    throw new ToolInputError("query must be a string.");
-  }
+  const query = readToolSearchQuery(params.query, "query", MAX_TOOL_SEARCH_QUERY_GRAPHEMES);
   const options = isRecord(params.options) ? params.options : undefined;
   return {
     query,
@@ -254,18 +267,21 @@ export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): 
   if (!Array.isArray(params.queries) || params.queries.length === 0) {
     throw new ToolInputError("queries must be a non-empty array.");
   }
-  if (params.queries.length > MAX_TOOL_SEARCH_RESULTS) {
-    throw new ToolInputError(`queries may contain at most ${MAX_TOOL_SEARCH_RESULTS} entries.`);
+  if (params.queries.length > MAX_TOOL_SEARCH_BATCH_QUERIES) {
+    throw new ToolInputError(
+      `queries may contain at most ${MAX_TOOL_SEARCH_BATCH_QUERIES} entries.`,
+    );
   }
 
   const searches = params.queries.map((value, index) => {
     if (!isRecord(value)) {
       throw new ToolInputError(`queries[${index}] must be an object.`);
     }
-    const query = value.query;
-    if (typeof query !== "string" || !query.trim()) {
-      throw new ToolInputError(`queries[${index}].query must be a non-empty string.`);
-    }
+    const query = readToolSearchQuery(
+      value.query,
+      `queries[${index}].query`,
+      MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
+    );
     try {
       return { query, limit: readToolSearchLimit(value.limit, config) };
     } catch (error) {
@@ -279,6 +295,13 @@ export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): 
   if (requestedResults > MAX_TOOL_SEARCH_RESULTS) {
     throw new ToolInputError(
       `batch queries may request at most ${MAX_TOOL_SEARCH_RESULTS} results in total.`,
+    );
+  }
+  const serializedQueries = JSON.stringify(searches.map((search) => search.query));
+  const serializedQueryBytes = new TextEncoder().encode(serializedQueries).byteLength;
+  if (serializedQueryBytes > MAX_TOOL_SEARCH_BATCH_QUERY_BYTES) {
+    throw new ToolInputError(
+      `serialized batch query text may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes.`,
     );
   }
   return { kind: "batch", searches };
