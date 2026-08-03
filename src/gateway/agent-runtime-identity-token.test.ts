@@ -75,7 +75,6 @@ describe("agent runtime identity token", () => {
       sessionKey: "session-1",
       turnSourceAccountId: " Work ",
     });
-
     await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
       kind: "agentRuntime",
       agentId: "main",
@@ -99,7 +98,6 @@ describe("agent runtime identity token", () => {
         },
       },
     });
-
     await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
       kind: "agentRuntime",
       agentId: "main",
@@ -128,6 +126,11 @@ describe("agent runtime identity token", () => {
           deny: ["message"],
         },
       },
+    });
+
+    const [payload] = token.split(".");
+    expect(JSON.parse(Buffer.from(payload ?? "", "base64url").toString("utf8"))).toMatchObject({
+      kind: "agent-runtime-session-handoff",
     });
 
     await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({

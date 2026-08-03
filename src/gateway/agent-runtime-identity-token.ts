@@ -13,6 +13,9 @@ import type { AgentRuntimeMessageActionContext } from "./message-action-turn-cap
 
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
 const AGENT_RUNTIME_IDENTITY_TOKEN_KIND = "agent-runtime";
+// Older Gateways reject this signed kind instead of accepting and silently
+// dropping handoff authority they do not understand.
+const AGENT_RUNTIME_SESSION_HANDOFF_TOKEN_KIND = "agent-runtime-session-handoff";
 const MESSAGE_ACTION_TOKEN_TTL_MS = 60_000;
 const CRON_SELF_MANAGEMENT_TOKEN_TTL_MS = 60_000;
 
@@ -46,7 +49,7 @@ export type AgentRuntimeSessionHandoffContext = {
 };
 
 type AgentRuntimeIdentityTokenPayload = {
-  kind: typeof AGENT_RUNTIME_IDENTITY_TOKEN_KIND;
+  kind: typeof AGENT_RUNTIME_IDENTITY_TOKEN_KIND | typeof AGENT_RUNTIME_SESSION_HANDOFF_TOKEN_KIND;
   agentId: string;
   sessionKey: string;
   turnSourceAccountId?: string;
@@ -233,7 +236,8 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       sessionHandoffContext?: unknown;
     };
     if (
-      raw.kind !== AGENT_RUNTIME_IDENTITY_TOKEN_KIND ||
+      (raw.kind !== AGENT_RUNTIME_IDENTITY_TOKEN_KIND &&
+        raw.kind !== AGENT_RUNTIME_SESSION_HANDOFF_TOKEN_KIND) ||
       typeof raw.agentId !== "string" ||
       typeof raw.sessionKey !== "string"
     ) {
@@ -289,8 +293,14 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     if (raw.sessionHandoffContext !== undefined && !sessionHandoffContext) {
       return undefined;
     }
+    if (
+      (raw.kind === AGENT_RUNTIME_SESSION_HANDOFF_TOKEN_KIND) !==
+      (sessionHandoffContext !== undefined)
+    ) {
+      return undefined;
+    }
     return {
-      kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
+      kind: raw.kind,
       agentId,
       sessionKey,
       ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
@@ -340,7 +350,9 @@ export async function mintAgentRuntimeIdentityToken(params: {
       }
     : undefined;
   const payload = encodePayload({
-    kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
+    kind: params.sessionHandoffContext
+      ? AGENT_RUNTIME_SESSION_HANDOFF_TOKEN_KIND
+      : AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
     agentId: normalizeAgentId(params.agentId),
     sessionKey: params.sessionKey.trim(),
     ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
