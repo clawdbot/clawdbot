@@ -65,6 +65,7 @@ import {
 } from "./internal-runtime-context.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
+import { resolveRestartRecoveryStorePaths } from "./main-session-restart-recovery-shared.js";
 import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
@@ -73,7 +74,6 @@ import {
   scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease,
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
-import { resolveRestartRecoveryStorePaths } from "./main-session-restart-recovery-shared.js";
 import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "./run-termination.js";
 import {
   createAssistantToolCallMessage,
