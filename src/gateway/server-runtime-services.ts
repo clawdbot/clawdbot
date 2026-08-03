@@ -182,20 +182,25 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   return timer;
 }
 
-function recoverPendingOutboundDeliveries(params: {
+const RECOVERY_SHUTDOWN_STILL_PENDING_WARN_MS = 5_000;
+
+function startPendingOutboundDeliveryRecovery(params: {
   cfg: OpenClawConfig;
   log: GatewayRuntimeServiceLogger;
-}): () => void {
+}): () => Promise<void> {
   let stopped = false;
-  let recoveryInFlight = false;
+  let inFlight: Promise<void> | null = null;
+  let stopPromise: Promise<void> | null = null;
   let logRecovery: ReturnType<GatewayRuntimeServiceLogger["child"]> | undefined;
 
   const recover = (startup: boolean): void => {
-    if (stopped || recoveryInFlight || isGatewayWorkAdmissionClosed()) {
+    if (stopped || inFlight || isGatewayWorkAdmissionClosed()) {
       return;
     }
-    recoveryInFlight = true;
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
+    const recovery = runWithGatewayIndependentRootWorkAdmission(async () => {
+      if (stopped) {
+        return;
+      }
       const { drainPendingDeliveries, recoverPendingDeliveries } =
         await import("../infra/outbound/delivery-queue.js");
       const { deliverOutboundPayloadsInternal } = await import("../infra/outbound/deliver.js");
@@ -221,11 +226,13 @@ function recoverPendingOutboundDeliveries(params: {
         deliver: deliverOutboundPayloadsInternal,
         selectEntry: () => ({ match: true, bypassBackoff: false }),
       });
-    })
-      .catch((err: unknown) => params.log.error(`Delivery recovery failed: ${String(err)}`))
-      .finally(() => {
-        recoveryInFlight = false;
-      });
+    }).catch((err: unknown) => params.log.error(`Delivery recovery failed: ${String(err)}`));
+    const settled: Promise<void> = recovery.finally(() => {
+      if (inFlight === settled) {
+        inFlight = null;
+      }
+    });
+    inFlight = settled;
   };
 
   // Match the queue's first backoff window without holding admission between
@@ -236,6 +243,26 @@ function recoverPendingOutboundDeliveries(params: {
   return () => {
     stopped = true;
     clearInterval(retryTimer);
+    if (stopPromise) {
+      return stopPromise;
+    }
+    const recovery = inFlight;
+    if (!recovery) {
+      stopPromise = Promise.resolve();
+      return stopPromise;
+    }
+    const stillPendingTimer = setTimeout(() => {
+      (logRecovery ??= params.log.child("delivery-recovery")).warn(
+        `delivery recovery is still pending after ${RECOVERY_SHUTDOWN_STILL_PENDING_WARN_MS}ms; waiting before runtime teardown`,
+      );
+    }, RECOVERY_SHUTDOWN_STILL_PENDING_WARN_MS);
+    stillPendingTimer.unref?.();
+    // Provider dispatch is not generically cancellable. Keep its runtime alive
+    // until the admitted recovery settles; the process watchdog owns forced exit.
+    stopPromise = recovery.finally(() => {
+      clearTimeout(stillPendingTimer);
+    });
+    return stopPromise;
   };
 }
 
@@ -304,12 +331,13 @@ export function activateGatewayScheduledServices(params: {
   startCron?: boolean;
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
-}): { heartbeatRunner: HeartbeatRunner } {
+}): { heartbeatRunner: HeartbeatRunner; stopOutboundDeliveryRecovery: () => Promise<void> } {
   if (params.minimalTestGateway) {
     // Minimal gateways keep handles callable but inert so tests can share shutdown paths with
     // production starts without launching background loops.
     return {
       heartbeatRunner: createNoopHeartbeatRunner(),
+      stopOutboundDeliveryRecovery: async () => {},
     };
   }
   if (
@@ -343,19 +371,21 @@ export function activateGatewayScheduledServices(params: {
       logCron: params.logCron,
     });
   }
-  const stopOutboundDeliveryRecovery = recoverPendingOutboundDeliveries({
+  const stopOutboundDeliveryRecovery = startPendingOutboundDeliveryRecovery({
     cfg: params.cfgAtStart,
     log: params.log,
   });
-  return {
-    heartbeatRunner: {
-      updateConfig: heartbeatRunner.updateConfig,
-      stop: () => {
-        stopOutboundDeliveryRecovery();
-        stopSessionDeliveryRuntime();
-        sessionUpstreamMonitor.stop();
-        heartbeatRunner.stop();
-      },
+  const heartbeatRunnerWithUpstreamMonitor: HeartbeatRunner = {
+    updateConfig: heartbeatRunner.updateConfig,
+    stop: () => {
+      void stopOutboundDeliveryRecovery();
+      stopSessionDeliveryRuntime();
+      sessionUpstreamMonitor.stop();
+      heartbeatRunner.stop();
     },
+  };
+  return {
+    heartbeatRunner: heartbeatRunnerWithUpstreamMonitor,
+    stopOutboundDeliveryRecovery,
   };
 }

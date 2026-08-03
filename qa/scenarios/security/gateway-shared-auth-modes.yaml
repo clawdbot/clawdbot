@@ -1,0 +1,26 @@
+title: Gateway shared auth modes
+
+scenario:
+  id: gateway-shared-auth-modes
+  surface: security
+  coverage:
+    primary:
+      - security.shared-gateway-token-password-auth
+      - security.gateway-auth-mode
+  objective: Prove the real Gateway enforces explicit token, password, and none authentication modes across WebSocket, HTTP, and startup boundaries.
+  successCriteria:
+    - WebSocket clients connect with the configured token or password and reject invalid or cross-mode credentials.
+    - The real models HTTP endpoint accepts the configured shared secret and returns 401 for an invalid secret in token and password modes.
+    - Missing active credentials and unauthenticated non-loopback exposure fail before the Gateway listens with actionable configuration guidance.
+    - Explicit none mode remains available on loopback, and existing private-ingress auth behavior remains covered without claiming adjacent Tailscale or browser trust taxonomy.
+  docsRefs:
+    - docs/gateway/authentication.md
+    - docs/gateway/security/index.md
+  codeRefs:
+    - src/gateway/auth.ts
+    - src/gateway/server-runtime-config.ts
+    - src/gateway/server.auth.modes.suite.ts
+  execution:
+    kind: vitest
+    path: src/gateway/server.auth.modes.test.ts
+    summary: Run the real Gateway auth-mode matrix across WebSocket, HTTP, loopback, private ingress, and startup validation.
