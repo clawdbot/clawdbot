@@ -2,6 +2,7 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
 import { isGatewayAdmin } from "../session-sharing.js";
+import type { SessionsListResult } from "../session-utils.types.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readSessionsMutationVersion } from "./session-change-event.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -10,8 +11,8 @@ type SessionListFence = {
   agentRunIndexVersion: number;
   sessionsMutationVersion: number;
 };
-type SessionListOperation = SessionListFence & { promise: Promise<unknown> };
-type SessionListCompleted = SessionListFence & { result: unknown };
+type SessionListOperation = SessionListFence & { promise: Promise<SessionsListResult> };
+type SessionListCompleted = SessionListFence & { expiresAt?: number; result: SessionsListResult };
 type SessionListState = {
   completed: Map<string, SessionListCompleted>;
   config: OpenClawConfig;
@@ -78,13 +79,32 @@ function rememberCompletedSessionList(
   }
 }
 
+function resolveSessionListExpiration(result: SessionsListResult): number | null | undefined {
+  let expiresAt: number | undefined;
+  for (const session of result.sessions) {
+    // Running durations tick continuously, and a retained child can sit outside
+    // this page, leaving no authoritative child expiration to cache safely.
+    if (session.hasActiveSubagentRun || session.childSessions?.length) {
+      return null;
+    }
+    const statusExpiration = session.agentStatus?.expiresAt;
+    if (
+      statusExpiration !== undefined &&
+      (expiresAt === undefined || statusExpiration < expiresAt)
+    ) {
+      expiresAt = statusExpiration;
+    }
+  }
+  return expiresAt;
+}
+
 export async function respondWithCachedSessionList(params: {
   client: GatewayClient | null;
   config: OpenClawConfig;
   context: GatewayRequestContext;
   request: SessionsListParams;
   respond: RespondFn;
-  run: () => Promise<unknown>;
+  run: () => Promise<SessionsListResult>;
 }): Promise<void> {
   const workKey = sessionListWorkKey(params.request, params.client);
   const state = sessionListState(params.context, params.config);
@@ -95,7 +115,11 @@ export async function respondWithCachedSessionList(params: {
   // prevent deriving a safe deadline, so only concurrent temporal requests share work.
   const cacheCompleted = params.request.activeMinutes === undefined && !params.request.spawnedBy;
   const completed = cacheCompleted ? state.completed.get(workKey) : undefined;
-  if (completed && matchesSessionListFence(completed, fence)) {
+  if (
+    completed &&
+    matchesSessionListFence(completed, fence) &&
+    (completed.expiresAt === undefined || completed.expiresAt > Date.now())
+  ) {
     params.respond(true, completed.result, undefined);
     return;
   }
@@ -111,7 +135,10 @@ export async function respondWithCachedSessionList(params: {
     .then(params.run)
     .then((result) => {
       if (cacheCompleted && matchesSessionListFence(readSessionListFence(params.context), fence)) {
-        rememberCompletedSessionList(state, workKey, { ...fence, result });
+        const expiresAt = resolveSessionListExpiration(result);
+        if (expiresAt !== null && (expiresAt === undefined || expiresAt > Date.now())) {
+          rememberCompletedSessionList(state, workKey, { ...fence, result, expiresAt });
+        }
       }
       return result;
     });
