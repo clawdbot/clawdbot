@@ -611,7 +611,7 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it("fans status out to every keyed agent entry", async () => {
+  it("fans JSON status out to every keyed agent entry", async () => {
     const agentIds = ["main", ...Array.from({ length: 21 }, (_, index) => `agent-${index + 1}`)];
     getRuntimeConfig.mockReturnValue({
       agents: {
@@ -620,18 +620,29 @@ describe("memory cli", () => {
         ),
       },
     });
-    getMemorySearchManager.mockImplementation(async () => ({
+    getMemorySearchManager.mockImplementation(async ({ agentId }: { agentId: string }) => ({
       manager: {
-        status: () => makeMemoryStatus({ workspaceDir: undefined }),
+        status: () =>
+          makeMemoryStatus({
+            workspaceDir: undefined,
+            dbPath: `/state/agents/${agentId}/agent/openclaw-agent.sqlite`,
+          }),
         close: vi.fn(async () => {}),
       },
     }));
+    const json = spyRuntimeJson(defaultRuntime);
 
-    await runMemoryCli(["status"]);
+    await runMemoryCli(["status", "--json"]);
 
     expect(
       getMemorySearchManager.mock.calls.map(([params]) => (params as { agentId: string }).agentId),
     ).toEqual(agentIds);
+    const payload =
+      firstWrittenJsonArg<Array<{ agentId: string; status: { dbPath: string } }>>(json);
+    expect(payload?.map(({ agentId }) => agentId)).toEqual(agentIds);
+    expect(payload?.map(({ status }) => status.dbPath)).toEqual(
+      agentIds.map((agentId) => `/state/agents/${agentId}/agent/openclaw-agent.sqlite`),
+    );
   });
 
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
