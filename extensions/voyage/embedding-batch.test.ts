@@ -1,5 +1,5 @@
 // Voyage batch tests cover bounded status/error response reads.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runVoyageEmbeddingBatches } from "./embedding-batch.js";
 import type { VoyageEmbeddingClient } from "./embedding-provider.js";
 import { voyageEmbeddingBatchTesting as testing } from "./test-support.js";
@@ -76,6 +76,64 @@ function streamingResponse(params: { chunkCount: number; chunkSize: number; stat
 }
 
 describe("voyage batch bounded reads", () => {
+  it("clamps polling to the remaining batch timeout", async () => {
+    const sleeps: number[] = [];
+
+    await expect(
+      runVoyageEmbeddingBatches({
+        client: buildClient(),
+        agentId: "main",
+        requests: [{ custom_id: "req-0", body: { input: "hello" } }],
+        wait: true,
+        pollIntervalMs: 2_000,
+        timeoutMs: 1_000,
+        concurrency: 1,
+        deps: {
+          now: (() => {
+            const times = [0, 500];
+            return () => times.shift() ?? 500;
+          })(),
+          sleep: async (ms) => {
+            sleeps.push(ms);
+            throw new Error("stop after first wait");
+          },
+          uploadBatchJsonlFile: async () => "input-0",
+          postJsonWithRetry: async () => ({ id: "batch-0", status: "in_progress" }),
+        },
+      }),
+    ).rejects.toThrow("stop after first wait");
+
+    expect(sleeps).toEqual([500]);
+  });
+
+  it("does not poll status after the batch timeout expires", async () => {
+    let now = 0;
+    const statusFetch = vi.fn();
+
+    await expect(
+      runVoyageEmbeddingBatches({
+        client: buildClient(),
+        agentId: "main",
+        requests: [{ custom_id: "req-0", body: { input: "hello" } }],
+        wait: true,
+        pollIntervalMs: 1_000,
+        timeoutMs: 1_000,
+        concurrency: 1,
+        deps: {
+          now: () => now,
+          sleep: async (ms) => {
+            now += ms;
+          },
+          uploadBatchJsonlFile: async () => "input-0",
+          postJsonWithRetry: async () => ({ id: "batch-0", status: "in_progress" }),
+          withRemoteHttpResponse: statusFetch as never,
+        },
+      }),
+    ).rejects.toThrow("voyage batch batch-0 timed out after 1000ms");
+
+    expect(statusFetch).not.toHaveBeenCalled();
+  });
+
   it("uses a 16 MiB cap for successful status/error-file responses", () => {
     expect(VOYAGE_BATCH_RESPONSE_MAX_BYTES).toBe(16 * 1024 * 1024);
   });

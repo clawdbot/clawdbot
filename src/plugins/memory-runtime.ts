@@ -1,11 +1,20 @@
 // Runtime bridge for plugin-owned memory hooks and state.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
-import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { getMemoryRuntime } from "./memory-state.js";
-import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
+import { loadPluginRegistryHandle, resolvePluginRegistryLoadCacheKey } from "./loader.js";
+import { getMemoryRuntime, resolveMemoryCapabilityRegistration } from "./memory-state.js";
+import type { PluginRegistry } from "./registry-types.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
+
+type MemoryRuntime = NonNullable<
+  PluginRegistry["memoryCapabilities"][number]["capability"]["runtime"]
+>;
+type MemoryRuntimeOwner = { runtime: MemoryRuntime; registry?: PluginRegistry };
+let standaloneMemoryRegistrySlot:
+  | { key: string; registry: PluginRegistry; retiredRuntimes: Map<MemoryRuntime, PluginRegistry> }
+  | undefined;
 
 /** Resolves the configured memory slot to the single runtime plugin that may load memory. */
 function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
@@ -21,8 +30,10 @@ function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   return [pluginId];
 }
 
-function resolveMemoryRuntimeWorkspaceDir(cfg: OpenClawConfig): string | undefined {
-  const agentId = resolveDefaultAgentId(cfg);
+function resolveMemoryRuntimeWorkspaceDir(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
   const dir = resolveAgentWorkspaceDir(cfg, agentId);
   if (typeof dir !== "string" || !dir.trim()) {
     return undefined;
@@ -30,29 +41,74 @@ function resolveMemoryRuntimeWorkspaceDir(cfg: OpenClawConfig): string | undefin
   return resolveUserPath(dir);
 }
 
-function ensureMemoryRuntime(cfg?: OpenClawConfig) {
+function resolveMemoryRuntimeFromRegistry(registry: PluginRegistry) {
+  return resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.capability.runtime;
+}
+
+function listCurrentMemoryRuntimeOwners(): MemoryRuntimeOwner[] {
   const current = getMemoryRuntime();
-  if (current || !cfg) {
-    return current;
+  const owners = new Map<MemoryRuntime, MemoryRuntimeOwner>();
+  for (const [runtime, registry] of standaloneMemoryRegistrySlot?.retiredRuntimes ?? []) {
+    owners.set(runtime, { runtime, registry });
   }
-  const onlyPluginIds = resolveMemoryRuntimePluginIds(cfg);
+  if (current) {
+    owners.set(current, { runtime: current });
+  }
+  if (standaloneMemoryRegistrySlot) {
+    const runtime = resolveMemoryRuntimeFromRegistry(standaloneMemoryRegistrySlot.registry);
+    if (runtime) {
+      owners.set(runtime, { runtime, registry: standaloneMemoryRegistrySlot.registry });
+    }
+  }
+  return [...owners.values()];
+}
+
+function withMemoryRuntimeOwner<T>(
+  owner: MemoryRuntimeOwner,
+  run: (runtime: MemoryRuntime) => T,
+): T {
+  return withPluginRuntimeRegistryScope(owner.registry, () => run(owner.runtime));
+}
+
+function ensureMemoryRuntime(params?: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): MemoryRuntimeOwner | undefined {
+  const current = getMemoryRuntime();
+  if (current || !params) {
+    return current ? { runtime: current } : undefined;
+  }
+  const onlyPluginIds = resolveMemoryRuntimePluginIds(params.cfg);
   if (onlyPluginIds.length === 0) {
-    return getMemoryRuntime();
+    return undefined;
   }
-  getLoadedRuntimePluginRegistry({ requiredPluginIds: onlyPluginIds });
-  if (getMemoryRuntime()) {
-    return getMemoryRuntime();
+  const workspaceDir = resolveMemoryRuntimeWorkspaceDir(params.cfg, params.agentId);
+  const loadOptions = {
+    config: params.cfg,
+    onlyPluginIds,
+    workspaceDir,
+    activate: false as const,
+  };
+  const key = resolvePluginRegistryLoadCacheKey(loadOptions);
+  if (standaloneMemoryRegistrySlot?.key === key) {
+    const runtime = resolveMemoryRuntimeFromRegistry(standaloneMemoryRegistrySlot.registry);
+    return runtime ? { runtime, registry: standaloneMemoryRegistrySlot.registry } : undefined;
   }
-  const workspaceDir = resolveMemoryRuntimeWorkspaceDir(cfg);
-  ensureStandaloneRuntimePluginRegistryLoaded({
-    requiredPluginIds: onlyPluginIds,
-    loadOptions: {
-      config: cfg,
-      onlyPluginIds,
-      workspaceDir,
-    },
-  });
-  return getMemoryRuntime();
+  const registry = loadPluginRegistryHandle(loadOptions);
+  if (!registry) {
+    return undefined;
+  }
+  const runtime = resolveMemoryRuntimeFromRegistry(registry);
+  const previousSlot = standaloneMemoryRegistrySlot;
+  const retiredRuntimes = new Map(previousSlot?.retiredRuntimes);
+  const previousRuntime = previousSlot
+    ? resolveMemoryRuntimeFromRegistry(previousSlot.registry)
+    : undefined;
+  if (previousSlot && previousRuntime && previousRuntime !== runtime) {
+    retiredRuntimes.set(previousRuntime, previousSlot.registry);
+  }
+  standaloneMemoryRegistrySlot = { key, registry, retiredRuntimes };
+  return runtime ? { runtime, registry } : undefined;
 }
 
 /** Returns the active plugin-backed memory search manager for an agent. */
@@ -61,23 +117,35 @@ export async function getActiveMemorySearchManager(params: {
   agentId: string;
   purpose?: "default" | "status" | "cli";
 }) {
-  const runtime = ensureMemoryRuntime(params.cfg);
-  if (!runtime) {
+  const owner = ensureMemoryRuntime(params);
+  if (!owner) {
     return { manager: null, error: "memory plugin unavailable" };
   }
-  return await runtime.getMemorySearchManager(params);
+  return await withMemoryRuntimeOwner(
+    owner,
+    async (runtime) => await runtime.getMemorySearchManager(params),
+  );
 }
 
 /** Resolves current memory backend config without constructing a manager. */
 export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; agentId: string }) {
-  return ensureMemoryRuntime(params.cfg)?.resolveMemoryBackendConfig(params) ?? null;
+  const owner = ensureMemoryRuntime(params);
+  return owner
+    ? withMemoryRuntimeOwner(owner, (runtime) => runtime.resolveMemoryBackendConfig(params))
+    : null;
 }
 
 /** Closes all active plugin-backed memory search managers. */
 export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void> {
   void cfg;
-  const runtime = getMemoryRuntime();
-  await runtime?.closeAllMemorySearchManagers?.();
+  await Promise.all(
+    listCurrentMemoryRuntimeOwners().map((owner) =>
+      withMemoryRuntimeOwner(owner, async (runtime) => {
+        await runtime.closeAllMemorySearchManagers?.();
+      }),
+    ),
+  );
+  standaloneMemoryRegistrySlot?.retiredRuntimes.clear();
 }
 
 /** Closes the plugin-backed memory search manager for one agent. */
@@ -85,6 +153,21 @@ export async function closeActiveMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {
-  const runtime = getMemoryRuntime();
-  await runtime?.closeMemorySearchManager?.(params);
+  await Promise.all(
+    listCurrentMemoryRuntimeOwners().map((owner) =>
+      withMemoryRuntimeOwner(owner, async (runtime) => {
+        await runtime.closeMemorySearchManager?.(params);
+      }),
+    ),
+  );
+}
+
+function resetStandaloneMemoryRegistrySlot(): void {
+  standaloneMemoryRegistrySlot = undefined;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.memoryRuntimeTestApi")] = {
+    resetStandaloneMemoryRegistrySlot,
+  };
 }

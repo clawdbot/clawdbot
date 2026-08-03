@@ -8,6 +8,7 @@ import { fileStore } from "../infra/file-store.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 import { probePlaybackMediaFileDescriptor, type PlaybackMediaProbeResult } from "./media-probe.js";
 import { resolveNativePlaybackCodecCompatibility } from "./playback-codec-policy.js";
@@ -351,13 +352,9 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
     return { mode: "fallback" };
   }
 
-  const inspectionJob = computeInspection();
-  playbackInspectionJobs.set(cacheKey, inspectionJob);
-  try {
-    return await inspectionJob;
-  } finally {
-    playbackInspectionJobs.delete(cacheKey);
-  }
+  return await getOrCreatePromise(playbackInspectionJobs, cacheKey, computeInspection, {
+    evictOnSettled: true,
+  });
 }
 
 /** Resolves source-aware playback metadata and caches codec classification by file identity. */

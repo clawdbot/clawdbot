@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
-import { inspectPortUsage, type PortUsage } from "../../infra/ports.js";
+import { inspectPortUsage, LOOPBACK_PORT_PROBE_HOSTS, type PortUsage } from "../../infra/ports.js";
 import type { GatewayPortHealthSnapshot } from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
@@ -196,7 +196,9 @@ export async function inspectGatewayPortHealth(params: {
 }): Promise<GatewayPortHealthSnapshot> {
   let portUsage: PortUsage;
   try {
-    portUsage = await inspectPortUsage(params.port);
+    portUsage = await inspectPortUsage(params.port, {
+      probeHosts: LOOPBACK_PORT_PROBE_HOSTS,
+    });
   } catch (err) {
     portUsage = {
       port: params.port,

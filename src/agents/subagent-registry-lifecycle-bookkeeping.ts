@@ -40,7 +40,7 @@ export function createSubagentRegistryLifecycleBookkeeping(
     };
     if (!cleanupParams.preserveTranscript) {
       runCleanupTail("session cleanup", async () => {
-        await removeInternalSessionEffectsSession(cleanupParams.entry.execution?.transcriptTarget);
+        await removeInternalSessionEffectsSession(cleanupParams.entry.execution.transcriptTarget);
       });
     }
     if (cleanupParams.entry.spawnMode !== "session") {

@@ -41,7 +41,7 @@ function resolveOpencodeGoCatalogAuth(
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "OpenCode Go Provider",
-  description: "Bundled OpenCode Go provider plugin",
+  description: "Official OpenCode Go provider plugin",
   manifest,
   provider: {
     label: "OpenCode Go",

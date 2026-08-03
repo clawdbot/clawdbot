@@ -1,6 +1,7 @@
 // Tests session and trajectory export command packaging, filesystem writes, and approval routing.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbuild.mjs";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -39,6 +40,7 @@ const hoisted = await vi.hoisted(async () => {
     sessionTranscriptEvents: [] as unknown[],
   };
 });
+const generatedVendorAssets = generateExportHtmlVendorAssets();
 
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   readAcpSessionMetaForEntry: hoisted.readAcpSessionMetaForEntryMock,
@@ -211,6 +213,9 @@ describe("buildExportSessionReply", () => {
       async () => hoisted.sessionTranscriptEvents,
     );
     hoisted.exportHtmlTemplateContents.clear();
+    for (const [fileName, contents] of Object.entries(generatedVendorAssets)) {
+      hoisted.exportHtmlTemplateContents.set(`vendor/${fileName}`, contents);
+    }
     hoisted.sessionTranscriptEvents = [];
   });
 

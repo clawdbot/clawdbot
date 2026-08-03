@@ -1,34 +1,39 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
+import type { WizardStep as ProtocolWizardStep } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred, type Deferred } from "../shared/deferred.js";
 import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
-type WizardStepOption = {
-  value: unknown;
-  label: string;
-  hint?: string;
-};
+export type WizardStep = ProtocolWizardStep;
 
-export type WizardStep = {
-  id: string;
-  type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress" | "action";
-  title?: string;
-  message?: string;
-  format?: "plain";
-  options?: WizardStepOption[];
-  initialValue?: unknown;
-  placeholder?: string;
-  sensitive?: boolean;
-  executor?: "gateway" | "client";
-  externalUrl?: string;
-  deviceCode?: {
-    code: string;
-    expiresInMinutes?: number;
-    message?: string;
-  };
-};
+type WizardStepInputRequirement = "always" | "never" | "client-executor";
+
+const WIZARD_STEP_INPUT_REQUIREMENT_BY_TYPE = {
+  note: "never",
+  select: "always",
+  text: "always",
+  confirm: "always",
+  multiselect: "always",
+  progress: "never",
+  action: "client-executor",
+} as const satisfies Record<WizardStep["type"], WizardStepInputRequirement>;
+
+/** Whether a step needs a user answer instead of client or gateway acknowledgement. */
+export function wizardStepAwaitsInput(step: WizardStep): boolean {
+  const requirement = WIZARD_STEP_INPUT_REQUIREMENT_BY_TYPE[step.type];
+  switch (requirement) {
+    case "always":
+      return true;
+    case "never":
+      return false;
+    case "client-executor":
+      return step.executor === "client";
+  }
+  const unhandledRequirement: never = requirement;
+  return unhandledRequirement;
+}
 
 type WizardSessionStatus = "running" | "done" | "cancelled" | "error";
 
@@ -76,7 +81,12 @@ class WizardSessionPrompter implements WizardPrompter {
   }
 
   async note(message: string, title?: string): Promise<void> {
-    await this.prompt({ type: "note", title, message, executor: "client" });
+    await this.prompt({
+      type: "note",
+      title,
+      message,
+      executor: "client",
+    });
   }
 
   async deviceCode(params: {
@@ -106,7 +116,12 @@ class WizardSessionPrompter implements WizardPrompter {
   }
 
   async plain(message: string): Promise<void> {
-    await this.prompt({ type: "note", message, format: "plain", executor: "client" });
+    await this.prompt({
+      type: "note",
+      message,
+      format: "plain",
+      executor: "client",
+    });
   }
 
   async select<T>(params: {

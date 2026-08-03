@@ -46,7 +46,12 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  estimateToolResultTextChars,
+  resolveLiveToolResultMaxChars,
+  sliceToolResultTextToBudget,
+} from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import {
   createFailedDynamicToolResponse,
@@ -398,29 +403,6 @@ const EXPLICIT_MESSAGE_PROVIDER_KEYS = ["channel", "provider"];
 const EXPLICIT_MESSAGE_TARGET_KEYS = ["target", "to", "channelId"];
 const EXPLICIT_MESSAGE_THREAD_KEYS = ["threadId", "thread_id", "messageThreadId", "topicId"];
 const EXPLICIT_MESSAGE_REPLY_KEYS = ["replyTo", "replyToId", "replyToIdFull"];
-const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
-const LARGE_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 32_000;
-const XL_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 64_000;
-
-function resolveCodexDynamicToolResultMaxChars(contextWindowTokens?: number): number {
-  if (
-    typeof contextWindowTokens !== "number" ||
-    !Number.isFinite(contextWindowTokens) ||
-    contextWindowTokens <= 0
-  ) {
-    return DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
-  }
-  const tokens = Math.floor(contextWindowTokens);
-  const autoCap =
-    tokens >= 200_000
-      ? XL_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS
-      : tokens >= 100_000
-        ? LARGE_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS
-        : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
-  // Match the core live-result context-share ceiling without importing core
-  // internals across the bundled-plugin boundary.
-  return Math.min(autoCap, Math.max(1, Math.floor(tokens * 0.3) * 4));
-}
 
 function computerFrameImageIdentity(
   content: AgentToolResult<unknown>["content"] | undefined,
@@ -466,9 +448,13 @@ export function createCodexDynamicToolBridge(params: {
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
-  const toolResultMaxChars = resolveCodexDynamicToolResultMaxChars(
-    params.hookContext?.contextWindowTokens,
-  );
+  const contextWindowTokens = params.hookContext?.contextWindowTokens;
+  const toolResultMaxChars =
+    typeof contextWindowTokens === "number" &&
+    Number.isFinite(contextWindowTokens) &&
+    contextWindowTokens > 0
+      ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
+      : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
   const availableProjection = projectCodexDynamicTools(params.tools);
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
@@ -1433,23 +1419,28 @@ function withDynamicToolAsyncStarted<T extends CodexDynamicToolCallResponse>(
 function normalizeToolResultMaxChars(maxChars: number): number {
   return typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
     ? Math.floor(maxChars)
-    : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+    : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
 function convertToolContents(
   content: Array<TextContent | ImageContent>,
-  toolResultMaxChars = DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS,
+  toolResultMaxChars = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
 ): CodexDynamicToolCallOutputContentItem[] {
   const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
   const totalTextChars = content.reduce(
     (total, item) => total + (item.type === "text" ? item.text.length : 0),
     0,
   );
-  if (totalTextChars <= maxChars) {
+  const totalTextBudget = content.reduce(
+    (total, item) => total + (item.type === "text" ? estimateToolResultTextChars(item.text) : 0),
+    0,
+  );
+  if (totalTextBudget <= maxChars) {
     return content.flatMap(convertToolContent);
   }
-  const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, showing ${maxChars}; rerun with narrower args.)`;
+  const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, weighted budget ${maxChars}; rerun with narrower args.)`;
   const notice = `\n${noticeText}`;
-  const textBudget = Math.max(0, maxChars - notice.length);
+  const noticeChars = estimateToolResultTextChars(notice);
+  const textBudget = Math.max(0, maxChars - noticeChars);
   let remainingTextBudget = textBudget;
   let appendedNotice = false;
   const output: CodexDynamicToolCallOutputContentItem[] = [];
@@ -1461,15 +1452,14 @@ function convertToolContents(
     if (appendedNotice) {
       continue;
     }
-    if (notice.length >= maxChars) {
-      output.push({ type: "inputText", text: truncateUtf16Safe(noticeText, maxChars) });
+    if (noticeChars >= maxChars) {
+      output.push({ type: "inputText", text: sliceToolResultTextToBudget(noticeText, maxChars) });
       appendedNotice = true;
       continue;
     }
-    const sliceLength = Math.min(item.text.length, remainingTextBudget);
-    remainingTextBudget -= sliceLength;
-    const shouldAppendNotice = remainingTextBudget <= 0;
-    const text = truncateUtf16Safe(item.text, sliceLength);
+    const text = sliceToolResultTextToBudget(item.text, remainingTextBudget);
+    remainingTextBudget -= estimateToolResultTextChars(text);
+    const shouldAppendNotice = remainingTextBudget <= 0 || text.length < item.text.length;
     if (shouldAppendNotice) {
       // The notice budget is reserved before slicing text, so the combined
       // result is already bounded without another boundary-sensitive cut.
@@ -1480,7 +1470,7 @@ function convertToolContents(
     }
   }
   if (!appendedNotice) {
-    output.push({ type: "inputText", text: truncateUtf16Safe(noticeText, maxChars) });
+    output.push({ type: "inputText", text: sliceToolResultTextToBudget(noticeText, maxChars) });
   }
   return output;
 }

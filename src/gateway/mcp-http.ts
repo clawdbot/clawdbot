@@ -311,6 +311,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           accountId: requestContext.accountId,
           inboundEventKind: requestContext.inboundEventKind,
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
+          sourceReplyOnly: requestContext.sourceReplyOnly,
           taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           toolsAllow: requestContext.toolsAllow,
@@ -359,6 +360,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
               hookContext: {
                 agentId: scopedTools.agentId,
                 config: cfg,
+                ...(scopedTools.workspaceDir ? { workspaceDir: scopedTools.workspaceDir } : {}),
                 sessionKey: requestContext.sessionKey,
                 sessionId: requestContext.sessionId,
                 runId: requestContext.runId,

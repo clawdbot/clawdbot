@@ -30,6 +30,7 @@ import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
 import { collectSkillBins } from "../../skills/discovery/bins.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
@@ -91,20 +92,9 @@ function installClawHubSkillDeduped(params: ClawHubInstallParams): Promise<ClawH
     params.force ?? false,
     params.acknowledgeClawHubRisk ?? false,
   ]);
-  const active = clawHubInstallsInFlight.get(key);
-  if (active) {
-    return active;
-  }
-  const install = installSkillFromClawHub(params);
-  clawHubInstallsInFlight.set(key, install);
-  void install
-    .finally(() => {
-      if (clawHubInstallsInFlight.get(key) === install) {
-        clawHubInstallsInFlight.delete(key);
-      }
-    })
-    .catch(() => undefined);
-  return install;
+  return getOrCreatePromise(clawHubInstallsInFlight, key, () => installSkillFromClawHub(params), {
+    evictOnSettled: true,
+  });
 }
 
 function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace) {

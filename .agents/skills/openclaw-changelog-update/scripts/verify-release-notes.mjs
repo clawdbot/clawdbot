@@ -44,7 +44,7 @@ const nonEditorialTypes = new Set([
   "test",
 ]);
 const nonEditorialTitlePattern =
-  /(?:^|[\s:([{\-])(docs?|documentation|tests?|testing|qa|quality assurance|refactor(?:ing)?|ci|continuous integration|build|chore|style|lint|format)(?:$|[\s:)\]}\-])/i;
+  /(?:^|[\s:([{-])(docs?|documentation|tests?|testing|qa|quality assurance|refactor(?:ing)?|ci|continuous integration|build|chore|style|lint|format)(?:$|[\s:)\]}-])/i;
 const editorialTitlePattern =
   /^\s*(?:\[[^\]]+\]\s*)?(?:#\d+:\s*)?(?:add|allow|block|enable|expose|fail|fix|harden|honor|improve|keep|migrate|move|persist|polish|preserve|prevent|propagate|rate[- ]?limit|restore|revert|ship|support|treat|validate)\b|^\s*#\d+:/i;
 const genericDirectCommitTerms = new Set([
@@ -67,6 +67,7 @@ const genericDirectCommitTerms = new Set([
   "restore",
   "update",
 ]);
+const ansiEscapePattern = new RegExp(String.raw`\u001B\[[0-?]*[ -/]*[@-~]`, "g");
 let githubSnapshotState;
 
 function fail(message) {
@@ -111,7 +112,7 @@ function parseArgs(argv) {
     mainRef: undefined,
     noGithubSnapshot: false,
     refreshGithubSnapshot: false,
-    seedRef: undefined,
+    seedRef: /** @type {string | undefined} */ (undefined),
     shippedRefs: [],
     writeLedger: false,
   };
@@ -233,7 +234,7 @@ function gitIsAncestor(base, target) {
   if (result.status === 1) {
     return false;
   }
-  fail(
+  return fail(
     `could not validate release range ancestry for ${base}..${target}: ${
       result.stderr?.trim() || result.signal || result.status
     }`,
@@ -252,20 +253,19 @@ function gitCommit(ref, required = false) {
   if (!required) {
     return undefined;
   }
-  fail(`could not resolve canonical main ref ${ref}: ${result.stderr?.trim() || result.status}`);
+  return fail(
+    `could not resolve canonical main ref ${ref}: ${result.stderr?.trim() || result.status}`,
+  );
 }
 
 function fetchGithubApi(args) {
   try {
     return JSON.parse(
-      run("ghx", ["api", ...args], { env: { GHX_NO_CACHE: "1" } }).replace(
-        /\u001B\[[0-?]*[ -/]*[@-~]/g,
-        "",
-      ),
+      run("ghx", ["api", ...args], { env: { GHX_NO_CACHE: "1" } }).replace(ansiEscapePattern, ""),
     );
   } catch (error) {
     if (typeof error.stdout === "string" && error.stdout.trim() !== "") {
-      return JSON.parse(error.stdout.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, ""));
+      return JSON.parse(error.stdout.replace(ansiEscapePattern, ""));
     }
     throw error;
   }
@@ -942,8 +942,8 @@ function authorsMatch(left, right) {
 }
 
 function pathsOverlap(left, right) {
-  for (const path of left) {
-    if (right.has(path)) {
+  for (const filePath of left) {
+    if (right.has(filePath)) {
       return true;
     }
   }
@@ -998,7 +998,7 @@ function canonicalMainCommits(base, mainRef) {
   if (!mainRef) {
     return [];
   }
-  const mainCommit = gitCommit(mainRef, true);
+  const mainCommit = /** @type {string} */ (gitCommit(mainRef, true));
   const mainBase = git(["merge-base", base, mainCommit]);
   const output = git([
     "log",
@@ -1103,8 +1103,8 @@ function sourceCommits(base, target, mainRef) {
       fail(`cyclic revert history at ${hash}`);
     }
     seen.add(hash);
-    const output = git(["show", "-s", "--format=%s%x1f%B", hash]);
-    const [subject, ...bodyParts] = output.split("\x1f");
+    const commitOutput = git(["show", "-s", "--format=%s%x1f%B", hash]);
+    const [subject, ...bodyParts] = commitOutput.split("\x1f");
     const body = bodyParts.join("\x1f");
     const message = `${subject}\n${body}`;
     const revertedHash = standardRevertedHash(body);
@@ -1270,10 +1270,11 @@ function sourceCommits(base, target, mainRef) {
   for (const { candidates, commit, pullRequestOrigins } of pendingCanonicalMatches) {
     const matches = canonicalMainCommitMatches(
       commit,
-      [...candidates.values()].map((candidate) => ({
-        ...withChangedPaths(candidate),
-        pullRequests: candidateMainPullRequests.get(candidate.hash) ?? [],
-      })),
+      [...candidates.values()].map((candidate) =>
+        Object.assign({}, withChangedPaths(candidate), {
+          pullRequests: candidateMainPullRequests.get(candidate.hash) ?? [],
+        }),
+      ),
     );
     canonicalMainCommitsByReleaseCommit.set(commit.hash, matches);
     if (pullRequestOrigins.length > 0 && matches.length === 1) {
@@ -1345,11 +1346,11 @@ function sourceCommits(base, target, mainRef) {
     }
   }
   const revertedPullRequests = new Set();
-  for (const pullRequests of resolveAssociatedPullRequests(
+  for (const revertedPullRequestNumbers of resolveAssociatedPullRequests(
     [...revertedCommitHashes],
     targetTimestamp,
   ).values()) {
-    for (const number of pullRequests) {
+    for (const number of revertedPullRequestNumbers) {
       revertedPullRequests.add(number);
     }
   }
@@ -2089,14 +2090,12 @@ export function ledgerFor(
     for (const issue of linkedIssues) {
       addHandles(thanks, issue.thanks);
     }
-    return {
-      ...entry,
-      ...editorialClassification(entry.title),
+    return Object.assign({}, entry, editorialClassification(entry.title), {
       externalReferences: priorEntry?.externalReferences ?? [],
       linkedIssues,
       priorReferences,
       thanks,
-    };
+    });
   });
   const shippedBaselineLine = formatShippedBaselineExclusions(shippedBaselines);
   const ledger = [
@@ -2544,7 +2543,6 @@ function main() {
   ];
   const resolvedHandles = resolveGitHubHandles(contributorHandles);
   const relationships = contributionRelationships(source, nodes, resolvedHandles);
-  const unlinkedCommits = source.activeCommits.filter((commit) => commit.references.length === 0);
   const resolvedCommitAuthors = resolveDirectCommitAuthors(relationships.directCommits);
   relationships.directCommits = withDirectCommitAuthors(
     relationships.directCommits,

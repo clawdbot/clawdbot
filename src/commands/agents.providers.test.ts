@@ -101,14 +101,14 @@ describe("buildProviderStatusIndex", () => {
     expect(status?.name).toBe("Work");
   });
 
-  it("records accounts that throw during read-only resolution as not configured", async () => {
+  it("keeps unresolved configured SecretRef accounts visible without exposing their refs", async () => {
     const plugin = {
       id: "quietchat",
       meta: { label: "QuietChat" },
       config: {
         listAccountIds: () => ["default"],
         resolveAccount: () => {
-          throw new Error("unresolved SecretRef");
+          throw new Error("unresolved SecretRef: PRIVATE_PROVIDER_TOKEN");
         },
       },
       status: {},
@@ -123,13 +123,161 @@ describe("buildProviderStatusIndex", () => {
           "quietchat:default",
           {
             provider: "quietchat",
+            providerLabel: "QuietChat",
             accountId: "default",
-            state: "not configured",
-            configured: false,
+            state: "configured unavailable",
+            configured: true,
+            visibleInConfiguredLists: true,
           },
         ],
       ]),
     );
+    const statuses = await buildProviderStatusIndex({} as OpenClawConfig);
+    expect(
+      listProvidersForAgent({
+        summaryIsDefault: true,
+        cfg: {} as OpenClawConfig,
+        bindings: [],
+        providerStatus: statuses,
+        providerMetadata: buildProviderSummaryMetadataIndex({} as OpenClawConfig),
+      }),
+    ).toEqual(["QuietChat default: configured unavailable"]);
+    expect(JSON.stringify([...statuses.values()])).not.toContain("PRIVATE_PROVIDER_TOKEN");
+  });
+
+  it("keeps configured-but-unavailable Telegram-style accounts in default agent output", async () => {
+    const account = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      tokenStatus: "configured_unavailable" as const,
+    };
+    const plugin = {
+      id: "telegram",
+      meta: { label: "Telegram" },
+      config: {
+        listAccountIds: () => ["default"],
+        inspectAccount: () => account,
+        resolveAccount: () => account,
+        describeAccount: () => ({
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          tokenStatus: "configured_unavailable" as const,
+        }),
+        isConfigured: () => false,
+      },
+      status: {},
+    } as never;
+    const cfg = {
+      channels: {
+        telegram: {
+          enabled: true,
+          tokenFile: "/nonexistent/token",
+        },
+      },
+    } as OpenClawConfig;
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+
+    const statuses = await buildProviderStatusIndex(cfg);
+
+    expect(statuses.get("telegram:default")).toMatchObject({
+      configured: true,
+      state: "configured unavailable",
+    });
+    expect(
+      listProvidersForAgent({
+        summaryIsDefault: true,
+        cfg,
+        bindings: [],
+        providerStatus: statuses,
+        providerMetadata: buildProviderSummaryMetadataIndex(cfg),
+      }),
+    ).toEqual(["Telegram default: configured unavailable"]);
+  });
+
+  it("does not mark a healthy Slack account unavailable for an optional unresolved user token", async () => {
+    const account = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      botTokenStatus: "available" as const,
+      appTokenStatus: "available" as const,
+      userTokenStatus: "configured_unavailable" as const,
+    };
+    const plugin = {
+      id: "slack",
+      meta: { label: "Slack" },
+      config: {
+        listAccountIds: () => ["default"],
+        inspectAccount: () => account,
+        resolveAccount: () => account,
+        describeAccount: () => ({ accountId: "default", enabled: true, configured: true }),
+        isConfigured: () => true,
+      },
+      status: {},
+    } as never;
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+
+    expect(
+      (await buildProviderStatusIndex({} as OpenClawConfig)).get("slack:default"),
+    ).toMatchObject({ configured: true, state: "configured" });
+  });
+
+  it("does not treat an incomplete Slack account as configured when a required token is missing", async () => {
+    const account = {
+      accountId: "default",
+      enabled: true,
+      configured: false,
+      botTokenStatus: "configured_unavailable" as const,
+      appTokenStatus: "missing" as const,
+      userTokenStatus: "missing" as const,
+    };
+    const plugin = {
+      id: "slack",
+      meta: { label: "Slack" },
+      config: {
+        listAccountIds: () => ["default"],
+        inspectAccount: () => account,
+        resolveAccount: () => account,
+        describeAccount: () => ({ accountId: "default", enabled: true, configured: true }),
+        isConfigured: () => false,
+      },
+      status: {},
+    } as never;
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+
+    expect(
+      (await buildProviderStatusIndex({} as OpenClawConfig)).get("slack:default"),
+    ).toMatchObject({ configured: false, state: "not configured" });
+  });
+
+  it("keeps a fully configured Slack account visible when a required token is unavailable", async () => {
+    const account = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      botTokenStatus: "configured_unavailable" as const,
+      appTokenStatus: "available" as const,
+      userTokenStatus: "missing" as const,
+    };
+    const plugin = {
+      id: "slack",
+      meta: { label: "Slack" },
+      config: {
+        listAccountIds: () => ["default"],
+        inspectAccount: () => account,
+        resolveAccount: () => account,
+        describeAccount: () => ({ accountId: "default", enabled: true, configured: false }),
+        isConfigured: () => false,
+      },
+      status: {},
+    } as never;
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+
+    expect(
+      (await buildProviderStatusIndex({} as OpenClawConfig)).get("slack:default"),
+    ).toMatchObject({ configured: true, state: "configured unavailable" });
   });
 
   it("does not inspect linkage for an unconfigured account", async () => {

@@ -166,7 +166,10 @@ async function runRealPicker(options: ProducerOptions, openclawHome: string) {
     await sendAndWait("\r", /Configure DM access policies now\?/u);
     await sendAndWait("\r", /Configuration updated\./u);
 
-    while (!exit) {
+    for (;;) {
+      if (exit) {
+        break;
+      }
       if (remainingMs() === 0) {
         throw new Error(`picker timed out after ${options.timeoutMs}ms`);
       }
@@ -182,7 +185,10 @@ async function runRealPicker(options: ProducerOptions, openclawHome: string) {
     if (!exit) {
       child.kill("SIGTERM");
       const cleanupDeadline = Date.now() + 5_000;
-      while (!exit && Date.now() < cleanupDeadline) {
+      while (Date.now() < cleanupDeadline) {
+        if (exit) {
+          break;
+        }
         await delay(25);
       }
     }

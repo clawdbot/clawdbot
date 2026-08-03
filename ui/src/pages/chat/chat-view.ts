@@ -54,7 +54,7 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import type { SidebarContent } from "./components/chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
 import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
@@ -240,6 +240,7 @@ export type ChatProps = {
   } | null;
   currentAgentId: string;
   fullMessageAgentId?: string;
+  loadFullAssistantMessage?: SidebarFullMessageLoader | null;
   onAgentChange: (agentId: string) => void;
   onNavigateToAgent?: () => void;
   onSessionSelect?: (sessionKey: string) => void;
@@ -355,6 +356,7 @@ export function renderChat(props: ChatProps) {
       userAvatar: props.userAvatar,
       basePath: props.basePath,
       fullMessageAgentId: props.fullMessageAgentId,
+      loadFullAssistantMessage: props.loadFullAssistantMessage,
       localMediaPreviewRoots: props.localMediaPreviewRoots,
       assistantAttachmentAuthToken: props.assistantAttachmentAuthToken,
       resolveArtifactDownload: props.resolveArtifactDownload,

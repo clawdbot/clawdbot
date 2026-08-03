@@ -25,11 +25,7 @@ import {
 } from "./channel.adapters.js";
 import { listZalouserDirectoryGroupMembers } from "./directory.js";
 import type { ZalouserProbeResult } from "./probe.js";
-import {
-  createZalouserSetupWizardProxy,
-  zalouserSetupAdapter,
-  zalouserSetupContract,
-} from "./setup-core.js";
+import { createZalouserSetupWizardProxy, zalouserSetupContract } from "./setup-core.js";
 import { createZalouserPluginBase } from "./shared.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 
@@ -71,7 +67,6 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     base: {
       ...createZalouserPluginBase({
         setupWizard: zalouserSetupWizardProxy,
-        setup: zalouserSetupAdapter,
         setupContract: zalouserSetupContract,
       }),
       groups: zalouserGroupsAdapter,

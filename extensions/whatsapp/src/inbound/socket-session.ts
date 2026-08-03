@@ -8,6 +8,7 @@ import type {
   WAMessage,
   WASocket,
 } from "baileys";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { identitiesOverlap, type WhatsAppSelfIdentity } from "../identity.js";
@@ -309,7 +310,11 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       getActiveReachoutTimelock(reachoutTimeLock) ?? (await fetchReachoutTimeLock(currentSock));
     const activeState = getActiveReachoutTimelock(state);
     if (activeState) {
-      throw new Error(formatReachoutTimelockError(activeState));
+      const error = new Error(formatReachoutTimelockError(activeState));
+      // Only the preflight proves no native write; retry checks may follow an ambiguous send.
+      throw readinessOptions?.rememberReady
+        ? new PlatformMessageNotDispatchedError(error.message, { cause: error })
+        : error;
     }
     if (readinessOptions?.rememberReady && state) {
       // The top-level direct send checks readiness before typing; consume this

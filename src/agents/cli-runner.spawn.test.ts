@@ -5,6 +5,7 @@ import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import {
@@ -164,6 +165,23 @@ const GEMINI_OK_JSONL = `${[
   JSON.stringify({ type: "message", role: "assistant", content: "ok", delta: true }),
   JSON.stringify({ type: "result", status: "success" }),
 ].join("\n")}\n`;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function createCliPackageFixture(version: string): Promise<{
+  root: string;
+  entrypoint: string;
+}> {
+  const root = tempDirs.make("openclaw-cli-version-gate-");
+  const entrypoint = path.join(root, "bin", "cli.js");
+  await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    `${JSON.stringify({ name: "@fixture/versioned-cli", version })}\n`,
+  );
+  await fs.writeFile(entrypoint, `#!${process.execPath}\n`, { mode: 0o755 });
+  await fs.chmod(entrypoint, 0o755);
+  return { root, entrypoint };
+}
 
 describe("runCliAgent spawn path", () => {
   it("formats output digests without logging response content", () => {
@@ -1237,6 +1255,129 @@ describe("runCliAgent spawn path", () => {
     );
 
     expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+  });
+
+  it("binds and admits the exact package artifact at the tool-availability version floor", async () => {
+    const fixture = await createCliPackageFixture("0.39.1");
+    try {
+      mockSuccessfulCliRun(GEMINI_OK_JSONL);
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "google-gemini-cli",
+          model: "gemini-3.1-pro-preview",
+          backend: { command: fixture.entrypoint },
+          cliToolAvailability: { native: [], openClaw: [] },
+          runtimeArtifact: {
+            kind: "bundled-package-tree",
+            packageName: "@fixture/versioned-cli",
+            entrypoint: "command",
+            exactToolAvailabilityVersionPolicy: { stableMinimum: "0.39.1" },
+          },
+        }),
+      );
+
+      const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
+      expect(input.argv?.slice(0, 2)).toEqual([
+        await fs.realpath(process.execPath),
+        await fs.realpath(fixture.entrypoint),
+      ]);
+    } finally {
+      await fs.rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an exact tool-availability run below the package version floor before spawn", async () => {
+    const fixture = await createCliPackageFixture("0.39.0");
+    try {
+      const context = buildPreparedCliRunContext({
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        backend: { command: fixture.entrypoint },
+        cliToolAvailability: { native: [], openClaw: [] },
+        runtimeArtifact: {
+          kind: "bundled-package-tree",
+          packageName: "@fixture/versioned-cli",
+          entrypoint: "command",
+          exactToolAvailabilityVersionPolicy: { stableMinimum: "0.39.1" },
+        },
+      });
+      context.params.isolatedCompletion = true;
+      await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+        code: "unsupported",
+        message: expect.stringContaining("requires >=0.39.1; found 0.39.0"),
+      });
+      expect(supervisorSpawnMock).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { version: "0.40.0-preview.2", admitted: false },
+    { version: "0.40.0-preview.3", admitted: true },
+    { version: "0.41.0-nightly.20260423.gd1c91f526", admitted: false },
+    { version: "0.41.0-nightly.20260427.g42587de73", admitted: true },
+    { version: "0.53.0-beta.0", admitted: false },
+  ])("applies the exact tool-availability policy to $version", async ({ version, admitted }) => {
+    const fixture = await createCliPackageFixture(version);
+    const run = () =>
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "google-gemini-cli",
+          model: "gemini-3.1-pro-preview",
+          backend: { command: fixture.entrypoint },
+          cliToolAvailability: { native: [], openClaw: [] },
+          runtimeArtifact: {
+            kind: "bundled-package-tree",
+            packageName: "@fixture/versioned-cli",
+            entrypoint: "command",
+            exactToolAvailabilityVersionPolicy: {
+              stableMinimum: "0.39.1",
+              prereleaseMinimums: {
+                preview: "0.40.0-preview.3",
+                nightly: "0.41.0-nightly.20260427.g42587de73",
+              },
+            },
+          },
+        }),
+      );
+    try {
+      if (admitted) {
+        mockSuccessfulCliRun(GEMINI_OK_JSONL);
+        await expect(run()).resolves.toBeDefined();
+        expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+      } else {
+        await expect(run()).rejects.toThrow("requires a supported package version");
+        expect(supervisorSpawnMock).not.toHaveBeenCalled();
+      }
+    } finally {
+      await fs.rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not apply the exact tool-availability version floor to normal agent turns", async () => {
+    const fixture = await createCliPackageFixture("0.39.0");
+    try {
+      mockSuccessfulCliRun(GEMINI_OK_JSONL);
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "google-gemini-cli",
+          model: "gemini-3.1-pro-preview",
+          backend: { command: fixture.entrypoint },
+          runtimeArtifact: {
+            kind: "bundled-package-tree",
+            packageName: "@fixture/versioned-cli",
+            entrypoint: "command",
+            exactToolAvailabilityVersionPolicy: { stableMinimum: "0.39.1" },
+          },
+        }),
+      );
+
+      const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
+      expect(input.argv?.[0]).toBe(fixture.entrypoint);
+    } finally {
+      await fs.rm(fixture.root, { recursive: true, force: true });
+    }
   });
 
   it("maps Ultra to the strongest generic CLI backend level", async () => {

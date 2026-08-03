@@ -61,6 +61,7 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
     const page = await context.newPage();
     const now = Date.now();
     await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.rewind"],
       presenceUsers: [
         { self: true, id: "profile-riley", name: "Riley", email: "riley@example.test" },
         { id: "profile-colin", name: "Colin", email: "colin@example.test" },

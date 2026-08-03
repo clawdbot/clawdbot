@@ -45,6 +45,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
       !isRecentOutboundMessage({
         accountId: options.accountId,
         remoteJid,
+        alternateRemoteJid: msg.key?.remoteJidAlt,
         messageId: id,
       })
     ) {

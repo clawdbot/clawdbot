@@ -266,6 +266,31 @@ export function withAgentModelAliases(
   return next;
 }
 
+/** Build alias-only onboarding appliers without mutating provider catalog config. */
+export function createAliasOnlyPresetAppliers(params: {
+  modelRef: string;
+  alias: string;
+}): ProviderOnboardPresetAppliers<[]> {
+  const applyProviderConfig = (cfg: OpenClawConfig): OpenClawConfig => {
+    const models = { ...cfg.agents?.defaults?.models };
+    models[params.modelRef] = {
+      ...models[params.modelRef],
+      alias: models[params.modelRef]?.alias ?? params.alias,
+    };
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: { ...cfg.agents?.defaults, models },
+      },
+    };
+  };
+  return {
+    applyProviderConfig,
+    applyConfig: (cfg) => applyAgentDefaultModelPrimary(applyProviderConfig(cfg), params.modelRef),
+  };
+}
+
 function isMergeableProviderConfig(
   value: ModelProviderConfig | undefined,
 ): value is ModelProviderConfig {

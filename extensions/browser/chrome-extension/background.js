@@ -632,6 +632,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           paired: Boolean(relayUrl),
           state: relayState,
           sharedTabCount: shared.length,
+          relayUrl: relayUrl ?? "",
         });
         return;
       }

@@ -25,9 +25,9 @@ import type {
 import { buildMatrixQaMessageContent } from "./client-message-content.js";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
   runMatrixQaE2eeClientOperation,
-  shouldRecordMatrixQaObservedEventUpdate,
   type MatrixQaE2eeActorId,
 } from "./e2ee-client-internals.js";
 import { findMatrixQaObservedEventMatch, normalizeMatrixQaObservedEvent } from "./events.js";
@@ -316,24 +316,18 @@ export async function createMatrixQaE2eeScenarioClient(
   const client: MatrixClient = await createMatrixQaE2eeMatrixClient(params);
   const localEvents: MatrixQaObservedEvent[] = [];
   const verificationSummaries: MatrixVerificationSummary[] = [];
-  const observedEventsById = new Map<string, MatrixQaObservedEvent>();
   let primeCursorIndex = 0;
   const cursorIndexByRoom = new Map<string, number>();
 
+  const observedEventRecorder = createMatrixQaE2eeObservedEventRecorder({
+    append(event) {
+      localEvents.push(event);
+      params.observedEvents.push(event);
+    },
+  });
+
   const recordEvent = (roomId: string, event: MatrixRawEvent) => {
-    const normalized = normalizeMatrixQaObservedEvent(roomId, event);
-    if (
-      !normalized ||
-      !shouldRecordMatrixQaObservedEventUpdate({
-        next: normalized,
-        previous: observedEventsById.get(normalized.eventId),
-      })
-    ) {
-      return;
-    }
-    observedEventsById.set(normalized.eventId, normalized);
-    localEvents.push(normalized);
-    params.observedEvents.push(normalized);
+    observedEventRecorder.record(normalizeMatrixQaObservedEvent(roomId, event));
   };
   client.on("room.message", recordEvent);
   const recordVerificationSummary = (summary: MatrixVerificationSummary) => {

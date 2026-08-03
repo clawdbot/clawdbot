@@ -14,6 +14,8 @@ import type { ChannelAccountSnapshot, RuntimeEnv } from "./runtime-api.js";
 
 export type MattermostEventPayload = {
   event?: string;
+  status?: string;
+  seq_reply?: number;
   data?: {
     post?: unknown;
     reaction?: string | Record<string, unknown>;
@@ -56,6 +58,8 @@ const MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const MATTERMOST_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
+  status: z.string().optional(),
+  seq_reply: z.number().optional(),
   data: z
     .object({
       // Durable ingress validates the post only after claiming the raw envelope.
@@ -158,6 +162,7 @@ export function createMattermostConnectOnce(
         let protocolPingTimer: ReturnType<typeof setTimeout> | undefined;
         let protocolPongTimer: ReturnType<typeof setTimeout> | undefined;
         let initialUpdateAt: number | undefined;
+        let authenticationSeq: number | undefined;
 
         const clearTimers = () => {
           if (healthCheckTimer !== undefined) {
@@ -292,11 +297,11 @@ export function createMattermostConnectOnce(
           });
           opts.statusSink?.({
             connected: true,
-            lastConnectedAt: Date.now(),
-            lastError: null,
+            lifecycle: "starting",
           });
+          authenticationSeq = opts.nextSeq();
           const authPayload = JSON.stringify({
-            seq: opts.nextSeq(),
+            seq: authenticationSeq,
             action: "authentication_challenge",
             data: { token: opts.botToken },
           });
@@ -344,6 +349,17 @@ export function createMattermostConnectOnce(
             return;
           }
 
+          if (payload.status === "OK" && payload.seq_reply === authenticationSeq) {
+            opts.statusSink?.({
+              connected: true,
+              lifecycle: "ready",
+              lastConnectedAt: Date.now(),
+              lastError: null,
+              terminalDisconnect: undefined,
+            });
+            return;
+          }
+
           if (payload.event === "reaction_added" || payload.event === "reaction_removed") {
             if (!opts.onReaction) {
               return;
@@ -387,6 +403,7 @@ export function createMattermostConnectOnce(
           const message = reasonToString(reason);
           opts.statusSink?.({
             connected: false,
+            lifecycle: "recovering",
             lastDisconnect: {
               at: Date.now(),
               status: code,
@@ -411,6 +428,8 @@ export function createMattermostConnectOnce(
           });
           opts.runtime.error?.(`mattermost websocket error: ${String(err)}`);
           opts.statusSink?.({
+            connected: false,
+            lifecycle: "recovering",
             lastError: String(err),
           });
           try {

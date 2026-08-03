@@ -45,6 +45,7 @@
   "agent-media-payload",
   "inbound-reply-dispatch",
   "inbound-envelope",
+  "inbound-event-delivery",
   "channel-reply-pipeline",
   "interactive-runtime",
   "outbound-media",

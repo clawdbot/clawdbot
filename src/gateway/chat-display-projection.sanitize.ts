@@ -97,12 +97,21 @@ export function sanitizeChatHistoryContentBlock(
     changed = true;
   }
   const type = typeof entry.type === "string" ? entry.type : "";
-  if (type === "image" && typeof entry.data === "string") {
-    const bytes = estimateBase64DecodedBytes(entry.data);
-    delete entry.data;
-    entry.omitted = true;
-    entry.bytes = bytes;
-    changed = true;
+  if (type === "image") {
+    let imageData = typeof entry.data === "string" ? entry.data : undefined;
+    const source = readRecord(entry.source);
+    if (source?.type === "base64" && typeof source.data === "string") {
+      imageData ??= source.data;
+      const projectedSource = { ...source };
+      delete projectedSource.data;
+      entry.source = projectedSource;
+    }
+    if (imageData !== undefined) {
+      delete entry.data;
+      entry.omitted = true;
+      entry.bytes = estimateBase64DecodedBytes(imageData);
+      changed = true;
+    }
   }
   if (type === "audio" && entry.source && typeof entry.source === "object") {
     const source = { ...(entry.source as Record<string, unknown>) };
@@ -127,9 +136,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
       return false;
     }
     const entry = block as { type?: unknown; textSignature?: unknown };
-    return (
-      entry.type === "text" && Boolean(parseAssistantTextSignature(entry.textSignature)?.phase)
-    );
+    return entry.type === "text" && Boolean(parseAssistantTextSignature(entry)?.phase);
   });
   if (!hasExplicitPhasedText) {
     return { content, changed: false };
@@ -142,7 +149,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
     if (entry.type !== "text") {
       return true;
     }
-    return parseAssistantTextSignature(entry.textSignature)?.phase === "final_answer";
+    return parseAssistantTextSignature(entry)?.phase === "final_answer";
   });
   return {
     content: filtered,

@@ -1,3 +1,46 @@
+import type { ResponseReasoningItem } from "openai/resources/responses/responses.js";
+import type { TextContent } from "../types.js";
+import type {
+  ResponsesThinkingBlock,
+  TextBlockReference,
+} from "./openai-responses-stream-terminal-internal.js";
+
+export type ResponsesStreamOutputSlot<TMessage, TToolCall> =
+  | {
+      type: "thinking";
+      item: ResponseReasoningItem;
+      block: ResponsesThinkingBlock;
+      contentIndex: number;
+    }
+  | {
+      type: "text";
+      item: TMessage;
+      block: TextContent | null;
+      contentIndex: number | undefined;
+      pendingText: string | null;
+      collapseCandidate: TextBlockReference | null;
+    }
+  | { type: "toolCall"; toolCall: TToolCall };
+
+type DeferredTextSlot = {
+  pendingText: string | null;
+  collapseCandidate: { block: { text: string } } | null;
+};
+
+export function appendResponsesPendingTextDelta<TSlot extends DeferredTextSlot>(
+  slot: TSlot,
+  delta: string,
+  materialize: (slot: TSlot) => void,
+): void {
+  slot.pendingText = `${slot.pendingText ?? ""}${delta}`;
+  const priorText = slot.collapseCandidate?.block.text ?? "";
+  if (priorText.startsWith(slot.pendingText) || slot.pendingText.startsWith(priorText)) {
+    return;
+  }
+  // Divergence means this is a distinct message; materialize its withheld delta.
+  materialize(slot);
+}
+
 export function readResponsesOutputIndex(event: object): number | undefined {
   const outputIndex = (event as { output_index?: unknown }).output_index;
   return typeof outputIndex === "number" && Number.isInteger(outputIndex) && outputIndex >= 0

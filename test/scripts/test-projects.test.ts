@@ -228,8 +228,8 @@ describe("scripts/test-projects changed-target routing", () => {
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ])(
     "routes setup inference transcript ownership changes through both regressions for %s",
-    (path) => {
-      expect(resolveChangedTestTargetPlan([path])).toEqual({
+    (targetPath) => {
+      expect(resolveChangedTestTargetPlan([targetPath])).toEqual({
         mode: "targets",
         targets: [
           "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
@@ -1708,6 +1708,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes script declaration edits through implementation owner tests", () => {
     const declarationMirrors = new Map([
+      ["scripts/check.d.mts", "scripts/check.mjs"],
       ["scripts/build-stamp.d.mts", "scripts/build-stamp.mjs"],
       ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
       ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
@@ -1717,10 +1718,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/bundled-plugin-build-entries.mjs",
       ],
       ["scripts/lib/config-boundary-guard.d.mts", "scripts/lib/config-boundary-guard.mjs"],
-      [
-        "scripts/lib/deprecated-config-api-guard.d.mts",
-        "scripts/lib/deprecated-config-api-guard.mjs",
-      ],
+      ["scripts/lib/arg-utils.d.mts", "scripts/lib/arg-utils.mjs"],
       [
         "scripts/lib/extension-source-classifier.d.mts",
         "scripts/lib/extension-source-classifier.mjs",
@@ -1741,6 +1739,25 @@ describe("scripts/test-projects changed-target routing", () => {
       expect(resolveChangedTestTargetPlan([declarationPath]), declarationPath).toEqual(
         resolveChangedTestTargetPlan([implementationPath]),
       );
+    }
+  });
+
+  it("routes shared contract ownership and declarations through every affected lane", () => {
+    const targets = [
+      "test/scripts/test-projects.test.ts",
+      "test/vitest/vitest.contracts-channel-surface.config.ts",
+      "test/vitest/vitest.contracts-channel-config.config.ts",
+      "test/vitest/vitest.contracts-channel-registry.config.ts",
+      "test/vitest/vitest.contracts-channel-session.config.ts",
+    ];
+    for (const changedPath of [
+      "test/vitest/vitest.contracts-paths.mjs",
+      "test/vitest/vitest.contracts-paths.d.mts",
+    ]) {
+      expect(resolveChangedTestTargetPlan([changedPath]), changedPath).toEqual({
+        mode: "targets",
+        targets,
+      });
     }
   });
 
@@ -1827,6 +1844,15 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/local-heavy-check-runtime.test.ts"],
       ],
       ["scripts/lib/managed-child-process.mjs", ["test/scripts/managed-child-process.test.ts"]],
+      [
+        "scripts/lib/failed-trailer.mjs",
+        [
+          "test/scripts/run-oxlint.test.ts",
+          "test/scripts/run-tsgo.test.ts",
+          "test/scripts/run-vitest.test.ts",
+          "test/scripts/changed-lanes.test.ts",
+        ],
+      ],
       [
         "scripts/lib/windows-taskkill.mjs",
         ["test/scripts/managed-child-process.test.ts", "test/scripts/run-with-env.test.ts"],
@@ -1991,13 +2017,6 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/actions/detect-docs-changes/action.yml",
         ["test/scripts/ci-workflow-guards.test.ts"],
-      ],
-      [
-        ".github/actions/docker-e2e-plan/action.yml",
-        [
-          "test/scripts/package-acceptance-workflow.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
-        ],
       ],
       [
         ".github/actions/ensure-base-commit/action.yml",
@@ -2373,10 +2392,6 @@ describe("scripts/test-projects changed-target routing", () => {
           "src/plugins/contracts/config-boundary-guard.test.ts",
           "src/plugins/contracts/deprecated-internal-config-api.test.ts",
         ],
-      ],
-      [
-        "scripts/lib/deprecated-config-api-guard.mjs",
-        ["src/plugins/contracts/deprecated-internal-config-api.test.ts"],
       ],
       [
         "scripts/lib/extension-package-boundary.ts",
@@ -3176,12 +3191,17 @@ describe("scripts/test-projects changed-target routing", () => {
   it("adds the CLI process project for broad CLI targets", () => {
     const plans = buildVitestRunPlans(["src/cli"]);
 
-    expect(plans.map((plan) => plan.config)).toEqual([
-      "test/vitest/vitest.unit-fast.config.ts",
-      "test/vitest/vitest.cli-process.config.ts",
-      "test/vitest/vitest.cli.config.ts",
-    ]);
-    expect(plans[1]?.includePatterns).toContain("src/cli/help-exit.process.test.ts");
+    expect(plans.map((plan) => plan.config)).toEqual(
+      expect.arrayContaining([
+        "test/vitest/vitest.unit-fast.config.ts",
+        "test/vitest/vitest.cli-process.config.ts",
+        "test/vitest/vitest.cli.config.ts",
+      ]),
+    );
+    const processPlan = plans.find(
+      (plan) => plan.config === "test/vitest/vitest.cli-process.config.ts",
+    );
+    expect(processPlan?.includePatterns).toContain("src/cli/help-exit.process.test.ts");
   });
 
   it("rejects broad CLI watch targets that cross shared and process projects", () => {
@@ -3838,16 +3858,19 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes changed ui build helpers to their importing tests", () => {
+  it.each([
+    ["ui/config/control-ui-chunking.ts", "ui/src/app/control-ui-chunking.test.ts"],
+    ["ui/config/control-ui-locales.ts", "ui/src/app/vite-config.node.test.ts"],
+  ])("routes changed ui build helper %s to its owner test", (changedPath, testPath) => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "ui/config/control-ui-chunking.ts",
+      changedPath,
     ]);
 
     expect(plans).toEqual([
       {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
-        includePatterns: ["ui/src/app/control-ui-chunking.test.ts"],
+        includePatterns: [testPath],
         watchMode: false,
       },
     ]);

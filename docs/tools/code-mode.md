@@ -991,6 +991,9 @@ Each result's `telemetry` field reports: hidden catalog size and a source
 breakdown (`openclaw`/`mcp`/`client` counts), cumulative search/describe/call
 counts for the run's catalog, and the model-visible tool names (`exec`,
 `wait`, and retained direct-only tools).
+The `counterScope` identifies one counter lifetime, changing when a catalog is
+replaced or restored but remaining stable when tools are appended or prompt
+policy narrows that catalog.
 
 The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
 `agent exec --json` envelope) adds per-run stats:

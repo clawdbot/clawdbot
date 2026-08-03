@@ -13,25 +13,25 @@ export async function readLatestSubagentOutputWithRetryUsing<Outcome = unknown>(
   readSubagentOutput: (sessionKey: string, outcome?: Outcome) => Promise<string | undefined>;
 }): Promise<string | undefined> {
   const maxWaitMs = Math.max(0, Math.min(params.maxWaitMs, 15_000));
-  let waitedMs = 0;
-  let result: string | undefined;
-  while (waitedMs < maxWaitMs) {
-    result = await params.readSubagentOutput(params.sessionKey, params.outcome);
+  if (!(maxWaitMs > 0)) {
+    return undefined;
+  }
+  const deadlineAt = performance.now() + maxWaitMs;
+  for (;;) {
+    const result = await params.readSubagentOutput(params.sessionKey, params.outcome);
     if (result?.trim()) {
       return result;
     }
-    const remainingMs = maxWaitMs - waitedMs;
+    const remainingMs = deadlineAt - performance.now();
     if (remainingMs <= 0) {
-      break;
+      return result;
     }
     const sleepMs = Math.min(params.retryIntervalMs, remainingMs);
     // Use real timers here; tests provide fake timers around this small retry loop.
     await new Promise((resolve) => {
       setTimeout(resolve, sleepMs);
     });
-    waitedMs += sleepMs;
   }
-  return result;
 }
 
 /** Captures immediate output first, then optionally waits for a delayed completion reply. */

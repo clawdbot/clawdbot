@@ -521,6 +521,7 @@ export function createTelegramOutboundAdapter(
         return await send(outboundTo, params.text, {
           ...baseOpts,
           mediaUrl: params.mediaUrl,
+          ...(params.mediaAccess !== undefined ? { mediaAccess: params.mediaAccess } : {}),
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
           forceDocument: params.forceDocument ?? false,
@@ -541,6 +542,7 @@ export function createTelegramOutboundAdapter(
         payload: params.payload,
         baseOpts: {
           ...baseOpts,
+          ...(params.mediaAccess !== undefined ? { mediaAccess: params.mediaAccess } : {}),
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
           forceDocument: params.forceDocument ?? false,

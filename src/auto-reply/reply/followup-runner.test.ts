@@ -15,7 +15,7 @@ const state = vi.hoisted(() => ({
   clearRunContext: vi.fn(),
 }));
 
-vi.mock("../../infra/agent-events.js", () => ({
+vi.mock("../../infra/agent-run-registry.js", () => ({
   clearAgentRunContext: (...args: unknown[]) => state.clearRunContext(...args),
 }));
 

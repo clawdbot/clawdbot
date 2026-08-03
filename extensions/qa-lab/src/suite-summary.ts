@@ -1,10 +1,12 @@
 // Qa Lab plugin module implements suite summary behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteArtifactError } from "./errors.js";
 import type { QaEvidenceSummaryJson, QaEvidenceTiming } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 
 type QaSuiteSummaryScenario = {
@@ -108,9 +110,7 @@ async function readQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
 }
 
 function readNonNegativeCount(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.floor(value))
-    : null;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function assertQaSuiteSummaryHasExecutedScenarios(
@@ -118,6 +118,7 @@ function assertQaSuiteSummaryHasExecutedScenarios(
   summaryPath: string,
   errorCode: "summary_failure_count_missing" | "summary_blocking_count_missing",
   optionalScenarioNames?: ReadonlySet<string>,
+  requireExecutedScenario = false,
 ): void {
   if (!summary || typeof summary !== "object") {
     return;
@@ -127,24 +128,42 @@ function assertQaSuiteSummaryHasExecutedScenarios(
     scenarios?: unknown;
     entries?: unknown;
   };
+  if (payload.counts !== undefined) {
+    if (!isRecord(payload.counts)) {
+      throw new QaSuiteArtifactError(
+        errorCode,
+        `QA summary at ${summaryPath} counts must be a non-array object.`,
+      );
+    }
+    for (const countName of ["total", "passed", "failed", "skipped"] as const) {
+      if (
+        Object.hasOwn(payload.counts, countName) &&
+        readNonNegativeCount(payload.counts[countName]) === null
+      ) {
+        throw new QaSuiteArtifactError(
+          errorCode,
+          `QA summary at ${summaryPath} counts.${countName} must be a non-negative safe integer.`,
+        );
+      }
+    }
+  }
   const total = readNonNegativeCount(payload.counts?.total);
   const passed = readNonNegativeCount(payload.counts?.passed);
   const failed = readNonNegativeCount(payload.counts?.failed);
-  const skipped = readNonNegativeCount(payload.counts?.skipped);
   const scenarios = Array.isArray(payload.scenarios)
     ? (payload.scenarios as QaSuiteReportOnlyScenario[])
     : undefined;
   const entries = Array.isArray(payload.entries)
     ? (payload.entries as QaEvidenceEntryStatus[])
     : undefined;
-  const hasExecutedScenario =
+  const hasObservedOutcomeRows = (scenarios?.length ?? 0) > 0 || (entries?.length ?? 0) > 0;
+  const hasCompletedScenario =
     scenarios?.some((scenario) => scenario.status === "pass" || scenario.status === "fail") ===
       true ||
     entries?.some((entry) => entry.result?.status === "pass" || entry.result?.status === "fail") ===
       true ||
-    (passed ?? 0) > 0 ||
     (failed ?? 0) > 0 ||
-    (total !== null && total > 0 && (skipped === null || total > skipped));
+    (!hasObservedOutcomeRows && (passed ?? 0) > 0);
   const hasBlockingNonOptionalSkip =
     errorCode === "summary_blocking_count_missing" &&
     scenarios?.some(
@@ -169,7 +188,9 @@ function assertQaSuiteSummaryHasExecutedScenarios(
   if (
     total === 0 ||
     scenarios?.length === 0 ||
-    (!hasExecutedScenario &&
+    // A tolerated blocking result cannot authenticate a campaign that never completed a scenario.
+    (requireExecutedScenario && !hasCompletedScenario) ||
+    (!hasCompletedScenario &&
       !hasBlockingUnknownOrFailedScenario &&
       !hasBlockingNonOptionalSkip &&
       !hasBlockingNonPassEvidence)
@@ -195,6 +216,23 @@ function isQaSuiteReportOnlyOptionalScenario(
     optionalScenarioNames?.has(scenario.name) === true &&
     typeof scenario.details === "string" &&
     scenario.details.includes("report-only")
+  );
+}
+
+export function resolveQaReportOnlyOptionalScenarioNames(
+  scenarios: readonly QaSeedScenarioWithSource[],
+): ReadonlySet<string> {
+  return new Set(
+    scenarios
+      .filter((scenario) => {
+        const toolCoverage = scenario.execution.config?.toolCoverage;
+        return (
+          scenario.execution.kind === "flow" &&
+          isRecord(toolCoverage) &&
+          toolCoverage.required === false
+        );
+      })
+      .map((scenario) => scenario.title),
   );
 }
 
@@ -309,7 +347,7 @@ export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string
 
 export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
   summaryPath: string,
-  options?: { optionalScenarioNames?: ReadonlySet<string> },
+  options?: { optionalScenarioNames?: ReadonlySet<string>; requireExecutedScenario?: boolean },
 ): Promise<number> {
   const payload = await readQaSuiteSummaryFile(summaryPath);
   assertQaSuiteSummaryHasExecutedScenarios(
@@ -317,6 +355,7 @@ export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
     summaryPath,
     "summary_blocking_count_missing",
     options?.optionalScenarioNames,
+    options?.requireExecutedScenario,
   );
   const blockingScenarioCount = readQaSuiteFailedOrSkippedScenarioCountFromSummary(payload);
   if (blockingScenarioCount !== null) {

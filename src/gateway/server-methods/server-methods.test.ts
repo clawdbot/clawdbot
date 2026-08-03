@@ -1003,6 +1003,17 @@ describe("projectRecentChatDisplayMessages", () => {
       content: safeFailureContent,
     },
     {
+      name: "preserves a safe failure for a synthetic sentinel followed only by private thinking",
+      message: {
+        content: [
+          { type: "text", text: STREAM_ERROR_FALLBACK_TEXT },
+          { type: "thinking", thinking: "private upstream details" },
+        ],
+        errorMessage: privateError,
+      },
+      content: safeFailureContent,
+    },
+    {
       name: "projects reasoning-text-only assistant errors as a generic safe failure",
       message: {
         content: [{ type: "reasoning", text: "private upstream details" }],
@@ -1270,6 +1281,235 @@ describe("projectRecentChatDisplayMessages", () => {
       expect(JSON.stringify(result)).not.toContain("secret.internal.example");
     },
   );
+
+  it.each([
+    {
+      name: "plain string content",
+      content: `${STREAM_ERROR_FALLBACK_TEXT}I'm running on ollama-cloud now.`,
+      expected: "I'm running on ollama-cloud now.",
+    },
+    {
+      name: "one text block",
+      content: [
+        { type: "text", text: `${STREAM_ERROR_FALLBACK_TEXT}I'm running on ollama-cloud now.` },
+      ],
+      expected: [{ type: "text", text: "I'm running on ollama-cloud now." }],
+    },
+    {
+      name: "provider output-text block",
+      content: [{ type: "output_text", text: `${STREAM_ERROR_FALLBACK_TEXT}Good catch.` }],
+      expected: [{ type: "output_text", text: "Good catch." }],
+    },
+    {
+      name: "separate sentinel and reply text blocks",
+      content: [
+        { type: "text", text: STREAM_ERROR_FALLBACK_TEXT },
+        { type: "text", text: "I'm running on ollama-cloud now." },
+      ],
+      expected: [{ type: "text", text: "I'm running on ollama-cloud now." }],
+    },
+  ])("removes an internal stream-error prefix from same-message $name", ({ content, expected }) => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content,
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: expected,
+        stopReason: "error",
+        timestamp: 1,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(STREAM_ERROR_FALLBACK_TEXT);
+    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
+  });
+
+  it("keeps intentional mentions of the internal fallback inside a real assistant reply", () => {
+    const text = `Diagnostic note: ${STREAM_ERROR_FALLBACK_TEXT}`;
+    const result = projectRecentChatDisplayMessages([
+      { role: "assistant", content: [{ type: "text", text }], stopReason: "error" },
+    ]);
+
+    expect(result[0]?.content).toEqual([{ type: "text", text }]);
+  });
+
+  it.each([undefined, "stop"])(
+    "keeps literal fallback-prefixed assistant text without error provenance %j",
+    (stopReason) => {
+      const text = `${STREAM_ERROR_FALLBACK_TEXT} actual quoted text`;
+      const result = projectRecentChatDisplayMessages([
+        {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          ...(stopReason ? { stopReason } : {}),
+        },
+      ]);
+
+      expect(result[0]?.content).toEqual([{ type: "text", text }]);
+    },
+  );
+
+  it("removes a synthetic error prefix while preserving displayable image content", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: STREAM_ERROR_FALLBACK_TEXT },
+          { type: "image", data: "AQ==" },
+        ],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([{ type: "image", omitted: true, bytes: 1 }]);
+    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
+  });
+
+  it("drops a repaired stream-error placeholder before same-turn assistant content", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        stopReason: "error",
+        errorMessage: "provider failed before content",
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "actual fallback response" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "actual fallback response" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+
+  it("keeps a genuine failed turn before a new forwarded inter-session turn", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        stopReason: "error",
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "forwarded update" }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "actual fallback response" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toHaveLength(3);
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+    });
+    expect(result[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "forwarded update" }],
+    });
+    expect(result[2]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "actual fallback response" }],
+    });
+  });
+
+  it("keeps genuine stream-error failures when a hidden assistant row has text", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        stopReason: "error",
+      },
+      {
+        role: "assistant",
+        display: false,
+        content: [{ type: "text", text: "internal-only assistant content" }],
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        stopReason: "error",
+      },
+    ]);
+  });
+
+  it("keeps a stream-error placeholder when the next user turn starts first", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        stopReason: "error",
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "fresh answer" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        stopReason: "error",
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "fresh answer" }],
+        timestamp: 3,
+      },
+    ]);
+  });
 
   it("projects sessions_send inter-session turns as forwarded assistant-side display messages", () => {
     const result = projectRecentChatDisplayMessages([
@@ -4953,9 +5193,58 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
 
+  it("refreshes cached health when recorded lifecycle changes without socket churn", async () => {
+    const cached = createHealthSnapshot({
+      channels: {
+        slack: {
+          accountId: "default",
+          configured: true,
+          running: true,
+          connected: true,
+          lifecycle: "ready",
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              running: true,
+              connected: true,
+              lifecycle: "ready",
+            },
+          },
+        },
+      },
+      channelOrder: ["slack"],
+      channelLabels: { slack: "Slack" },
+    });
+    const fresh = { ...cached, ts: cached.ts + 1 };
+    const { refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh,
+      runtimeSnapshot: {
+        channels: {},
+        channelAccounts: {
+          slack: {
+            default: {
+              accountId: "default",
+              running: true,
+              connected: true,
+              lifecycle: "blocked",
+            },
+          },
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+  });
+
   it("preserves event-loop health sampled by the refresh path", async () => {
     const eventLoop = {
       degraded: true,
+      degradedSinceMs: 61_000,
       reasons: ["event_loop_delay" as const],
       intervalMs: 2_000,
       delayP99Ms: 1_500,
@@ -4965,6 +5254,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     };
     const replacementEventLoop = {
       degraded: false,
+      degradedSinceMs: null,
       reasons: [],
       intervalMs: 1,
       delayP99Ms: 0,

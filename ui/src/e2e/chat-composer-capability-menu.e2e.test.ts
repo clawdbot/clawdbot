@@ -363,7 +363,7 @@ describeControlUiE2e("Control UI composer capability menu", () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
       methodResponses: {
         "config.get": configResponse({
           github: { url: "https://mcp.example.test", enabled: true },
@@ -560,7 +560,7 @@ describeControlUiE2e("Control UI composer capability menu", () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
       deferredMethods: ["sessions.list", "tools.effective"],
       methodResponses: {
         "config.get": configResponse({
@@ -629,14 +629,14 @@ describeControlUiE2e("Control UI composer capability menu", () => {
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       const clear = composer.getByRole("button", { name: "Clear session overrides" });
       await expect.poll(() => clear.isDisabled()).toBe(true);
-      await expect.poll(() => clear.getAttribute("title")).toContain("Write access");
+      await expect.poll(() => clear.getAttribute("title")).toContain("operator.admin access");
       await expect
         .poll(() => menu.getByRole("menuitemcheckbox", { name: "Web search" }).isDisabled())
         .toBe(true);
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       const docs = menu.getByRole("menuitem", { name: /^Docs/ });
       await expect.poll(() => docs.isDisabled()).toBe(true);
-      await expect.poll(() => docs.getAttribute("title")).toContain("Write access");
+      await expect.poll(() => docs.getAttribute("title")).toContain("operator.admin access");
       await menu.getByRole("menuitem", { name: "Back" }).click();
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect

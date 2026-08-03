@@ -1,6 +1,10 @@
 // Channel plugin catalog tests cover plugin catalog entries and metadata normalization.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginChannelCatalogEntry } from "../../plugins/channel-catalog-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 
 const listChannelCatalogEntriesMock = vi.hoisted(() =>
   vi.fn<() => PluginChannelCatalogEntry[]>(() => []),
@@ -12,9 +16,41 @@ vi.mock("../../plugins/channel-catalog-registry.js", () => ({
 
 import { getChannelPluginCatalogEntry } from "./catalog.js";
 
+const tempDirs: string[] = [];
+
 beforeEach(() => {
   listChannelCatalogEntriesMock.mockReset().mockReturnValue([]);
 });
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const tempDir of tempDirs.splice(0)) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+function writeChannelCatalog(
+  catalogPath: string,
+  id: string,
+  label: string,
+  defaultChoice?: string,
+): void {
+  fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+  fs.writeFileSync(
+    catalogPath,
+    JSON.stringify({
+      entries: [
+        {
+          name: `@example/${id}`,
+          openclaw: {
+            channel: { id, label, selectionLabel: label, docsPath: `/channels/${id}`, blurb: id },
+            install: { npmSpec: `@example/${id}`, ...(defaultChoice ? { defaultChoice } : {}) },
+          },
+        },
+      ],
+    }),
+  );
+}
 
 describe("channel plugin catalog", () => {
   it("keeps third-party channel ids mapped with catalog install trust", () => {
@@ -73,5 +109,54 @@ describe("channel plugin catalog", () => {
         excludePluginRefs: [{ pluginId: "telegram", origin: "config" }],
       })?.origin,
     ).toBe("bundled");
+  });
+
+  it.each(["__proto__", "constructor", "toString"])(
+    "rejects inherited install default choice %s from external catalog input",
+    (defaultChoice) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-catalog-choice-"));
+      tempDirs.push(root);
+      const catalogPath = path.join(root, "catalog.json");
+      writeChannelCatalog(catalogPath, "unsafe-choice", "Unsafe Choice", defaultChoice);
+
+      const entry = getChannelPluginCatalogEntry("unsafe-choice", {
+        catalogPaths: [catalogPath],
+        workspaceDir: root,
+        env: {},
+      });
+      expect(entry?.install.defaultChoice).toBe("npm");
+    },
+  );
+
+  it("reloads external catalog entries after the explicit plugin metadata lifecycle reset", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-external-catalog-"));
+    tempDirs.push(root);
+    const catalogPath = path.join(root, "catalog.json");
+    const options = { catalogPaths: [catalogPath], workspaceDir: root, env: {} };
+
+    expect(getChannelPluginCatalogEntry("lifecycle-external", options)).toBeUndefined();
+    writeChannelCatalog(catalogPath, "lifecycle-external", "After external install");
+    clearPluginMetadataLifecycleCaches();
+
+    expect(getChannelPluginCatalogEntry("lifecycle-external", options)?.meta.label).toBe(
+      "After external install",
+    );
+  });
+
+  it("reloads official generated catalog entries after the explicit plugin metadata lifecycle reset", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-official-catalog-"));
+    tempDirs.push(root);
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    const catalogPath = path.join(root, "dist", "channel-catalog.json");
+    const options = { catalogPaths: [path.join(root, "external.json")], env: {} };
+
+    expect(getChannelPluginCatalogEntry("lifecycle-official", options)).toBeUndefined();
+    writeChannelCatalog(catalogPath, "lifecycle-official", "After official update");
+    clearPluginMetadataLifecycleCaches();
+
+    expect(getChannelPluginCatalogEntry("lifecycle-official", options)?.meta.label).toBe(
+      "After official update",
+    );
   });
 });

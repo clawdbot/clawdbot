@@ -140,6 +140,29 @@ describe("chat pane header state", () => {
     expect(patch).toHaveBeenLastCalledWith(session.key, { label: null }, { agentId: "main" });
   });
 
+  it("renames the selected agent's canonical global session", () => {
+    const patch = vi.fn(async () => ({}));
+    const sessions = { patch } as unknown as SessionCapability;
+    const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+    state.sessionKey = "global";
+    state.assistantAgentId = "research";
+    const session = {
+      key: "global",
+      kind: "global",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+
+    pane.beginHeaderRename(session);
+    pane.headerRenameValue = "Research thread";
+    pane.commitHeaderRename();
+
+    expect(patch).toHaveBeenCalledWith(
+      "global",
+      { label: "Research thread" },
+      { agentId: "research" },
+    );
+  });
+
   it("cancels and skips unchanged labels", () => {
     const patch = vi.fn(async () => ({}));
     const sessions = { patch } as unknown as SessionCapability;
@@ -342,6 +365,7 @@ describe("chat pane header state", () => {
     } satisfies GatewaySessionRow;
     pane.handleHeaderMenuAction("reveal", session, "/src/openclaw", null);
     await vi.waitFor(() => expect(state.chatError).toBe("No desktop available."));
+    expect(state.lastError).toBe(state.chatError);
   });
 });
 
@@ -513,6 +537,13 @@ describe("chat pane keyboard shortcuts", () => {
 });
 
 describe("chat pane session creation lifecycle", () => {
+  function advertiseSessionCreate(pane: TestChatPane) {
+    pane.context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.write"] },
+      features: { methods: ["sessions.create"] },
+    } as typeof pane.context.gateway.snapshot.hello;
+  }
+
   it("drops a created session after a same-client reconnect", async () => {
     const created = createDeferred<string | null>();
     const sessions = {
@@ -522,8 +553,10 @@ describe("chat pane session creation lifecycle", () => {
     const { pane, state } = createTestChatPane({ client, sessions });
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
+    advertiseSessionCreate(pane);
 
     const pending = pane.createSession();
+    await vi.waitFor(() => expect(sessions.create).toHaveBeenCalledOnce());
     state.connected = false;
     pane.connectionGeneration += 1;
     state.connectionEpoch = pane.connectionGeneration;
@@ -544,8 +577,10 @@ describe("chat pane session creation lifecycle", () => {
     const client = {} as GatewayBrowserClient;
     const { pane, requestUpdate, state } = createTestChatPane({ client, sessions });
     const replacementSessions = {} as SessionCapability;
+    advertiseSessionCreate(pane);
 
     const pending = pane.createSession();
+    await vi.waitFor(() => expect(sessions.create).toHaveBeenCalledOnce());
     state.sessionsError = "stale sessions.create failure";
     pane.context = createSessionContext(client, replacementSessions);
     created.resolve(null);
@@ -563,8 +598,10 @@ describe("chat pane session creation lifecycle", () => {
     } as unknown as SessionCapability;
     const client = {} as GatewayBrowserClient;
     const { pane, requestUpdate, state } = createTestChatPane({ client, sessions });
+    advertiseSessionCreate(pane);
 
     const pending = pane.createSession();
+    await vi.waitFor(() => expect(sessions.create).toHaveBeenCalledOnce());
     state.sessionsError = "stale sessions.create failure";
     Object.defineProperty(pane, "isConnected", {
       configurable: true,

@@ -65,6 +65,10 @@ describe("cross-OS release checks workflow", () => {
     const workflow = readFileSync(WORKFLOW_PATH, "utf8");
 
     expect(workflow).toContain("timeout --preserve-status 300s npm pack --ignore-scripts");
+    expect(workflow).toContain(
+      'import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";',
+    );
+    expect(workflow).toContain("const entry = resolveNpmJsonEntries(payload).at(-1);");
   });
 
   it("keeps release artifact tarball filenames local before upload paths use them", () => {

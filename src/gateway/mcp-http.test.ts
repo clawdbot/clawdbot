@@ -21,6 +21,7 @@ type MockGatewayTool = {
 
 type MockGatewayScopedTools = {
   agentId: string;
+  workspaceDir?: string;
   tools: MockGatewayTool[];
 };
 
@@ -58,6 +59,7 @@ type ScopedToolsCall = {
   currentInboundAudio?: boolean;
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
+  sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: string;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner?: boolean;
@@ -112,6 +114,7 @@ type BeforeToolCallHookInput = {
     turnSourceTo?: string;
     turnSourceAccountId?: string;
     turnSourceThreadId?: string | number;
+    workspaceDir?: string;
     loopDetection?: unknown;
   };
   signal?: unknown;
@@ -1252,6 +1255,7 @@ describe("mcp loopback server", () => {
         "x-openclaw-current-channel-id": "telegram:victim-chat",
         "x-openclaw-current-thread-ts": "999",
         "x-openclaw-source-reply-delivery-mode": "automatic",
+        "x-openclaw-source-reply-only": "true",
         "x-openclaw-inbound-event-kind": "room_event",
       }),
       body: mcpToolsListBody(),
@@ -1268,6 +1272,7 @@ describe("mcp loopback server", () => {
     expect(call.currentChannelId).toBeUndefined();
     expect(call.currentThreadTs).toBeUndefined();
     expect(call.sourceReplyDeliveryMode).toBeUndefined();
+    expect(call.sourceReplyOnly).toBeUndefined();
     expect(call.inboundEventKind).toBeUndefined();
     expect(call.conversationReadOrigin).toBe("delegated");
     expect(call.includeNodeExecTool).toBe(false);
@@ -1294,6 +1299,8 @@ describe("mcp loopback server", () => {
         accountId: "bound-account",
         inboundEventKind: "user_request",
         sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplyOnly: true,
+        toolsAllow: ["message"],
         taskSuggestionDeliveryMode: "gateway",
         requireExplicitMessageTarget: true,
         senderIsOwner: false,
@@ -1347,6 +1354,7 @@ describe("mcp loopback server", () => {
           "x-openclaw-current-inbound-audio": "false",
           "x-openclaw-inbound-event-kind": "room_event",
           "x-openclaw-source-reply-delivery-mode": "automatic",
+          "x-openclaw-source-reply-only": "false",
           "x-openclaw-task-suggestion-delivery-mode": "direct",
           "x-openclaw-require-explicit-message-target": "false",
         }),
@@ -1375,6 +1383,7 @@ describe("mcp loopback server", () => {
       accountId: "bound-account",
       inboundEventKind: "user_request",
       sourceReplyDeliveryMode: "message_tool_only",
+      sourceReplyOnly: true,
       taskSuggestionDeliveryMode: "gateway",
       requireExplicitMessageTarget: true,
       senderIsOwner: false,
@@ -1419,6 +1428,23 @@ describe("mcp loopback server", () => {
       turnSourceThreadId: "bound-thread",
     });
     expect(getBeforeToolCallHookInput(0).ctx).toHaveProperty("loopDetection");
+  });
+
+  it("carries the resolved workspace dir into the before-tool-call hook context", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [makeMessageTool()],
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    const { runtime } = await startLoopbackServerForTest();
+
+    await callMainSessionTool({
+      token: runtime?.ownerToken,
+      name: "message",
+      args: { body: "hello" },
+    });
+
+    expect(getBeforeToolCallHookInput(0).ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
   it("revalidates a CLI grant after async preparation before tool execution", async () => {
@@ -3406,13 +3432,22 @@ describe("createMcpLoopbackServerConfig", () => {
     if (!oldRuntime) {
       throw new Error("expected old MCP loopback runtime");
     }
-    let stalledRequest: ReturnType<typeof request> | undefined;
-    let resolveSocketReady: () => void = () => {};
-    let rejectSocketReady: (error: Error) => void = () => {};
-    const socketReady = new Promise<void>((resolve, reject) => {
-      resolveSocketReady = resolve;
-      rejectSocketReady = reject;
+    // Node only exempts a connection from close()'s idle sweep once its parser has
+    // begun a message, so the drain is pinned by the server-side request start, not
+    // by the client-side connect. Capture admission is that server-side signal.
+    const captureKey = "capture-stalled-drain";
+    let resolveRequestStarted: () => void = () => {};
+    let rejectRequestStarted: (error: Error) => void = () => {};
+    const requestStarted = new Promise<void>((resolve, reject) => {
+      resolveRequestStarted = resolve;
+      rejectRequestStarted = reject;
     });
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onRequestStart: () => resolveRequestStarted(),
+      onToolCallResult: vi.fn(),
+    });
+    let stalledRequest: ReturnType<typeof request> | undefined;
     const responsePromise = new Promise<void>((resolve, reject) => {
       const req = request(
         {
@@ -3424,6 +3459,7 @@ describe("createMcpLoopbackServerConfig", () => {
             authorization: `Bearer ${oldRuntime.ownerToken}`,
             connection: "close",
             "content-type": "application/json",
+            "x-openclaw-cli-capture-key": captureKey,
           },
         },
         (res) => {
@@ -3431,15 +3467,8 @@ describe("createMcpLoopbackServerConfig", () => {
           res.once("end", resolve);
         },
       );
-      req.once("socket", (socket) => {
-        if (!socket.connecting) {
-          resolveSocketReady();
-          return;
-        }
-        socket.once("connect", resolveSocketReady);
-      });
       req.once("error", (error) => {
-        rejectSocketReady(error);
+        rejectRequestStarted(error);
         reject(error);
       });
       req.write("{");
@@ -3455,20 +3484,13 @@ describe("createMcpLoopbackServerConfig", () => {
     };
     let oldClose: Promise<void> | undefined;
     try {
-      await socketReady;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await requestStarted;
 
       let closeSettled = false;
       oldClose = closeMcpLoopbackServer().finally(() => {
         closeSettled = true;
       });
       expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
-      expect(closeSettled).toBe(false);
 
       const successor = await startLoopbackServerForTest();
       const successorGrant = mintMcpLoopbackClientGrant({
@@ -3480,6 +3502,9 @@ describe("createMcpLoopbackServerConfig", () => {
         runtimeOwnerToken: successor.runtime.ownerToken,
         captureKey: "capture-successor",
       });
+      // The unfinished body still holds the old connection, so the successor was
+      // minted mid-drain: exactly the window where a late close could fence it.
+      expect(closeSettled).toBe(false);
 
       finishStalledRequest();
       await responsePromise;
@@ -3496,6 +3521,7 @@ describe("createMcpLoopbackServerConfig", () => {
         ).status,
       ).toBe(200);
     } finally {
+      clearMcpLoopbackToolCallCapture(captureKey);
       finishStalledRequest();
       await responsePromise.catch(() => undefined);
       await (oldClose ?? oldServer.close()).catch(() => undefined);

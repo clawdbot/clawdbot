@@ -7,10 +7,6 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
-import contextPruningExtension from "../agent-hooks/context-pruning.js";
-import { setContextPruningRuntime } from "../agent-hooks/context-pruning/runtime.js";
-import { computeEffectiveSettings } from "../agent-hooks/context-pruning/settings.js";
-import { makeToolPrunablePredicate } from "../agent-hooks/context-pruning/tools.js";
 import { resolveEffectiveCompactionMode } from "../agent-settings.js";
 import {
   finalizeToolTerminalPresentation,
@@ -22,8 +18,6 @@ import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-mi
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { resolveTranscriptPolicy } from "../transcript-policy.js";
-import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 import { recordEmbeddedToolSendReceipt } from "./tool-send-receipts.js";
 
 type AgentToolResultEvent = {
@@ -131,61 +125,6 @@ function buildAgentToolResultMiddlewareFactory(
   };
 }
 
-function resolveContextWindowTokens(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  modelId: string;
-  model: ProviderRuntimeModel | undefined;
-}): number {
-  return resolveContextWindowInfo({
-    cfg: params.cfg,
-    provider: params.provider,
-    modelId: params.modelId,
-    modelContextTokens: params.model?.contextTokens,
-    modelContextWindow: params.model?.contextWindow,
-    defaultTokens: DEFAULT_CONTEXT_TOKENS,
-  }).tokens;
-}
-
-function buildContextPruningFactory(params: {
-  cfg: OpenClawConfig | undefined;
-  sessionManager: SessionManager;
-  provider: string;
-  modelId: string;
-  model: ProviderRuntimeModel | undefined;
-}): ExtensionFactory | undefined {
-  const raw = params.cfg?.agents?.defaults?.contextPruning;
-  if (raw?.mode !== "cache-ttl") {
-    return undefined;
-  }
-  if (!isCacheTtlEligibleProvider(params.provider, params.modelId, params.model?.api)) {
-    return undefined;
-  }
-
-  const settings = computeEffectiveSettings(raw);
-  if (!settings) {
-    return undefined;
-  }
-  const transcriptPolicy = resolveTranscriptPolicy({
-    modelApi: params.model?.api,
-    provider: params.provider,
-    modelId: params.modelId,
-  });
-
-  setContextPruningRuntime(params.sessionManager, {
-    settings,
-    contextWindowTokens: resolveContextWindowTokens(params),
-    isToolPrunable: makeToolPrunablePredicate(settings.tools),
-    dropThinkingBlocks: transcriptPolicy.dropThinkingBlocks,
-    lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager, {
-      provider: params.provider,
-      modelId: params.modelId,
-    }),
-  });
-
-  return contextPruningExtension;
-}
-
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
@@ -222,10 +161,6 @@ export function buildEmbeddedExtensionFactories(params: {
       provider: compactionCfg?.provider,
     });
     factories.push(compactionSafeguardExtension);
-  }
-  const pruningFactory = buildContextPruningFactory(params);
-  if (pruningFactory) {
-    factories.push(pruningFactory);
   }
   factories.push(
     buildAgentToolResultMiddlewareFactory(params.sessionManager, {

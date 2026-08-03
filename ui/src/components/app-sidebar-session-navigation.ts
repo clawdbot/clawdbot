@@ -13,6 +13,7 @@ import {
   sessionMatchesArchivedFilter,
 } from "../lib/sessions/index.ts";
 import {
+  composerDraftSearch,
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
@@ -23,6 +24,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
+  resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
@@ -546,7 +548,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       return;
     }
     const key = this.agentResumeKey(agentId);
-    const draft = encodeURIComponent(t("chat.welcome.suggestions.whatCanYouDo"));
     const target = sessionNavigationTarget({
       face: "chat",
       sessionKey: key,
@@ -558,7 +559,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     this.setApplicationSession(key, this.selectedAgentIdForSessions());
     this.onNavigate?.("chat", {
       ...target.options,
-      search: `?draft=${draft}`,
+      search: composerDraftSearch(t("chat.welcome.suggestions.whatCanYouDo")),
     });
   }
 
@@ -671,7 +672,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       ...rows,
       ...Object.values(this.sessionData.childSessionRowsByParent).flat(),
     ].filter((row) => {
-      const parentKey = row.spawnedBy ?? row.parentSessionKey;
+      const parentKey = resolveUiSessionNavigationParentKey(row);
       return (
         parentKey != null &&
         mainSessionKeys.has(parentKey) &&

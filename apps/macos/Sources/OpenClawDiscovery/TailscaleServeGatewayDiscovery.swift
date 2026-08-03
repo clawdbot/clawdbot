@@ -12,6 +12,7 @@ enum TailscaleServeGatewayDiscovery {
     private static let maxCandidates = 32
     private static let probeConcurrency = 6
     private static let defaultProbeTimeoutSeconds: TimeInterval = 1.6
+    private static let probeSession = URLSession(configuration: .ephemeral)
 
     struct DiscoveryContext {
         var tailscaleStatus: @Sendable () async -> String?
@@ -218,16 +219,13 @@ enum TailscaleServeGatewayDiscovery {
         components.host = host
         guard let url = components.url else { return false }
 
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = max(0.5, timeout)
-        config.timeoutIntervalForResource = max(0.5, timeout)
-        let session = URLSession(configuration: config)
-        let task = session.webSocketTask(with: url)
+        // Discovery fans out and retries during startup. Reuse the session;
+        // AsyncTimeout owns each deadline and every websocket task owns its cancel.
+        let task = self.probeSession.webSocketTask(with: url)
         task.resume()
 
         defer {
             task.cancel(with: .goingAway, reason: nil)
-            session.invalidateAndCancel()
         }
 
         do {
@@ -270,6 +268,12 @@ enum TailscaleServeGatewayDiscovery {
 
         return event == "connect.challenge"
     }
+
+    #if DEBUG
+    static func probeSessionIdentifierForTesting() -> ObjectIdentifier {
+        ObjectIdentifier(self.probeSession)
+    }
+    #endif
 }
 
 private struct TailscaleStatus: Decodable {

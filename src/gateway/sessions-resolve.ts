@@ -8,7 +8,7 @@ import {
   errorShape,
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { canonicalizeSessionEntryAliases, type SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
@@ -128,8 +128,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasKey) {
-    // Key lookups may hit legacy store aliases. Migrate/prune before returning
-    // the canonical key so later calls operate on one store identity.
     const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key, clone: false });
     const store = target.store;
     if (store[target.canonicalKey]) {
@@ -154,42 +152,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       }
       return { ok: true, key: target.canonicalKey };
     }
-    const legacyKey = target.storeKeys.find((candidate) => store[candidate]);
-    if (!legacyKey) {
-      return noSessionFoundResult({ p, message: `No session found: ${key}` });
-    }
-    await canonicalizeSessionEntryAliases({
-      storePath: target.storePath,
-      target: {
-        canonicalKey: target.canonicalKey,
-        storeKeys: target.storeKeys,
-      },
-    });
-    const refreshedTarget = resolveGatewaySessionStoreTargetWithStore({
-      cfg,
-      key: target.canonicalKey,
-      clone: false,
-    });
-    if (
-      !isResolvedSessionKeyVisible({
-        cfg,
-        p,
-        store: refreshedTarget.store,
-        key: refreshedTarget.canonicalKey,
-      })
-    ) {
-      return noSessionFoundResult({ p, message: `No session found: ${key}` });
-    }
-    const agentCheckLegacy = validateSessionAgentExists(
-      cfg,
-      refreshedTarget.canonicalKey,
-      refreshedTarget.store[refreshedTarget.canonicalKey],
-      { acpMetadataSessionKey: refreshedTarget.canonicalKey },
-    );
-    if (agentCheckLegacy) {
-      return agentCheckLegacy;
-    }
-    return { ok: true, key: refreshedTarget.canonicalKey };
+    return noSessionFoundResult({ p, message: `No session found: ${key}` });
   }
 
   if (hasSessionId) {
@@ -236,6 +199,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     cfg,
     storePath,
     store,
+    lightweightListRows: true,
     opts: {
       includeGlobal: p.includeGlobal === true,
       includeUnknown: p.includeUnknown === true,
@@ -252,7 +216,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     });
   }
   if (list.sessions.length > 1) {
-    const keys = list.sessions.map((s) => s.key).join(", ");
+    const keys = list.sessions.map((session) => session.key).join(", ");
     return {
       ok: false,
       error: errorShape(
@@ -269,6 +233,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
   return {
     ok: true,
-    key: expectDefined(list.sessions[0], "sessions entry at 0").key,
+    key: labelKey,
   };
 }

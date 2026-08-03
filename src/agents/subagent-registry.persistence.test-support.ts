@@ -15,20 +15,30 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
+export type SubagentRunFixture = Omit<SubagentRunRecord, "execution"> & {
+  execution?: SubagentRunRecord["execution"];
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunRecord["execution"]["outcome"];
+};
 
 function resolveSubagentSessionStorePath(stateDir: string, agentId: string): string {
   return path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
 }
 
 /** Expands shorthand test records into the canonical nested persistence shape. */
-export function createCanonicalSubagentRunFixture(run: SubagentRunRecord): SubagentRunRecord {
-  const terminal = typeof run.endedAt === "number";
+export function createCanonicalSubagentRunFixture(run: SubagentRunFixture): SubagentRunRecord {
+  const { startedAt, endedAt, outcome, ...record } = run;
+  const terminal = typeof endedAt === "number";
   return {
-    execution: terminal
-      ? { status: "terminal", startedAt: run.startedAt, endedAt: run.endedAt, outcome: run.outcome }
-      : { status: "running", startedAt: run.startedAt },
-    completion: { required: run.expectsCompletionMessage === true },
-    delivery: {
+    ...record,
+    execution:
+      run.execution ??
+      (terminal
+        ? { status: "terminal", startedAt, endedAt, outcome }
+        : { status: "running", startedAt }),
+    completion: run.completion ?? { required: run.expectsCompletionMessage === true },
+    delivery: run.delivery ?? {
       status:
         run.expectsCompletionMessage === false
           ? "not_required"
@@ -36,12 +46,11 @@ export function createCanonicalSubagentRunFixture(run: SubagentRunRecord): Subag
             ? "pending"
             : "not_required",
     },
-    ...run,
   };
 }
 
 export function canonicalSubagentRunFixtures(
-  runs: Map<string, SubagentRunRecord>,
+  runs: ReadonlyMap<string, SubagentRunFixture>,
 ): Map<string, SubagentRunRecord> {
   return new Map([...runs].map(([runId, run]) => [runId, createCanonicalSubagentRunFixture(run)]));
 }
@@ -100,7 +109,7 @@ export function createSubagentRegistryTestDeps(
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
     captureSubagentCompletionReply: vi.fn(async () => undefined),
     ensureContextEnginesInitialized: vi.fn(),
-    ensureRuntimePluginsLoaded: vi.fn(),
+    loadAgentRuntimePluginRegistryHandle: vi.fn(),
     getRuntimeConfig: vi.fn(() => ({})),
     getGatewayRecoveryRuntime: vi.fn(() => ({
       dispatchAgent: vi.fn(),

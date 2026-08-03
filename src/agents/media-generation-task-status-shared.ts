@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core";
 /**
  * Shared media generation task status and duplicate-guard helpers.
  *
@@ -12,7 +13,6 @@ import {
 import { listFreshTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildSessionAsyncTaskStatusDetails } from "./session-async-task-status.js";
-import { stableStringify } from "./stable-stringify.js";
 
 /** Marks media as ready while requester delivery is still being confirmed. */
 export const MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS =

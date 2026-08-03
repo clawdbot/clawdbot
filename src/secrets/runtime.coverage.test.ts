@@ -520,25 +520,23 @@ function logCoverageBatch(label: string, batch: readonly SecretRegistryEntry[]):
   );
 }
 
-function batchNeedsRuntimeWebTools(batch: readonly SecretRegistryEntry[]): boolean {
-  return batch.some(
-    (entry) =>
-      entry.id.startsWith("tools.web.") ||
-      (entry.id.startsWith("plugins.entries.") &&
-        (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
+function isRuntimeWebCredentialTarget(entry: SecretRegistryEntry): boolean {
+  if (!entry.id.endsWith(".apiKey")) {
+    return false;
+  }
+  return (
+    entry.id.startsWith("tools.web.") ||
+    (entry.id.startsWith("plugins.entries.") &&
+      (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch.")))
   );
 }
 
+function batchNeedsRuntimeWebTools(batch: readonly SecretRegistryEntry[]): boolean {
+  return batch.some(isRuntimeWebCredentialTarget);
+}
+
 function batchUsesRuntimeWebToolsOnly(batch: readonly SecretRegistryEntry[]): boolean {
-  return (
-    batch.length > 0 &&
-    batch.every(
-      (entry) =>
-        entry.id.startsWith("tools.web.") ||
-        (entry.id.startsWith("plugins.entries.") &&
-          (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
-    )
-  );
+  return batch.length > 0 && batch.every(isRuntimeWebCredentialTarget);
 }
 
 function collectOpenClawCoverageEntries(options: {

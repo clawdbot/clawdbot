@@ -85,7 +85,8 @@ builds plugin publish plans, writes a green evidence bundle, then prints the exa
 OpenClaw Release Publish command only after everything is green.
 
 Options:
-  --tag <tag>                         Release tag to validate.
+  --tag <tag>                         Planned release tag. The tag must not exist yet.
+  --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
   --workflow-ref <ref>                Trusted workflow ref. Default: main; matching Tideclaw branch required for alpha.
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
@@ -145,6 +146,7 @@ export function parseArgs(argv) {
     skipTelegram: false,
     telegramProviderMode: DEFAULT_TELEGRAM_PROVIDER_MODE,
     tag: "",
+    targetSha: "",
     workflowRef: "",
     fullReleaseRunId: "",
     npmPreflightRunId: "",
@@ -167,6 +169,9 @@ export function parseArgs(argv) {
         break parseArgv;
       case "--tag":
         setOnce(arg, "tag", requireValue(args, ++index, arg));
+        break;
+      case "--target-sha":
+        setOnce(arg, "targetSha", requireValue(args, ++index, arg));
         break;
       case "--workflow-ref":
         setOnce(arg, "workflowRef", requireValue(args, ++index, arg));
@@ -232,6 +237,9 @@ export function parseArgs(argv) {
   }
   if (!options.tag) {
     throw new Error("--tag is required");
+  }
+  if (options.targetSha && !/^[a-f0-9]{40}$/u.test(options.targetSha)) {
+    throw new Error("--target-sha must be a full lowercase commit SHA");
   }
   if (options.tag.includes("-alpha.")) {
     if (!TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(options.workflowRef)) {
@@ -647,12 +655,12 @@ export function validateCandidateCheckout({
 }) {
   if (targetHeadSha !== targetSha) {
     throw new Error(
-      `release candidate tag resolves to ${targetSha}, but target worktree HEAD is ${targetHeadSha}`,
+      `release candidate target is ${targetSha}, but target worktree HEAD is ${targetHeadSha}`,
     );
   }
   if (targetTrackedStatus.trim()) {
     throw new Error(
-      "release candidate validation requires a clean tracked target worktree at the release tag",
+      "release candidate validation requires a clean tracked target worktree at the frozen release SHA",
     );
   }
   if (toolingSha !== trustedToolingSha) {
@@ -666,6 +674,39 @@ export function validateCandidateCheckout({
     );
   }
   return { status: "passed", targetSha, toolingSha, workflowRef };
+}
+
+/**
+ * Keeps release validation pre-publication: the final immutable tag is created
+ * only after this helper has recorded green evidence for the frozen SHA.
+ */
+export function assertPlannedReleaseTagIsAbsent(tag, checkRemoteTagExists) {
+  if (checkRemoteTagExists(tag)) {
+    throw new Error(
+      `release candidate tag ${tag} already exists; validate a new patch instead of reusing a published tag`,
+    );
+  }
+}
+
+function remoteTagExists(tag, cwd) {
+  const result = spawnSync(
+    "git",
+    ["ls-remote", "--exit-code", "--tags", "origin", `refs/tags/${tag}`],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status === 0) {
+    return true;
+  }
+  if (result.status === 2) {
+    return false;
+  }
+  throw new Error(
+    `could not determine whether planned release tag ${tag} already exists: ${result.stderr.trim() || result.stdout.trim() || `git exited ${result.status ?? "without a status"}`}`,
+  );
 }
 
 function gitIsAncestor(ancestor, target) {
@@ -1512,7 +1553,8 @@ async function main() {
     return;
   }
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
-  const targetSha = gitRevParse(`${options.tag}^{}`, targetRoot);
+  const targetSha = gitRevParse(options.targetSha || "HEAD", targetRoot);
+  assertPlannedReleaseTagIsAbsent(options.tag, (tag) => remoteTagExists(tag, targetRoot));
   const toolingSha = gitRevParse("HEAD", TOOLING_ROOT);
   const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
   // The outer process pins a clean main commit before creating this tooling checkout.
@@ -1582,7 +1624,7 @@ async function main() {
     const workflowFile = "full-release-validation.yml";
     const targetContextRef = releaseBranchForTag(options.tag);
     options.fullReleaseRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
-      ref: options.tag,
+      ref: targetSha,
       ...(targetContextRef ? { target_context_ref: targetContextRef } : {}),
       provider: options.provider,
       mode: options.mode,
@@ -1599,7 +1641,7 @@ async function main() {
   if (!options.npmPreflightRunId && !options.skipDispatch) {
     const workflowFile = "openclaw-npm-release.yml";
     options.npmPreflightRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
-      tag: options.tag,
+      tag: targetSha,
       preflight_only: "true",
       npm_dist_tag: options.npmDistTag,
     });

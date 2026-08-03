@@ -50,6 +50,16 @@ export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; err
   respond: RespondFn,
   res: T,
 ): res is T & { ok: true } {
+  return respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res);
+}
+
+export function respondUnavailableOnNodeInvokeErrorWithProvenance<
+  T extends { ok: boolean; error?: unknown },
+>(
+  respond: RespondFn,
+  res: T,
+  provenance?: { nodeCommandDispatched: boolean },
+): res is T & { ok: true } {
   if (res.ok) {
     return true;
   }
@@ -60,11 +70,15 @@ export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; err
   const nodeCode = normalizeOptionalString(nodeError?.code) ?? "";
   const nodeMessage = normalizeOptionalString(nodeError?.message) ?? "node invoke failed";
   const message = nodeCode ? `${nodeCode}: ${nodeMessage}` : nodeMessage;
+  const details = {
+    nodeError: res.error ?? null,
+    ...(provenance ? { nodeCommandDispatched: provenance.nodeCommandDispatched } : {}),
+  };
   respond(
     false,
     undefined,
     errorShape(ErrorCodes.UNAVAILABLE, message, {
-      details: { nodeError: res.error ?? null },
+      details,
     }),
   );
   return false;

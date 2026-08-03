@@ -300,6 +300,7 @@ async function loadReferenceImages(params: {
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<
   Array<{
     sourceImage: MusicGenerationSourceImage;
@@ -314,6 +315,7 @@ async function loadReferenceImages(params: {
   }> = [];
 
   for (const rawInput of params.inputs) {
+    params.signal?.throwIfAborted();
     const trimmed = rawInput.trim();
     const inputRaw = normalizeMediaReferenceSource(
       trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed,
@@ -343,12 +345,14 @@ async function loadReferenceImages(params: {
       workspaceDir: params.workspaceDir,
       sandbox: params.sandboxConfig,
     });
+    params.signal?.throwIfAborted();
     const media = isDataUrl
       ? decodeDataUrl(resolvedInput)
       : params.sandboxConfig
         ? await loadWebMedia(resolvedPath ?? resolvedInput, {
             sandboxValidated: true,
             readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
+            ...(params.signal ? { requestInit: { signal: params.signal } } : {}),
           })
         : await (async () => {
             const referenceTarget = resolvedPath ?? resolvedInput;
@@ -356,6 +360,7 @@ async function loadReferenceImages(params: {
             const { signal, cleanup } = buildTimeoutAbortSignal({
               timeoutMs: params.timeoutMs ?? DEFAULT_REFERENCE_FETCH_TIMEOUT_MS,
               operation: "music-generate.reference-fetch",
+              ...(params.signal ? { signal: params.signal } : {}),
               ...(isRemoteReference ? { url: referenceTarget } : {}),
             });
             try {
@@ -368,6 +373,7 @@ async function loadReferenceImages(params: {
               cleanup();
             }
           })();
+    params.signal?.throwIfAborted();
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind ?? "unknown"}`);
     }
@@ -624,7 +630,7 @@ export function createMusicGenerateTool(options?: {
     description:
       "Create song/jingle/beat/loop/soundtrack/anthem/instrumental. Make/generate music => call; lyrics-only request => text only. prompt: style/genre/mood/tempo/instruments/purpose; lyrics: exact sung words; image/images condition on reference image(s). action=list discovers providers/models. Session chat background: call once/request, await, then visible reply + structured media. status checks active task.",
     parameters: MusicGenerateToolSchema,
-    execute: async (_toolCallId, rawArgs) => {
+    execute: async (_toolCallId, rawArgs, signal) => {
       const args = rawArgs as Record<string, unknown>;
       const action = resolveAction(args);
 
@@ -726,6 +732,7 @@ export function createMusicGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
+        signal,
       });
       validateMusicGenerationCapabilities({
         provider: selectedProvider,
@@ -736,6 +743,8 @@ export function createMusicGenerateTool(options?: {
         durationSeconds,
         format,
       });
+      // Accepted tasks own their paid work independently; cancellation applies only before admission.
+      signal?.throwIfAborted();
       const taskHandle = createMusicGenerationTaskRun({
         sessionKey: options?.agentSessionKey,
         requesterOrigin: options?.requesterOrigin,

@@ -34,7 +34,6 @@ export type PendingApproval = {
 export type TlonSettingsStore = {
   groupChannels?: string[];
   dmAllowlist?: string[];
-  autoDiscover?: boolean;
   showModelSig?: boolean;
   autoAcceptDmInvites?: boolean;
   autoDiscoverChannels?: boolean;
@@ -118,7 +117,10 @@ function parseSettingsResponse(raw: unknown): TlonSettingsStore {
     dmAllowlist: Array.isArray(settings.dmAllowlist)
       ? settings.dmAllowlist.filter((x): x is string => typeof x === "string")
       : undefined,
-    autoDiscover: typeof settings.autoDiscover === "boolean" ? settings.autoDiscover : undefined,
+    autoDiscoverChannels:
+      typeof settings.autoDiscoverChannels === "boolean"
+        ? settings.autoDiscoverChannels
+        : undefined,
     showModelSig: typeof settings.showModelSig === "boolean" ? settings.showModelSig : undefined,
     autoAcceptDmInvites:
       typeof settings.autoAcceptDmInvites === "boolean" ? settings.autoAcceptDmInvites : undefined,
@@ -249,8 +251,8 @@ function applySettingsUpdate(
         ? value.filter((x): x is string => typeof x === "string")
         : undefined;
       break;
-    case "autoDiscover":
-      next.autoDiscover = typeof value === "boolean" ? value : undefined;
+    case "autoDiscoverChannels":
+      next.autoDiscoverChannels = typeof value === "boolean" ? value : undefined;
       break;
     case "showModelSig":
       next.showModelSig = typeof value === "boolean" ? value : undefined;

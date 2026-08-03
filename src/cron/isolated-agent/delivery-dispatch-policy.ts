@@ -299,37 +299,52 @@ function resolveDirectCronRetryDelaysMs(): readonly number[] {
 
 export async function retryTransientDirectCronDelivery<T>(params: {
   jobId: string;
+  label?: string;
   signal?: AbortSignal;
+  deadlineAtMs?: number;
   run: () => Promise<T>;
   shouldRetryError?: (err: unknown) => boolean;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectCronRetryDelaysMs();
-  if (params.signal?.aborted) {
-    throw new Error("cron delivery aborted");
-  }
-  const runWithAbortCheck = async () => {
+  const assertActive = () => {
     if (params.signal?.aborted) {
       throw new Error("cron delivery aborted");
     }
+    if (params.deadlineAtMs !== undefined && Date.now() >= params.deadlineAtMs) {
+      const error = new Error("cron delivery deadline exceeded");
+      error.name = "TimeoutError";
+      throw error;
+    }
+  };
+  assertActive();
+  const runWithAbortCheck = async () => {
+    assertActive();
     return await params.run();
   };
-  return await retryAsync(runWithAbortCheck, {
+  const result = await retryAsync(runWithAbortCheck, {
     attempts: retryDelaysMs.length + 1,
     minDelayMs: 0,
     maxDelayMs: Math.max(...retryDelaysMs),
     delayMs: ({ attempt }) => retryDelaysMs[attempt - 1] ?? 0,
     shouldRetry: (err) =>
       params.signal?.aborted !== true &&
+      (params.deadlineAtMs === undefined || Date.now() < params.deadlineAtMs) &&
       isTransientDirectCronDeliveryError(err) &&
       (params.shouldRetryError?.(err) ?? true),
     onRetry: async ({ attempt, maxAttempts, delayMs, err }) => {
       await logCronDeliveryWarn(
-        `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${attempt + 1}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
+        `[cron:${params.jobId}] transient ${params.label ?? "direct announce"} delivery failure, retrying ${attempt + 1}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
       );
       if (delayMs === 0) {
         await sleepWithAbort(0, params.signal);
       }
     },
-    sleep: async (delayMs) => await sleepWithAbort(delayMs, params.signal),
+    sleep: async (delayMs) => {
+      const remainingMs =
+        params.deadlineAtMs === undefined ? delayMs : Math.max(0, params.deadlineAtMs - Date.now());
+      await sleepWithAbort(Math.min(delayMs, remainingMs), params.signal);
+      assertActive();
+    },
   });
+  return result;
 }

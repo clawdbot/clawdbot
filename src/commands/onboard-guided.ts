@@ -57,6 +57,7 @@ export type GuidedOnboardingDeps = {
   launchHatchTui?: (workspace: string) => Promise<void>;
   runSetupMemoryImportStep?: typeof import("../wizard/setup.memory-import.js").runSetupMemoryImportStep;
   runAppRecommendations?: typeof import("../wizard/setup.app-recommendations.js").setupAppRecommendations;
+  ensureControlUiAssetsBuilt?: typeof import("../infra/control-ui-assets.js").ensureControlUiAssetsBuilt;
   /** Browser-first local hatch handoff. Tests inject this to avoid real browser/Gateway work. */
   runBrowserHandoff?: typeof runBrowserHatchHandoff;
   probeBrowserHandoffGateway?: typeof probeBrowserHatchGateway;
@@ -426,6 +427,27 @@ async function runGuidedOnboardingFlow(
   });
   const { allowWorkspaceChange, conflict: workspaceConflict } = workspaceSelection;
   const appliedWorkspace = workspaceSelection.workspaceDir;
+  let controlUiAssetsReady = true;
+  if (
+    opts.tui !== true &&
+    opts.skipUi !== true &&
+    persistedConfig.gateway?.mode !== "remote" &&
+    persistedConfig.gateway?.controlUi?.enabled !== false
+  ) {
+    const ensureControlUiAssetsBuilt =
+      deps.ensureControlUiAssetsBuilt ??
+      (await import("../infra/control-ui-assets.js")).ensureControlUiAssetsBuilt;
+    let controlUiProgress: ReturnType<WizardPrompter["progress"]> | undefined;
+    const assets = await ensureControlUiAssetsBuilt(runtime, {
+      onBuildStart: () => {
+        controlUiProgress = prompter.progress(t("wizard.guided.controlUiPreparing"));
+      },
+    }).finally(() => controlUiProgress?.stop());
+    controlUiAssetsReady = assets.ok;
+    if (!assets.ok && assets.message) {
+      runtime.error(assets.message);
+    }
+  }
   if (alreadyConfigured) {
     await prompter.note(t("wizard.guided.alreadySetUp"), t("wizard.guided.welcomeTitle"));
     if (workspaceConflict) {
@@ -514,7 +536,7 @@ async function runGuidedOnboardingFlow(
         existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
       )
     : appliedWorkspace;
-  if (opts.tui !== true) {
+  if (opts.tui !== true && opts.skipUi !== true && controlUiAssetsReady) {
     const probeBrowserHandoffGateway =
       deps.probeBrowserHandoffGateway ??
       (await import("./onboard-browser-handoff.js")).probeBrowserHatchGateway;

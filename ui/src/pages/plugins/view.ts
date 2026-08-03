@@ -574,6 +574,32 @@ function renderInstalledFilter(props: PluginsViewProps) {
   });
 }
 
+function renderPluginHeading(params: {
+  name: string;
+  content: TemplateResult;
+  onShowDetails?: () => void;
+}): TemplateResult {
+  return html`
+    <h3 class="settings-row__title">
+      ${params.onShowDetails
+        ? html`
+            <button
+              type="button"
+              class="plugins-item__detail-button"
+              aria-label=${params.name}
+              @click=${(event: Event) => {
+                event.stopPropagation();
+                params.onShowDetails?.();
+              }}
+            >
+              ${params.content}
+            </button>
+          `
+        : params.content}
+    </h3>
+  `;
+}
+
 function renderPluginRow(
   plugin: PluginCatalogItem,
   props: PluginsViewProps,
@@ -598,14 +624,18 @@ function renderPluginRow(
         props.onIconError(plugin.id),
       )}
       <div class="settings-row__text">
-        <h3 class="settings-row__title">
-          ${plugin.name}
-          ${plugin.version
-            ? includePackageName
-              ? html`<span class="plugins-version">v${plugin.version}</span>`
-              : html`<span class="plugins-version">v${plugin.version}</span>`
-            : nothing}
-        </h3>
+        ${renderPluginHeading({
+          name: plugin.name,
+          content: html`
+            ${plugin.name}
+            ${plugin.version
+              ? includePackageName
+                ? html`<span class="plugins-version">v${plugin.version}</span>`
+                : html`<span class="plugins-version">v${plugin.version}</span>`
+              : nothing}
+          `,
+          onShowDetails: () => props.onShowDetails(plugin.id),
+        })}
         <span class="settings-row__desc">
           ${plugin.description || t("pluginsPage.optionalCapability")}
         </span>
@@ -859,12 +889,16 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
     >
       ${renderArtTile(artSlug, pkg.displayName)}
       <div class="settings-row__text">
-        <h3 class="settings-row__title">
-          ${pkg.displayName}
-          ${pkg.latestVersion
-            ? html`<span class="plugins-version">v${pkg.latestVersion}</span>`
-            : nothing}
-        </h3>
+        ${renderPluginHeading({
+          name: pkg.displayName,
+          content: html`
+            ${pkg.displayName}
+            ${pkg.latestVersion
+              ? html`<span class="plugins-version">v${pkg.latestVersion}</span>`
+              : nothing}
+          `,
+          onShowDetails: installed ? () => props.onShowDetails(installed.id) : undefined,
+        })}
         <span class="settings-row__desc">${pkg.summary || pkg.name}</span>
         ${renderMetaLine([
           pkg.isOfficial ? t("pluginsPage.official") : nothing,

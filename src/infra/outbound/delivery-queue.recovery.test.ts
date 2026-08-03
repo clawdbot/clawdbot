@@ -25,6 +25,7 @@ import {
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import {
   ackDelivery,
   claimDeliveryPlatformSendAttempt,
@@ -73,8 +74,8 @@ function readOutboundQueueStatus(tmpDir: string, id: string): string | undefined
     env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
   });
   const row = db
-    .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?")
-    .get(id) as { status?: string } | undefined;
+    .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+    .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { status?: string } | undefined;
   return row?.status;
 }
 
@@ -1213,6 +1214,7 @@ describe("delivery-queue recovery", () => {
     expect(reconcileInput.retryCount).toBe(0);
 
     const afterCommitInput = mockCallArg(afterCommit) as {
+      deliveryQueueId?: string;
       kind?: string;
       to?: string;
       accountId?: string;
@@ -1221,6 +1223,7 @@ describe("delivery-queue recovery", () => {
       silent?: boolean;
       result?: { messageId?: string };
     };
+    expect(afterCommitInput.deliveryQueueId).toBe(id);
     expect(afterCommitInput.kind).toBe("text");
     expect(afterCommitInput.to).toBe("+1");
     expect(afterCommitInput.accountId).toBe("acct-1");
@@ -1322,10 +1325,15 @@ describe("delivery-queue recovery", () => {
       error: "provider lookup timed out",
       retryable: true,
     });
+    const afterUnknownSendTerminal = vi.fn(async (ctx: { queueId: string }) => {
+      expect(ctx.queueId).toBe(id);
+      expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    });
     resolveOutboundChannelMessageAdapterMock.mockReturnValue({
       durableFinal: {
         capabilities: { reconcileUnknownSend: true },
         reconcileUnknownSend,
+        afterUnknownSendTerminal,
       },
     });
     const deliver = vi.fn().mockResolvedValue([]);
@@ -1337,6 +1345,7 @@ describe("delivery-queue recovery", () => {
     expect(result).toMatchObject({ failed: 1, skippedMaxRetries: 0 });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    expect(afterUnknownSendTerminal).toHaveBeenCalledOnce();
   });
 
   it("does not reconcile unknown-after-send entries unless the adapter declares the capability", async () => {
