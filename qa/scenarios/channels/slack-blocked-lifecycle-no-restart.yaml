@@ -1,4 +1,4 @@
-title: Slack blocked lifecycle stays visible without auto-restart
+title: Slack blocked lifecycle recovers in place without auto-restart
 
 scenario:
   id: slack-blocked-lifecycle-no-restart
@@ -8,7 +8,7 @@ scenario:
       - channels.channels-status
     secondary:
       - observability.background-health-monitor-loop
-  objective: Prove a Slack identity failure is recorded as blocked, projected through channels.status, and skipped by the production health monitor.
+  objective: Prove a Slack identity failure remains blocked without restart, then a fresh channel-authored identity fact recovers the same task to ready.
   gatewayConfigPatch:
     channels:
       slack:
@@ -23,6 +23,7 @@ scenario:
     - channels.status exposes lifecycle and derived healthState as blocked.
     - The account remains running without a pending restart.
     - The health monitor does not change lastStartAt after its startup-grace check.
+    - A fresh Slack event repairs identity and publishes ready without restarting the account task.
   docsRefs:
     - docs/gateway/health.md
   codeRefs:
@@ -34,7 +35,7 @@ scenario:
     channel: slack
     suiteIsolation: isolated
     isolationReason: Waits through the production health monitor startup grace with a deliberately blocked Slack identity.
-    summary: Start Slack against Crabline with an invalid identity token and prove blocked status remains stable.
+    summary: Start Slack blocked against Crabline, prove restart suppression, then recover ready through a fresh Slack event on the same task.
 
 flow:
   steps:
@@ -69,4 +70,23 @@ flow:
             expr: "finalAccount?.lifecycle === 'blocked' && finalAccount?.healthState === 'blocked' && finalAccount?.running === true && finalAccount?.restartPending !== true && finalAccount?.lastStartAt === initialAccount.lastStartAt"
             message:
               expr: "`Health monitor restarted or obscured the blocked Slack account: ${JSON.stringify({ initialAccount, finalAccount })}`"
-      detailsExpr: "JSON.stringify({ verdict: 'PASS', channel: 'slack', accountId: finalAccount.accountId, lifecycle: finalAccount.lifecycle, healthState: finalAccount.healthState, running: finalAccount.running, restartPending: finalAccount.restartPending ?? false, lastStartAtUnchanged: finalAccount.lastStartAt === initialAccount.lastStartAt })"
+        - sendInbound:
+            conversation:
+              id: C12345678
+              kind: group
+            senderId: U12345678
+            senderName: QA Driver
+            text: "@openclaw lifecycle recovery probe"
+        - call: waitForCondition
+          saveAs: recoveredAccount
+          args:
+            - lambda:
+                async: true
+                expr: "((status) => { const account = (status.channelAccounts?.slack ?? []).find((candidate) => candidate.accountId === transport.accountId); return account?.lifecycle === 'ready' && account?.terminalDisconnect === undefined ? account : undefined; })(await env.gateway.call('channels.status', { probe: false, timeoutMs: 10000 }, { timeoutMs: 15000 }))"
+            - 30000
+            - 250
+        - assert:
+            expr: "recoveredAccount?.running === true && recoveredAccount?.connected === true && recoveredAccount?.restartPending !== true && recoveredAccount?.lastStartAt === initialAccount.lastStartAt"
+            message:
+              expr: "`Slack did not recover ready on the same account task: ${JSON.stringify({ initialAccount, recoveredAccount })}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', channel: 'slack', accountId: recoveredAccount.accountId, transition: [initialAccount.lifecycle, recoveredAccount.lifecycle], blockedHealthState: initialAccount.healthState, running: recoveredAccount.running, connected: recoveredAccount.connected, terminalDisconnectCleared: recoveredAccount.terminalDisconnect === undefined, restartPending: recoveredAccount.restartPending ?? false, lastStartAtUnchanged: recoveredAccount.lastStartAt === initialAccount.lastStartAt })"

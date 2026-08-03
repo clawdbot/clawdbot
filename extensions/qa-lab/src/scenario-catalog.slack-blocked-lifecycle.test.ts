@@ -3,7 +3,7 @@ import { readQaScenarioById } from "./scenario-catalog.js";
 import { flowContainsCall, requireFlowScenario } from "./scenario-catalog.test-utils.js";
 
 describe("Slack blocked lifecycle scenario", () => {
-  it("invalidates and observes the selected account without waiting for readiness", () => {
+  it("observes blocked status and drives explicit ready recovery on the same task", () => {
     const scenario = requireFlowScenario(readQaScenarioById("slack-blocked-lifecycle-no-restart"));
 
     expect(scenario.gatewayConfigPatch).toMatchObject({
@@ -19,6 +19,9 @@ describe("Slack blocked lifecycle scenario", () => {
     expect(flow).toContain("transport.accountId");
     expect(flow).toContain("await env.gateway.call('channels.status'");
     expect(flow).toContain("account?.lifecycle === 'blocked'");
+    expect(flow).toContain("account?.lifecycle === 'ready'");
+    expect(flow).toContain("sendInbound");
+    expect(flow).toContain("lastStartAt === initialAccount.lastStartAt");
     expect(flow).not.toContain("account.accountId === 'default'");
     expect(flowContainsCall(scenario.execution.flow, "waitForCondition")).toBe(true);
     expect(flowContainsCall(scenario.execution.flow, "waitForTransportReady")).toBe(false);
