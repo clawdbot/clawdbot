@@ -6,7 +6,6 @@ import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronAgentExecutionStarted, CronJob } from "../types.js";
 import {
   registerActiveCronTaskRun,
-  startActiveCronTaskRunSettlementGrace,
   trackActiveCronTaskRunSettlement,
 } from "./active-run-cancellation.js";
 import {
@@ -250,7 +249,7 @@ export async function executeJobCoreWithTimeout(
         progress.completedCoreResult = result;
         return await deliverPrimaryWebhook(state, job, result, runAbortController.signal, progress);
       });
-      trackActiveCronTaskRunSettlement(runPromise);
+      trackActiveCronTaskRunSettlement(runPromise, runAbortController.signal);
       void runPromise.catch((err: unknown) => {
         if (runAbortController.signal.aborted) {
           state.deps.log.warn(
@@ -263,7 +262,6 @@ export async function executeJobCoreWithTimeout(
       if (first !== operatorCancellationMarker) {
         return first;
       }
-      startActiveCronTaskRunSettlementGrace();
       const settled = resolveInterruptedRunProgress({
         progress,
         job,
@@ -334,7 +332,7 @@ export async function executeJobCoreWithTimeout(
         watchdog.deadlineAtMs(),
       );
     });
-    trackActiveCronTaskRunSettlement(runPromise);
+    trackActiveCronTaskRunSettlement(runPromise, runAbortController.signal);
     void runPromise.catch((err: unknown) => {
       if (runAbortController.signal.aborted) {
         state.deps.log.warn(
@@ -346,7 +344,6 @@ export async function executeJobCoreWithTimeout(
     try {
       const first = await Promise.race([runPromise, timeoutPromise, operatorCancellationPromise]);
       if (first === operatorCancellationMarker) {
-        startActiveCronTaskRunSettlementGrace();
         const settled = resolveInterruptedRunProgress({
           progress,
           job,
@@ -360,7 +357,6 @@ export async function executeJobCoreWithTimeout(
       if (first !== timeoutMarker) {
         return first;
       }
-      startActiveCronTaskRunSettlementGrace();
       const activeExecution = watchdog.activeExecution();
       const settled = resolveInterruptedRunProgress({
         progress,
