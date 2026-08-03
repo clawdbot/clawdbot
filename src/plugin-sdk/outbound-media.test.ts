@@ -338,7 +338,7 @@ describe("createHostedOutboundMediaStore", () => {
       "fixture-plugin",
       {
         namespace: "serialized-delete-media-chunks",
-        maxEntries: 2,
+        maxEntries: 1,
         overflowPolicy: "reject-new",
       },
     );
@@ -354,7 +354,7 @@ describe("createHostedOutboundMediaStore", () => {
       createToken: () => "token123",
       rawChunkBytes: 64,
       maxEntries: 1,
-      maxChunkRows: 2,
+      maxChunkRows: 1,
       overflowPolicy: "reject-new",
     });
     loadWebMediaMock.mockResolvedValue({
@@ -391,6 +391,17 @@ describe("createHostedOutboundMediaStore", () => {
       publicBaseUrl: "https://gateway.example.com",
       maxBytes: 1024,
     });
+    let replacementSettled = false;
+    void replacement.then(
+      () => {
+        replacementSettled = true;
+      },
+      () => {
+        replacementSettled = true;
+      },
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(replacementSettled).toBe(false);
     releaseDelete?.();
 
     await expect(deletion).resolves.toBeUndefined();
