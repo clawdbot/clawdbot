@@ -169,6 +169,7 @@ describe("CronPage editor state sync", () => {
     const job: CronJob = {
       id: "access-job",
       name: "Readably scheduled task",
+      description: "Inspect this task without changing its permissions",
       enabled: true,
       createdAtMs: 0,
       updatedAtMs: 0,
@@ -205,6 +206,9 @@ describe("CronPage editor state sync", () => {
     await waitForCronPage(() =>
       expect(page.querySelector('[data-test-id="cron-row-access-job"]')).not.toBeNull(),
     );
+    expect(
+      page.querySelector('[data-test-id="cron-row-description-access-job"]')?.textContent,
+    ).toContain(job.description);
     expect(Boolean(page.querySelector('[data-test-id="cron-new-task"]'))).toBe(canManage);
     expect(Boolean(page.querySelector('[data-test-id="cron-row-run-access-job"]'))).toBe(canManage);
     expect(Boolean(page.querySelector('[data-test-id="cron-row-toggle-access-job"]'))).toBe(
@@ -215,6 +219,9 @@ describe("CronPage editor state sync", () => {
     (page.querySelector('[data-test-id="cron-row-access-job"]') as HTMLElement).click();
     await waitForCronPage(() =>
       expect(page.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull(),
+    );
+    expect(page.querySelector('[data-test-id="cron-detail-description"]')?.textContent).toContain(
+      job.description,
     );
     expect(Boolean(page.querySelector('[data-test-id="cron-run-now"]'))).toBe(canManage);
     expect(Boolean(page.querySelector('[data-test-id="cron-toggle-enabled"]'))).toBe(canManage);
