@@ -42,6 +42,7 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+const SLACK_REACTION_USER_LIMIT = 100;
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 
@@ -547,10 +548,17 @@ export async function handleSlackAction(
       }
       return jsonResult({ ok: true, added: emoji });
     }
+    const limit = Math.min(
+      readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      }) ?? SLACK_REACTION_USER_LIMIT,
+      SLACK_REACTION_USER_LIMIT,
+    );
     await assertReadTargetAllowed(channelId);
-    const reactions = readOpts
-      ? await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts)
-      : await slackActionRuntime.listSlackReactions(channelId, messageId);
+    const reactions = await slackActionRuntime.listSlackReactions(channelId, messageId, {
+      ...readOpts,
+      limit,
+    });
     return jsonResult({ ok: true, reactions });
   }
 
