@@ -63,8 +63,9 @@ const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CLICKCLACK_CORRELATION_ID_MAX_LENGTH = 128;
 const CLICKCLACK_CORRELATION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
 const CLICKCLACK_CORRELATION_ID_HEADER = "X-Correlation-ID";
-// Bound control-plane waits before response headers without turning multipart
-// uploads into a wall-clock deadline that cannot observe upload progress.
+// Bound retry-safe read waits before response headers. Writes may still be
+// uploading or already committed when headers are withheld, so their existing
+// transport/proxy timeout behavior must remain unchanged.
 const CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS = 30_000;
 // Keep REST and websocket JSON under the same bounded response budget. ClickClack
 // accepts 1 MiB request bodies, then wraps and re-encodes them as events, so a
@@ -157,11 +158,14 @@ export function createClickClackClient(options: ClientOptions) {
       requestHeaders.set("Content-Type", "application/json");
     }
     const requestInit = { ...init, headers: requestHeaders };
-    // Fetch cannot observe multipart upload progress. Keep uploads on the
-    // transport's progress-aware timeout instead of imposing a total duration.
-    const response = isUpload
-      ? await fetcher(url, requestInit)
-      : await fetchWithTimeout(url, requestInit, CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS, fetcher);
+    const method = init.method?.toUpperCase() ?? "GET";
+    // A write can time out after the server commits it, and Fetch cannot tell
+    // whether its request body is still making progress. Only retry-safe reads
+    // use the fixed pre-header deadline.
+    const response =
+      method === "GET" || method === "HEAD"
+        ? await fetchWithTimeout(url, requestInit, CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS, fetcher)
+        : await fetcher(url, requestInit);
     if (!response.ok) {
       const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
       // Remote error bodies are untrusted output; redact them even when the

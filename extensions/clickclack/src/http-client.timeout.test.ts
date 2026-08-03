@@ -35,6 +35,39 @@ describe("ClickClack HTTP client timeouts", () => {
     }
   });
 
+  it("does not impose the response-header deadline on JSON writes", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveResponse: (response: Response) => void = () => {
+        throw new Error("JSON response resolver was not initialized");
+      };
+      let settled = false;
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) =>
+          await new Promise<Response>((resolve) => {
+            resolveResponse = resolve;
+          }),
+      );
+      const client = createClickClackClient({
+        baseUrl: "https://clickclack.example",
+        token: "fake",
+        fetch: fetchMock as unknown as typeof fetch,
+      });
+
+      const message = client.createChannelMessage("channel-1", "message").finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(settled).toBe(false);
+      expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeUndefined();
+
+      resolveResponse(Response.json({ message: { id: "message-1" } }));
+      await expect(message).resolves.toMatchObject({ id: "message-1" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not impose the response-header deadline on channel media uploads", async () => {
     vi.useFakeTimers();
     try {
