@@ -806,7 +806,7 @@ compatibility fallback when the shared
     | Model        | `tts.providers.openai.model`                  | `gpt-4o-mini-tts`                |
     | Voice        | `tts.providers.openai.speakerVoice`           | `coral`                          |
     | Speed        | `tts.providers.openai.speed`                  | (unset)                          |
-    | Instructions | `tts.providers.openai.instructions`           | (unset, `gpt-4o-mini-tts` only)  |
+    | Instructions | `tts.providers.openai.instructions`           | (unset, `gpt-4o-mini-tts` family only)  |
     | Format       | `tts.providers.openai.responseFormat`         | `opus` for voice notes, `mp3` for files |
     | API key      | `tts.providers.openai.apiKey`                 | Falls back to `OPENAI_API_KEY`   |
     | Base URL     | `tts.providers.openai.baseUrl`                | `https://api.openai.com/v1`      |
