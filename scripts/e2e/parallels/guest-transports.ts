@@ -501,16 +501,18 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
     }
     if (!launched) {
       throw new Error(
-        Date.now() >= deadline
-          ? `${options.label} timed out`
-          : `${options.label} background launch failed with exit code ${lastLaunchStatus}`,
+        `${options.label} background launch failed with exit code ${lastLaunchStatus}`,
       );
     }
 
     let completedLogDrainDeadline = 0;
     let doneFileSeen = false;
+    let completionProbeAttempted = false;
     const activeDeadline = () => (doneFileSeen ? completedLogDrainDeadline : deadline);
-    while (Date.now() < activeDeadline()) {
+    // A process can finish while setup exhausts the active budget; inspect its
+    // completion marker once before deciding whether cleanup must stop it.
+    while (!completionProbeAttempted || Date.now() < activeDeadline()) {
+      completionProbeAttempted = true;
       const doneProbe = runCommand(
         "prlctl",
         [
