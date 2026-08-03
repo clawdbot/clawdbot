@@ -1323,8 +1323,23 @@ describe("TUI PTY real backends", () => {
       });
       try {
         let queueClientConnected = false;
+        const admittedRunIds = new Set<string>();
         queueClient.onConnected = () => {
           queueClientConnected = true;
+        };
+        // Retain admission events that arrive before both chat.send ACKs settle.
+        queueClient.onEvent = ({ event, payload }) => {
+          if (event !== "chat" || !payload || typeof payload !== "object") {
+            return;
+          }
+          const chatEvent = payload as { runId?: unknown; sessionKey?: unknown; state?: unknown };
+          if (
+            chatEvent.state === "final" &&
+            chatEvent.sessionKey === fixture.sessionKey &&
+            typeof chatEvent.runId === "string"
+          ) {
+            admittedRunIds.add(chatEvent.runId);
+          }
         };
         queueClient.start();
         await waitFor({
@@ -1332,6 +1347,7 @@ describe("TUI PTY real backends", () => {
           read: () => (queueClientConnected ? true : null),
           onTimeout: () => new Error("TUI Gateway client did not connect"),
         });
+        await queueClient.subscribeSessionEvents();
         await fixture.run.write("/queue collect debounce:250ms\r", { delay: false });
         await fixture.waitForOutput("Queue mode set to collect.");
         await fixture.run.write("slow collect parent\r");
@@ -1345,16 +1361,23 @@ describe("TUI PTY real backends", () => {
           sessionKey: fixture.sessionKey,
           message: "collect prompt alpha",
         });
-        await sleep(50);
         const betaSend = queueClient.sendChat({
           sessionKey: fixture.sessionKey,
           message: "collect prompt beta",
         });
         const sendResults = await Promise.all([alphaSend, betaSend]);
         expect(sendResults.map((result) => result.status)).toEqual(["started", "started"]);
-        // Let both Gateway submissions reach the active-turn queue before the
-        // parent response opens the collect debounce window.
-        await sleep(1_000);
+        const expectedRunIds = sendResults.map(({ runId }) => runId);
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (expectedRunIds.every((runId) => admittedRunIds.has(runId)) ? true : null),
+          onTimeout: () =>
+            new Error(
+              `queued prompts were not admitted: expected ${expectedRunIds.join(", ")}; ` +
+                `observed ${[...admittedRunIds].join(", ")}\n${fixture.gateway.logs()}\n` +
+                fixture.run.output(),
+            ),
+        });
         fixture.mockModel.releaseFirstResponse();
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
