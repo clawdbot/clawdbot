@@ -50,20 +50,11 @@ type LayeredExecPolicy = {
   ask: ExecAsk;
 };
 
-function applySessionLegacyExecPolicyLayer(
-  base: LayeredExecPolicy,
-  sessionEntry?: ExecSessionDefaults,
-): LayeredExecPolicy {
-  const security = normalizeExecSecurity(sessionEntry?.execSecurity);
-  const ask = normalizeExecAsk(sessionEntry?.execAsk);
-  if (security !== null || ask !== null) {
-    return {
-      security: security ?? base.security,
-      ask: ask ?? base.ask,
-    };
-  }
-  return base;
-}
+type ExplicitExecPolicy = {
+  mode?: ExecMode;
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+};
 
 // Gather the shared config state once so exec resolution applies one
 // agent/global/session precedence order.
@@ -109,6 +100,60 @@ function resolveExecConfigState(params: {
   };
 }
 
+function resolveExplicitExecPolicy(params: {
+  globalExec?: ResolvedExecConfig;
+  agentExec?: ResolvedExecConfig;
+  sessionEntry?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
+}): ExplicitExecPolicy {
+  const sessionSecurity = normalizeExecSecurity(params.sessionEntry?.execSecurity);
+  const sessionAsk = normalizeExecAsk(params.sessionEntry?.execAsk);
+  return applyExecPolicyLayer(
+    applyExecPolicyLayer(
+      applyExecPolicyLayer(applyExecPolicyLayer({}, params.globalExec), params.agentExec),
+      sessionSecurity !== null || sessionAsk !== null
+        ? {
+            security: sessionSecurity ?? undefined,
+            ask: sessionAsk ?? undefined,
+          }
+        : undefined,
+    ),
+    params.execOverrides,
+  );
+}
+
+export type ExecExecutionDisposition =
+  | { kind: "denied" }
+  | { kind: "unavailable" }
+  | { kind: "sandbox-local" }
+  | { kind: "host-unconditional"; host: Exclude<ExecHost, "sandbox"> }
+  | { kind: "host-authority-required"; host: Exclude<ExecHost, "sandbox"> };
+
+/** Classifies whether exec can run without authority owned outside its execution host. */
+export function resolveExecExecutionDisposition(params: {
+  effectiveHost: ExecHost;
+  security: ExecSecurity;
+  ask: ExecAsk;
+  sandboxAvailable: boolean;
+  configuredMode?: ExecMode;
+  explicitSecurity?: ExecSecurity;
+}): ExecExecutionDisposition {
+  if (params.effectiveHost === "sandbox") {
+    if (!params.sandboxAvailable) {
+      return { kind: "unavailable" };
+    }
+    return params.configuredMode === "deny" || params.explicitSecurity === "deny"
+      ? { kind: "denied" }
+      : { kind: "sandbox-local" };
+  }
+  if (params.security === "deny") {
+    return { kind: "denied" };
+  }
+  return params.security === "full" && params.ask === "off"
+    ? { kind: "host-unconditional", host: params.effectiveHost }
+    : { kind: "host-authority-required", host: params.effectiveHost };
+}
+
 /** Resolves whether node exec is usable and any effective node binding. */
 export function resolveNodeExecEligibility(params: {
   cfg?: OpenClawConfig;
@@ -147,6 +192,7 @@ export function resolveExecDefaults(params: {
   ask: ExecAsk;
   node?: string;
   canRequestNode: boolean;
+  executionDisposition: ExecExecutionDisposition;
 } {
   const {
     cfg,
@@ -184,13 +230,13 @@ export function resolveExecDefaults(params: {
     security: approvalDefaults?.security ?? defaultSecurity,
     ask: approvalDefaults?.ask ?? "off",
   };
-  const layeredPolicy = applyExecPolicyLayer(
-    applySessionLegacyExecPolicyLayer(
-      applyExecPolicyLayer(applyExecPolicyLayer(basePolicy, globalExec), agentExec),
-      params.sessionEntry,
-    ),
-    params.execOverrides,
-  );
+  const explicitPolicy = resolveExplicitExecPolicy({
+    globalExec,
+    agentExec,
+    sessionEntry: params.sessionEntry,
+    execOverrides: params.execOverrides,
+  });
+  const layeredPolicy = applyExecPolicyLayer(basePolicy, explicitPolicy);
   const modePolicy = resolveExecModePolicy(layeredPolicy);
   // Approval files are safety bounds: they can only reduce security/ask from
   // config-derived policy, never grant a less restrictive effective mode.
@@ -221,6 +267,14 @@ export function resolveExecDefaults(params: {
       configuredTarget: host,
       requestedTarget: "node",
       sandboxAvailable,
+    }),
+    executionDisposition: resolveExecExecutionDisposition({
+      effectiveHost: resolved.effectiveHost,
+      security,
+      ask,
+      sandboxAvailable,
+      configuredMode: explicitPolicy.mode,
+      explicitSecurity: explicitPolicy.security,
     }),
   };
 }

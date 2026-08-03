@@ -106,6 +106,10 @@ describe("resolveExecDefaults", () => {
     expect(defaults.mode).toBe("full");
     expect(defaults.security).toBe("full");
     expect(defaults.ask).toBe("off");
+    expect(defaults.executionDisposition).toEqual({
+      kind: "host-unconditional",
+      host: "gateway",
+    });
   });
 
   it("keeps sandbox deny by default when auto resolves to sandbox", () => {
@@ -125,6 +129,31 @@ describe("resolveExecDefaults", () => {
     expect(defaults.mode).toBe("deny");
     expect(defaults.security).toBe("deny");
     expect(defaults.ask).toBe("off");
+    expect(defaults.executionDisposition).toEqual({ kind: "sandbox-local" });
+  });
+
+  it.each([
+    ["mode deny", { mode: "deny" as const }, { kind: "denied" }],
+    ["security deny", { security: "deny" as const }, { kind: "denied" }],
+    ["mode auto", { mode: "auto" as const }, { kind: "sandbox-local" }],
+    ["mode ask", { mode: "ask" as const }, { kind: "sandbox-local" }],
+    ["mode allowlist", { mode: "allowlist" as const }, { kind: "sandbox-local" }],
+  ])("classifies sandbox execution disposition for %s", (_label, exec, disposition) => {
+    expect(
+      resolveExecDefaults({
+        cfg: withDefaultAgent({ tools: { exec: { host: "auto", ...exec } } }),
+        sandboxAvailable: true,
+      }).executionDisposition,
+    ).toEqual(disposition);
+  });
+
+  it("classifies an explicit sandbox without a runtime as unavailable", () => {
+    expect(
+      resolveExecDefaults({
+        cfg: withDefaultAgent({ tools: { exec: { host: "sandbox", mode: "full" } } }),
+        sandboxAvailable: false,
+      }).executionDisposition,
+    ).toEqual({ kind: "unavailable" });
   });
 
   it("ignores host approval defaults when auto resolves to sandbox", () => {
