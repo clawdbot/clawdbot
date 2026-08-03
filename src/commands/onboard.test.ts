@@ -921,12 +921,15 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
-  it("keeps --tui on guided onboarding", async () => {
+  it.each([
+    ["--tui", { tui: true }],
+    ["--skip-ui", { skipUi: true }],
+  ])("keeps %s on guided onboarding", async (_label, opts) => {
     const runtime = makeRuntime();
 
-    await setupWizardCommand({ tui: true }, runtime);
+    await setupWizardCommand(opts, runtime);
 
-    expect(mocks.runGuidedOnboarding).toHaveBeenCalledWith({ tui: true }, runtime);
+    expect(mocks.runGuidedOnboarding).toHaveBeenCalledWith(opts, runtime);
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
   });
 
