@@ -57,6 +57,7 @@ const telemetryState = vi.hoisted(() => {
 
 const sdkStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const sdkShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const sdkCtor = vi.hoisted(() => vi.fn());
 const logEmit = vi.hoisted(() => vi.fn());
 const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
@@ -107,6 +108,10 @@ vi.mock("@opentelemetry/api", () => ({
 
 vi.mock("@opentelemetry/sdk-node", () => ({
   NodeSDK: class {
+    constructor(options?: unknown) {
+      sdkCtor(options);
+    }
+
     start = sdkStart;
     shutdown = sdkShutdown;
   },
@@ -220,7 +225,9 @@ const LATE_CHILD_ELAPSED_MS = 30 * 60_000 + 1_000;
 const PROTO_KEY = "__proto__";
 const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
 const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
+const OTEL_TEST_USERINFO = ["operator", "example-fixture"].join(":");
 const ORIGINAL_OPENCLAW_OTEL_PRELOADED = process.env.OPENCLAW_OTEL_PRELOADED;
+const ORIGINAL_OTEL_EXPORTER_OTLP_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
 const ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL = process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
 const ORIGINAL_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
 const ORIGINAL_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
@@ -584,6 +591,7 @@ describe("diagnostics-otel service", () => {
     telemetryState.tracer.setSpanContext.mockClear();
     telemetryState.meter.createCounter.mockClear();
     telemetryState.meter.createHistogram.mockClear();
+    sdkCtor.mockClear();
     sdkStart.mockClear();
     sdkShutdown.mockClear();
     logEmit.mockReset();
@@ -597,6 +605,7 @@ describe("diagnostics-otel service", () => {
     createNodeProxyAgentMock.mockReturnValue(undefined);
     unhandledRejectionHandlerState.reset();
     unhandledRejectionHandlerState.register.mockClear();
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
@@ -612,6 +621,11 @@ describe("diagnostics-otel service", () => {
       delete process.env.OPENCLAW_OTEL_PRELOADED;
     } else {
       process.env.OPENCLAW_OTEL_PRELOADED = ORIGINAL_OPENCLAW_OTEL_PRELOADED;
+    }
+    if (ORIGINAL_OTEL_EXPORTER_OTLP_ENDPOINT === undefined) {
+      delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    } else {
+      process.env.OTEL_EXPORTER_OTLP_ENDPOINT = ORIGINAL_OTEL_EXPORTER_OTLP_ENDPOINT;
     }
     if (ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL === undefined) {
       delete process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
@@ -1688,6 +1702,16 @@ describe("diagnostics-otel service", () => {
       "https://collector.example.com/otlp/v1/traces#tenant-a",
     ],
     [
+      "preserves valid collector credentials and query parameters",
+      `https://${OTEL_TEST_USERINFO}@collector.example.com/otlp?tenant=red`,
+      `https://${OTEL_TEST_USERINFO}@collector.example.com/otlp/v1/traces?tenant=red`,
+    ],
+    [
+      "preserves parseable non-HTTP collector URL schemes",
+      "custom+otel://collector.example.com/otlp",
+      "custom+otel://collector.example.com/otlp/v1/traces",
+    ],
+    [
       "keeps signal-qualified endpoint unchanged when signal path casing differs",
       "https://collector.example.com/v1/Traces",
       "https://collector.example.com/v1/Traces",
@@ -1761,6 +1785,105 @@ describe("diagnostics-otel service", () => {
     expect(traceOptions.url).toBe("https://trace-env.example.com/v1/traces");
     expect(metricOptions.url).toBe("https://metric-env.example.com/otlp/v1/metrics");
     expect(logOptions.url).toBe("https://log-env.example.com/otlp/v1/logs");
+  });
+
+  test("ignores malformed shared OTLP env when valid signal endpoints shadow it", async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://operator:qa-ignored-shared-password@[";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "https://trace-env.example.com/v1/traces";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = "https://metric-env.example.com/v1/metrics";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = "https://log-env.example.com/v1/logs";
+
+    await startOtelService({ traces: true, metrics: true, logs: true });
+
+    expect(firstExporterOptions(traceExporterCtor).url).toBe(
+      "https://trace-env.example.com/v1/traces",
+    );
+    expect(firstExporterOptions(metricExporterCtor).url).toBe(
+      "https://metric-env.example.com/v1/metrics",
+    );
+    expect(firstExporterOptions(logExporterCtor).url).toBe("https://log-env.example.com/v1/logs");
+  });
+
+  test("treats whitespace-only OTLP environment endpoints as unset", async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = " \u00a0 ";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = " \t ";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = "\u2000";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = "\ufeff";
+
+    await startOtelService({ traces: true, metrics: true, logs: true });
+
+    expect(firstExporterOptions(traceExporterCtor).url).toBe(`${OTEL_TEST_ENDPOINT}/v1/traces`);
+    expect(firstExporterOptions(metricExporterCtor).url).toBe(`${OTEL_TEST_ENDPOINT}/v1/metrics`);
+    expect(firstExporterOptions(logExporterCtor).url).toBe(`${OTEL_TEST_ENDPOINT}/v1/logs`);
+  });
+
+  test.each([
+    {
+      enabledSignal: "traces",
+      flags: { traces: true, metrics: false, logs: false },
+      metricReaderCount: 0,
+      tracesDisabled: false,
+    },
+    {
+      enabledSignal: "metrics",
+      flags: { traces: false, metrics: true, logs: false },
+      metricReaderCount: 1,
+      tracesDisabled: true,
+    },
+    {
+      enabledSignal: "traces and metrics",
+      flags: { traces: true, metrics: true, logs: false },
+      metricReaderCount: 1,
+      tracesDisabled: false,
+    },
+  ] as const)(
+    "keeps NodeSDK exporter ownership explicit for $enabledSignal",
+    async ({ flags, metricReaderCount, tracesDisabled }) => {
+      await startOtelService(flags);
+
+      const options = mockCallArg(sdkCtor, 0) as {
+        logRecordProcessors?: unknown[];
+        metricReaders?: unknown[];
+        spanProcessors?: unknown[];
+      };
+      expect(options.logRecordProcessors).toEqual([]);
+      expect(options.metricReaders).toHaveLength(metricReaderCount);
+      expect(options).not.toHaveProperty("metricReader");
+      if (tracesDisabled) {
+        expect(options.spanProcessors).toEqual([]);
+      }
+    },
+  );
+
+  test("ignores malformed collector endpoints for preloaded traces and metrics", async () => {
+    process.env.OPENCLAW_OTEL_PRELOADED = "1";
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://operator:qa-preloaded-shared-password@[";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT =
+      "https://operator:qa-preloaded-trace-password@[";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
+      "https://operator:qa-preloaded-metric-password@[";
+
+    await startOtelService({ traces: true, metrics: true, logs: false });
+
+    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(metricExporterCtor).not.toHaveBeenCalled();
+  });
+
+  test("ignores malformed collector endpoints for stdout-only diagnostics", async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://operator:qa-stdout-shared-password@[";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = "https://operator:qa-stdout-log-password@[";
+
+    await startOtelService({
+      endpoint: "https://operator:qa-stdout-config-password@[",
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "stdout",
+    });
+
+    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(logExporterCtor).not.toHaveBeenCalled();
   });
 
   test("passes env proxy agents to OTLP HTTP exporters", async () => {

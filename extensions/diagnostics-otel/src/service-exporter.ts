@@ -28,14 +28,10 @@ function resolveOtelUrl(endpoint: string | undefined, path: string): string | un
     return endpoint;
   }
   if (/[?#]/u.test(endpoint)) {
-    try {
-      const url = new URL(endpoint);
-      const basePath = url.pathname.replace(/\/+$/u, "");
-      url.pathname = `${basePath}/${path}`;
-      return url.toString();
-    } catch {
-      // Fall back to the historical concatenation path for non-URL test doubles.
-    }
+    const url = new URL(endpoint);
+    const basePath = url.pathname.replace(/\/+$/u, "");
+    url.pathname = `${basePath}/${path}`;
+    return url.toString();
   }
   return `${endpoint}/${path}`;
 }
@@ -43,13 +39,36 @@ function resolveOtelUrl(endpoint: string | undefined, path: string): string | un
 export function resolveSignalOtelUrl(params: {
   signalEndpoint?: string;
   signalEnvEndpoint?: string;
+  sharedEnvEndpoint?: string;
   endpoint?: string;
   path: string;
 }): string | undefined {
-  return resolveOtelUrl(
-    normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint) ?? params.endpoint,
-    params.path,
-  );
+  const endpoint =
+    normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint) ?? params.endpoint;
+  // OTLP parses nonblank env values verbatim even when explicit config takes precedence.
+  const signalEnvEndpoint = params.signalEnvEndpoint?.trim() ? params.signalEnvEndpoint : undefined;
+  const sharedEnvEndpoint = params.sharedEnvEndpoint?.trim() ? params.sharedEnvEndpoint : undefined;
+  const consumedSharedEnvEndpoint = signalEnvEndpoint ? undefined : sharedEnvEndpoint;
+  const appendedSharedEnvEndpoint = consumedSharedEnvEndpoint
+    ? `${consumedSharedEnvEndpoint}${consumedSharedEnvEndpoint.endsWith("/") ? "" : "/"}${params.path}`
+    : undefined;
+  const resolvedEndpoint =
+    endpoint && URL.canParse(endpoint) ? resolveOtelUrl(endpoint, params.path) : endpoint;
+
+  for (const candidate of [
+    endpoint,
+    signalEnvEndpoint ?? sharedEnvEndpoint,
+    appendedSharedEnvEndpoint,
+    resolvedEndpoint,
+  ]) {
+    if (candidate && !URL.canParse(candidate)) {
+      throw new Error(
+        "Configured OpenTelemetry collector endpoint is invalid; check the collector URL",
+      );
+    }
+  }
+
+  return resolvedEndpoint;
 }
 
 function readOtelEnvFile(params: {
