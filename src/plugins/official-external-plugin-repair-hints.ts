@@ -1,6 +1,7 @@
 /** Builds doctor/install repair hints for missing official external plugin owners. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredChannelPresencePolicy } from "./channel-plugin-ids.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogManifest,
@@ -60,6 +61,9 @@ export function resolveMissingOfficialExternalChannelPluginRepairHint(params: {
   channelId: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  /** Prepared manifest facts. Callers resolving many channels must pass these, or
+   * presence policy rebuilds the whole manifest registry once per channel. */
+  manifestRecords?: readonly PluginManifestRecord[];
 }): OfficialExternalPluginRepairHint | null {
   const hint = resolveOfficialExternalPluginRepairHint(params.channelId);
   if (!hint?.channelId || hint.channelId !== params.channelId) {
@@ -71,6 +75,7 @@ export function resolveMissingOfficialExternalChannelPluginRepairHint(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     includePersistedAuthState: false,
+    manifestRecords: params.manifestRecords,
   }).find((entry) => entry.channelId === hint.channelId);
   if (!policy || policy.effective) {
     return null;

@@ -281,6 +281,7 @@ export async function channelsListCommand(
         config: cfg,
         channelId: entry.id,
         ...(workspaceDir ? { workspaceDir } : {}),
+        manifestRecords: metadataSnapshot.plugins,
       });
       return {
         entry,

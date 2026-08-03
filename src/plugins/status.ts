@@ -268,6 +268,7 @@ function buildPluginReport(
           config: rawConfig,
           workspaceDir,
           env: params?.env ?? process.env,
+          metadataSnapshot,
         })
       : params?.onlyPluginIds === undefined
         ? undefined
