@@ -1308,13 +1308,17 @@ export function startDiagnosticHeartbeat(
         activity,
         staleMs: stuckSessionWarnMs,
       });
+      // `state.lastActivity` is refreshed by every inbound message, so it dates the
+      // arrival of new work rather than progress on existing work: a wedged lane
+      // receiving messages faster than the threshold can never age into observation.
+      // Reconcile on run-progress age, and keep the session clock as a lower bound so
+      // an orphaned session with no activity row is still observed exactly as before.
+      const progressAgeMs = activity.lastProgressAgeMs ?? ageMs;
+      const attentionAgeMs = Math.max(ageMs, progressAgeMs);
       if (
-        (state.state === "processing" && ageMs > stuckSessionWarnMs) ||
+        (state.state === "processing" && attentionAgeMs > stuckSessionWarnMs) ||
         idleQueuedRecoverableStall
       ) {
-        const attentionAgeMs = idleQueuedRecoverableStall
-          ? (activity.lastProgressAgeMs ?? ageMs)
-          : ageMs;
         const classification = logSessionAttention({
           sessionId: state.sessionId,
           sessionKey: state.sessionKey,

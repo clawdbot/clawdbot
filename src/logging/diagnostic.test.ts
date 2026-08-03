@@ -901,6 +901,130 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("still observes a wedged processing lane whose inbound traffic keeps refreshing session activity", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+
+      // Inbound every 25s against a 30s heartbeat and a 30s warn threshold, so
+      // `state.lastActivity` is only ever 5s old at tick time while run progress
+      // has been frozen since the run started.
+      for (let i = 0; i < 6; i += 1) {
+        vi.advanceTimersByTime(25_000);
+        logMessageQueued({ sessionId: "s1", sessionKey: "main", source: `inbound-${i}` });
+        vi.advanceTimersByTime(5_000);
+      }
+    } finally {
+      unsubscribe();
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stalled"),
+        "stalled event",
+      ),
+      {
+        classification: "stalled_agent_run",
+        reason: "active_work_without_progress",
+        activeWorkKind: "embedded_run",
+      },
+    );
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", allowActiveAbort: true },
+      ["ageMs", "stateGeneration", "queueDepth"],
+    );
+    const request = requireFirstMockCallArg(recoverStuckSession, "recoverStuckSession");
+    // The reported age is the progress clock (>= the 60s abort threshold), not
+    // the 5s session-touch clock the inbound traffic keeps resetting.
+    expect(request.ageMs).toBeGreaterThanOrEqual(60_000);
+    expect(request.queueDepth).toBeGreaterThan(0);
+  });
+
+  it("stays silent on a busy processing lane whose run progress is genuinely fresh", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+
+      for (let i = 0; i < 6; i += 1) {
+        vi.advanceTimersByTime(25_000);
+        logMessageQueued({ sessionId: "s1", sessionKey: "main", source: `inbound-${i}` });
+        markDiagnosticRunProgressForTest({
+          sessionId: "s1",
+          sessionKey: "main",
+          reason: "embedded_run:progress",
+        });
+        vi.advanceTimersByTime(5_000);
+      }
+    } finally {
+      unsubscribe();
+    }
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "session.stuck" ||
+          event.type === "session.stalled" ||
+          event.type === "session.long_running",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("does not make a blocked tool call newly abortable once the progress clock opens the gate", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+
+      // 180s of stale progress is far below BLOCKED_TOOL_CALL_ABORT_FLOOR_MS.
+      for (let i = 0; i < 6; i += 1) {
+        vi.advanceTimersByTime(25_000);
+        logMessageQueued({ sessionId: "s1", sessionKey: "main", source: `inbound-${i}` });
+        vi.advanceTimersByTime(5_000);
+      }
+    } finally {
+      unsubscribe();
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stalled"),
+        "stalled event",
+      ),
+      {
+        classification: "blocked_tool_call",
+        reason: "blocked_tool_call",
+        activeWorkKind: "tool_call",
+      },
+    );
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
   it("recovers stale native tool calls through the active-run abort path", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
