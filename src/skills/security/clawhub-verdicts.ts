@@ -12,6 +12,7 @@ import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type { buildWorkspaceSkillStatus } from "../discovery/status.js";
 
 const OWNER_QUALIFIED_VERDICT_CONCURRENCY = 4;
+const OWNER_QUALIFIED_VERDICT_BUDGET_MS = 5_000;
 
 type ClawHubVerdictTarget = {
   registry: string;
@@ -129,18 +130,30 @@ function canAutoFetchVerdictRegistry(registry: string): boolean {
   return configured !== null && target === configured;
 }
 
+function needsOwnerQualifiedVerdict(
+  item: ClawHubSkillSecurityVerdictItem,
+  target: { slug: string; ownerHandle?: string; version: string } | undefined,
+): target is { slug: string; ownerHandle: string; version: string } {
+  return Boolean(
+    target?.ownerHandle &&
+    target.slug === item.requestedSlug &&
+    target.version === item.requestedVersion &&
+    isOwnerQualifiedSkillNotFoundVerdict(item),
+  );
+}
+
 async function resolveOwnerQualifiedVerdict(params: {
   item: ClawHubSkillSecurityVerdictItem;
   target: { slug: string; ownerHandle?: string; version: string } | undefined;
   registry: string;
+  deadlineAtMs: number;
 }): Promise<ClawHubSkillSecurityVerdictItem> {
-  const { item, target, registry } = params;
-  if (
-    !target?.ownerHandle ||
-    target.slug !== item.requestedSlug ||
-    target.version !== item.requestedVersion ||
-    !isOwnerQualifiedSkillNotFoundVerdict(item)
-  ) {
+  const { item, target, registry, deadlineAtMs } = params;
+  if (!needsOwnerQualifiedVerdict(item, target)) {
+    return item;
+  }
+  const timeoutMs = deadlineAtMs - Date.now();
+  if (timeoutMs <= 0) {
     return item;
   }
   try {
@@ -150,10 +163,55 @@ async function resolveOwnerQualifiedVerdict(params: {
       version: target.version,
       baseUrl: registry,
       skipAuth: true,
+      timeoutMs,
     });
   } catch {
     // Keep the explicit bulk verdict if the compatibility fallback is unavailable.
     return item;
+  }
+}
+
+async function resolveOwnerQualifiedVerdicts(params: {
+  items: ClawHubSkillSecurityVerdictItem[];
+  targets: Array<{ slug: string; ownerHandle?: string; version: string }>;
+  registry: string;
+  deadlineAtMs: number;
+}): Promise<ClawHubSkillSecurityVerdictItem[]> {
+  const remainingMs = params.deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    return params.items;
+  }
+
+  const timedOut = Symbol("owner-qualified-verdict-timeout");
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
+    timer = setTimeout(() => resolve(timedOut), remainingMs);
+    timer.unref?.();
+  });
+  const resolvedItems = [...params.items];
+  const resolvedPromise = runTasksWithConcurrency({
+    limit: OWNER_QUALIFIED_VERDICT_CONCURRENCY,
+    tasks: params.items.map((item, index) => async () => {
+      resolvedItems[index] = await resolveOwnerQualifiedVerdict({
+        item,
+        target: params.targets[index],
+        registry: params.registry,
+        deadlineAtMs: params.deadlineAtMs,
+      });
+    }),
+  });
+  try {
+    const resolved = await Promise.race([resolvedPromise, timeoutPromise]);
+    if (resolved === timedOut) {
+      // Passive badge lookup must not wait across multiple fallback waves.
+      // Preserve every bulk verdict whose owner-qualified lookup is late.
+      return resolvedItems.slice();
+    }
+    return resolvedItems;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -198,25 +256,27 @@ export async function fetchOpenClawSkillSecurityVerdicts(
   }
 
   const items: OpenClawSkillSecurityVerdictItem[] = [];
+  let ownerFallbackDeadlineAtMs: number | undefined;
   for (const [registry, registryTargets] of byRegistry) {
     const response = await fetchClawHubSkillSecurityVerdicts({
       baseUrl: registry,
       items: registryTargets,
       skipAuth: true,
     });
-    const { results: resolvedItems } = await runTasksWithConcurrency({
-      limit: OWNER_QUALIFIED_VERDICT_CONCURRENCY,
-      tasks: response.items.map(
-        (item, index) => () =>
-          // The batch response mirrors request order but omits the requested owner,
-          // so also re-check slug and version before applying the owner fallback.
-          resolveOwnerQualifiedVerdict({
-            item,
-            target: registryTargets[index],
-            registry,
-          }),
-      ),
-    });
+    const needsOwnerFallback = response.items.some((item, index) =>
+      needsOwnerQualifiedVerdict(item, registryTargets[index]),
+    );
+    if (needsOwnerFallback && ownerFallbackDeadlineAtMs === undefined) {
+      ownerFallbackDeadlineAtMs = Date.now() + OWNER_QUALIFIED_VERDICT_BUDGET_MS;
+    }
+    const resolvedItems = needsOwnerFallback
+      ? await resolveOwnerQualifiedVerdicts({
+          items: response.items,
+          targets: registryTargets,
+          registry,
+          deadlineAtMs: ownerFallbackDeadlineAtMs!,
+        })
+      : response.items;
     for (const resolvedItem of resolvedItems) {
       items.push(projectClawHubVerdictItem(resolvedItem, registry));
     }

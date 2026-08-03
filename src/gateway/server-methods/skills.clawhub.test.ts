@@ -275,7 +275,7 @@ describe("skills gateway handlers (clawhub)", () => {
       baseUrl: "https://clawhub.ai",
       token: undefined,
       skipAuth: true,
-      timeoutMs: undefined,
+      timeoutMs: expect.any(Number),
     });
     expect(response).toEqual({
       schema: "openclaw.skills.security-verdicts.v1",
@@ -434,6 +434,80 @@ describe("skills gateway handlers (clawhub)", () => {
         ),
       ),
     });
+  });
+
+  it("returns bulk misses when the owner-qualified fallback budget expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const skillCount = 5;
+      buildWorkspaceSkillStatusMock.mockReturnValue({
+        workspaceDir: "/tmp/workspace",
+        managedSkillsDir: "/tmp/openclaw/skills",
+        skills: Array.from({ length: skillCount }, (_, index) => ({
+          name: `skill-${index}`,
+          skillKey: `skill-${index}`,
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: `skill-${index}`,
+            ownerHandle: `owner-${index}`,
+            installedVersion: "1.0.0",
+            installedAt: 123,
+          },
+        })),
+      });
+      fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
+        schema: "clawhub.skill.security-verdicts.v1",
+        items: Array.from({ length: skillCount }, (_, index) => ({
+          ok: false,
+          decision: "fail",
+          reasons: ["skill.not_found"],
+          requestedSlug: `skill-${index}`,
+          requestedVersion: "1.0.0",
+          error: { code: "skill_not_found", message: "Skill not found" },
+        })),
+      });
+      fetchClawHubSkillVerificationMock.mockImplementation(
+        () =>
+          new Promise(() => {
+            // Intentionally never settles; the request-wide budget must win.
+          }),
+      );
+
+      let settled = false;
+      const responsePromise = callSkillsHandler("skills.securityVerdicts", {}).then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledTimes(4);
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+
+      const { ok, response, error } = await responsePromise;
+      expect(error).toBeUndefined();
+      expect(ok).toBe(true);
+      expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledTimes(4);
+      expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 5_000 }),
+      );
+      expect(response).toEqual({
+        schema: "openclaw.skills.security-verdicts.v1",
+        items: Array.from({ length: skillCount }, (_, index) =>
+          expect.objectContaining({
+            ok: false,
+            requestedSlug: `skill-${index}`,
+            error: { code: "skill_not_found", message: "Skill not found" },
+          }),
+        ),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not passively fetch verdicts from a non-default registry", async () => {
