@@ -582,6 +582,9 @@ export async function runCodexAppServerSideQuestion(
               pendingNativePreToolUseFailures.push(failure);
             }
           },
+          onCriticalToolLoop: (intervention) => {
+            runAbortController.abort(new Error(intervention.reason));
+          },
         })
       : undefined;
     const nativeHookRelayConfig = nativeHookRelay
@@ -813,6 +816,9 @@ function registerCodexSideNativeHookRelay(params: {
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void;
+  onCriticalToolLoop: NonNullable<
+    Parameters<typeof registerNativeHookRelay>[0]["onCriticalToolLoop"]
+  >;
 }): NativeHookRelayRegistrationHandle | undefined {
   if (params.options.enabled === false) {
     return undefined;
@@ -834,6 +840,7 @@ function registerCodexSideNativeHookRelay(params: {
     }),
     signal: params.signal,
     onPreToolUseFailure: params.onPreToolUseFailure,
+    onCriticalToolLoop: params.onCriticalToolLoop,
     command: {
       timeoutMs: params.options.gatewayTimeoutMs,
     },

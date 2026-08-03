@@ -1032,4 +1032,31 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
+
+  it("terminates the Codex run when its native relay reports a critical loop", async () => {
+    const sessionFile = path.join(tempDir, "native-tool-loop-session.jsonl");
+    const workspaceDir = path.join(tempDir, "native-tool-loop-workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+    });
+    await harness.waitForMethod("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+    if (!registration?.onCriticalToolLoop) {
+      throw new Error("Expected native critical-loop termination callback");
+    }
+
+    registration.onCriticalToolLoop({
+      toolName: "exec",
+      toolCallId: "critical-loop-call",
+      reason: "critical no-progress tool loop",
+    });
+
+    const result = await run;
+    expect(readAttemptTerminal(result).aborted).toBe(true);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
 });

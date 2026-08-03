@@ -40,6 +40,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     sessionAgentId,
     sandboxSessionKey,
     runAbortController,
+    abortExplicitly,
     sandbox,
     options,
     nativeHookRelayEvents,
@@ -228,6 +229,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         } else {
           pendingNativePreToolUseFailures.push(failure);
         }
+      },
+      onCriticalToolLoop: (intervention) => {
+        abortExplicitly(new Error(intervention.reason));
       },
     });
     return {

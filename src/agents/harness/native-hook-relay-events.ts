@@ -101,7 +101,7 @@ export function nativeHookRelayEventToolMatcher(
 }
 
 export async function processNativeHookRelayInvocation(params: {
-  registration: NativeHookRelayRegistration;
+  registration: ActiveNativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -118,7 +118,7 @@ export async function processNativeHookRelayInvocation(params: {
 }
 
 async function runNativeHookRelayPreToolUse(params: {
-  registration: NativeHookRelayRegistration;
+  registration: ActiveNativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -161,6 +161,26 @@ async function runNativeHookRelayPreToolUse(params: {
       outcome.deniedReason === "tool-loop"
         ? `${outcome.reason}\n\nDo not repeat this exact tool action. Reassess the task and choose a different action or answer without another tool call.`
         : outcome.reason;
+    if (
+      outcome.deniedReason === "tool-loop" &&
+      !params.registration.criticalToolLoopTerminationRequested
+    ) {
+      params.registration.criticalToolLoopTerminationRequested = true;
+      // PreToolUse can deny an action but cannot terminate Codex's provider
+      // loop. Return the denial first, then ask the native run owner to abort.
+      const termination = setImmediate(() => {
+        try {
+          params.registration.onCriticalToolLoop?.({
+            toolName,
+            ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
+            reason: outcome.reason,
+          });
+        } catch {
+          // The tool denial remains authoritative even if run cleanup fails.
+        }
+      });
+      termination.unref?.();
+    }
     return params.adapter.renderPreToolUseBlockResponse(
       reason,
       outcome.kind === "failure" && outcome.disposition !== "blocked"

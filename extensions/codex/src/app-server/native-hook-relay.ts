@@ -151,6 +151,9 @@ export function createCodexNativeHookRelay(params: {
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
+  onCriticalToolLoop: NonNullable<
+    Parameters<typeof registerNativeHookRelay>[0]["onCriticalToolLoop"]
+  >;
 }): NativeHookRelayRegistrationHandle | undefined {
   if (params.options?.enabled === false) {
     return undefined;
@@ -184,6 +187,7 @@ export function createCodexNativeHookRelay(params: {
     }),
     signal: params.signal,
     onPreToolUseFailure: params.onPreToolUseFailure,
+    onCriticalToolLoop: params.onCriticalToolLoop,
     command: {
       // Hook relay subprocesses are observational for most tool events; keep
       // them lower priority so they do not compete with the active reply turn.
