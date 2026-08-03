@@ -21,7 +21,7 @@ import { expect, vi } from "vitest";
 import { CODE_HEAVY_SPOKEN_FALLBACK as CODE_HEAVY_SPOKEN_FALLBACK_CORE } from "./speech-text.js";
 import type { TtsAudioPersistence } from "./tts-synthesis.js";
 
-export type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
+type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
 
 const synthesizeMock = vi.hoisted(() =>
   vi.fn(
@@ -286,13 +286,7 @@ export async function expectTtsPayloadResult(params: {
   }
 }
 
-export {
-  getSpeechProviderMock,
-  listSpeechProvidersMock,
-  prepareSynthesisMock,
-  synthesizeMock,
-  transcodeAudioBufferMock,
-};
+export { prepareSynthesisMock, synthesizeMock, transcodeAudioBufferMock };
 export type {
   OpenClawConfig,
   ReplyPayload,
