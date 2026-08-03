@@ -668,7 +668,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 }> {
   resetRunOverflowCompactionHarnessMocks();
-  vi.resetModules();
+
+  // This harness has one aggregate consumer, which references run.js only as a
+  // type before this loader. Resetting the worker graph here recompiles every
+  // runner dependency without changing which module instance the mocks own.
 
   vi.doMock("../../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
