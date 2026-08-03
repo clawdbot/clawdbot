@@ -4549,7 +4549,6 @@ describe("persistSessionUsageUpdate", () => {
       update: {
         isHeartbeat: true,
         usage: { input: 1_200, output: 100 },
-        usageIsContextSnapshot: true,
         providerUsed: "claude-cli",
         modelUsed: "claude-sonnet-4-6",
         cliSessionBinding: {
@@ -4589,7 +4588,6 @@ describe("persistSessionUsageUpdate", () => {
       update: {
         isHeartbeat: true,
         usage: { input: 1_200, output: 100 },
-        usageIsContextSnapshot: true,
         providerUsed: "claude-cli",
         modelUsed: "claude-sonnet-4-6",
         clearCliSessionBinding: true,
@@ -4604,11 +4602,10 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "treats CLI usage as a fresh context snapshot when requested",
+      name: "does not treat CLI cumulative usage as a context snapshot without last-call usage",
       seed: {},
       update: {
         usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-        usageIsContextSnapshot: true,
         providerUsed: "claude-cli",
         cliSessionBinding: {
           sessionId: "cli-session-1",
@@ -4618,8 +4615,8 @@ describe("persistSessionUsageUpdate", () => {
         },
       },
       expected: {
-        totalTokens: 32_000,
-        totalTokensFresh: true,
+        totalTokens: undefined,
+        totalTokensFresh: false,
         cliSessionIds: { "claude-cli": "cli-session-1" },
         cliSessionBindings: {
           "claude-cli": {
@@ -4643,7 +4640,6 @@ describe("persistSessionUsageUpdate", () => {
       },
       update: {
         usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-        usageIsContextSnapshot: true,
         providerUsed: "claude-cli",
         clearCliSessionBinding: true,
       },
@@ -4666,7 +4662,6 @@ describe("persistSessionUsageUpdate", () => {
       update: {
         usage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
         lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
-        usageIsContextSnapshot: true,
         providerUsed: "claude-cli",
         contextTokensUsed: 1_048_576,
         compactionTokensAfter: 0,
@@ -4829,6 +4824,20 @@ describe("persistSessionUsageUpdate", () => {
       seed: {},
       update: { usage: { input: 50_000, output: 5_000, total: 55_000 } },
       expected: { totalTokens: undefined, totalTokensFresh: false },
+    },
+    {
+      name: "rejects cumulative usage as a context snapshot when last-call usage is missing",
+      seed: { totalTokens: 42_000, totalTokensFresh: true },
+      update: {
+        usage: { input: 180_000, output: 10_000, cacheRead: 20_000, cacheWrite: 5_000 },
+        providerUsed: "claude-cli",
+      },
+      expected: {
+        totalTokens: 42_000,
+        totalTokensFresh: false,
+        inputTokens: 180_000,
+        outputTokens: 10_000,
+      },
     },
     {
       name: "preserves fresh post-compaction totalTokens across stale usage updates",

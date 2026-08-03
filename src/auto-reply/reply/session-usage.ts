@@ -107,7 +107,6 @@ export async function persistSessionUsageUpdate(params: {
   providerUsed?: string;
   contextTokensUsed?: number;
   promptTokens?: number;
-  usageIsContextSnapshot?: boolean;
   isHeartbeat?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
@@ -133,10 +132,7 @@ export async function persistSessionUsageUpdate(params: {
     params.promptTokens > 0;
   const hasUsableLastCallUsage =
     Boolean(params.lastCallUsage) && params.lastCallUsage?.contextUsage?.state !== "unavailable";
-  const hasUsableUsageContextSnapshot =
-    params.usageIsContextSnapshot === true && params.usage?.contextUsage?.state !== "unavailable";
-  const hasFreshContextSnapshot =
-    hasUsableLastCallUsage || hasPromptTokens || hasUsableUsageContextSnapshot;
+  const hasFreshContextSnapshot = hasUsableLastCallUsage || hasPromptTokens;
   const compactionTokensAfter = resolveNonNegativeTokenCount(params.compactionTokensAfter);
   const hasCompactionSnapshot = compactionTokensAfter !== undefined;
 
@@ -161,9 +157,7 @@ export async function persistSessionUsageUpdate(params: {
           // `usage.input` sums input tokens from every API call in the run
           // (tool-use loops, compaction retries), overstating actual context.
           // `lastCallUsage` reflects only the final API call — the true context.
-          const usageForContext =
-            params.lastCallUsage ??
-            (params.usageIsContextSnapshot === true ? params.usage : undefined);
+          const usageForContext = params.lastCallUsage;
           const usageTotalTokens =
             hasFreshContextSnapshot && !preserveUserFacingRunState
               ? deriveSessionTotalTokens({

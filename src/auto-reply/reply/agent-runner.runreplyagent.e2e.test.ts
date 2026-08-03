@@ -4839,8 +4839,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(stored.fallbackNotice).toBeUndefined();
     expect(stored.modelProvider).toBe("claude-cli");
     expect(stored.model).toBe("claude-opus-4-7");
-    expect(stored.totalTokens).toBe(36_000);
-    expect(stored.totalTokensFresh).toBe(true);
+    // The mocked run reports only cumulative usage without a per-call
+    // `lastCallUsage`; cumulative tokens must never be stored as the context
+    // snapshot (they would inflate totalTokens across multi-call turns).
+    expect(stored.totalTokens).toBeUndefined();
+    expect(stored.totalTokensFresh).toBe(false);
   });
 
   it("surfaces overflow fallback when embedded run returns empty payloads", async () => {
