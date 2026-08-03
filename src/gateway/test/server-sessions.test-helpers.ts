@@ -16,6 +16,7 @@ import {
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import {
   connectOk,
@@ -35,56 +36,9 @@ export const getGatewayConfigModule = createLazyRuntimeModule(
 );
 
 export async function getSessionsHandlers() {
-  const [
-    { sessionAbortHandlers },
-    { sessionCompactHandlers },
-    { sessionCheckpointHandlers },
-    { sessionCheckpointQueryHandlers },
-    { sessionCreateHandlers },
-    { sessionDeleteHandlers },
-    { sessionDispatchHandlers },
-    { sessionGroupHandlers },
-    { sessionMessagingHandlers },
-    { sessionMutationHandlers },
-    { sessionReadHandlers },
-    { sessionRewindHandlers },
-    { sessionSharingHandlers },
-    { sessionSubscriptionHandlers },
-    { sessionSuggestionHandlers },
-  ] = await Promise.all([
-    import("../server-methods/sessions-abort.js"),
-    import("../server-methods/sessions-compact.js"),
-    import("../server-methods/sessions-compaction-checkpoints.js"),
-    import("../server-methods/sessions-compaction-queries.js"),
-    import("../server-methods/sessions-create.js"),
-    import("../server-methods/sessions-delete.js"),
-    import("../server-methods/sessions-dispatch.js"),
-    import("../server-methods/sessions-groups.js"),
-    import("../server-methods/sessions-messaging.js"),
-    import("../server-methods/sessions-mutations.js"),
-    import("../server-methods/sessions-read.js"),
-    import("../server-methods/sessions-rewind.js"),
-    import("../server-methods/sessions-sharing.js"),
-    import("../server-methods/sessions-subscriptions.js"),
-    import("../server-methods/sessions-suggestions.js"),
-  ]);
-  return {
-    ...sessionReadHandlers,
-    ...sessionSharingHandlers,
-    ...sessionSuggestionHandlers,
-    ...sessionSubscriptionHandlers,
-    ...sessionCreateHandlers,
-    ...sessionCheckpointQueryHandlers,
-    ...sessionCheckpointHandlers,
-    ...sessionRewindHandlers,
-    ...sessionDispatchHandlers,
-    ...sessionMessagingHandlers,
-    ...sessionAbortHandlers,
-    ...sessionMutationHandlers,
-    ...sessionDeleteHandlers,
-    ...sessionGroupHandlers,
-    ...sessionCompactHandlers,
-  };
+  return (
+    await import("./server-sessions-handlers.test-support.js")
+  ).getSessionHandlerTestSurface();
 }
 
 type TestTranscriptMessage = Record<string, unknown> & {
@@ -721,6 +675,9 @@ export async function directSessionReq<TPayload = unknown>(
 ): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
+  const loadGatewayModelCatalog =
+    (opts?.context?.loadGatewayModelCatalog as GatewayRequestContext["loadGatewayModelCatalog"]) ??
+    (async () => agentDiscoveryMock.models);
   let result:
     | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
     | undefined;
@@ -748,7 +705,8 @@ export async function directSessionReq<TPayload = unknown>(
       chatQueuedTurns: new Map(),
       dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
-      loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
+      loadGatewayModelCatalog,
+      readPreparedGatewayModelCatalog: loadGatewayModelCatalog,
       getRuntimeConfig,
       ...opts?.context,
     } as never,

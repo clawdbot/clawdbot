@@ -21,13 +21,9 @@ export async function readPreparedServerMethodModelCatalog(
   context: GatewayRequestContext,
   options?: { agentId?: string },
 ): Promise<ModelCatalogEntry[] | undefined> {
-  const { getPreparedModelCatalogSnapshot } =
-    await import("../../agents/prepared-model-catalog.js");
-  return getPreparedModelCatalogSnapshot({
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-    config: context.getRuntimeConfig(),
-    readOnly: true,
-  })?.entries;
+  return context.readPreparedGatewayModelCatalog
+    ? await context.readPreparedGatewayModelCatalog(options)
+    : undefined;
 }
 
 type LoadOptionalServerMethodModelCatalogOptions<T> = {
