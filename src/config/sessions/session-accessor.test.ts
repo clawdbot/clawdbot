@@ -3644,5 +3644,49 @@ describe("session accessor seam", () => {
       storePath,
     });
   });
+
+  it("preserves a matching preloaded entry identity without rereading the session row", () => {
+    const sessionKey = "agent:main:preloaded-read";
+    const target = resolveSessionTranscriptReadTarget({
+      agentId: "main",
+      sessionEntry: { sessionId: "preloaded-session" },
+      sessionId: "preloaded-session",
+      sessionKey,
+      storePath,
+    });
+
+    expect(target).toEqual({
+      agentId: "main",
+      sessionId: "preloaded-session",
+      sessionKey,
+      storePath,
+    });
+  });
+
+  it("does not trust a preloaded entry for a different session id", async () => {
+    const sessionKey = "agent:main:mismatched-preloaded-read";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "stored-session",
+        updatedAt: 10,
+      },
+    );
+
+    const target = resolveSessionTranscriptReadTarget({
+      agentId: "main",
+      sessionEntry: { sessionId: "different-session" },
+      sessionId: "stored-session",
+      sessionKey,
+      storePath,
+    });
+
+    expect(target).toEqual({
+      agentId: "main",
+      sessionId: "stored-session",
+      sessionKey,
+      storePath,
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
