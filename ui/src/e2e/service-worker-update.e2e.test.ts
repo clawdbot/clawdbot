@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
@@ -14,6 +14,7 @@ import {
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const artifactDir = path.resolve(".artifacts/control-ui-e2e/service-worker-update");
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 const buildA = "service-worker-build-a";
 const buildB = "service-worker-build-b";
@@ -167,11 +168,16 @@ describe("Control UI service-worker production update E2E", () => {
   });
 
   it("activates the next production worker and serves its refreshed build asset", async () => {
+    if (captureUiProof) {
+      await mkdir(artifactDir, { recursive: true });
+    }
     const context = await browser.newContext({
       locale: "en-US",
-      recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
       serviceWorkers: "allow",
       viewport: { height: 720, width: 1280 },
+      ...(captureUiProof
+        ? { recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } } }
+        : {}),
     });
     const page = await context.newPage();
     const pageErrors: string[] = [];
@@ -213,10 +219,12 @@ describe("Control UI service-worker production update E2E", () => {
       });
       expect(refreshedAsset.sha256).not.toBe(initialAsset.sha256);
 
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(artifactDir, "updated-worker-controlled-page.png"),
-      });
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "updated-worker-controlled-page.png"),
+        });
+      }
     } finally {
       await context.close();
     }
