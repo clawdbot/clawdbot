@@ -31,6 +31,7 @@ async function createHarness(
   stateDir: string,
   pluginConfig: Record<string, unknown> = {},
   agentId?: string,
+  origin?: { channel: string; accountId: string },
 ) {
   const config = { transcripts: { enabled: true, ...pluginConfig } };
   const logger = { warn: vi.fn() };
@@ -42,6 +43,7 @@ async function createHarness(
       stateDir,
       logger,
       ...(agentId ? { agentId } : {}),
+      ...(origin ? { agentChannel: origin.channel, agentAccountId: origin.accountId } : {}),
     }),
   };
 }
@@ -108,6 +110,84 @@ describe("transcripts tool", () => {
     await expect(storeFor(stateDir).readSession("owned-meeting")).resolves.toMatchObject({
       source: { meetingUrl: "https://zoom.us/j/1234567890" },
     });
+  });
+
+  it("binds same-channel live capture to the trusted turn account", async () => {
+    const stateDir = await makeStateDir();
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      aliases: ["discord"],
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+    });
+    const { tool } = await createHarness(stateDir, {}, "main", {
+      channel: "discord",
+      accountId: "account-a",
+    });
+
+    await tool.execute(
+      "call-account-bound",
+      {
+        action: "start",
+        providerId: "discord-voice",
+        accountId: "account-b",
+        guildId: "guild-b",
+        channelId: "channel-b",
+        sessionId: "account-bound",
+      },
+      undefined,
+      vi.fn(),
+    );
+
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          source: expect.objectContaining({ accountId: "account-a" }),
+        }),
+      }),
+    );
+    await expect(storeFor(stateDir).readSession("account-bound")).resolves.toMatchObject({
+      source: { accountId: "account-a" },
+    });
+  });
+
+  it("preserves an explicit account for a different provider channel", async () => {
+    const stateDir = await makeStateDir();
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "google-meet",
+      aliases: ["googlemeet"],
+      name: "Google Meet",
+      sourceKinds: ["live-caption"],
+      start,
+    });
+    const { tool } = await createHarness(stateDir, {}, "main", {
+      channel: "discord",
+      accountId: "discord-account",
+    });
+
+    await tool.execute(
+      "call-cross-provider",
+      {
+        action: "start",
+        providerId: "google-meet",
+        accountId: "meet-account",
+        meetingUrl: "https://meet.google.com/abc-defg-hij",
+        sessionId: "cross-provider",
+      },
+      undefined,
+      vi.fn(),
+    );
+
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          source: expect.objectContaining({ accountId: "meet-account" }),
+        }),
+      }),
+    );
   });
 
   it("keeps ownerless shipped sessions visible only to the main agent", async () => {

@@ -547,7 +547,14 @@ export function createOpenClawTools(
       agentAccountId: options?.agentAccountId,
     }),
     ...(includeTranscriptsTool
-      ? [createTranscriptsTool({ agentId: sessionAgentId, config: resolvedConfig })]
+      ? [
+          createTranscriptsTool({
+            agentId: sessionAgentId,
+            agentChannel: options?.agentChannel,
+            agentAccountId: options?.agentAccountId,
+            config: resolvedConfig,
+          }),
+        ]
       : []),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded

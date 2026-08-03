@@ -17,6 +17,8 @@ export type TranscriptsLogger = {
 
 export type TranscriptsRuntimeContext = {
   agentId?: string;
+  agentChannel?: string;
+  agentAccountId?: string;
   config?: OpenClawConfig;
   stateDir: string;
   logger: TranscriptsLogger;
@@ -110,6 +112,27 @@ export function resolveSourceProvider(providerId: string, ctx: TranscriptsRuntim
     : getTranscriptSourceProvider(providerId, ctx.config);
 }
 
+function bindSourceToTurnAccount(params: {
+  ctx: TranscriptsRuntimeContext;
+  provider: TranscriptSourceProvider;
+  source: TranscriptSourceLocator;
+}): TranscriptSourceLocator {
+  const channel = params.ctx.agentChannel?.trim().toLowerCase();
+  const accountId = params.ctx.agentAccountId?.trim();
+  if (!channel || !accountId) {
+    return params.source;
+  }
+  const providerChannels = [params.provider.id, ...(params.provider.aliases ?? [])].map((entry) =>
+    entry.trim().toLowerCase(),
+  );
+  if (!providerChannels.includes(channel)) {
+    return params.source;
+  }
+  // Same-channel capture stays on the trusted inbound account; model input
+  // cannot redirect a live source through another configured channel account.
+  return { ...params.source, accountId };
+}
+
 export function toolText(text: string, details?: Record<string, unknown>) {
   return {
     content: [{ type: "text" as const, text }],
@@ -149,14 +172,19 @@ export async function startTranscripts(params: {
   if (params.abortSignal?.aborted) {
     throw new Error("transcripts start aborted");
   }
-  const providerSource = {
+  const requestedSource = {
     ...sourceFromParams(params.rawParams),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
   };
-  const provider = resolveSourceProvider(providerSource.providerId, params.ctx);
+  const provider = resolveSourceProvider(requestedSource.providerId, params.ctx);
   if (!provider?.start) {
-    throw new Error(`transcripts provider ${providerSource.providerId} cannot start live capture`);
+    throw new Error(`transcripts provider ${requestedSource.providerId} cannot start live capture`);
   }
+  const providerSource = bindSourceToTurnAccount({
+    ctx: params.ctx,
+    provider,
+    source: requestedSource,
+  });
   const session: TranscriptSessionDescriptor = {
     sessionId:
       readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
