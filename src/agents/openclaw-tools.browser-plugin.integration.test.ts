@@ -8,6 +8,7 @@ import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { setPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 
 const hoisted = vi.hoisted(() => ({
   resolvePluginTools: vi.fn(),
@@ -154,6 +155,50 @@ describe("createOpenClawTools browser plugin integration", () => {
 
     expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
     expect(firstResolvePluginToolsParams().allowGatewaySubagentBinding).toBe(true);
+  });
+
+  it("forwards lifecycle-prepared plugin facts to plugin resolution", () => {
+    hoisted.resolvePluginTools.mockReturnValue([]);
+    const config = { plugins: { enabled: true } } as OpenClawConfig;
+    const metadataSnapshot = { plugins: [], index: {} } as never;
+    const pluginRegistry = { tools: [] } as never;
+    const loadContext = {
+      rawConfig: config,
+      config,
+      activationSourceConfig: config,
+      autoEnabledReasons: {},
+      workspaceDir: "/tmp",
+      env: process.env,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    };
+    setPreparedPluginRuntimeLoadContext(pluginRegistry, loadContext);
+
+    resolveOpenClawPluginToolsForOptions({
+      options: {
+        config,
+        workspaceDir: "/tmp",
+        preparedModelRuntime: {
+          agentDir: "/tmp/agent",
+          workspaceDir: "/tmp",
+          activeProjectKeys: [],
+          config,
+          metadataSnapshot,
+          pluginRegistry,
+          allowGatewaySubagentBinding: false,
+          modelCatalog: { entries: [], routeVariants: [] },
+          configuredRuntimeModels: [],
+          inlineProviderModels: [],
+          createStores: vi.fn(),
+        },
+      },
+      resolvedConfig: config,
+    });
+
+    expect(firstResolvePluginToolsParams().preparedRuntime).toEqual({
+      loadContext,
+      metadataSnapshot,
+      registry: pluginRegistry,
+    });
   });
 
   it("forwards auth profile helpers to plugin resolution and context", async () => {

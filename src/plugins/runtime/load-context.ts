@@ -19,6 +19,7 @@ import {
   isPluginMetadataSnapshotCompatible,
   resolvePluginMetadataSnapshot,
 } from "../plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import type { PluginLogger } from "../types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -133,6 +134,7 @@ export type PluginRuntimeLoadContext = {
   env: NodeJS.ProcessEnv;
   logger: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
+  metadataSnapshot?: PluginMetadataSnapshot;
   installRecords?: Record<string, PluginInstallRecord>;
 };
 
@@ -158,6 +160,7 @@ type PluginRuntimeLoadContextOptions = {
   onlyPluginIds?: readonly string[];
   logger?: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 /** Creates the default plugin runtime loader logger. */
@@ -179,7 +182,8 @@ export function resolvePluginRuntimeLoadContext(
   const rawWorkspaceDir =
     options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
   const initialMetadataSnapshot =
-    options?.manifestRegistry === undefined
+    options?.metadataSnapshot ??
+    (options?.manifestRegistry === undefined
       ? resolvePluginMetadataSnapshot({
           config: rawConfig,
           env,
@@ -187,7 +191,7 @@ export function resolvePluginRuntimeLoadContext(
           allowWorkspaceScopedCurrent: true,
           ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
         })
-      : undefined;
+      : undefined);
   const manifestRegistry = options?.manifestRegistry ?? initialMetadataSnapshot?.manifestRegistry;
   const activationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,
@@ -245,6 +249,7 @@ export function resolvePluginRuntimeLoadContext(
     env,
     logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
     ...(finalManifestRegistry ? { manifestRegistry: finalManifestRegistry } : {}),
+    ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,
   };
 }
