@@ -442,7 +442,10 @@ async function ensureSessionRuntimeCleanup(params: {
   clearSessionResetRuntimeState([...queueKeys], {
     activeReplySessionId: params.sessionId,
   });
-  stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
+  await stopSubagentsForRequester({
+    cfg: params.cfg,
+    requesterSessionKey: params.target.canonicalKey,
+  });
   if (!params.sessionId) {
     params.assertCurrent?.();
     clearBootstrapSnapshot(params.target.canonicalKey);

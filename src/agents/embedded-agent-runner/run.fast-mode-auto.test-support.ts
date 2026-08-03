@@ -11,7 +11,7 @@ import {
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
-  resetRunOverflowCompactionHarnessMocks,
+  resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -57,7 +57,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
   });
 
   beforeEach(() => {
-    resetRunOverflowCompactionHarnessMocks();
+    resetSharedRunIntegrationHarnessMocks();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
     mockedClassifyFailoverReason.mockReturnValue(null);
   });

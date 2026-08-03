@@ -507,19 +507,93 @@ content classes you opted into.
 
 ## Diagnostic event catalog
 
-The events below back the metrics and spans above or are available for direct
-plugin subscription. `run.progress` and `run.execution_phase` are direct-only
-lifecycle signals; the diagnostics-otel plugin does not export them as
-standalone OTLP signals. Event kinds and `run.execution_phase.phase` values are
-additive. TypeScript consumers should keep default branches instead of assuming
-either union is permanently exhaustive.
+The events below back the metrics and spans above. Public events are also
+available for direct plugin subscription; trusted core events such as
+`model.usage` are restricted to authorized internal consumers.
+`run.progress` and `run.execution_phase` are direct-only lifecycle signals;
+the diagnostics-otel plugin does not export them as standalone OTLP signals.
+Event kinds and `run.execution_phase.phase` values are additive. TypeScript
+consumers should keep default branches instead of assuming either union is
+permanently exhaustive.
 
 **Model usage**
 
-- `model.usage` - tokens, cost, duration, context, provider/model/channel,
-  session ids. `usage` is provider/turn accounting for cost and telemetry;
-  `context.used` is the current prompt/context snapshot and can be lower than
-  provider `usage.total` when cached input or tool-loop calls are involved.
+`model.usage` is a trusted, in-process diagnostic event, not a JSONL log
+record. A representative event has this shape:
+
+```json
+{
+  "type": "model.usage",
+  "ts": 1735689600000,
+  "seq": 42,
+  "provider": "openai",
+  "model": "gpt-5.4",
+  "channel": "webchat",
+  "agentId": "main",
+  "sessionId": "session-123",
+  "sessionKey": "agent:main:main",
+  "usage": {
+    "input": 120,
+    "output": 40,
+    "cacheRead": 30,
+    "cacheWrite": 10,
+    "promptTokens": 160,
+    "total": 200
+  },
+  "lastCallUsage": {
+    "input": 120,
+    "output": 40,
+    "cacheRead": 30,
+    "cacheWrite": 10,
+    "total": 200
+  },
+  "context": { "limit": 128000, "used": 160 },
+  "costUsd": 0.0012,
+  "durationMs": 850,
+  "trace": {
+    "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "spanId": "00f067aa0ba902b7",
+    "traceFlags": "01"
+  }
+}
+```
+
+- `ts` is a Unix timestamp in milliseconds; `seq` is process-local.
+- `usage` holds turn-level token counts. `promptTokens` includes `input`,
+  `cacheRead`, and `cacheWrite`; `lastCallUsage`, when available, describes the
+  final model call.
+- `context.used` is the current prompt/context snapshot and can be lower than
+  `usage.total` when cached input or tool-loop calls are involved.
+- Provider/model/session identifiers, token buckets, `lastCallUsage`,
+  `context`, `costUsd`, `durationMs`, and `trace` fields are optional.
+  `costUsd` is an estimate and can be absent when model pricing is unavailable;
+  it is not provider-reported billing. Trace context can also include
+  `parentSpanId`.
+
+The Gateway's `/tmp/openclaw/openclaw-YYYY-MM-DD.log` JSONL file and
+`diagnostics.otel.logsExporter: "stdout"` contain ordinary log records, not raw
+`model.usage` events. Public diagnostic subscriptions and
+`diagnostics.stability` do not expose trusted core usage events. The
+diagnostics-otel plugin converts them to metrics such as `openclaw.tokens` and
+`openclaw.cost.usd` and to `openclaw.model.usage` spans; those usage metrics
+and spans intentionally omit session identifiers.
+
+For an external integration that needs session-correlated usage, query the
+authenticated Gateway instead:
+
+```bash
+openclaw gateway call sessions.usage --params '{"range":"30d","agentScope":"all"}' --json
+openclaw gateway usage-cost --days 30 --all-agents --json
+```
+
+Both commands require `operator.read`. `sessions.usage` can include per-session
+`sessionId`, provider/model details, and token/cost summaries; per-session usage
+can be temporarily `null` while its cache refreshes. `usage-cost` provides
+aggregate estimates. Omit `agentScope` or `--all-agents` to scope the report
+to the default agent. For continuously updated clients,
+[subscribe to session changes instead of polling usage reports](/gateway/clients#subscribe-instead-of-polling-usage).
+See the [Gateway RPC method reference](/gateway/protocol#rpc-method-families)
+for usage methods and request options.
 
 **Message flow**
 

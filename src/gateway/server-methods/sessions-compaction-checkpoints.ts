@@ -16,10 +16,8 @@ import {
   createFileBackedCompactionCheckpointStore,
   getSessionCompactionCheckpoint,
 } from "../session-compaction-checkpoints.js";
-import {
-  buildDashboardSessionKey,
-  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
-} from "../session-create-service.js";
+import { buildDashboardSessionKey } from "../session-create-service.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { interruptSessionRunIfActive } from "./sessions-messaging.js";
 import {

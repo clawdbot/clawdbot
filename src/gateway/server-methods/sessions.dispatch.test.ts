@@ -23,7 +23,7 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
-import { sessionsHandlers } from "./sessions.js";
+import { sessionDispatchHandlers } from "./sessions-dispatch.js";
 
 const sessionKey = "agent:main:cloud-test";
 const sessionId = "session-cloud-test";
@@ -91,8 +91,8 @@ function makeContext(overrides: Partial<GatewayRequestContext> = {}): GatewayReq
 async function invoke(context: GatewayRequestContext) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
-    sessionsHandlers["sessions.dispatch"],
-    'sessionsHandlers["sessions.dispatch"] test invariant',
+    sessionDispatchHandlers["sessions.dispatch"],
+    'sessionDispatchHandlers["sessions.dispatch"] test invariant',
   )({
     req: { id: "dispatch-request" } as never,
     params: { key: sessionKey, profileId: "test" },
@@ -107,8 +107,8 @@ async function invoke(context: GatewayRequestContext) {
 async function invokeReclaim(context: GatewayRequestContext) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
-    sessionsHandlers["sessions.reclaim"],
-    'sessionsHandlers["sessions.reclaim"] test invariant',
+    sessionDispatchHandlers["sessions.reclaim"],
+    'sessionDispatchHandlers["sessions.reclaim"] test invariant',
   )({
     req: { id: "reclaim-request" } as never,
     params: { key: sessionKey },

@@ -5,7 +5,8 @@ import {
   beginTaskSuggestionAcceptance,
   completeTaskSuggestionAcceptance,
 } from "../task-suggestion-registry.js";
-import { sessionsHandlers } from "./sessions.js";
+import { sessionCreateHandlers } from "./sessions-create.js";
+import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { taskSuggestionsHandlers } from "./task-suggestions.js";
 import type { RespondFn } from "./types.js";
 
@@ -105,7 +106,7 @@ describe("task suggestion gateway methods", () => {
     const taskId = (requirePayload(created) as { taskId: string }).taskId;
     let sessionKey = "";
     const createSession = vi
-      .spyOn(sessionsHandlers, "sessions.create")
+      .spyOn(sessionCreateHandlers, "sessions.create")
       .mockImplementation(async ({ params, respond }) => {
         expect(params).toMatchObject({
           agentId: "main",
@@ -168,7 +169,7 @@ describe("task suggestion gateway methods", () => {
   it("admits new work when every bounded registry entry has already been accepted", async () => {
     const acceptedTaskIds: string[] = [];
     const createSession = vi
-      .spyOn(sessionsHandlers, "sessions.create")
+      .spyOn(sessionCreateHandlers, "sessions.create")
       .mockImplementation(async ({ params, respond }) => {
         respond(true, { key: (params as { key: string }).key, runStarted: true }, undefined);
       });
@@ -222,7 +223,7 @@ describe("task suggestion gateway methods", () => {
       release = resolve;
     });
     const createSession = vi
-      .spyOn(sessionsHandlers, "sessions.create")
+      .spyOn(sessionCreateHandlers, "sessions.create")
       .mockImplementation(async ({ params, respond }) => {
         await gate;
         respond(true, { key: (params as { key: string }).key, runStarted: true }, undefined);
@@ -249,7 +250,7 @@ describe("task suggestion gateway methods", () => {
     });
     const taskId = (requirePayload(created) as { taskId: string }).taskId;
     let sessionKey = "";
-    vi.spyOn(sessionsHandlers, "sessions.create").mockImplementation(
+    vi.spyOn(sessionCreateHandlers, "sessions.create").mockImplementation(
       async ({ params, respond }) => {
         sessionKey = (params as { key: string }).key;
         respond(
@@ -264,7 +265,7 @@ describe("task suggestion gateway methods", () => {
       },
     );
     const deleteSession = vi
-      .spyOn(sessionsHandlers, "sessions.delete")
+      .spyOn(sessionDeleteHandlers, "sessions.delete")
       .mockImplementation(async ({ params, respond }) => {
         expect(params).toEqual({
           key: sessionKey,
@@ -303,12 +304,12 @@ describe("task suggestion gateway methods", () => {
     });
     const taskId = (requirePayload(created) as { taskId: string }).taskId;
     let sessionKey = "";
-    vi.spyOn(sessionsHandlers, "sessions.create").mockImplementation(async ({ params }) => {
+    vi.spyOn(sessionCreateHandlers, "sessions.create").mockImplementation(async ({ params }) => {
       sessionKey = (params as { key: string }).key;
       throw new Error("initial dispatch failed");
     });
     const deleteSession = vi
-      .spyOn(sessionsHandlers, "sessions.delete")
+      .spyOn(sessionDeleteHandlers, "sessions.delete")
       .mockImplementation(async ({ params, respond }) => {
         expect(params).toMatchObject({ key: sessionKey, agentId: "main" });
         respond(true, { ok: true, deleted: true }, undefined);
@@ -333,10 +334,10 @@ describe("task suggestion gateway methods", () => {
       agentId: "main",
     });
     const taskId = (requirePayload(created) as { taskId: string }).taskId;
-    vi.spyOn(sessionsHandlers, "sessions.create").mockRejectedValue(
+    vi.spyOn(sessionCreateHandlers, "sessions.create").mockRejectedValue(
       new Error("initial dispatch failed"),
     );
-    vi.spyOn(sessionsHandlers, "sessions.delete").mockImplementation(async ({ respond }) => {
+    vi.spyOn(sessionDeleteHandlers, "sessions.delete").mockImplementation(async ({ respond }) => {
       respond(false, undefined, { code: "UNAVAILABLE", message: "still active" });
     });
     vi.spyOn(managedWorktrees, "findLiveByOwner").mockReturnValue({ id: "wt_partial" } as never);

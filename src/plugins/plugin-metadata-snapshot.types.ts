@@ -27,7 +27,7 @@ export type PluginMetadataSnapshotOwnerMaps = {
   providerRequests?: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
 };
 
-export type PluginMetadataSnapshotMetrics = {
+type PluginMetadataSnapshotMetrics = {
   registrySnapshotMs: number;
   manifestRegistryMs: number;
   ownerMapsMs: number;
@@ -36,7 +36,7 @@ export type PluginMetadataSnapshotMetrics = {
   manifestPluginCount: number;
 };
 
-export type PluginMetadataSnapshotRegistryDiagnostic = {
+type PluginMetadataSnapshotRegistryDiagnostic = {
   level: "info" | "warn";
   code:
     | "persisted-registry-missing"

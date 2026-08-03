@@ -1031,6 +1031,7 @@ export async function startGatewayPostAttachRuntime(
   params: {
     minimalTestGateway: boolean;
     cfgAtStart: OpenClawConfig;
+    getConfig: () => OpenClawConfig;
     bindHost: string;
     bindHosts: string[];
     port: number;
@@ -1290,8 +1291,8 @@ export async function startGatewayPostAttachRuntime(
             // would miss lifetime registration and race the replacement gateway.
             if (params.isClosing?.() !== true) {
               mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
-                cfg: params.cfgAtStart,
                 delayMs: 0,
+                getConfig: params.getConfig,
                 shouldContinue: () => params.isClosing?.() !== true,
                 waitForStart: params.waitForPostReadyWork,
                 gatewayRuntime: params.recoveryRuntime,
@@ -1302,8 +1303,8 @@ export async function startGatewayPostAttachRuntime(
           params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
         }
         try {
-          const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
-          scheduleSubagentOrphanRecovery();
+          const { scheduleSubagentRegistrySweep } = await import("../agents/subagent-registry.js");
+          scheduleSubagentRegistrySweep();
         } catch (err) {
           params.log.warn(`subagent restart recovery failed to schedule: ${String(err)}`);
         }

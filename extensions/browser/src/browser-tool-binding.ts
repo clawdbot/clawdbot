@@ -52,6 +52,7 @@ const TAB_BOUND_ACTIONS = new Set([
   "console",
   "dialog",
   "download",
+  "extract",
   "focus",
   "navigate",
   "pdf",

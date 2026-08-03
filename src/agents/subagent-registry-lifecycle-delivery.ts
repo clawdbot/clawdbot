@@ -444,6 +444,7 @@ export function createSubagentRegistryLifecycleDelivery(
         entry.delivery?.payload?.fallbackFrozenResultText ?? entry.completion?.fallbackResultText,
       wakeOnDescendantSettle:
         entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
+      terminalReply: entry.delivery?.payload?.terminalReply ?? entry.completion?.terminalReply,
     };
   };
 
@@ -476,6 +477,7 @@ export function createSubagentRegistryLifecycleDelivery(
       outcome: entry.execution.outcome,
       frozenResultText: entry.completion?.resultText,
       fallbackFrozenResultText: entry.completion?.fallbackResultText,
+      terminalReply: entry.completion?.terminalReply,
     };
     return true;
   };

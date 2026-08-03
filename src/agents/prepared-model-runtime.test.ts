@@ -14,6 +14,7 @@ import {
   rejectPendingPreparedModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
@@ -127,6 +128,7 @@ describe("prepared model runtime snapshots", () => {
 
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
       config: {},
+      env: process.env,
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
       selections: undefined,
     });
@@ -138,14 +140,20 @@ describe("prepared model runtime snapshots", () => {
 
   it("uses an explicit lifecycle environment for catalog and auth discovery", async () => {
     const env = { NVIDIA_API_KEY: "test-nvidia-api-key" };
-    await publishPreparedModelRuntimeSnapshot({
-      config: {},
+    const config = {};
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
+      config,
       agentDir: "/tmp/prepared-model-runtime-explicit-env",
       env,
     });
 
+    expect(getPreparedPluginRuntimeLoadContext(snapshot.pluginRegistry)).toMatchObject({
+      rawConfig: config,
+      env,
+    });
+
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledWith(
-      {},
+      config,
       "/tmp/prepared-model-runtime-explicit-env",
       expect.objectContaining({ env }),
     );

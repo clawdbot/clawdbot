@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
+  loadPreparedModelRuntimeSnapshot,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
@@ -91,6 +92,34 @@ describe("prepared model runtime owner selection", () => {
 
     expect(snapshot.workspaceDir).toBe("/tmp/gateway-launch-workspace");
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+  });
+
+  it("resolves a gateway-published owner only for requests carrying the binding flag", async () => {
+    // Gateway startup publishes configured owners with allowGatewaySubagentBinding,
+    // and that flag is part of the owner key. A request that omits it matches no
+    // owner, and standalone activation stays refused while the lifecycle is active.
+    mocks.configuredAgentIds = ["default"];
+    const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      gatewayLifecycle: true,
+      defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
+    });
+    const request = {
+      config,
+      agentId: "default",
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/gateway-launch-workspace",
+    };
+
+    await expect(
+      loadPreparedModelRuntimeSnapshot({ ...request, allowGatewaySubagentBinding: true }),
+    ).resolves.toMatchObject({ config });
+    await expect(loadPreparedModelRuntimeSnapshot(request)).rejects.toThrow(
+      "prepared model runtime owner was not published",
+    );
   });
 
   it("reuses the configured owner for its prepared plugin harness selections", async () => {

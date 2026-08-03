@@ -368,14 +368,15 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("keeps plugin SDK subagent runs best-effort when registry persistence fails", async () => {
+  it("rejects plugin SDK subagent runs and releases admission when registry persistence fails", async () => {
     await withTempDir(
       { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },
       async (root) => {
         useTestStateDir(root);
         resetAgentTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
-        const persistSubagentRunsToDiskOrThrow = vi.fn(() => {
+        const persistSubagentRunsToDiskOrThrow = vi.fn();
+        persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
           throw new Error("disk full");
         });
         applyGatewaySubagentRegistryTestDeps({
@@ -412,6 +413,7 @@ describe("gateway agent handler", () => {
         const context = makeContext();
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");
         const commandCallCount = mocks.agentCommand.mock.calls.length;
+        const respond = vi.fn();
 
         await invokeAgent(
           {
@@ -422,6 +424,7 @@ describe("gateway agent handler", () => {
           {
             context,
             reqId: runId,
+            respond,
             client: {
               connect: baseClient.connect,
               internal: {
@@ -434,19 +437,44 @@ describe("gateway agent handler", () => {
         );
 
         expect(persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(1);
-        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
-        await waitForAssertion(() => {
-          const task = requireValue(findTaskByRunId(runId), "expected fallback cli task");
-          expectRecordFields(task, {
-            runtime: "cli",
-            childSessionKey,
-            status: "succeeded",
-            terminalSummary: "completed",
-          });
-        });
+        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
+        expect(findTaskByRunId(runId)).toBeUndefined();
+        const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
+        expectStringFieldContains(error, "message", "run was not started");
         expect(context.logGateway.warn).toHaveBeenCalledWith(
-          expect.stringContaining("falling back to cli task tracking"),
+          expect.stringContaining("rejecting untracked dispatch"),
         );
+
+        const retryRunId = "plugin-subagent-registry-retry";
+        await invokeAgent(
+          {
+            message: "retry background plugin subagent task",
+            sessionKey: childSessionKey,
+            idempotencyKey: retryRunId,
+          },
+          {
+            context,
+            reqId: retryRunId,
+            client: {
+              connect: baseClient.connect,
+              internal: {
+                ...baseClient.internal,
+                agentRunTracking: "plugin_subagent",
+                pluginRuntimeOwnerId: "memory-core",
+              },
+            },
+          },
+        );
+
+        expect(persistSubagentRunsToDiskOrThrow.mock.calls.length).toBeGreaterThan(1);
+        await waitForAssertion(() => {
+          expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
+          const retryRun = requireValue(
+            getSubagentRunByChildSessionKey(childSessionKey),
+            "expected retry plugin subagent run",
+          );
+          expect(retryRun.runId).toBe(retryRunId);
+        });
       },
     );
   });

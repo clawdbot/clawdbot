@@ -507,17 +507,7 @@ actor GatewayEndpointStore {
             self.cancelRemoteEnsure()
             guard await self.sourceIsCurrent(source, generation: generation) else { return }
             let url = URL(string: "\(source.scheme)://\(source.localHost):\(source.localPort)")!
-            self.setReady(
-                mode: .local,
-                url: url,
-                token: source.token,
-                password: source.password,
-                tls: GatewayTLSRoute.resolve(
-                    url: url,
-                    connectionMode: .local,
-                    configuredFingerprint: nil),
-                deviceAuthGatewayID: source.deviceAuthGatewayID,
-                routeAuthority: nil)
+            self.publishReadyEndpoint(source: source, url: url)
         case .remote:
             if source.remoteTransport == .direct {
                 guard let url = source.directRemoteURL else {
@@ -529,17 +519,7 @@ actor GatewayEndpointStore {
                 }
                 self.cancelRemoteEnsure()
                 guard await self.sourceIsCurrent(source, generation: generation) else { return }
-                self.setReady(
-                    mode: .remote,
-                    url: url,
-                    token: source.token,
-                    password: source.password,
-                    tls: GatewayTLSRoute.resolve(
-                        url: url,
-                        connectionMode: .remote,
-                        configuredFingerprint: source.remoteTLSFingerprint),
-                    deviceAuthGatewayID: source.deviceAuthGatewayID,
-                    routeAuthority: nil)
+                self.publishReadyEndpoint(source: source, url: url)
                 return
             }
             let route = await deps.remoteRouteIfRunning()
@@ -552,17 +532,7 @@ actor GatewayEndpointStore {
             guard await self.sourceIsCurrent(source, generation: generation) else { return }
             self.cancelRemoteEnsure()
             let url = URL(string: "\(source.scheme)://127.0.0.1:\(Int(route.localPort))")!
-            self.setReady(
-                mode: .remote,
-                url: url,
-                token: source.token,
-                password: source.password,
-                tls: GatewayTLSRoute.resolve(
-                    url: url,
-                    connectionMode: .remote,
-                    configuredFingerprint: source.remoteTLSFingerprint),
-                deviceAuthGatewayID: source.deviceAuthGatewayID,
-                routeAuthority: route.generation)
+            self.publishReadyEndpoint(source: source, url: url, routeAuthority: route.generation)
         case .unconfigured:
             self.cancelRemoteEnsure()
             self.setState(.unavailable(mode: .unconfigured, reason: "Gateway not configured"))
@@ -706,17 +676,7 @@ actor GatewayEndpointStore {
                     userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
             }
             self.cancelRemoteEnsure()
-            return self.setReady(
-                mode: .remote,
-                url: url,
-                token: source.token,
-                password: source.password,
-                tls: GatewayTLSRoute.resolve(
-                    url: url,
-                    connectionMode: .remote,
-                    configuredFingerprint: source.remoteTLSFingerprint),
-                deviceAuthGatewayID: source.deviceAuthGatewayID,
-                routeAuthority: nil)
+            return self.publishReadyEndpoint(source: source, url: url)
         }
 
         guard self.kickRemoteEnsureIfNeeded(detail: detail) else {
@@ -776,17 +736,7 @@ actor GatewayEndpointStore {
         self.remoteEnsure = nil
 
         let url = URL(string: "\(source.scheme)://127.0.0.1:\(Int(route.localPort))")!
-        return self.setReady(
-            mode: .remote,
-            url: url,
-            token: source.token,
-            password: source.password,
-            tls: GatewayTLSRoute.resolve(
-                url: url,
-                connectionMode: .remote,
-                configuredFingerprint: source.remoteTLSFingerprint),
-            deviceAuthGatewayID: source.deviceAuthGatewayID,
-            routeAuthority: route.generation)
+        return self.publishReadyEndpoint(source: source, url: url, routeAuthority: route.generation)
     }
 
     private func matchingReadyRemoteEndpoint(
@@ -847,6 +797,28 @@ actor GatewayEndpointStore {
                 .debug(
                     "endpoint unavailable mode=\(modeDesc, privacy: .public) reason=\(reason, privacy: .public)")
         }
+    }
+
+    @discardableResult
+    private func publishReadyEndpoint(
+        source: SourceSnapshot,
+        url: URL,
+        routeAuthority: UInt64? = nil) -> GatewayConnection.EndpointSnapshot
+    {
+        // SourceSnapshot owns route credentials and identity. Publish every ready
+        // path through one derivation so local, direct, and tunnel routes cannot drift.
+        let mode: AppState.ConnectionMode = source.mode == .local ? .local : .remote
+        return self.setReady(
+            mode: mode,
+            url: url,
+            token: source.token,
+            password: source.password,
+            tls: GatewayTLSRoute.resolve(
+                url: url,
+                connectionMode: mode,
+                configuredFingerprint: mode == .remote ? source.remoteTLSFingerprint : nil),
+            deviceAuthGatewayID: source.deviceAuthGatewayID,
+            routeAuthority: routeAuthority)
     }
 
     @discardableResult
@@ -918,18 +890,7 @@ extension GatewayEndpointStore {
 
         guard await self.sourceIsCurrent(source, generation: generation) else { return nil }
         self.logger.info("auto bind fallback to tailnet host=\(source.localHost, privacy: .public)")
-        self.setReady(
-            mode: .local,
-            url: url,
-            token: source.token,
-            password: source.password,
-            tls: GatewayTLSRoute.resolve(
-                url: url,
-                connectionMode: .local,
-                configuredFingerprint: nil),
-            deviceAuthGatewayID: source.deviceAuthGatewayID,
-            routeAuthority: nil)
-        return self.resolvedEndpoint
+        return self.publishReadyEndpoint(source: source, url: url)
     }
 }
 

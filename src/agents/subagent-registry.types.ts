@@ -1,6 +1,7 @@
 import type { SubagentEndReason } from "../context-engine/types.js";
 /** Persisted execution, completion, delivery, and attachment state for child runs. */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
@@ -10,6 +11,8 @@ import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export type SubagentCompletionRequest = {
   runId: string;
+  /** Exact in-process owner required after acquiring the terminal completion lock. */
+  expectedEntry?: SubagentRunRecord;
   endedAt?: number;
   outcome: SubagentRunOutcome;
   reason: SubagentLifecycleEndedReason;
@@ -20,6 +23,7 @@ export type SubagentCompletionRequest = {
   suppressSessionEffects?: boolean;
   recoverInterrupted?: true;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 export type ContextEngineSubagentEndedParams = {
@@ -54,10 +58,26 @@ export type PendingFinalDeliveryPayload = {
   frozenResultText?: string | null;
   fallbackFrozenResultText?: string | null;
   wakeOnDescendantSettle?: boolean;
+  terminalReply?: AgentRunTerminalReplySnapshot;
+};
+
+export type SubagentRestartRecoveryReceipt = {
+  sessionId: string;
+  sessionMarker: string;
+  sessionLifecycleRevision?: string;
+  idempotencyKey: string;
+  phase: "reserved" | "attempted" | "consumed" | "accepted" | "abandoned";
+  lifecycleGeneration?: string;
 };
 
 type SubagentExecutionState = {
   status: "queued" | "running" | "interrupted" | "terminal";
+  /** Gateway lifecycle that owns child-session effects for this run. */
+  lifecycleGeneration?: string;
+  /** Durable dispatch receipt for one interrupted-session snapshot. */
+  restartRecovery?: SubagentRestartRecoveryReceipt;
+  /** Sticky terminal policy: this run must never mutate its child session again. */
+  suppressSessionEffects?: true;
   acceptedAt?: number;
   startedAt?: number;
   endedAt?: number;
@@ -73,6 +93,7 @@ export type SubagentCompletionState = {
   capturedAt?: number;
   fallbackResultText?: string | null;
   fallbackCapturedAt?: number;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 export type SwarmCollectorStatus = "done" | "failed" | "killed" | "timeout";
@@ -183,6 +204,15 @@ type SubagentKillReconciliationState = {
   supersededAt?: number;
 };
 
+type SubagentKillIntent = {
+  requestedAt: number;
+  reason: string;
+  lifecycleGeneration?: string;
+  sessionId?: string;
+  sessionLifecycleRevision?: string;
+  suppressTaskDelivery?: boolean;
+};
+
 export type SubagentRunRecord = {
   runId: string;
   /** Detached task owner; steer/restart changes runId but continues the same task. */
@@ -226,6 +256,8 @@ export type SubagentRunRecord = {
   killReconciliation?: SubagentKillReconciliationState;
   /** Fail-closed holder for a child whose failed spawn could not prove session deletion. */
   spawnFailureCleanup?: SpawnFailureCleanupState;
+  /** Durable operator cancellation ownership before runtime side effects complete. */
+  killIntent?: SubagentKillIntent;
   /** Durable requester-stop policy until silent completion cleanup finishes. */
   suppressCompletionDelivery?: boolean;
   expectsCompletionMessage?: boolean;

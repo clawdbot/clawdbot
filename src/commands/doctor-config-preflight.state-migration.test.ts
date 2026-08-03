@@ -1,6 +1,7 @@
 // Doctor config preflight tests cover state migration preflight behavior before config repair.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
+import type { LegacyConfigIssue } from "../config/types.js";
 import {
   listActiveDegradedPlugins,
   setActiveDegradedPlugins,
@@ -153,6 +154,7 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     issues: [] as Array<{ path: string; message: string }>,
   })),
 );
+const findDoctorLegacyConfigIssues = vi.hoisted(() => vi.fn((): LegacyConfigIssue[] => []));
 const note = vi.hoisted(() => vi.fn());
 
 vi.mock("./doctor-state-migrations.js", () => ({
@@ -196,6 +198,10 @@ vi.mock("../config/io.js", () => ({
   recoverConfigFromLastKnownGood: vi.fn(),
 }));
 
+vi.mock("./doctor/shared/legacy-config-issues.js", () => ({
+  findDoctorLegacyConfigIssues,
+}));
+
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
@@ -203,6 +209,8 @@ const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js"
 describe("runDoctorConfigPreflight state migration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    findDoctorLegacyConfigIssues.mockReset();
+    findDoctorLegacyConfigIssues.mockReturnValue([]);
     setActiveDegradedPlugins([]);
     needsStartupMigrationCheckpoint.mockReturnValue(false);
     runPostCorePluginConvergence.mockResolvedValue(makeStartupConvergenceResult());
@@ -1046,6 +1054,9 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("runs config-independent state migration for invalid config", async () => {
+    findDoctorLegacyConfigIssues.mockReturnValueOnce([
+      { path: "cron.store", message: "cron.store is legacy." },
+    ]);
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: false,

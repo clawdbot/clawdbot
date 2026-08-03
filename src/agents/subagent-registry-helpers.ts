@@ -30,7 +30,6 @@ import {
   resolveSubagentRunOrphanReason,
   type SubagentRunOrphanReason,
 } from "./subagent-session-reconciliation.js";
-import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import { releaseSwarmRun } from "./swarm-scheduler.js";
 
 export const PROVISIONAL_KILL_RECONCILIATION_MS = 5 * 60_000;
@@ -118,41 +117,19 @@ export function markSpawnFailureCleanupTerminalState(
   };
 }
 
-function isTerminalSpawnFailureCleanupStatus(status: unknown): boolean {
-  return (
-    status === "deleted" ||
-    status === "missing" ||
-    status === "replaced" ||
-    status === "terminal_registered"
-  );
-}
-
 export function failedSpawnCleanupTerminalError(status: "missing" | "replaced"): string {
   return status === "missing"
     ? "subagent spawn failed before startup and the provisional session was already absent"
     : "subagent spawn failed before startup and a replacement session proved the provisional session is gone";
 }
 
-export function shouldDeleteArchivedSubagentSession(entry: SubagentRunRecord): boolean {
-  if (entry.cleanup === "keep") {
-    return false;
-  }
-  const status = entry.spawnFailureCleanup?.status;
-  return status === "terminal_registered" || !isTerminalSpawnFailureCleanupStatus(status);
-}
-
-export function archivedSubagentSessionDeleteIdentity(
-  entry: SubagentRunRecord,
-): ProvisionalSessionCleanupIdentity | undefined {
-  return entry.spawnFailureCleanup?.status === "terminal_registered"
-    ? entry.spawnFailureCleanup.sessionIdentity
-    : undefined;
-}
-
 /** Persists child session timing/status derived from the subagent registry row. */
 export async function persistSubagentSessionTiming(
   entry: SubagentRunRecord,
-  options?: { isCurrentGeneration?: () => boolean },
+  options?: {
+    isCurrentGeneration?: () => boolean;
+    assertCommitAllowed?: () => void;
+  },
 ) {
   const childSessionKey = entry.childSessionKey?.trim();
   if (!childSessionKey) {
@@ -227,7 +204,10 @@ export async function persistSubagentSessionTiming(
       }
       return next;
     },
-    { replaceEntry: true },
+    {
+      assertCommitAllowed: options?.assertCommitAllowed,
+      replaceEntry: true,
+    },
   );
 }
 
@@ -360,7 +340,12 @@ export function reconcileOrphanedRestoredRuns(params: {
       // child sessions. Restore replays the obligation before retiring them.
       continue;
     }
-    if (entry.killReconciliation || entry.terminalOwner === "interrupted-recovery") {
+    if (
+      entry.killReconciliation ||
+      entry.killIntent ||
+      entry.execution.restartRecovery ||
+      entry.terminalOwner === "interrupted-recovery"
+    ) {
       // Provider completion or interrupted recovery still owns these rows.
       // Their bounded reconciliation runs even when the session vanished.
       continue;

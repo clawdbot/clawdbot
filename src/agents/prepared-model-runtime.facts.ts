@@ -8,7 +8,6 @@ import type { PreparedMessageToolCatalog } from "../channels/plugins/message-act
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   getPreparedMessageToolCatalog,
@@ -53,6 +52,7 @@ import {
   toStaticCatalogEntry,
   type PreparedConfiguredRuntimeModel,
 } from "./prepared-model-runtime.configured.js";
+import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -228,6 +228,7 @@ export async function prepareWorkspaceBuildGroup(
   const runtimePluginRegistry = !input.readOnly
     ? loadAgentRuntimePluginRegistryHandle({
         config: input.config,
+        env,
         ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
         ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
         selections: input.runtimePluginSelections,
@@ -236,11 +237,7 @@ export async function prepareWorkspaceBuildGroup(
   const runtimePluginMs = performance.now() - runtimePluginStartedAt;
   return await withPluginRuntimeRegistryScope(runtimePluginRegistry, async () => {
     const pluginMetadataStartedAt = performance.now();
-    const pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
-      config: input.config,
-      env,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    });
+    const pluginMetadataSnapshot = prepareOwnedPluginLoadContext(input, env, runtimePluginRegistry);
     const pluginMetadataMs = performance.now() - pluginMetadataStartedAt;
     const matchesStaticModelId = createStaticModelIdMatcher({
       manifestPlugins: pluginMetadataSnapshot.plugins,

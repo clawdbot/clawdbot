@@ -1,5 +1,7 @@
 import { promises as fs } from "node:fs";
+import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../config/sessions/lifecycle.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { callGateway } from "../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
@@ -10,7 +12,9 @@ const RESERVED_SESSION_DELETE_MAX_ELAPSED_MS = 30_000;
 
 export type ProvisionalSessionDeletionOutcome = "deleted" | "not_deleted" | "indeterminate";
 
+type GatewayCall = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
 type ProvisionalSessionCleanupProof = "missing" | "original" | "replacement";
+type SessionCleanupOutcome = "deleted" | "changed" | "failed";
 
 type WaitForSessionDeletionOptions =
   | boolean
@@ -19,6 +23,17 @@ type WaitForSessionDeletionOptions =
       maxElapsedMs?: number;
       retryDelayMs?: number;
     };
+
+type SessionCleanupOptions = {
+  emitLifecycleHooks?: boolean;
+  deleteTranscript?: boolean;
+  expectedIdentity?: ProvisionalSessionCleanupIdentity;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+  expectedSessionUpdatedAt?: number;
+  callGateway?: GatewayCall;
+  timeoutMs?: number;
+};
 
 function normalizeProvisionalSessionCleanupIdentity(
   identity?: ProvisionalSessionCleanupIdentity,
@@ -37,6 +52,22 @@ function normalizeProvisionalSessionCleanupIdentity(
       : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeCleanupOptionsIdentity(
+  options?: SessionCleanupOptions,
+): ProvisionalSessionCleanupIdentity | undefined {
+  return normalizeProvisionalSessionCleanupIdentity(
+    options?.expectedIdentity ?? {
+      expectedSessionId: options?.expectedSessionId,
+      expectedLifecycleRevision: options?.expectedLifecycleRevision,
+      expectedSessionUpdatedAt: options?.expectedSessionUpdatedAt,
+    },
+  );
+}
+
+function hasDeletionGuard(identity?: ProvisionalSessionCleanupIdentity): boolean {
+  return Boolean(identity?.expectedSessionId && identity.expectedLifecycleRevision);
 }
 
 export function captureProvisionalSessionCleanupIdentity(
@@ -115,32 +146,100 @@ export function applyReservedCleanupState<T extends { status: string }>(
     : result;
 }
 
-export async function cleanupProvisionalSession(
-  childSessionKey: string,
+function isSessionLifecycleChangedGatewayError(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const requestError = error as Error & { gatewayCode?: unknown; details?: unknown };
+  const details = requestError.details;
+  return (
+    requestError.gatewayCode === "INVALID_REQUEST" &&
+    typeof details === "object" &&
+    details !== null &&
+    (details as { reason?: unknown }).reason === SESSION_LIFECYCLE_CHANGED_ERROR_REASON
+  );
+}
+
+function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boolean {
+  if (!response || typeof response !== "object") {
+    return false;
+  }
+  const result = response as { aborted?: unknown; runIds?: unknown };
+  return (
+    result.aborted === true &&
+    Array.isArray(result.runIds) &&
+    result.runIds.some((runId) => runId === gatewayRunId)
+  );
+}
+
+export async function retrySubagentCleanup(
+  attempt: () => boolean | Promise<boolean>,
   options?: {
-    emitLifecycleHooks?: boolean;
-    deleteTranscript?: boolean;
-    timeoutMs?: number;
-    expectedIdentity?: ProvisionalSessionCleanupIdentity;
+    shouldRetry?: () => boolean;
+    onError?: (error: unknown) => void;
+    retryDelayMs?: number;
   },
 ): Promise<boolean> {
-  const expectedIdentity = normalizeProvisionalSessionCleanupIdentity(options?.expectedIdentity);
+  for (;;) {
+    try {
+      if (await attempt()) {
+        return true;
+      }
+    } catch (error) {
+      options?.onError?.(error);
+    }
+    if (options?.shouldRetry?.() === false) {
+      return false;
+    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(
+        resolve,
+        options?.retryDelayMs ?? (isFastTestRuntimeEnv() ? 1 : 1_000),
+      );
+      timer.unref?.();
+    });
+  }
+}
+
+async function requestProvisionalSessionCleanup(
+  childSessionKey: string,
+  options?: SessionCleanupOptions,
+): Promise<SessionCleanupOutcome> {
+  const expectedIdentity = normalizeCleanupOptionsIdentity(options);
+  const expectedSessionId = expectedIdentity?.expectedSessionId;
+  const expectedLifecycleRevision = expectedIdentity?.expectedLifecycleRevision;
+  if (!expectedSessionId || !expectedLifecycleRevision) {
+    return "failed";
+  }
   try {
-    await callSubagentGateway({
+    await (options?.callGateway ?? callSubagentGateway)({
       method: "sessions.delete",
       params: {
         key: childSessionKey,
         emitLifecycleHooks: options?.emitLifecycleHooks === true,
         deleteTranscript: options?.deleteTranscript === true,
-        ...expectedIdentity,
+        expectedSessionId,
+        expectedLifecycleRevision,
+        ...(typeof expectedIdentity.expectedSessionUpdatedAt === "number"
+          ? { expectedSessionUpdatedAt: expectedIdentity.expectedSessionUpdatedAt }
+          : {}),
       },
       timeoutMs: options?.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
     });
-    return true;
-  } catch {
-    // Best-effort cleanup only.
-    return false;
+    return "deleted";
+  } catch (error) {
+    if (isSessionLifecycleChangedGatewayError(error)) {
+      return "changed";
+    }
+    return "failed";
   }
+}
+
+export async function cleanupProvisionalSession(
+  childSessionKey: string,
+  options?: SessionCleanupOptions,
+): Promise<boolean> {
+  return (await requestProvisionalSessionCleanup(childSessionKey, options)) === "deleted";
 }
 
 function normalizeSessionDeletionWaitOptions(options?: WaitForSessionDeletionOptions): {
@@ -169,11 +268,7 @@ function normalizeSessionDeletionWaitOptions(options?: WaitForSessionDeletionOpt
 
 async function deleteProvisionalSessionWithBound(params: {
   childSessionKey: string;
-  cleanupOptions?: {
-    emitLifecycleHooks?: boolean;
-    deleteTranscript?: boolean;
-    expectedIdentity?: ProvisionalSessionCleanupIdentity;
-  };
+  cleanupOptions?: SessionCleanupOptions;
   waitOptions: ReturnType<typeof normalizeSessionDeletionWaitOptions>;
 }): Promise<ProvisionalSessionDeletionOutcome> {
   const startedAt = Date.now();
@@ -187,13 +282,15 @@ async function deleteProvisionalSessionWithBound(params: {
         params.waitOptions.maxElapsedMs === 0 ? 1 : Math.max(1, remainingElapsedMs),
       ),
     );
-    if (
-      await cleanupProvisionalSession(params.childSessionKey, {
-        ...params.cleanupOptions,
-        timeoutMs: attemptTimeoutMs,
-      })
-    ) {
+    const outcome = await requestProvisionalSessionCleanup(params.childSessionKey, {
+      ...params.cleanupOptions,
+      timeoutMs: attemptTimeoutMs,
+    });
+    if (outcome === "deleted") {
       return "deleted";
+    }
+    if (outcome === "changed") {
+      return "not_deleted";
     }
     if (
       attempts >= params.waitOptions.maxAttempts ||
@@ -215,13 +312,17 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
   expectedIdentity?: ProvisionalSessionCleanupIdentity;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+  expectedSessionUpdatedAt?: number;
   waitForSessionDeletion?: WaitForSessionDeletionOptions;
 }): Promise<{
   attachmentsRemoved: boolean;
   sessionDeleted: boolean;
   sessionDeletion: ProvisionalSessionDeletionOutcome;
 }> {
-  const expectedIdentity = normalizeProvisionalSessionCleanupIdentity(params.expectedIdentity);
+  const expectedIdentity = normalizeCleanupOptionsIdentity(params);
+  const guardedDeletion = hasDeletionGuard(expectedIdentity);
   const removeAttachments = async (): Promise<boolean> => {
     if (!params.attachmentAbsDir) {
       return true;
@@ -239,78 +340,67 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
     expectedIdentity,
   };
   const waitOptions = normalizeSessionDeletionWaitOptions(params.waitForSessionDeletion);
-  if (!expectedIdentity) {
-    const attachmentsRemoved = await removeAttachments();
-    if (waitOptions.enabled) {
-      const sessionDeletion = await deleteProvisionalSessionWithBound({
-        childSessionKey: params.childSessionKey,
-        cleanupOptions: sessionCleanupOptions,
-        waitOptions,
-      });
-      return {
-        attachmentsRemoved,
-        sessionDeleted: sessionDeletion === "deleted",
-        sessionDeletion,
-      };
-    }
-    const sessionDeleted = await cleanupProvisionalSession(
-      params.childSessionKey,
-      sessionCleanupOptions,
-    );
-    return {
-      attachmentsRemoved,
-      sessionDeleted,
-      sessionDeletion: sessionDeleted ? "deleted" : "not_deleted",
-    };
+  let attachmentsRemoved = true;
+  if (!guardedDeletion) {
+    attachmentsRemoved = await removeAttachments();
   }
+  let sessionDeletion: ProvisionalSessionDeletionOutcome;
   if (waitOptions.enabled) {
-    const sessionDeletion = await deleteProvisionalSessionWithBound({
+    sessionDeletion = await deleteProvisionalSessionWithBound({
       childSessionKey: params.childSessionKey,
       cleanupOptions: sessionCleanupOptions,
       waitOptions,
     });
-    const sessionDeleted = sessionDeletion === "deleted";
-    return {
-      attachmentsRemoved: sessionDeleted ? await removeAttachments() : false,
-      sessionDeleted,
-      sessionDeletion,
-    };
+  } else {
+    const outcome = await requestProvisionalSessionCleanup(
+      params.childSessionKey,
+      sessionCleanupOptions,
+    );
+    sessionDeletion =
+      outcome === "deleted" ? "deleted" : outcome === "changed" ? "not_deleted" : "not_deleted";
   }
-  const sessionDeleted = await cleanupProvisionalSession(
-    params.childSessionKey,
-    sessionCleanupOptions,
-  );
+  const sessionDeleted = sessionDeletion === "deleted";
+  if (guardedDeletion) {
+    attachmentsRemoved = sessionDeleted ? await removeAttachments() : false;
+  }
   return {
-    attachmentsRemoved: sessionDeleted ? await removeAttachments() : false,
+    attachmentsRemoved,
     sessionDeleted,
-    sessionDeletion: sessionDeleted ? "deleted" : "not_deleted",
+    sessionDeletion,
   };
 }
 
 export async function terminateAcceptedCollectorRun(params: {
   childSessionKey: string;
   gatewayRunId: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+  callGateway?: GatewayCall;
+  timeoutMs?: number;
 }): Promise<void> {
-  for (;;) {
+  const call = params.callGateway ?? callSubagentGateway;
+  const timeoutMs = params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS;
+  await retrySubagentCleanup(async () => {
     try {
-      await callSubagentGateway({
+      const response = await call({
         method: "chat.abort",
         params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
-        timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
+        timeoutMs,
       });
-      return;
-    } catch {
-      if (
-        await cleanupProvisionalSession(params.childSessionKey, {
-          deleteTranscript: true,
-        })
-      ) {
-        return;
+      if (isMatchingAbortResponse(response, params.gatewayRunId)) {
+        return true;
       }
+    } catch {
+      // Fall through to exact-session deletion.
     }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-      timer.unref?.();
+    const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
+      deleteTranscript: true,
+      expectedSessionId: params.expectedSessionId,
+      expectedLifecycleRevision: params.expectedLifecycleRevision,
+      callGateway: call,
+      timeoutMs,
     });
-  }
+    // A changed lifecycle proves the accepted run no longer owns this session.
+    return cleanup !== "failed";
+  });
 }

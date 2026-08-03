@@ -939,8 +939,17 @@ describe("spawnSubagentDirect seam flow", () => {
     const firstResult = await spawnReservedWorker("quarantine-persist-inspection-throws");
     expect(firstResult).toMatchObject({
       status: "error",
-      reservedCleanup: { sessionDeletion: "indeterminate", sessionIdentity },
+      reservedCleanup: {
+        sessionDeletion: "indeterminate",
+        sessionIdentity: {
+          expectedSessionId: expect.any(String),
+          expectedLifecycleRevision: expect.any(String),
+        },
+      },
     });
+    const retainedSessionIdentity = requireRecord(
+      requireRecord(firstResult.reservedCleanup).sessionIdentity,
+    );
     const provisionalCleanupAttempts = deleteCalls;
 
     hoisted.loadSessionStoreMock.mockImplementation(() => {
@@ -961,7 +970,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const deleteParams = hoisted.dispatchGatewayMethodInProcessMock.mock.calls
       .filter(([method]) => method === "sessions.delete")
       .map(([, params]) => requireRecord(params));
-    expect(deleteParams).toContainEqual(expect.objectContaining(sessionIdentity));
+    expect(deleteParams).toContainEqual(expect.objectContaining(retainedSessionIdentity));
 
     const blockedResult = await spawnOrdinaryWorker("after-retained-inspection-error");
     expect(blockedResult.status).toBe("forbidden");
@@ -1025,7 +1034,13 @@ describe("spawnSubagentDirect seam flow", () => {
     const firstResult = await spawnReservedWorker("quarantine-persist-replaced-child");
     expect(firstResult).toMatchObject({
       status: "error",
-      reservedCleanup: { sessionDeletion: "indeterminate", sessionIdentity },
+      reservedCleanup: {
+        sessionDeletion: "indeterminate",
+        sessionIdentity: {
+          expectedSessionId: expect.any(String),
+          expectedLifecycleRevision: expect.any(String),
+        },
+      },
     });
     expect(hoisted.quarantineFailedSubagentSpawnMock).toHaveBeenCalledTimes(1);
 
@@ -1887,23 +1902,28 @@ describe("spawnSubagentDirect seam flow", () => {
     let stopAllowed = false;
     let agentCalls = 0;
     let abortCalls = 0;
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        agentCalls += 1;
-        return { runId: `gateway-${agentCalls}` };
-      }
-      if (request.method === "chat.abort") {
-        abortCalls += 1;
-        if (!stopAllowed) {
-          throw new Error("abort unavailable");
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          agentCalls += 1;
+          return { runId: `gateway-${agentCalls}` };
+        }
+        if (request.method === "chat.abort") {
+          abortCalls += 1;
+          if (!stopAllowed) {
+            throw new Error("abort unavailable");
+          }
+          return {
+            aborted: true,
+            runIds: [requireRecord(request.params).runId],
+          };
+        }
+        if (request.method === "sessions.delete") {
+          throw new Error("delete unavailable");
         }
         return {};
-      }
-      if (request.method === "sessions.delete") {
-        throw new Error("delete unavailable");
-      }
-      return {};
-    });
+      },
+    );
 
     const first = await spawnSubagentDirect(
       { task: "stop-confirmation-first", collect: true, groupId: "stop-confirmation" },
@@ -2544,6 +2564,8 @@ describe("spawnSubagentDirect seam flow", () => {
     const childSessionKey = result.childSessionKey as string;
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(2);
     expect(persistedStore?.[childSessionKey]).toMatchObject({
+      sessionId: expect.any(String),
+      lifecycleRevision: expect.any(String),
       spawnedBy: "agent:main:main",
       completionOwnerSessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
@@ -2755,7 +2777,10 @@ describe("spawnSubagentDirect seam flow", () => {
       runId: "ambiguous-reserved-run",
       reservedCleanup: {
         sessionDeletion: "indeterminate",
-        sessionIdentity,
+        sessionIdentity: {
+          expectedSessionId: expect.any(String),
+          expectedLifecycleRevision: expect.any(String),
+        },
       },
     });
     const capturedSessionIdentity = requireRecord(
@@ -3000,6 +3025,10 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await cleanupApi.cleanupFailedSpawnBeforeAgentStart({
       childSessionKey: "agent:worker:subagent:timeout-boundary",
       deleteTranscript: true,
+      expectedIdentity: {
+        expectedSessionId: "timeout-boundary-session",
+        expectedLifecycleRevision: "timeout-boundary-lifecycle",
+      },
       waitForSessionDeletion: { maxAttempts: 10, maxElapsedMs: 0, retryDelayMs: 0 },
     });
 

@@ -27,6 +27,7 @@ import {
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentClaudeCliBackendTestFixture,
   installSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
@@ -3147,6 +3148,18 @@ describe("SystemAgentChatEngine", () => {
 });
 
 describe("OpenClaw agent loop backends", () => {
+  let restoreCliBackendFixture: (() => void) | undefined;
+
+  beforeAll(() => {
+    // These cases own chat routing and CLI session continuity. Anthropic setup tests own loading
+    // the generated backend artifact, so keep this integration on the same contract-level fixture.
+    restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
+  });
+
+  afterAll(() => {
+    restoreCliBackendFixture?.();
+  });
+
   it("runs a configured claude-cli model through the CLI loop with the ring-zero MCP tool", async () => {
     useTempStateDir();
     const config = {

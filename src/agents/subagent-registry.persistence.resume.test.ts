@@ -23,10 +23,6 @@ const { announceSpy } = vi.hoisted(() => ({
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
-vi.mock("./subagent-orphan-recovery.js", () => ({
-  scheduleOrphanRecovery: vi.fn(),
-}));
-
 let mod: typeof import("./subagent-registry.test-helpers.js");
 let callGatewayModule: typeof import("../gateway/call.js");
 let agentEventsModule: typeof import("../infra/agent-events.js");

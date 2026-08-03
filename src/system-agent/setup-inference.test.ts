@@ -21,6 +21,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -1390,10 +1391,12 @@ describe("activateSetupInference", () => {
     } satisfies OpenClawConfig;
     const configHarness = createConfigTransformHarness(initialConfig);
     const runCliAgent = vi.fn(successfulRunner("claude-cli", "claude-opus-5"));
+    const resolveRouteMetadata = vi.fn(resolvePluginMetadataSnapshot);
     const result = await activateSetupInference({
       kind: "claude-cli",
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(initialConfig),
+        resolvePluginMetadataSnapshot: resolveRouteMetadata,
         runCliAgent: runCliAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
       },
@@ -1424,6 +1427,7 @@ describe("activateSetupInference", () => {
       tools: { allow: ["exec"] },
     });
     expect(configHarness.transform).toHaveBeenCalledOnce();
+    expect(resolveRouteMetadata).toHaveBeenCalledOnce();
   });
 
   it("rejects an unattested successful candidate before persisting its model", async () => {
@@ -3863,6 +3867,12 @@ describe("activateSetupInference", () => {
     const ensureRegistryLoaded = vi.fn(() => {
       events.push("reload-active-registry");
     });
+    const resolveRouteMetadata = vi.fn(
+      (...args: Parameters<typeof resolvePluginMetadataSnapshot>) => {
+        events.push("resolve-route-metadata");
+        return resolvePluginMetadataSnapshot(...args);
+      },
+    );
     const result = await activateCodexSetup({
       workspace: "/tmp/openclaw-workspace",
       runtime: { log: runtimeLog, error: () => {}, exit: () => {} } as never,
@@ -3879,6 +3889,7 @@ describe("activateSetupInference", () => {
             runtimeConfig: config,
           };
         }) as never,
+        resolvePluginMetadataSnapshot: resolveRouteMetadata,
         runEmbeddedAgent: runEmbeddedAgent as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
         markRetainedManagedNpmInstall: markRetainedInstall,
@@ -3938,10 +3949,15 @@ describe("activateSetupInference", () => {
       }),
     );
     expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
+    expect(resolveRouteMetadata).toHaveBeenCalledOnce();
+    expect(resolveRouteMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ allowCurrent: false }),
+    );
     expect(events).toEqual([
       "install-plugin",
       "retain-plugin-install",
       "refresh-plugin-registry",
+      "resolve-route-metadata",
       "live-test",
       "persist-plugin-config",
       "refresh-plugin-registry",

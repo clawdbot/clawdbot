@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
@@ -949,5 +950,41 @@ describe("resolveInFlightRunSnapshot", () => {
         maxBytes: 200,
       }),
     ).toEqual({ runId: "run-1", text: "short answer", plan: { steps: [] } });
+  });
+
+  it("prioritizes active progress and explicitly clears budget-dropped projections", () => {
+    const event = {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool" as const,
+      ts: 1_000,
+      data: { phase: "start", name: "read", toolCallId: "tool-1", args: {} },
+    };
+    const expected = {
+      runId: "run-1",
+      text: "",
+      events: [event],
+      plan: { steps: [] },
+    };
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: {
+          runId: "run-1",
+          text: "x".repeat(1_000),
+          events: [event],
+          plan: { steps: [{ step: "y".repeat(1_000), status: "in_progress" }] },
+        },
+        messages: [],
+        maxBytes: jsonUtf8Bytes([]) + jsonUtf8Bytes(expected),
+      }),
+    ).toEqual(expected);
+
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: { runId: "run-1", text: "", events: [event] },
+        messages: [],
+        maxBytes: jsonUtf8Bytes([]) + jsonUtf8Bytes({ runId: "run-1", text: "", events: [] }),
+      }),
+    ).toEqual({ runId: "run-1", text: "", events: [] });
   });
 });

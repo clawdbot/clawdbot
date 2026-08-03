@@ -341,6 +341,49 @@ describe("app-tool-stream throttled projections", () => {
       }
     },
   );
+
+  it("does not let an older replay replace newer live tool progress", () => {
+    useToolStreamFakeTimers();
+    try {
+      const host = createHost();
+      const toolCallId = "call-sequenced";
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          phase: "start",
+          name: "read",
+          toolCallId,
+          args: { path: "README.md" },
+        }),
+      );
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 3, "tool", {
+          phase: "update",
+          name: "read",
+          toolCallId,
+          partialResult: "newer live progress",
+        }),
+      );
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 2, "tool", {
+          phase: "update",
+          name: "read",
+          toolCallId,
+          partialResult: "older replayed progress",
+        }),
+      );
+      vi.advanceTimersByTime(80);
+
+      expect(host.chatToolMessages[0]?.content).toEqual([
+        { type: "toolcall", name: "read", arguments: { path: "README.md" } },
+        { type: "toolresult", name: "read", text: "newer live progress" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("app-tool-stream result blocks", () => {

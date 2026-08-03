@@ -75,7 +75,7 @@ vi.mock("../../agents/subagent-registry-read.js", async () => {
   };
 });
 
-vi.mock("../session-subagent-reactivation.runtime.js", () => ({
+vi.mock("../../agents/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
 }));
 
@@ -94,7 +94,7 @@ vi.mock("./chat-abort-handler.js", () => ({
     handleChatAbortRequestWithLifecycleMock(...args),
 }));
 
-import { sessionsHandlers } from "./sessions.js";
+import { sessionMessagingHandlers } from "./sessions-messaging.js";
 
 function createRequestContext(overrides: Record<string, unknown> = {}): GatewayRequestContext {
   return {
@@ -183,8 +183,8 @@ describe("sessions.send completed subagent follow-up status", () => {
     });
 
     await expectDefined(
-      sessionsHandlers["sessions.send"],
-      'sessionsHandlers["sessions.send"] test invariant',
+      sessionMessagingHandlers["sessions.send"],
+      'sessionMessagingHandlers["sessions.send"] test invariant',
     )({
       req: { id: "req-1" } as never,
       params: {
@@ -231,8 +231,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
       const respondMock = vi.fn();
       await expectDefined(
-        sessionsHandlers[method],
-        "sessionsHandlers[method] test invariant",
+        sessionMessagingHandlers[method],
+        "sessionMessagingHandlers[method] test invariant",
       )({
         req: { id: "req-rebuilding" } as never,
         params: {
@@ -277,8 +277,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-steer" } as never,
       params: {
@@ -318,8 +318,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-raced" } as never,
       params: {
@@ -361,8 +361,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-rebuild-after-interrupt" } as never,
       params: {
@@ -407,8 +407,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-steer-replay" } as never,
       params: {
@@ -449,8 +449,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-steer-fresh" } as never,
       params: {
@@ -493,8 +493,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-steer-inflight" } as never,
       params: {
@@ -558,8 +558,8 @@ describe("sessions.send completed subagent follow-up status", () => {
     const secondRespond = vi.fn();
     const invoke = (reqId: string, respond: ReturnType<typeof vi.fn>) =>
       expectDefined(
-        sessionsHandlers["sessions.steer"],
-        'sessionsHandlers["sessions.steer"] test invariant',
+        sessionMessagingHandlers["sessions.steer"],
+        'sessionMessagingHandlers["sessions.steer"] test invariant',
       )({
         req: { id: reqId } as never,
         params: {
@@ -643,8 +643,8 @@ describe("sessions.send completed subagent follow-up status", () => {
     const secondRespond = vi.fn();
     const invoke = (reqId: string, respond: ReturnType<typeof vi.fn>) =>
       expectDefined(
-        sessionsHandlers["sessions.steer"],
-        'sessionsHandlers["sessions.steer"] test invariant',
+        sessionMessagingHandlers["sessions.steer"],
+        'sessionMessagingHandlers["sessions.steer"] test invariant',
       )({
         req: { id: reqId } as never,
         params: {
@@ -695,8 +695,8 @@ describe("sessions.send completed subagent follow-up status", () => {
       const context = createRequestContext({ getRuntimeConfig: () => cfg });
 
       await expectDefined(
-        sessionsHandlers[method],
-        "sessionsHandlers[method] test invariant",
+        sessionMessagingHandlers[method],
+        "sessionMessagingHandlers[method] test invariant",
       )({
         req: { id: "req-1" } as never,
         params: {

@@ -101,7 +101,7 @@ export function readGatewayRunId(
     return undefined;
   }
   const { runId } = response as { runId?: unknown };
-  return typeof runId === "string" && runId ? runId : undefined;
+  return typeof runId === "string" && runId.trim() ? runId.trim() : undefined;
 }
 
 export function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {

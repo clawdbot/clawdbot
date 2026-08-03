@@ -39699,7 +39699,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 934,
+      "line": 936,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode uses the primary Gateway window",
       "surface": "apple",
@@ -39707,7 +39707,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 936,
+      "line": 938,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode off",
       "surface": "apple",
@@ -39715,7 +39715,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 938,
+      "line": 940,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode paused",
       "surface": "apple",
@@ -39723,7 +39723,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 941,
+      "line": 943,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Talk mode ready",
       "surface": "apple",
@@ -39731,7 +39731,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 942,
+      "line": 944,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Listening",
       "surface": "apple",
@@ -39739,7 +39739,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 943,
+      "line": 945,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -39747,7 +39747,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 944,
+      "line": 946,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Speaking",
       "surface": "apple",
@@ -39755,7 +39755,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 948,
+      "line": 950,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "What would you like to work on?",
       "surface": "apple",
@@ -39763,7 +39763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 952,
+      "line": 954,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Check OpenClaw status",
       "surface": "apple",
@@ -39771,7 +39771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 953,
+      "line": 955,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Summarize the current OpenClaw status and tell me what needs attention.",
       "surface": "apple",
@@ -39779,7 +39779,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 956,
+      "line": 958,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "What can you do?",
       "surface": "apple",
@@ -39787,7 +39787,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 957,
+      "line": 959,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Show me what you can help with on this Mac right now.",
       "surface": "apple",
@@ -39795,7 +39795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 960,
+      "line": 962,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Catch me up",
       "surface": "apple",
@@ -39803,7 +39803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 961,
+      "line": 963,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
       "source": "Summarize what happened in my threads since yesterday.",
       "surface": "apple",
@@ -42147,7 +42147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 744,
+      "line": 746,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift",
       "source": "delivery unconfirmed",
       "surface": "apple",
@@ -42155,7 +42155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 744,
+      "line": 746,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift",
       "source": "queued after route change",
       "surface": "apple",

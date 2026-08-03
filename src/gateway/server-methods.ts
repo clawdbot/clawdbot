@@ -130,7 +130,50 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./server-methods/sessions-files.js").then((module) => module.sessionsFilesHandlers),
   "sessions-diff": () =>
     import("./server-methods/sessions-diff.js").then((module) => module.sessionsDiffHandlers),
-  sessions: () => import("./server-methods/sessions.js").then((module) => module.sessionsHandlers),
+  "sessions-abort": () =>
+    import("./server-methods/sessions-abort.js").then((module) => module.sessionAbortHandlers),
+  "sessions-compact": () =>
+    import("./server-methods/sessions-compact.js").then((module) => module.sessionCompactHandlers),
+  "sessions-compaction-checkpoints": () =>
+    import("./server-methods/sessions-compaction-checkpoints.js").then(
+      (module) => module.sessionCheckpointHandlers,
+    ),
+  "sessions-compaction-queries": () =>
+    import("./server-methods/sessions-compaction-queries.js").then(
+      (module) => module.sessionCheckpointQueryHandlers,
+    ),
+  "sessions-create": () =>
+    import("./server-methods/sessions-create.js").then((module) => module.sessionCreateHandlers),
+  "sessions-delete": () =>
+    import("./server-methods/sessions-delete.js").then((module) => module.sessionDeleteHandlers),
+  "sessions-dispatch": () =>
+    import("./server-methods/sessions-dispatch.js").then(
+      (module) => module.sessionDispatchHandlers,
+    ),
+  "sessions-groups": () =>
+    import("./server-methods/sessions-groups.js").then((module) => module.sessionGroupHandlers),
+  "sessions-messaging": () =>
+    import("./server-methods/sessions-messaging.js").then(
+      (module) => module.sessionMessagingHandlers,
+    ),
+  "sessions-mutations": () =>
+    import("./server-methods/sessions-mutations.js").then(
+      (module) => module.sessionMutationHandlers,
+    ),
+  "sessions-read": () =>
+    import("./server-methods/sessions-read.js").then((module) => module.sessionReadHandlers),
+  "sessions-rewind": () =>
+    import("./server-methods/sessions-rewind.js").then((module) => module.sessionRewindHandlers),
+  "sessions-sharing": () =>
+    import("./server-methods/sessions-sharing.js").then((module) => module.sessionSharingHandlers),
+  "sessions-subscriptions": () =>
+    import("./server-methods/sessions-subscriptions.js").then(
+      (module) => module.sessionSubscriptionHandlers,
+    ),
+  "sessions-suggestions": () =>
+    import("./server-methods/sessions-suggestions.js").then(
+      (module) => module.sessionSuggestionHandlers,
+    ),
   "session-catalog": () =>
     import("./server-methods/session-catalog.js").then((module) => module.sessionCatalogHandlers),
   "session-discussion": () =>

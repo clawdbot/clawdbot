@@ -17,14 +17,9 @@ vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn(
 
 type TestNodesPage = HTMLElement & {
   context: ApplicationContext;
-  client: GatewayBrowserClient | null;
-  connected: boolean;
+  nodeState: ReturnType<typeof createInitialNodesState>;
   requestGeneration: number;
-  nodesLoading: boolean;
-  nodes: Array<Record<string, unknown>>;
   presence: PresenceEntry[];
-  lastError: string | null;
-  chatError: string | null;
   routeData?: NodesRouteData;
   subscriptions: {
     hostConnected: () => void;
@@ -33,17 +28,26 @@ type TestNodesPage = HTMLElement & {
   };
   disconnectedCallback: () => void;
   willUpdate: (changed: Map<PropertyKey, unknown>) => void;
-  applyGatewaySnapshot: (
-    snapshot: ApplicationGatewaySnapshot,
-    forceReset: boolean,
-    initialBind?: boolean,
-  ) => void;
+  gateway: {
+    applySnapshot: (
+      snapshot: ApplicationGatewaySnapshot,
+      binding: { initial: boolean; sourceChanged: boolean },
+    ) => void;
+  };
   ensureInitialData: () => void;
   confirmInventoryRemoval: (prompt: {
     kind: "entry";
     entry: InventoryRemovalRequest;
   }) => Promise<void>;
 };
+
+function applyGatewaySnapshot(
+  page: TestNodesPage,
+  snapshot: ApplicationGatewaySnapshot,
+  sourceChanged = false,
+) {
+  page.gateway.applySnapshot(snapshot, { initial: false, sourceChanged });
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -110,13 +114,13 @@ describe("NodesPage gateway lifecycle", () => {
     page.willUpdate(new Map([["routeData", undefined]]));
 
     page.subscriptions.hostConnected();
-    expect(page.client).toBeNull();
-    expect(page.nodes).toBe(preloadedNodes);
+    expect(page.nodeState.client).toBeNull();
+    expect(page.nodeState.nodes).toBe(preloadedNodes);
 
     page.context = { gateway: gateway(client) } as unknown as ApplicationContext;
     page.presence = [{ instanceId: "stale" }];
-    page.subscriptions.hostUpdate();
-    expect(page.nodes).toEqual([]);
+    applyGatewaySnapshot(page, page.context.gateway.snapshot, true);
+    expect(page.nodeState.nodes).toEqual([]);
     expect(page.presence).toEqual([]);
     expect(page.requestGeneration).toBeGreaterThan(0);
 
@@ -141,7 +145,7 @@ describe("NodesPage gateway lifecycle", () => {
 
     page.willUpdate(new Map([["routeData", undefined]]));
 
-    expect(page.nodes).toEqual([]);
+    expect(page.nodeState.nodes).toEqual([]);
     expect(page.ensureInitialData).toHaveBeenCalledOnce();
   });
 
@@ -154,28 +158,27 @@ describe("NodesPage gateway lifecycle", () => {
       .mockReturnValueOnce(second.promise);
     const client = { request } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-nodes-page") as TestNodesPage;
-    page.client = client;
-    page.connected = true;
+    page.nodeState = createInitialNodesState({ client, connected: true });
     page.context = {
       runtimeConfig: { state: { configSnapshot: null, configLoading: false } },
     } as unknown as ApplicationContext;
 
-    const staleLoad = loadNodes(page);
-    page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
-    page.applyGatewaySnapshot(gatewaySnapshot(client, true), false);
-    const currentLoad = loadNodes(page);
+    const staleLoad = loadNodes(page.nodeState);
+    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
+    applyGatewaySnapshot(page, gatewaySnapshot(client, true));
+    const currentLoad = loadNodes(page.nodeState);
 
     first.resolve({ nodes: [{ id: "old" }] });
     await staleLoad;
-    expect(page.nodes).toEqual([]);
-    expect(page.nodesLoading).toBe(true);
+    expect(page.nodeState.nodes).toEqual([]);
+    expect(page.nodeState.nodesLoading).toBe(true);
 
     second.resolve({ nodes: [{ id: "new" }] });
     await currentLoad;
-    expect(page.nodes).toEqual([{ id: "new" }]);
-    expect(page.nodesLoading).toBe(false);
+    expect(page.nodeState.nodes).toEqual([{ id: "new" }]);
+    expect(page.nodeState.nodesLoading).toBe(false);
 
-    page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
+    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
   });
 
   it("retires an in-flight load when its gateway provider changes without a client change", async () => {
@@ -191,25 +194,25 @@ describe("NodesPage gateway lifecycle", () => {
     page.context = {
       runtimeConfig: { state: { configSnapshot: null, configLoading: false } },
     } as unknown as ApplicationContext;
-    page.applyGatewaySnapshot(snapshot, false);
+    applyGatewaySnapshot(page, snapshot);
 
-    const staleLoad = loadNodes(page);
+    const staleLoad = loadNodes(page.nodeState);
     const previousGeneration = page.requestGeneration;
-    page.applyGatewaySnapshot(snapshot, true);
-    const currentLoad = loadNodes(page);
+    applyGatewaySnapshot(page, snapshot, true);
+    const currentLoad = loadNodes(page.nodeState);
 
     expect(page.requestGeneration).toBeGreaterThan(previousGeneration);
     first.resolve({ nodes: [{ id: "old" }] });
     await staleLoad;
-    expect(page.nodes).toEqual([]);
-    expect(page.nodesLoading).toBe(true);
+    expect(page.nodeState.nodes).toEqual([]);
+    expect(page.nodeState.nodesLoading).toBe(true);
 
     second.resolve({ nodes: [{ id: "new" }] });
     await currentLoad;
-    expect(page.nodes).toEqual([{ id: "new" }]);
-    expect(page.nodesLoading).toBe(false);
+    expect(page.nodeState.nodes).toEqual([{ id: "new" }]);
+    expect(page.nodeState.nodesLoading).toBe(false);
 
-    page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
+    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
   });
 
   it("restores request ownership when a disconnected page reconnects", async () => {
@@ -225,23 +228,23 @@ describe("NodesPage gateway lifecycle", () => {
     page.context = {
       runtimeConfig: { state: { configSnapshot: null, configLoading: false } },
     } as unknown as ApplicationContext;
-    page.applyGatewaySnapshot(snapshot, false);
+    applyGatewaySnapshot(page, snapshot);
 
-    const staleLoad = loadNodes(page);
+    const staleLoad = loadNodes(page.nodeState);
     page.disconnectedCallback();
-    page.applyGatewaySnapshot(snapshot, false);
-    const currentLoad = loadNodes(page);
+    applyGatewaySnapshot(page, snapshot, true);
+    const currentLoad = loadNodes(page.nodeState);
 
     first.resolve({ nodes: [{ id: "old" }] });
     await staleLoad;
-    expect(page.nodes).toEqual([]);
-    expect(page.nodesLoading).toBe(true);
+    expect(page.nodeState.nodes).toEqual([]);
+    expect(page.nodeState.nodesLoading).toBe(true);
 
     second.resolve({ nodes: [{ id: "new" }] });
     await currentLoad;
-    expect(page.nodes).toEqual([{ id: "new" }]);
+    expect(page.nodeState.nodes).toEqual([{ id: "new" }]);
 
-    page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
+    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
   });
 
   it("cancels a pending removal confirmation when the connection resets", async () => {
@@ -250,8 +253,7 @@ describe("NodesPage gateway lifecycle", () => {
     const confirmation = deferred<boolean>();
     vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
     const page = document.createElement("openclaw-nodes-page") as TestNodesPage;
-    page.client = client;
-    page.connected = true;
+    page.nodeState = createInitialNodesState({ client, connected: true });
     page.context = {
       runtimeConfig: { state: { configSnapshot: null, configLoading: false } },
     } as unknown as ApplicationContext;
@@ -262,7 +264,7 @@ describe("NodesPage gateway lifecycle", () => {
     await Promise.resolve();
     const signal = vi.mocked(showConfirmDialog).mock.calls[0]?.[0].signal;
 
-    page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
+    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
     confirmation.resolve(true);
     await pending;
 

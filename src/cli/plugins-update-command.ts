@@ -184,10 +184,10 @@ type RunPluginUpdateCommandParams = {
 
 /** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
 export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
-  assertConfigWriteAllowedInCurrentMode();
   if (params.opts.dryRun) {
     return await runPluginUpdateCommandUnlocked(params);
   }
+  assertConfigWriteAllowedInCurrentMode();
   return await withPluginLifecycleLease(
     {},
     async () => await runPluginUpdateCommandUnlocked(params),
@@ -195,7 +195,9 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
 }
 
 async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandParams) {
-  assertConfigWriteAllowedInCurrentMode();
+  if (!params.opts.dryRun) {
+    assertConfigWriteAllowedInCurrentMode();
+  }
 
   const sourceSnapshotPromise = readConfigFileSnapshotForWrite()
     .then((prepared) => ({

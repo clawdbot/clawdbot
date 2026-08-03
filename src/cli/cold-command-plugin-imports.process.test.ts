@@ -147,6 +147,8 @@ it.each(cases)(
         cwd: path.resolve("."),
         env: {
           ...process.env,
+          // This fixture owns command imports, not entrypoint respawn or compile-cache behavior.
+          NODE_DISABLE_COMPILE_CACHE: "1",
           NODE_ENV: undefined,
           VITEST: undefined,
           OPENCLAW_CLAWHUB_URL: clawHubUrl,
@@ -155,6 +157,7 @@ it.each(cases)(
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_DEV_SOURCE_ROOT: path.resolve("."),
           OPENCLAW_HOME: path.join(root, "home"),
+          OPENCLAW_NO_RESPAWN: "1",
           OPENCLAW_STATE_DIR: stateDir,
         },
         maxBuffer: 4 * 1024 * 1024,

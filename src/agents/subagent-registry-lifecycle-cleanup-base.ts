@@ -214,7 +214,6 @@ export function createSubagentRegistryLifecycleCleanupBase(
     // Cleanup can yield to attachment, mirror, or announce work. A successor
     // registered while it was suspended owns every session-scoped side effect.
     await params.retireSupersededRun(runId, entry);
-    params.persist(runId);
     return true;
   };
 

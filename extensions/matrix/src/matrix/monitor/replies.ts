@@ -182,13 +182,13 @@ export async function deliverMatrixReplies(params: {
           cfg: params.cfg,
           accountId: params.accountId,
           tableMode,
+          preserveWhitespace: true,
         });
         for (const chunk of chunks) {
-          const trimmed = chunk.trim();
-          if (!trimmed) {
+          if (!chunk.trim()) {
             continue;
           }
-          await sendMessageMatrix(params.roomId, trimmed, {
+          await sendMessageMatrix(params.roomId, chunk, {
             client: params.client,
             cfg: params.cfg,
             replyToId: replyToIdForReply,

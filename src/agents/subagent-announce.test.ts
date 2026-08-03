@@ -105,7 +105,16 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     directOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
     requesterSessionOrigin?: { provider?: string; channel?: string };
     bestEffortDeliver?: boolean;
+    isSourceSessionEffectsAllowed?: () => boolean;
   }) => {
+    if (params.isSourceSessionEffectsAllowed?.() === false) {
+      return {
+        delivered: false,
+        path: "none",
+        reason: "source_owner_changed",
+        terminal: true,
+      };
+    }
     // The delivery mock preserves the key branch: active Discord requester
     // sessions are steered in-process, while inactive/direct paths call agent.
     const store = loadSessionStoreMock("/tmp/sessions.json") as Record<string, unknown>;
@@ -199,7 +208,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 
-vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryRuntimeMock);
+vi.mock("./subagent-registry-runtime.js", () => subagentRegistryRuntimeMock);
 import { defaultRuntime } from "../runtime.js";
 import { applySubagentWaitOutcome } from "./subagent-announce-output.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
@@ -305,6 +314,12 @@ describe("subagent announce seam flow", () => {
   });
 
   it("suppresses ANNOUNCE_SKIP delivery while still deleting the child session", async () => {
+    loadSessionStoreMock.mockReturnValue({
+      "agent:main:subagent:test": {
+        sessionId: "child-session-id",
+        lifecycleRevision: "child-lifecycle-revision",
+      },
+    });
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-direct-skip-whitespace",
@@ -329,6 +344,8 @@ describe("subagent announce seam flow", () => {
         key: "agent:main:subagent:test",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: "child-session-id",
+        expectedLifecycleRevision: "child-lifecycle-revision",
       },
       timeoutMs: 10_000,
     });
@@ -351,6 +368,48 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+  });
+
+  it("delivers frozen terminal facts while child-session effects stay suppressed", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:retired",
+      childRunId: "run-retired-recovery",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "recover interrupted work",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      outcome: { status: "error", error: "interrupted by restart" },
+      roundOneReply: "frozen terminal result",
+      suppressChildSessionEffects: true,
+      isChildSessionEffectsAllowed: () => false,
+      isCompletionDeliveryAllowed: () => true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+  });
+
+  it("drops requester delivery after the cleanup owner changes", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:retired",
+      childRunId: "run-retired-owner",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "recover interrupted work",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      outcome: { status: "error", error: "interrupted by restart" },
+      roundOneReply: "stale frozen terminal result",
+      suppressChildSessionEffects: true,
+      isCompletionDeliveryAllowed: () => false,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).not.toHaveBeenCalled();
   });
 
   it("warns when ANNOUNCE_SKIP suppresses a cron job completion", async () => {
@@ -404,6 +463,12 @@ describe("subagent announce seam flow", () => {
   });
 
   it("keeps lifecycle hooks enabled when deleting a completed session-mode child session", async () => {
+    loadSessionStoreMock.mockReturnValue({
+      "agent:main:subagent:test": {
+        sessionId: "child-session-id",
+        lifecycleRevision: "child-lifecycle-revision",
+      },
+    });
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-session-delete-cleanup",
@@ -429,6 +494,8 @@ describe("subagent announce seam flow", () => {
         key: "agent:main:subagent:test",
         deleteTranscript: true,
         emitLifecycleHooks: true,
+        expectedSessionId: "child-session-id",
+        expectedLifecycleRevision: "child-lifecycle-revision",
       },
       timeoutMs: 10_000,
     });

@@ -25,7 +25,7 @@ const { registryRuntimeMock } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("./subagent-announce.registry.runtime.js", () => registryRuntimeMock);
+vi.mock("./subagent-registry-runtime.js", () => registryRuntimeMock);
 
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: vi.fn(async () => ({})),

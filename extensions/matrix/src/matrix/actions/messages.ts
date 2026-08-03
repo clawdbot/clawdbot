@@ -108,11 +108,10 @@ export async function editMatrixMessage(
   if (!opts.cfg) {
     throw new Error("Matrix message actions require a resolved runtime config.");
   }
-  const trimmed = content.trim();
-  if (!trimmed) {
+  if (!content.trim()) {
     throw new Error("Matrix edit requires content");
   }
-  const eventId = await editMessageMatrix(roomId, messageId, trimmed, {
+  const eventId = await editMessageMatrix(roomId, messageId, content.trimEnd(), {
     cfg: opts.cfg,
     accountId: opts.accountId ?? undefined,
     client: opts.client,

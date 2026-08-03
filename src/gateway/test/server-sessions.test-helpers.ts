@@ -16,6 +16,7 @@ import {
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import {
   connectOk,
@@ -25,6 +26,7 @@ import {
   testState,
   writeSessionStore,
 } from "../test-helpers.js";
+import { sessionHandlerTestSurface } from "./server-sessions-handlers.test-support.js";
 
 export const getSessionManagerModule = createLazyRuntimeModule(
   () => import("../../agents/sessions/index.js"),
@@ -35,7 +37,7 @@ export const getGatewayConfigModule = createLazyRuntimeModule(
 );
 
 export async function getSessionsHandlers() {
-  return (await import("../server-methods/sessions.js")).sessionsHandlers;
+  return sessionHandlerTestSurface;
 }
 
 type TestTranscriptMessage = Record<string, unknown> & {
@@ -128,7 +130,7 @@ const sessionCleanupMocks = vi.hoisted(() => ({
     );
     return { followupCleared: 0, laneCleared: 0, keys: clearedKeys };
   }),
-  stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
+  stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0 })),
 }));
 
 const bootstrapCacheMocks = vi.hoisted(() => ({
@@ -672,6 +674,9 @@ export async function directSessionReq<TPayload = unknown>(
 ): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
+  const loadGatewayModelCatalog =
+    (opts?.context?.loadGatewayModelCatalog as GatewayRequestContext["loadGatewayModelCatalog"]) ??
+    (async () => agentDiscoveryMock.models);
   let result:
     | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
     | undefined;
@@ -699,7 +704,8 @@ export async function directSessionReq<TPayload = unknown>(
       chatQueuedTurns: new Map(),
       dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
-      loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
+      loadGatewayModelCatalog,
+      readPreparedGatewayModelCatalog: loadGatewayModelCatalog,
       getRuntimeConfig,
       ...opts?.context,
     } as never,

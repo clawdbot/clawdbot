@@ -1750,11 +1750,15 @@ describe("gateway send mirroring", () => {
     expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
   });
 
-  it("accepts media-only sends without message", async () => {
+  it.each([
+    { name: "without message", message: undefined },
+    { name: "with a whitespace-only message", message: "  \n\t  " },
+  ])("accepts media-only sends $name", async ({ message }) => {
     mockDeliverySuccess("m-media");
 
     const { respond } = await runSend({
       to: "channel:C1",
+      ...(message === undefined ? {} : { message }),
       mediaUrl: "https://example.com/a.png",
       channel: "slack",
       idempotencyKey: "idem-media-only",
@@ -1768,6 +1772,31 @@ describe("gateway send mirroring", () => {
     expect(response?.[1]?.messageId).toBe("m-media");
     expect(response?.[2]).toBeUndefined();
     expect(response?.[3]?.channel).toBe("slack");
+  });
+
+  it.each([
+    {
+      name: "leading Markdown code-block indentation",
+      message: "    const answer = 42;\n      return answer;",
+    },
+    {
+      name: "surrounding whitespace and trailing newlines",
+      message: " \t@teammate /command  \n\n",
+    },
+  ])("preserves authored message whitespace for $name", async ({ message }) => {
+    mockDeliverySuccess("m-authored-whitespace");
+
+    const { respond } = await runSend({
+      to: "channel:C1",
+      message,
+      channel: "slack",
+      sessionKey: "agent:main:main",
+      idempotencyKey: "idem-authored-whitespace",
+    });
+
+    expect(deliveryCall()?.payloads?.[0]?.text).toBe(message);
+    expect(deliveryCall()?.mirror?.text).toBe(message.trimEnd());
+    expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
   it("passes outbound session context for gateway media sends", async () => {

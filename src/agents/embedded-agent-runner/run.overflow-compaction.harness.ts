@@ -202,9 +202,7 @@ export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
   },
 );
 const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
-export const mockedSleepWithAbort = vi.fn(
-  async (_ms: number, _abortSignal?: AbortSignal) => undefined,
-);
+const mockedSleepWithAbort = vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined);
 function createMockAgentDiscoveryStores(): MockAgentDiscoveryStores {
   return {
     authStorage: {
@@ -251,7 +249,7 @@ const mockedPrepareProviderRuntimeAuth = vi.fn<
 >(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
-export const mockedBuildEmbeddedRunPayloads = vi.fn<
+const mockedBuildEmbeddedRunPayloads = vi.fn<
   (
     ...args: Parameters<typeof buildEmbeddedRunPayloads>
   ) => ReturnType<typeof buildEmbeddedRunPayloads>
@@ -307,7 +305,7 @@ const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
 );
 const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
 
-export const mockedLog: {
+const mockedLog: {
   debug: Mock<(...args: unknown[]) => void>;
   info: Mock<(...args: unknown[]) => void>;
   warn: Mock<(...args: unknown[]) => void>;
@@ -447,10 +445,7 @@ export const overflowBaseRunParams = {
   runId: "run-1",
 } as const;
 
-/** Reset every mocked runner dependency to the default successful no-op state. */
-export function resetRunOverflowCompactionHarnessMocks(): void {
-  vi.unstubAllEnvs();
-  resetCommandQueueStateForTest();
+function resetMockAgentHarness(): void {
   clearAgentHarnesses();
   registerAgentHarness({
     id: "codex",
@@ -472,6 +467,13 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
       return { assistant, ...(result.attemptUsage ? { usage: result.attemptUsage } : {}) };
     },
   });
+}
+
+/** Reset every mocked runner dependency to the default successful no-op state. */
+function resetRunOverflowCompactionHarnessMocks(): void {
+  vi.unstubAllEnvs();
+  resetCommandQueueStateForTest();
+  resetMockAgentHarness();
   mockedGlobalHookRunner.hasHooks.mockReset();
   mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
   mockedGlobalHookRunner.runBeforeAgentReply.mockReset();
@@ -661,6 +663,80 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
   mockedSleepWithAbort.mockReset();
   mockedSleepWithAbort.mockResolvedValue(undefined);
+}
+
+/** Reset only the seams mutated by the shared public-entry integration suites. */
+export function resetSharedRunIntegrationHarnessMocks(): void {
+  vi.unstubAllEnvs();
+  resetCommandQueueStateForTest();
+  resetMockAgentHarness();
+
+  mockedBuildEmbeddedRunPayloads.mockReset();
+  mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
+  mockedClassifyFailoverReason.mockReset();
+  mockedClassifyFailoverReason.mockReturnValue(null);
+  mockedClassifyAssistantFailoverReason.mockReset();
+  mockedClassifyAssistantFailoverReason.mockImplementation(
+    (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
+      mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
+  );
+  mockedCompactDirect.mockReset();
+  mockedCompactDirect.mockResolvedValue({
+    ok: false,
+    compacted: false,
+    reason: "nothing to compact",
+  });
+  mockedEnsureAuthProfileStore.mockReset();
+  mockedEnsureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReset();
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+    version: 1,
+    profiles: {},
+  });
+  mockedFormatAssistantErrorText.mockReset();
+  mockedFormatAssistantErrorText.mockReturnValue("");
+  mockedGetApiKeyForModel.mockReset();
+  mockedGetApiKeyForModel.mockImplementation(
+    async ({ profileId }: MockGetApiKeyForModelParams = {}) => ({
+      apiKey: "test-key",
+      profileId: profileId ?? "test-profile",
+      source: "test",
+      mode: "api-key",
+    }),
+  );
+  mockedGlobalHookRunner.hasHooks.mockReset();
+  mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+  mockedGlobalHookRunner.runBeforeAgentReply.mockReset();
+  mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue(undefined);
+  mockedIsCompactionFailureError.mockReset();
+  mockedIsCompactionFailureError.mockReturnValue(false);
+  mockedIsFailoverAssistantError.mockReset();
+  mockedIsFailoverAssistantError.mockReturnValue(false);
+  mockedIsLikelyContextOverflowError.mockReset();
+  mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
+    const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
+    return (
+      lower.includes("request_too_large") ||
+      lower.includes("context window exceeded") ||
+      (lower.includes("context window") && lower.includes("ran out of room")) ||
+      lower.includes("prompt is too long")
+    );
+  });
+  mockedIsRateLimitAssistantError.mockReset();
+  mockedIsRateLimitAssistantError.mockReturnValue(false);
+  mockedResolveAuthProfileOrder.mockReset();
+  mockedResolveAuthProfileOrder.mockReturnValue([]);
+  mockedResolveModelAsync.mockReset();
+  mockedResolveModelAsync.mockImplementation(
+    async (provider?: string, modelId?: string, _agentDir?: string, cfg?: unknown) =>
+      createMockResolvedModel(provider, modelId, cfg),
+  );
+  mockedRunEmbeddedAttempt.mockReset();
+
+  mockedAcquireAgentRunPreparedModelRuntime.mockClear();
+  mockedLog.warn.mockClear();
+  mockedMarkAuthProfileFailure.mockClear();
+  mockedSleepWithAbort.mockClear();
 }
 
 /** Install module mocks, import the runner, and return the mocked entrypoint. */

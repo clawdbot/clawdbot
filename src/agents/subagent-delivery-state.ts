@@ -1,3 +1,4 @@
+import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type {
   SubagentCompletionDeliveryState,
   SubagentCompletionState,
@@ -32,6 +33,11 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
     entry.pauseReason !== "sessions_yield"
       ? "interrupted-recovery"
       : undefined;
+  if (entry.completion) {
+    entry.completion.terminalReply = normalizeAgentRunTerminalReplySnapshot(
+      entry.completion.terminalReply,
+    );
+  }
   const killReconciliation = entry.killReconciliation;
   if (
     !killReconciliation ||
@@ -46,6 +52,35 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
       supersededAt: Number.isFinite(killReconciliation.supersededAt)
         ? killReconciliation.supersededAt
         : undefined,
+    };
+  }
+  const killIntent = entry.killIntent;
+  if (
+    !killIntent ||
+    typeof killIntent !== "object" ||
+    !Number.isFinite(killIntent.requestedAt) ||
+    typeof killIntent.reason !== "string" ||
+    !killIntent.reason.trim()
+  ) {
+    delete entry.killIntent;
+  } else {
+    entry.killIntent = {
+      requestedAt: killIntent.requestedAt,
+      reason: killIntent.reason.trim(),
+      lifecycleGeneration:
+        typeof killIntent.lifecycleGeneration === "string" && killIntent.lifecycleGeneration.trim()
+          ? killIntent.lifecycleGeneration.trim()
+          : undefined,
+      sessionId:
+        typeof killIntent.sessionId === "string" && killIntent.sessionId.trim()
+          ? killIntent.sessionId.trim()
+          : undefined,
+      sessionLifecycleRevision:
+        typeof killIntent.sessionLifecycleRevision === "string" &&
+        killIntent.sessionLifecycleRevision.trim()
+          ? killIntent.sessionLifecycleRevision.trim()
+          : undefined,
+      suppressTaskDelivery: killIntent.suppressTaskDelivery === true ? true : undefined,
     };
   }
   // cleanupHandled is an in-process lock; after restart, unfinished cleanup must

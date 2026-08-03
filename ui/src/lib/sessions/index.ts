@@ -437,6 +437,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     createResult: mutations.createResult,
     create: mutations.create,
     patch: mutations.patch,
+    retireModelOverride: mutations.retireModelOverride,
     setModelOverride: mutations.setModelOverride,
     patchRowLocal: mutations.patchRowLocal,
     isPreparedWorkSession: mutations.isPreparedWorkSession,

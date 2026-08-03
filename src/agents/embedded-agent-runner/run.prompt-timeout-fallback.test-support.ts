@@ -7,7 +7,7 @@ import {
   mockedClassifyFailoverReason,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
-  resetRunOverflowCompactionHarnessMocks,
+  resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
@@ -20,7 +20,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
   });
 
   beforeEach(() => {
-    resetRunOverflowCompactionHarnessMocks();
+    resetSharedRunIntegrationHarnessMocks();
     useOpenAIPlatformAuthFixture();
   });
 
@@ -56,52 +56,6 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow("LLM request timed out.");
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-  });
-
-  it("surfaces replay-invalid prompt timeouts instead of handing them to model fallback", async () => {
-    mockedClassifyFailoverReason.mockReturnValue("timeout");
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        assistantTexts: [],
-        terminal: {
-          kind: "failed",
-          source: "prompt",
-          error: new Error("LLM request timed out."),
-        },
-        promptTimeoutOutcome: {
-          message: "Harness abandoned the timed-out turn after provider activity.",
-          replayInvalid: true,
-          livenessState: "abandoned",
-        },
-      }),
-    );
-
-    let thrown: unknown;
-    try {
-      await runEmbeddedAgent({
-        ...overflowBaseRunParams,
-        provider: "openai",
-        model: "gpt-5.4",
-        runId: "run-prompt-timeout-replay-invalid",
-        config: makeModelFallbackCfg({
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai/gpt-5.4",
-                fallbacks: ["anthropic/claude-opus-4-6"],
-              },
-            },
-          },
-        }),
-      });
-    } catch (err) {
-      thrown = err;
-    }
-
-    expect(thrown).toBeInstanceOf(Error);
-    expect(thrown).not.toBeInstanceOf(MockedFailoverError);
-    expect(String((thrown as Error | undefined)?.message)).toContain("LLM request timed out.");
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 });

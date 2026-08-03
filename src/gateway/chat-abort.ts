@@ -10,7 +10,11 @@ import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  type AgentEventPayload,
+} from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
@@ -79,6 +83,13 @@ export type RestartRecoveryCandidate = {
   sessionKey: string;
   sessionId: string;
   observedAt?: number;
+};
+
+type InFlightRunSnapshot = {
+  runId: string;
+  text: string;
+  plan?: ChatRunPlanSnapshot;
+  events?: AgentEventPayload[];
 };
 
 type RegisteredChatAbortController = {
@@ -269,7 +280,7 @@ export function resolveInFlightRunSnapshot(params: {
   canonicalSessionKey: string;
   agentId?: string;
   defaultAgentId?: string;
-}): { runId: string; text: string; plan?: ChatRunPlanSnapshot } | undefined {
+}): InFlightRunSnapshot | undefined {
   const matchesKey = (entry: ChatAbortControllerEntry, key: string): boolean => {
     if (entry.sessionKey !== key) {
       return false;
@@ -335,18 +346,20 @@ export function resolveInFlightRunSnapshot(params: {
     { suppressLeadFragments: true },
   );
   const plan = run?.planSnapshot;
+  const events = run?.progressSnapshot?.events;
   return {
     runId: best.runId,
     text: projected.suppress ? "" : projected.text,
     ...(plan ? { plan } : {}),
+    ...(events?.length ? { events } : {}),
   };
 }
 
 export function boundInFlightRunSnapshotForChatHistory(params: {
-  snapshot: { runId: string; text: string; plan?: ChatRunPlanSnapshot } | undefined;
+  snapshot: InFlightRunSnapshot | undefined;
   messages: unknown[];
   maxBytes: number;
-}): { runId: string; text: string; plan?: ChatRunPlanSnapshot } | undefined {
+}): InFlightRunSnapshot | undefined {
   if (!params.snapshot) {
     return undefined;
   }
@@ -355,30 +368,42 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   if (messagesBytes + snapshotBytes <= params.maxBytes) {
     return params.snapshot;
   }
-  // Recovery priority is run adoption, then plan replay, then opportunistic text.
-  const withoutText = {
+  // Recovery priority is run adoption, then active progress, plan replay, and
+  // opportunistic text. Explicit empty projections authoritatively clear any
+  // stale client state when a richer snapshot cannot fit the history budget.
+  let bounded: InFlightRunSnapshot = {
     runId: params.snapshot.runId,
     text: "",
-    ...(params.snapshot.plan ? { plan: params.snapshot.plan } : {}),
+    ...(params.snapshot.events ? { events: [] } : {}),
+    ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
   };
-  if (params.snapshot.plan && messagesBytes + jsonUtf8Bytes(withoutText) <= params.maxBytes) {
-    return withoutText;
+
+  if (params.snapshot.events) {
+    const events = [...params.snapshot.events];
+    while (events.length > 0) {
+      const candidate = { ...bounded, events };
+      if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
+        bounded = candidate;
+        break;
+      }
+      events.shift();
+    }
   }
-  // An oversized plan must not also cost the deliverable buffered text. Clients
-  // treat an ABSENT plan as legacy-gateway unknown and preserve retained state,
-  // so a budget-dropped plan is sent as an explicit empty snapshot (authoritative
-  // clear) — accepted tradeoff: the checklist blanks until the next live plan
-  // event instead of showing a possibly obsolete retained plan indefinitely.
-  const droppedPlan = params.snapshot.plan ? { plan: { steps: [] } } : {};
-  const withoutPlan = {
-    runId: params.snapshot.runId,
-    text: params.snapshot.text,
-    ...droppedPlan,
-  };
-  if (params.snapshot.text && messagesBytes + jsonUtf8Bytes(withoutPlan) <= params.maxBytes) {
-    return withoutPlan;
+
+  if (params.snapshot.plan) {
+    const candidate = { ...bounded, plan: params.snapshot.plan };
+    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
+      bounded = candidate;
+    }
   }
-  return { runId: params.snapshot.runId, text: "", ...droppedPlan };
+
+  if (params.snapshot.text) {
+    const candidate = { ...bounded, text: params.snapshot.text };
+    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
+      bounded = candidate;
+    }
+  }
+  return bounded;
 }
 
 export type ChatAbortOps = {

@@ -42,6 +42,7 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
       required: true,
       resultText: "done",
       capturedAt: 260,
+      terminalReply: { disposition: "visible", text: "done" },
     },
     delivery: {
       status: "pending",
@@ -137,6 +138,68 @@ describe("subagent registry sqlite store", () => {
       await expect(fs.stat(path.join(tempStateDir!, "subagents", "runs.json"))).rejects.toThrow();
     });
   });
+
+  it.each([
+    {
+      name: "visible",
+      terminalReply: { disposition: "visible", text: "restart-visible" } as const,
+      resultText: "restart-visible",
+    },
+    {
+      name: "silent",
+      terminalReply: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+    },
+  ])(
+    "restores $name terminal reply in completion and pending delivery after restart",
+    async ({ name, terminalReply, resultText }) => {
+      await withTempStateEnv(async () => {
+        const runId = `run-restart-${name}`;
+        const run = createRun({
+          runId,
+          childSessionKey: `agent:main:subagent:${name}`,
+          completion: {
+            required: true,
+            resultText,
+            capturedAt: 260,
+            terminalReply,
+          },
+          delivery: {
+            status: "pending",
+            createdAt: 270,
+            attemptCount: 0,
+            payload: {
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              childSessionKey: `agent:main:subagent:${name}`,
+              childRunId: runId,
+              task: "check terminal reply restart",
+              startedAt: 110,
+              endedAt: 250,
+              outcome: { status: "ok" },
+              expectsCompletionMessage: true,
+              terminalReply,
+            },
+          },
+        });
+
+        saveSubagentRegistryToSqlite(new Map([[runId, run]]));
+        closeOpenClawStateDatabaseForTest();
+
+        const restored = loadSubagentRegistryFromSqlite().get(runId);
+        expect(restored?.completion).toMatchObject({ terminalReply, resultText });
+        expect(restored?.delivery).toMatchObject({
+          status: "pending",
+          payload: { terminalReply },
+        });
+      });
+    },
+  );
 
   it("uses save calls as whole-registry snapshots", async () => {
     await withTempStateEnv(async () => {

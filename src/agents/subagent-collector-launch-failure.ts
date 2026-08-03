@@ -55,6 +55,8 @@ export function activateCollectorLaunch(params: {
           await terminateAcceptedCollectorRun({
             childSessionKey: params.childSessionKey,
             gatewayRunId,
+            expectedSessionId: params.sessionIdentity?.expectedSessionId,
+            expectedLifecycleRevision: params.sessionIdentity?.expectedLifecycleRevision,
           });
           launchTerminationConfirmed = true;
           throw error;

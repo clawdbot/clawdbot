@@ -40,7 +40,6 @@ const ASSISTANT_TOOL_CALL_BLOCK_TYPES = new Set([
   "functionCall",
   "function_call",
 ]);
-
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -215,7 +214,10 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
   return snapshot;
 }
 
-function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | undefined {
+function selectSubagentOutputText(
+  snapshot: SubagentOutputSnapshot,
+  outcome?: SubagentRunOutcome,
+): string | undefined {
   if (snapshot.waitingForContinuation) {
     return undefined;
   }
@@ -225,7 +227,13 @@ function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | un
   if (snapshot.latestAssistantText) {
     return snapshot.latestAssistantText;
   }
-  if (snapshot.latestToolCallCount && snapshot.latestToolCallCount > 0) {
+  // Tool activity is partial-progress evidence only for a timed-out run. It is
+  // not authoritative completion output when producer terminal facts are absent.
+  if (
+    outcome?.status === "timeout" &&
+    snapshot.latestToolCallCount &&
+    snapshot.latestToolCallCount > 0
+  ) {
     return `${snapshot.latestToolCallCount} tool call(s) made without visible output.`;
   }
   return undefined;
@@ -233,7 +241,7 @@ function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | un
 
 export async function readSubagentOutput(
   sessionKey: string,
-  _outcome?: SubagentRunOutcome,
+  outcome?: SubagentRunOutcome,
   options?: { sessionTarget?: SessionTranscriptRuntimeTarget },
 ): Promise<string | undefined> {
   let messages: unknown[] | undefined;
@@ -257,7 +265,7 @@ export async function readSubagentOutput(
       : undefined;
   const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
   const snapshot = summarizeSubagentOutputHistory(sourceMessages);
-  const selected = selectSubagentOutputText(snapshot);
+  const selected = selectSubagentOutputText(snapshot, outcome);
   if (selected?.trim()) {
     return selected;
   }
@@ -276,6 +284,20 @@ export async function readLatestSubagentOutputWithRetry(params: {
     retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
     readSubagentOutput,
   });
+}
+
+export async function readSubagentTimeoutProgress(
+  sessionKey: string,
+  maxWaitMs: number,
+  outcome: SubagentRunOutcome,
+): Promise<string | undefined> {
+  const initial = await readSubagentOutput(sessionKey, outcome);
+  const progress = initial?.trim()
+    ? initial
+    : await readLatestSubagentOutputWithRetry({ sessionKey, maxWaitMs, outcome });
+  return progress && !isAnnounceSkip(progress) && !isSilentReplyText(progress, SILENT_REPLY_TOKEN)
+    ? progress
+    : undefined;
 }
 
 export async function waitForSubagentRunOutcome(

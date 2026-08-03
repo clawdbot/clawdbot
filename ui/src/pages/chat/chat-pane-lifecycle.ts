@@ -43,6 +43,7 @@ import {
   NEW_SESSION_CREATE_FAILED_MESSAGE,
   NEW_SESSION_LIST_LOADING_MESSAGE,
 } from "./chat-pane-shared.ts";
+import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { invalidateChatMetadataCache, refreshPageChat } from "./chat-state-refresh.ts";
@@ -545,10 +546,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     };
     this.addEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt);
     chatState.addCleanup(() => this.removeEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt));
+    chatState.addCleanup(this.context.gateway.subscribe((next) => this.applyGatewaySnapshot(next)));
     chatState.addCleanup(
-      this.context.gateway.subscribe((snapshot) => {
-        this.applyGatewaySnapshot(snapshot);
-      }),
+      this.context.agentSelection.subscribe((next) =>
+        applySelectedChatAgent(this.state, next.selectedId),
+      ),
     );
     const sessionPullRequests = sessionPullRequestsForGateway(this.context.gateway);
     chatState.addCleanup(
@@ -624,12 +626,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
         // after its transcript commit in deferSessionHydrationUntilTranscript.
         this.sessionDiscussionStates.delete(nextSessionKey);
       }
-      if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
+      if (nextSessionKey && !areUiSessionKeysEquivalent(nextSessionKey, this.state.sessionKey)) {
         this.switchPaneSession(nextSessionKey);
       } else if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
         this.catalogLoadGeneration += 1;
         this.openCatalogSession(catalogKey, this.state);
       } else if (nextSessionKey) {
+        // Route aliases name the same conversation. Adopt the canonical spelling
+        // without clearing the active stream and tool state as a session switch.
+        this.state.sessionKey = nextSessionKey;
         // A pane routed straight onto the created session never runs the switch
         // path, so its one-shot handoffs would expire unclaimed: the rejected turn
         // would vanish instead of offering a retry, and the accepted prompt would

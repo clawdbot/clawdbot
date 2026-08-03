@@ -64,6 +64,7 @@ type ToolStreamHost = {
   chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
+  activityEventSeqById?: Map<string, number>;
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
   planStatus?: PlanStatus | null;
@@ -327,6 +328,7 @@ export function resetToolStream(host: ToolStreamHost) {
   }
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
+  host.activityEventSeqById?.clear();
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
   host.planStatus = null;
@@ -334,6 +336,34 @@ export function resetToolStream(host: ToolStreamHost) {
   host.waitingApprovalStatuses?.clear();
   // Resolution can beat the overlay queue update. Keep tombstones across transient stream resets
   // until snapshot reconciliation observes the approval leaving the queue.
+}
+
+function activityEventIdentity(payload: AgentEventPayload): string | null {
+  if (payload.stream === "tool") {
+    const toolCallId = toTrimmedString(payload.data?.toolCallId);
+    return toolCallId ? `tool:${payload.runId}:${toolCallId}` : null;
+  }
+  if (payload.stream === "item" && payload.data?.kind === "preamble") {
+    const itemId =
+      toTrimmedString(payload.data?.itemId) ?? toTrimmedString(payload.data?.id) ?? "latest";
+    return `preamble:${payload.runId}:${itemId}`;
+  }
+  return null;
+}
+
+function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  const identity = activityEventIdentity(payload);
+  if (!identity) {
+    return true;
+  }
+  const seq = Number.isSafeInteger(payload.seq) ? payload.seq : 0;
+  const previous = host.activityEventSeqById?.get(identity);
+  if (previous !== undefined && seq <= previous) {
+    return false;
+  }
+  const sequences = (host.activityEventSeqById ??= new Map());
+  sequences.set(identity, seq);
+  return true;
 }
 
 export type CompactionStatus = {
@@ -923,6 +953,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   // active chat run; individual run-owned projections apply their own match.
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
+    return;
+  }
+  // History can replay an older active-run snapshot after newer live activity.
+  // Fence each tool/preamble identity by Gateway sequence so restore fills gaps
+  // without regressing a result or newer progress already rendered by this pane.
+  if (!acceptActivityEvent(host, payload)) {
     return;
   }
   if (payload.stream === "lifecycle" || payload.stream === "tool") {

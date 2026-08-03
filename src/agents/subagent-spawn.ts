@@ -220,6 +220,10 @@ export async function spawnSubagentDirect(
         ? initialSession.entry.createdAt
         : undefined;
     let provisionalSessionCleanupIdentity = captureCleanupIdentity(initialSession.entry);
+    const provisionalSessionIdentityParams = () => ({
+      expectedSessionId: provisionalSessionCleanupIdentity?.expectedSessionId,
+      expectedLifecycleRevision: provisionalSessionCleanupIdentity?.expectedLifecycleRevision,
+    });
     const cleanupProvisionedSessionForFailedSpawn = async (
       options?: Partial<Parameters<typeof cleanupFailedSpawnBeforeAgentStart>[0]>,
     ) => {
@@ -257,6 +261,7 @@ export async function spawnSubagentDirect(
       await cleanupProvisionedSessionForFailedSpawn({
         emitLifecycleHooks: false,
         deleteTranscript: true,
+        ...provisionalSessionIdentityParams(),
       });
       return withReservedCleanupResult({
         status: "error",
@@ -275,6 +280,7 @@ export async function spawnSubagentDirect(
         await cleanupProvisionedSessionForFailedSpawn({
           emitLifecycleHooks: false,
           deleteTranscript: true,
+          ...provisionalSessionIdentityParams(),
         });
         return withReservedCleanupResult({
           status: "error",
@@ -303,6 +309,7 @@ export async function spawnSubagentDirect(
         await cleanupProvisionedSessionForFailedSpawn({
           emitLifecycleHooks: false,
           deleteTranscript: true,
+          ...provisionalSessionIdentityParams(),
         });
         return withReservedCleanupResult({
           status: "error",
@@ -360,6 +367,7 @@ export async function spawnSubagentDirect(
       await cleanupProvisionedSessionForFailedSpawn({
         emitLifecycleHooks: threadBindingReady,
         deleteTranscript: true,
+        ...provisionalSessionIdentityParams(),
       });
       return withReservedCleanupResult({
         status: materializedAttachments.status,
@@ -486,6 +494,7 @@ export async function spawnSubagentDirect(
             attachmentAbsDir,
             emitLifecycleHooks: threadBindingReady,
             deleteTranscript: true,
+            ...provisionalSessionIdentityParams(),
           });
           retainAdmissionReservationAfterReturn = failureCleanupOutcome === "indeterminate";
           return;

@@ -308,7 +308,7 @@ export async function prepareAgentRunDispatch(params: {
     }),
     modelRun: params.isOneShotModelRun,
   });
-  let dispatchTaskTrackingMode: PreparedAgentRunDispatch["dispatchTaskTrackingMode"] =
+  const dispatchTaskTrackingMode: PreparedAgentRunDispatch["dispatchTaskTrackingMode"] =
     taskTrackingMode === "cli" ? "cli" : "none";
   if (taskTrackingMode === "plugin_subagent" && params.resolvedSessionKey) {
     try {
@@ -322,9 +322,19 @@ export async function prepareAgentRunDispatch(params: {
       });
     } catch (err) {
       params.context.logGateway.warn(
-        `failed to register plugin subagent run ${params.runId}; falling back to cli task tracking: ${formatForLog(err)}`,
+        `failed to register plugin subagent run ${params.runId}; rejecting untracked dispatch: ${formatForLog(err)}`,
       );
-      dispatchTaskTrackingMode = "cli";
+      activeRunAbort.cleanup({ force: true });
+      activeGatewayWorkAdmission.release();
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `plugin subagent registry persistence failed; run was not started: ${formatForLog(err)}`,
+        ),
+      );
+      return undefined;
     }
   }
   let restoreAdmittedRestartRecoveryInterrupted:
