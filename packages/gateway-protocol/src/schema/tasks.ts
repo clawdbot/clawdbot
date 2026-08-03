@@ -26,6 +26,7 @@ const TaskDeliveryStatusSchema = Type.Union([
   Type.Literal("delivered"),
   Type.Literal("session_queued"),
   Type.Literal("failed"),
+  Type.Literal("dismissed"),
   Type.Literal("parent_missing"),
   Type.Literal("not_applicable"),
 ]);

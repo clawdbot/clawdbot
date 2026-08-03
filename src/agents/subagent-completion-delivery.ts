@@ -326,7 +326,7 @@ export function dismissSubagentCompletionDelivery(taskId: string): {
   delivery.nextAttemptAt = undefined;
   const projectedTask: TaskRecord = {
     ...task,
-    deliveryStatus: "not_applicable",
+    deliveryStatus: "dismissed",
     terminalOutcome: "blocked",
     terminalSummary: "Task completed; result delivery was dismissed by the operator.",
     cleanupAfter: Math.max(task.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),

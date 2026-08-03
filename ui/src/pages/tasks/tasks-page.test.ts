@@ -425,7 +425,7 @@ describe("TasksPage cancellation lifecycle", () => {
 
   it("keeps a dismissed completion result copyable without offering another recovery", async () => {
     const dismissed = createTask("task-dismissed", "completed", {
-      deliveryStatus: "not_applicable",
+      deliveryStatus: "dismissed",
       terminalOutcome: "blocked",
       terminalSummary: "Task completed; result delivery was dismissed by the operator.",
     });

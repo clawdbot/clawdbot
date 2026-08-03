@@ -17,7 +17,10 @@ import {
   admitSubagentCompletionDelivery,
   settleSubagentCompletionDelivery,
 } from "./subagent-completion-admission.store.js";
-import { retrySubagentCompletionDelivery } from "./subagent-completion-delivery.js";
+import {
+  dismissSubagentCompletionDelivery,
+  retrySubagentCompletionDelivery,
+} from "./subagent-completion-delivery.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -312,6 +315,32 @@ describe("atomic subagent completion admission store", () => {
         reason: "completion delivery redrive limit reached",
       });
       expect(resumeSubagentRun).not.toHaveBeenCalled();
+
+      const dismissed = dismissSubagentCompletionDelivery(input.task.taskId);
+      expect(dismissed).toMatchObject({
+        ok: true,
+        task: {
+          deliveryStatus: "dismissed",
+          terminalOutcome: "blocked",
+          progressSummary: "canonical result",
+        },
+      });
+      expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
+        status: "discarded",
+        disposition: "intentional_non_delivery",
+      });
+
+      resetTaskRegistryForTests({ persist: false });
+      subagentRuns.clear();
+      for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
+        subagentRuns.set(runId, entry);
+      }
+      ensureTaskRegistryReady();
+      expect(getTaskById(input.task.taskId)).toMatchObject({
+        deliveryStatus: "dismissed",
+        terminalOutcome: "blocked",
+        progressSummary: "canonical result",
+      });
     });
   });
 });

@@ -355,6 +355,7 @@ describe("task-registry store runtime", () => {
     expect(parseTaskScopeKind("system")).toBe("system");
     expect(parseTaskStatus("running")).toBe("running");
     expect(parseTaskDeliveryStatus("pending")).toBe("pending");
+    expect(parseTaskDeliveryStatus("dismissed")).toBe("dismissed");
     expect(parseTaskNotifyPolicy("done_only")).toBe("done_only");
     expect(parseOptionalTaskTerminalOutcome("blocked")).toBe("blocked");
     expect(parseOptionalTaskTerminalOutcome(null)).toBeUndefined();

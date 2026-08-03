@@ -81,7 +81,7 @@ function renderTask(task: TaskSummary, props: TasksProps) {
   const cancelling = props.cancellingTaskIds.has(task.id);
   const retainedResult = task.terminalOutcome === "blocked";
   const recoverableDelivery = retainedResult && task.deliveryStatus === "failed";
-  const dismissedDelivery = retainedResult && task.deliveryStatus === "not_applicable";
+  const dismissedDelivery = retainedResult && task.deliveryStatus === "dismissed";
   return html`
     <div class="list-item" data-task-id=${task.id}>
       <div class="list-main">
