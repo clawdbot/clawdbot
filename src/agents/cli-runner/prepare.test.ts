@@ -56,8 +56,10 @@ import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
+import { cliBackendLog } from "./log.js";
 import { prepareCliRunContext } from "./prepare.js";
 import { setCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
+import * as sessionHistoryModule from "./session-history.js";
 import type { RunCliAgentParams } from "./types.js";
 
 function registerTestContextEngine(
@@ -1938,6 +1940,44 @@ describe("prepareCliRunContext", () => {
     expect(context.systemPrompt).toContain("Current model identity: test-cli/test-model.");
     expect(context.systemPrompt).not.toContain("hook exploded");
     expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
+    // Exactly one marker: the dispatch boundary owns it, so no consumer-level
+    // catch can add a second one.
+    expect(context.params.prompt.match(/<dropped_plugin_context/gu)).toHaveLength(1);
+  });
+
+  it("does not mark a drop when preparation fails before hook dispatch", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    const historySpy = vi
+      .spyOn(sessionHistoryModule, "loadCliSessionHistoryMessages")
+      .mockRejectedValue(new Error("session history read failed"));
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => {});
+
+    try {
+      const context = await fixture.prepare({});
+
+      // The history load never reached the dispatcher, so nothing was dropped:
+      // claiming otherwise would hand the model a false recovery instruction.
+      expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
+      expect(context.params.prompt).toBe("latest ask");
+      expect(context.params.prompt).not.toContain("dropped_plugin_context");
+      expect(context.params.prompt).not.toContain("dispatch-failed");
+      expect(context.systemPrompt).not.toContain("dropped_plugin_context");
+      // The failure is still an operator-visible diagnostic.
+      expect(
+        warnSpy.mock.calls.some(
+          ([message]) =>
+            message.includes("cli prompt-build hook preparation failed") &&
+            message.includes("session history read failed"),
+        ),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+      historySpy.mockRestore();
+    }
   });
 
   it("bounds the CLI drop marker when many prompt-build handlers fail", async () => {

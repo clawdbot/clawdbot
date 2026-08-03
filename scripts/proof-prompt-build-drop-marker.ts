@@ -72,7 +72,10 @@ import { resolvePromptBuildHookResult } from "../src/agents/embedded-agent-runne
  *   4. Re-entrancy guard — a nested prompt build gets a marker naming every
  *      plugin whose contribution the guard skipped; the outer build stays clean.
  *   5. Dispatch rejection — a fail-closed runner makes `runBeforePromptBuild`
- *      itself reject; the call site's `.catch()` emits the marker.
+ *      itself reject; the call site's `.catch()` emits the marker. This is the
+ *      one and only place the `dispatch-failed` code is produced for the
+ *      embedded AND CLI consumers, since both go through
+ *      `resolvePromptBuildHookResult`.
  *   6. Redaction boundary — the same secret-bearing failure is ABSENT from the
  *      model-visible marker and PRESENT in the operator log.
  *   7. Entry + byte caps — 30 failing plugins through the harness and embedded
@@ -82,6 +85,12 @@ import { resolvePromptBuildHookResult } from "../src/agents/embedded-agent-runne
  *      overflow, asserted on the prompt `prepareCliRunContext` hands the backend.
  *  10. Hostile plugin id — a plugin id containing the marker's own closing tag
  *      and an injected instruction cannot break the frame or address the model.
+ *  11. CLI boundary asymmetry — the CLI's preparation catch spans pre-dispatch
+ *      setup as well as the dispatcher, so it must not attribute a pre-dispatch
+ *      failure to a lost plugin contribution. Both directions run back to back
+ *      through the same real consumer: a failure BEFORE dispatch leaves the
+ *      prompt byte-identical to the base ask with no marker, while a real drop
+ *      one step later still produces exactly one marker.
  *
  * Every drop scenario also asserts the dropped plugin's own block is genuinely
  * absent, so the marker is never mistaken for the contribution surviving.
@@ -247,7 +256,10 @@ async function runEmbeddedPromptBuild(
  * backend. The CLI backend is published through the real active-runtime-registry
  * seam the production resolver reads, so no test-only backend hook is used.
  */
-async function runCliPromptBuild(specs: HookSpec[]): Promise<string> {
+async function runCliPromptBuild(
+  specs: HookSpec[],
+  options: { failBeforeDispatch?: boolean } = {},
+): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proof-201-cli-"));
   process.env.OPENCLAW_STATE_DIR = dir;
   const sessionFile = path.join(dir, "agents", "main", "sessions", "proof-session.jsonl");
@@ -270,7 +282,7 @@ async function runCliPromptBuild(specs: HookSpec[]): Promise<string> {
   setActivePluginRegistry(runtimeRegistry);
   initializeGlobalHookRunner(buildRegistry(specs));
 
-  const prepared = await prepareCliRunContext({
+  const runParams: Record<string, unknown> = {
     sessionId: "proof-session",
     sessionFile,
     workspaceDir: dir,
@@ -278,9 +290,33 @@ async function runCliPromptBuild(specs: HookSpec[]): Promise<string> {
     provider: "test-cli",
     model: "test-model",
     timeoutMs: 1_000,
-    runId: `proof-cli-${specs.length}`,
+    runId: `proof-cli-${specs.length}${options.failBeforeDispatch ? "-predispatch" : ""}`,
     config: {},
-  } as never);
+  };
+  if (options.failBeforeDispatch) {
+    // The CLI catch spans EVERY pre-dispatch preparation step, not just the
+    // dispatcher, so the proof has to make one of those steps fail. It does that
+    // through real production code and real input: the hook context is assembled
+    // by `buildAgentHookContextChannelFields(params)`, which reads
+    // `params.currentChannelId` while resolving the channel id — inside the same
+    // try, strictly before `resolvePromptBuildHookResult` dispatches anything.
+    // (`loadCliSessionHistoryMessages`, ClawSweeper's suggested trigger, cannot
+    // be used here: it swallows its own IO errors and returns []. The unit
+    // regression in prepare.test.ts covers that trigger by stubbing it; this
+    // proof keeps every function real and moves the throw one step later. Same
+    // catch, same boundary.)
+    // Non-enumerable so the failure lands exactly once, at the hook-context
+    // read inside the try. `prepareCliRunContext` re-spreads `params` in later
+    // stages; an enumerable throwing getter would fire again there and mask
+    // what this scenario is measuring.
+    Object.defineProperty(runParams, "currentChannelId", {
+      enumerable: false,
+      get(): string {
+        throw new Error(`pre-dispatch preparation failed: ${SECRET}`);
+      },
+    });
+  }
+  const prepared = await prepareCliRunContext(runParams as never);
   fs.rmSync(dir, { recursive: true, force: true });
   return prepared.params.prompt;
 }
@@ -534,6 +570,10 @@ async function main(): Promise<void> {
   assert(cliSecretPrompt.includes("latest ask"), "cli: the base ask survives");
   assert(cliSecretPrompt.includes(MARKER_OPEN), "cli: marker reaches the CLI prompt");
   assert(
+    (cliSecretPrompt.match(/<dropped_plugin_context/gu) ?? []).length === 1,
+    "cli: exactly one marker — only the dispatch boundary emits it",
+  );
+  assert(
     cliSecretPrompt.includes("proof-leaky (handler-failed)"),
     "cli: marker names the plugin with a fixed reason code",
   );
@@ -583,6 +623,47 @@ async function main(): Promise<void> {
   assert(
     hostileMarker.includes("(handler-failed)"),
     "hostile id: the drop is still reported with its reason code",
+  );
+
+  console.log("\n[11] CLI boundary asymmetry: a pre-dispatch failure is log-only, never marked");
+  const preDispatchPrompt = await runCliPromptBuild(
+    [{ pluginId: "proof-beads", handler: () => ({ prependContext: PLANS_BLOCK }) }],
+    { failBeforeDispatch: true },
+  );
+  assert(
+    preDispatchPrompt === "latest ask",
+    "pre-dispatch: the CLI prompt is exactly the base ask, untouched",
+  );
+  assert(
+    !preDispatchPrompt.includes(MARKER_OPEN),
+    "pre-dispatch: no drop marker — nothing was dispatched, so nothing was dropped",
+  );
+  assert(
+    !preDispatchPrompt.includes("dispatch-failed"),
+    "pre-dispatch: the dispatch-failed reason code is absent from the prompt",
+  );
+  assert(
+    !preDispatchPrompt.includes("sk-live-9f3c-PROOF") &&
+      !preDispatchPrompt.includes("internal.invalid"),
+    "pre-dispatch: the failure text stays out of the prompt too",
+  );
+  // Same registry, same consumer, one step later in the same try: a real drop
+  // still marks the prompt. The two runs differ only in where the failure lands.
+  const dispatchedDropPrompt = await runCliPromptBuild([
+    {
+      pluginId: "proof-beads",
+      handler: () => {
+        throw new Error(`bd ready failed: ${SECRET}`);
+      },
+    },
+  ]);
+  assert(
+    (dispatchedDropPrompt.match(/<dropped_plugin_context/gu) ?? []).length === 1,
+    "post-dispatch: a real dropped contribution still yields exactly one marker",
+  );
+  assert(
+    dispatchedDropPrompt.includes("proof-beads (handler-failed)"),
+    "post-dispatch: the marker names the plugin whose contribution was actually lost",
   );
 
   console.log(`\nAll runtime assertions passed. (${checks} checks)`);

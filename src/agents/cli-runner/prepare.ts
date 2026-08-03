@@ -36,7 +36,6 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { buildPromptBuildDropResult } from "../../plugins/prompt-build-drop.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
   isSubagentSessionKey,
@@ -754,14 +753,16 @@ export async function prepareCliRunContext(
         bootstrapContextRunKind: params.bootstrapContextRunKind,
       });
     } catch (error) {
+      // Deliberately marker-free: this catch also spans pre-dispatch preparation
+      // (config resolution, session-history load, hook-context assembly), so a
+      // failure here does not prove a plugin contribution was ever dispatched or
+      // dropped. Telling the model that context is missing when it never existed
+      // is the same misleading-recovery-instruction failure the marker exists to
+      // prevent. A real before_prompt_build rejection is turned into the bounded
+      // drop marker at the dispatch boundary inside resolvePromptBuildHookResult
+      // (openclaw-beads-201); the operator diagnostic stays in the warn above.
       cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
-      // Preparation failed after the hooks may already have produced context.
-      // Surface the loss instead of shipping a prompt that looks complete
-      // (openclaw-beads-201). The error stays in the warn above; the marker is a
-      // bounded reason code so nothing error-derived reaches the model.
-      return hookRunner?.hasHooks("before_prompt_build")
-        ? buildPromptBuildDropResult([{ reason: "dispatch-failed" }])
-        : undefined;
+      return undefined;
     }
   })();
   const promptBuildToolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
