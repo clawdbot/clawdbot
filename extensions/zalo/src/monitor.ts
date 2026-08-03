@@ -26,7 +26,11 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { registerPluginHttpRoute, resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
+import {
+  canonicalizeWebhookRouteKey,
+  registerPluginHttpRoute,
+  resolveWebhookPath,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiError,
@@ -135,26 +139,14 @@ const loadZaloWebhookModule = createLazyRuntimeModule(async () => ({
   ...(await loadZaloWebhookIngressRuntime()),
 }));
 
-function releaseSharedHostedMediaRouteRef(routePath: string): void {
-  const current = hostedMediaRouteRefs.get(routePath);
-  if (!current) {
-    return;
-  }
-  if (current.count > 1) {
-    current.count -= 1;
-    return;
-  }
-  hostedMediaRouteRefs.delete(routePath);
-  for (const unregisterHandle of current.unregisters) {
-    unregisterHandle();
-  }
-}
-
 function registerSharedHostedMediaRoute(params: {
   path: string;
   accountId: string;
   log?: (message: string) => void;
 }): () => void {
+  const routeKey = canonicalizeWebhookRouteKey(params.path);
+  // Every account registers the account-agnostic handler so a swapped registry is populated.
+  // Exact unregister handles stay leased until the final account releases the shared route.
   const unregister = registerPluginHttpRoute({
     auth: "plugin",
     match: "prefix",
@@ -163,6 +155,8 @@ function registerSharedHostedMediaRoute(params: {
     source: "zalo-hosted-media",
     accountId: params.accountId,
     log: params.log,
+    replaceExisting: true,
+    throwOnFailure: true,
     handler: async (req, res) => {
       const handled = await tryHandleHostedZaloMediaRequest(req, res);
       if (!handled && !res.headersSent) {
@@ -172,16 +166,35 @@ function registerSharedHostedMediaRoute(params: {
       }
     },
   });
-
-  const existing = hostedMediaRouteRefs.get(params.path);
-  if (existing) {
-    existing.count += 1;
-    existing.unregisters.push(unregister);
-    return () => releaseSharedHostedMediaRouteRef(params.path);
+  const acquired = hostedMediaRouteRefs.get(routeKey) ?? {
+    count: 0,
+    unregisters: [],
+  };
+  if (acquired.count === 0) {
+    hostedMediaRouteRefs.set(routeKey, acquired);
   }
+  acquired.count += 1;
+  acquired.unregisters.push(unregister);
 
-  hostedMediaRouteRefs.set(params.path, { count: 1, unregisters: [unregister] });
-  return () => releaseSharedHostedMediaRouteRef(params.path);
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    const current = hostedMediaRouteRefs.get(routeKey);
+    if (current !== acquired) {
+      return;
+    }
+    acquired.count -= 1;
+    if (acquired.count > 0) {
+      return;
+    }
+    hostedMediaRouteRefs.delete(routeKey);
+    for (const unregisterHandle of acquired.unregisters) {
+      unregisterHandle();
+    }
+  };
 }
 
 type ZaloMessagePipelineParams = ZaloProcessingContext & {
@@ -990,6 +1003,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
             source: "zalo-webhook",
             accountId: account.accountId,
             log: runtime.log,
+            throwOnFailure: true,
             handler: async (req, res) => {
               const handled = await handleZaloWebhookRequest(req, res);
               if (!handled && !res.headersSent) {
