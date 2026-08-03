@@ -766,6 +766,28 @@ describe("hasDescendantRunAwaitingSettleFromRuns", () => {
     expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(false);
   });
 
+  it("waits for queued completion delivery, then settles after delivery or dismissal", () => {
+    const now = Date.now();
+    const run = makeRun({
+      runId: "run-queued-delivery",
+      childSessionKey: "agent:main:subagent:queued-delivery",
+      requesterSessionKey: requester,
+      createdAt: now - 50_000,
+      endedAt: now - 2_000,
+      expectsCompletionMessage: true,
+      delivery: { status: "in_progress", disposition: "session_queued" },
+    });
+    const runs = toRunMap([run]);
+
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(true);
+
+    run.delivery = { status: "delivered", disposition: "delivered" };
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(false);
+
+    run.delivery = { status: "discarded", disposition: "intentional_non_delivery" };
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(false);
+  });
+
   it("excludes the settling run so the finalize path can check its own drain", () => {
     const now = Date.now();
     const runs = toRunMap([

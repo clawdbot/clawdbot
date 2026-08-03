@@ -324,6 +324,18 @@ describe("waitForAgentRun", () => {
     });
   });
 
+  it("carries a bounded terminal reply snapshot from agent.wait", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      terminalReply: { disposition: "visible", text: "final reply" },
+    });
+
+    await expect(waitForAgentRun({ runId: "run-reply", timeoutMs: 500 })).resolves.toEqual({
+      status: "ok",
+      terminalReply: { disposition: "visible", text: "final reply" },
+    });
+  });
+
   it("normalizes wait timeouts before sending agent.wait", async () => {
     callGatewayMock.mockResolvedValue({ status: "ok" });
 

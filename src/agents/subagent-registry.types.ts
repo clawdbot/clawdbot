@@ -1,6 +1,7 @@
 import type { SubagentEndReason } from "../context-engine/types.js";
 /** Persisted execution, completion, delivery, and attachment state for child runs. */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
@@ -21,6 +22,7 @@ export type SubagentCompletionRequest = {
   suppressSessionEffects?: boolean;
   recoverInterrupted?: true;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 export type ContextEngineSubagentEndedParams = {
@@ -52,9 +54,8 @@ export type PendingFinalDeliveryPayload = {
   outcome?: SubagentRunOutcome;
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
-  frozenResultText?: string | null;
-  fallbackFrozenResultText?: string | null;
   wakeOnDescendantSettle?: boolean;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 export type SubagentRestartRecoveryReceipt = {
@@ -65,6 +66,14 @@ export type SubagentRestartRecoveryReceipt = {
   phase: "reserved" | "attempted" | "consumed" | "accepted" | "abandoned";
   lifecycleGeneration?: string;
 };
+
+type SubagentDeliveryDisposition =
+  | "delivered"
+  | "session_queued"
+  | "intentional_non_delivery"
+  | "retryable"
+  | "ambiguous"
+  | "permanent_failure";
 
 type SubagentExecutionState = {
   status: "queued" | "running" | "interrupted" | "terminal";
@@ -89,6 +98,7 @@ export type SubagentCompletionState = {
   capturedAt?: number;
   fallbackResultText?: string | null;
   fallbackCapturedAt?: number;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 export type SwarmCollectorStatus = "done" | "failed" | "killed" | "timeout";
@@ -132,13 +142,22 @@ export type SubagentCompletionDeliveryState = {
   lastAttemptAt?: number;
   attemptCount?: number;
   lastError?: string | null;
+  /** Closed result of the latest transport attempt; never doubles as delivery success. */
+  disposition?: SubagentDeliveryDisposition;
+  /** Logical obligation generation. Redrive increments it and never revives an old row. */
+  generation?: number;
+  queueId?: string;
+  windowStartedAt?: number;
+  deadlineAt?: number;
+  nextAttemptAt?: number;
   steeringLeaseId?: string;
   steeringLeasedAt?: number;
   steeringInjectedAt?: number;
   suspendedAt?: number;
-  suspendedReason?: "retry-limit" | "expiry";
+  suspendedReason?: "retry-limit" | "expiry" | "permanent_failure";
+  dismissedAt?: number;
   discardedAt?: number;
-  discardReason?: "expired" | "pressure-pruned";
+  discardReason?: "expired";
   discardedPayloadSummary?: {
     requesterSessionKey?: string;
     childSessionKey?: string;

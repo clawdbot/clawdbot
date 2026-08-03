@@ -92,6 +92,7 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     sessionStartedAt: undefined,
     sessionDiffBaseline: undefined,
     lastInteractionAt: undefined,
+    pendingTranscriptRepair: undefined,
   };
   transitionMainSessionRecovery(next, { kind: "clear" });
   clearAllCliSessions(next);

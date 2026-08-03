@@ -693,6 +693,21 @@ describe("CLI attempt execution", () => {
     expect(inherited.runTimeoutOverrideMs).toBeUndefined();
   });
 
+  it("forwards execution admission callbacks to the embedded runtime", async () => {
+    const onExecutionStarted = vi.fn();
+    const embedded = await runOpenClawEmbeddedAttemptForTest({
+      runId: "embedded-execution-started",
+      opts: { onExecutionStarted },
+    });
+    const callback = embedded.onExecutionStarted;
+
+    expect(callback).toBeTypeOf("function");
+    (callback as (info?: { lifecycleGeneration?: string }) => void)({
+      lifecycleGeneration: "next-generation",
+    });
+    expect(onExecutionStarted).toHaveBeenCalledTimes(1);
+  });
+
   async function runClaudeCliAttempt(params: {
     sessionKey: string;
     sessionEntry: SessionEntry;
@@ -700,6 +715,7 @@ describe("CLI attempt execution", () => {
     body: string;
     runId: string;
     cwd?: string;
+    onExecutionStarted?: () => void;
   }) {
     await runAgentAttempt({
       providerOverride: "claude-cli",
@@ -718,7 +734,9 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: params.runId,
-      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {
+        onExecutionStarted: params.onExecutionStarted,
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -732,6 +750,29 @@ describe("CLI attempt execution", () => {
       sessionHasHistory: false,
     });
   }
+
+  it("forwards execution admission callbacks to the CLI runtime", async () => {
+    const sessionKey = "agent:main:direct:cli-execution-started";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-execution-started",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    const onExecutionStarted = vi.fn();
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("started"));
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "start",
+      runId: "run-cli-execution-started",
+      onExecutionStarted,
+    });
+
+    expect(firstRunCliAgentArg().onExecutionStarted).toBe(onExecutionStarted);
+  });
 
   async function writeClaudeCliAssistantTranscript(cliSessionId: string) {
     // Claude stores resumable sessions under a workspace-derived project dir,

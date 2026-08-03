@@ -1067,7 +1067,7 @@ jobs:
     # check-lint/check-dependencies; tsdown parallelizes across the extra
     # cores for roughly the same billed core-minutes.
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 35 || 20 }}
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
       core-support-boundary-result: ${{ steps.built_artifact_checks.outputs['core-support-boundary-result'] }}

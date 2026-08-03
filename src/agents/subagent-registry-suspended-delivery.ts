@@ -12,28 +12,23 @@ import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recover
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-const CRON_EXPIRY_MS = 2 * 60 * 60_000;
-const SUBAGENT_EXPIRY_MS = 6 * 60 * 60_000;
-const INTERACTIVE_EXPIRY_MS = 24 * 60 * 60_000;
+const SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60_000;
+export const SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT = 25;
+export const SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP = 50;
 
 export function isSuspendedPendingFinalDelivery(entry: SubagentRunRecord): boolean {
   return typeof entry.execution.endedAt === "number" && isDeliverySuspended(entry);
 }
 
-export function resolveSuspendedDeliveryExpiryMs(entry: SubagentRunRecord): number {
-  const requester = entry.requesterSessionKey;
-  return requester.includes(":cron:")
-    ? CRON_EXPIRY_MS
-    : requester.includes(":subagent:")
-      ? SUBAGENT_EXPIRY_MS
-      : INTERACTIVE_EXPIRY_MS;
+export function resolveSuspendedDeliveryExpiryMs(): number {
+  return SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS;
 }
 
 export async function discardSuspendedPendingFinalDelivery(params: {
   runId: string;
   entry: SubagentRunRecord;
   now: number;
-  reason: "expired" | "pressure-pruned";
+  reason: "expired";
   resumedRuns: Set<string>;
   clearPendingLifecycleError: (runId: string) => void;
   clearPendingLifecycleTimeout: (runId: string) => void;

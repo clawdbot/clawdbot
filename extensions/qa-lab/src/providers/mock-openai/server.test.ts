@@ -2659,6 +2659,262 @@ describe("qa mock openai server", () => {
     expect(outputText(payload)).toBe("QA-SUBAGENT-DIRECT-FALLBACK-OK");
   });
 
+  it.each([
+    ["visible", "QA-SUBAGENT-TERMINAL-VISIBLE-OK"],
+    ["silent", "NO_REPLY"],
+    [
+      "empty",
+      [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    ],
+    [
+      "fallback",
+      [
+        "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    ],
+  ])("returns the terminal-reply matrix worker result for %s", async (terminalCase, expected) => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [makeUserInput(`Subagent terminal reply QA worker: ${terminalCase}.`)],
+    });
+
+    expect(outputText(payload)).toBe(expected);
+  });
+
+  it("keeps the empty terminal worker empty across retry prompts", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [
+        makeUserInput("Subagent terminal reply QA worker: empty."),
+        makeUserInput("Continue after the previous empty response."),
+      ],
+    });
+
+    expect(outputText(payload)).toContain("QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK");
+    expect(outputText(payload)).not.toContain("Protocol note:");
+  });
+
+  it("makes the empty terminal worker terminal after one side effect", async () => {
+    const server = await startMockServer();
+    await expectNonStreamingResponsesJson(server, {
+      tools: [{ type: "function", name: "write" }],
+      input: [makeUserInput("Subagent terminal reply QA worker: empty.")],
+    });
+    const writeRequest = requireRecord(
+      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+      "empty terminal write request",
+    );
+    expect(writeRequest.plannedToolName).toBe("write");
+    expect(requireRecord(writeRequest.plannedToolArgs, "empty terminal write args")).toMatchObject({
+      path: "qa-terminal-empty-side-effect.txt",
+    });
+
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [{ type: "function", name: "write" }],
+      input: [
+        makeUserInput("Subagent terminal reply QA worker: empty."),
+        makeToolOutputWithCallId(String(writeRequest.plannedToolCallId), "Wrote 40 bytes"),
+      ],
+    });
+    expect(outputText(payload)).toContain("QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK");
+  });
+
+  it("represents an empty terminal reply intentionally in the resumed parent turn", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [
+        makeUserInput("Subagent terminal reply QA check: empty."),
+        makeUserInput(
+          [
+            "[Internal task completion event]",
+            "Task: qa-terminal-empty",
+            "Result: (no output)",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED");
+  });
+
+  it.each([
+    {
+      name: "OpenAI private-source guidance",
+      instructions:
+        "Current source visible reply MUST use `message(action=send)`; final text is private.",
+      final: undefined,
+    },
+    {
+      name: "Codex private-source guidance",
+      instructions:
+        "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. When the message is the completed reply to the current source conversation, set `final=true`.",
+      final: true,
+    },
+  ])("delivers an empty terminal representation with $name", async ({ instructions, final }) => {
+    const server = await startMockServer();
+    const completionInput = [
+      makeUserInput("Subagent terminal reply QA check: empty."),
+      {
+        type: "function_call",
+        call_id: "call_empty_historical_write",
+        name: "write",
+        arguments: '{"path":"qa-terminal-empty-side-effect.txt"}',
+      },
+      makeToolOutputWithCallId("call_empty_historical_write", "Wrote 40 bytes"),
+      makeUserInput(
+        TEST_RUNTIME_CONTEXT_CARRIER.replace(
+          "runtime metadata",
+          "[Internal task completion event]\nTask: qa-terminal-empty\nResult: (no output)",
+        ),
+      ),
+    ];
+    const delivery = await expectNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      instructions,
+      input: completionInput,
+    });
+    const messageCall = outputToolCall(delivery, "message");
+    expect(outputToolArgsFromItem(messageCall)).toEqual({
+      action: "send",
+      message: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
+      ...(final ? { final } : {}),
+    });
+
+    const settled = await expectNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      instructions,
+      input: [
+        ...completionInput,
+        messageCall,
+        makeToolOutputWithCallId(
+          outputToolCallId(messageCall, "call_mock_message_empty_terminal"),
+          '{"ok":true,"messageId":"qa-empty-terminal"}',
+        ),
+      ],
+    });
+    expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
+    expect(outputText(settled)).toBe("");
+  });
+
+  it("classifies a completion event before the child task text it quotes", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [
+        makeUserInput("Subagent terminal reply QA check: empty."),
+        makeUserInput(
+          [
+            "[Internal task completion event]",
+            "Task: Subagent terminal reply QA worker: empty.",
+            "Result: (no output)",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED");
+  });
+
+  it.each(["visible", "silent", "fallback", "restart", "empty"])(
+    "ends the %s parent turn before direct terminal delivery",
+    async (terminalCase) => {
+      const server = await startMockServer();
+      const prompt = `Subagent terminal reply QA check: ${terminalCase}.`;
+      const payload = await expectNonStreamingResponsesJson(server, {
+        tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+        input: [
+          makeUserInput(prompt),
+          makeToolOutputWithCallId(
+            "call_mock_sessions_spawn_1",
+            JSON.stringify({ status: "accepted", runId: `run-${terminalCase}` }),
+          ),
+        ],
+      });
+
+      expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(payload)).toBe("NO_REPLY");
+    },
+  );
+
+  it.each(["visible", "silent", "fallback", "restart"])(
+    "uses explicit silence for the %s completion-agent direct fallback",
+    async (terminalCase) => {
+      const server = await startMockServer();
+      const payload = await expectNonStreamingResponsesJson(server, {
+        tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+        input: [
+          makeUserInput(`Subagent terminal reply QA check: ${terminalCase}.`),
+          makeUserInput(
+            TEST_RUNTIME_CONTEXT_CARRIER.replace(
+              "runtime metadata",
+              [
+                "[Internal task completion event]",
+                `Task: qa-terminal-${terminalCase}`,
+                `Result: QA-SUBAGENT-TERMINAL-${terminalCase.toUpperCase()}-OK`,
+              ].join("\n"),
+            ),
+          ),
+        ],
+      });
+
+      expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(payload)).toBe("NO_REPLY");
+    },
+  );
+
+  it("uses the latest terminal-reply case in a shared parent transcript", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput("Subagent terminal reply QA check: visible."),
+        makeUserInput("Subagent terminal reply QA check: silent."),
+      ],
+    });
+
+    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(true);
+    const debugRequest = requireRecord(
+      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+      "latest terminal case debug request",
+    );
+    expect(debugRequest.plannedToolName).toBe("sessions_spawn");
+    expect(requireRecord(debugRequest.plannedToolArgs, "latest terminal case args").label).toBe(
+      "qa-terminal-silent",
+    );
+  });
+
+  it("ignores a stale terminal-reply case in a later internal runtime carrier", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput("Subagent terminal reply QA check: fallback."),
+        makeUserInput(
+          TEST_RUNTIME_CONTEXT_CARRIER.replace(
+            "runtime metadata",
+            "Subagent terminal reply QA check: silent.",
+          ),
+        ),
+      ],
+    });
+
+    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(true);
+    const debugRequest = requireRecord(
+      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+      "current terminal case debug request",
+    );
+    expect(debugRequest.plannedToolName).toBe("sessions_spawn");
+    expect(requireRecord(debugRequest.plannedToolArgs, "current terminal case args").label).toBe(
+      "qa-terminal-fallback",
+    );
+  });
+
   it("does not treat prompt or instruction mentions as callable subagent tools", async () => {
     const server = await startMockServer();
     const payload = await expectNonStreamingResponsesJson(server, {

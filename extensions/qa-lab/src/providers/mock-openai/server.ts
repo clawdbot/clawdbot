@@ -56,10 +56,15 @@ import {
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
+  QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE,
   buildStrandedFinalRecoveryText,
   buildStrandedFinalRetryFailureText,
   isStrandedFinalRetryFailureRequest,
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
+  QA_SUBAGENT_TERMINAL_MARKERS,
+  QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
+  QA_SUBAGENT_TERMINAL_WORKER_DELAY_MS,
   QA_NATIVE_STOP_DELAY_PROMPT_RE,
   QA_NATIVE_STOP_DELAY_MS,
   QA_IMAGE_GENERATION_PROMPT_RE,
@@ -482,6 +487,14 @@ async function buildResponsesPayload(
     codeModeControlJson?.status === "completed" && Object.hasOwn(codeModeControlJson, "value")
       ? stringifyScenarioToolOutput(codeModeControlJson.value)
       : rawToolOutput;
+  const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
+  const completedToolName = (() => {
+    if (completedToolCall?.name !== "exec") {
+      return completedToolCall?.name;
+    }
+    const code = parseToolCallArguments(completedToolCall)?.code;
+    return typeof code === "string" ? decodeCodeModeTarget(code)?.name : undefined;
+  })();
   const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
     buildScenarioToolCallEvents(toolDeclarationBody, name, args);
   const allInputText = extractAllRequestTexts(input, body);
@@ -720,6 +733,98 @@ async function buildResponsesPayload(
   }
   if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
     return buildAssistantEvents(QA_SUBAGENT_DIRECT_FALLBACK_MARKER);
+  }
+  const terminalCompletionCase = extractLastMatchingUserTurn(
+    input,
+    QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
+  )
+    ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
+    ?.toLowerCase();
+  if (terminalCompletionCase && /Internal task completion event/i.test(allInputText)) {
+    if (terminalCompletionCase === "empty") {
+      if (completedToolName === "message") {
+        return buildAssistantEvents("");
+      }
+      if (hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode) {
+        const deliveryInstructions = extractAllRequestTexts(
+          input.filter((item) => item.role === "system" || item.role === "developer"),
+          body,
+        );
+        const requiresFinal =
+          /visible source replies are not automatically delivered for this run\.[\s\S]*set `?final=true`?/i.test(
+            deliveryInstructions,
+          );
+        return buildToolCallEventsWithArgs("message", {
+          action: "send",
+          message: QA_SUBAGENT_TERMINAL_MARKERS.empty,
+          ...(requiresFinal ? { final: true } : {}),
+        });
+      }
+      return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS.empty);
+    }
+    // The direct delivery fallback owns visible, silent, restart, and sanitized
+    // fallback results. Use explicit silence so generic empty-response recovery
+    // cannot replay the historical spawn before that fallback runs.
+    return buildAssistantEvents("NO_REPLY");
+  }
+  const terminalWorkerCase = Array.from(
+    allInputText.matchAll(
+      new RegExp(
+        QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE.source,
+        `${QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE.flags.replaceAll("g", "")}g`,
+      ),
+    ),
+  )
+    .at(-1)?.[1]
+    ?.toLowerCase();
+  if (terminalWorkerCase) {
+    await sleep(QA_SUBAGENT_TERMINAL_WORKER_DELAY_MS);
+  }
+  if (terminalWorkerCase === "silent") {
+    return buildAssistantEvents("NO_REPLY");
+  }
+  if (terminalWorkerCase === "empty") {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "write")) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "qa-terminal-empty-side-effect.txt",
+        content: "empty terminal QA side effect completed\n",
+      });
+    }
+    return buildAssistantEvents(
+      [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    );
+  }
+  if (terminalWorkerCase === "fallback") {
+    return buildAssistantEvents(
+      [
+        QA_SUBAGENT_TERMINAL_MARKERS.fallback,
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    );
+  }
+  if (terminalWorkerCase === "visible" || terminalWorkerCase === "restart") {
+    return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS[terminalWorkerCase]);
+  }
+  if (terminalCompletionCase) {
+    if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: `Subagent terminal reply QA worker: ${terminalCompletionCase}.`,
+        label: `qa-terminal-${terminalCompletionCase}`,
+        thread: false,
+        mode: "run",
+      });
+    }
+    if (hasCompletedToolOutput) {
+      // End the requester turn before the delayed worker settles. The terminal
+      // result must therefore use the runtime's direct channel fallback.
+      return buildAssistantEvents("NO_REPLY");
+    }
   }
   // Protected completion context is excluded from the current user prompt;
   // ignoring it replays the historical kickoff and recursively spawns workers.

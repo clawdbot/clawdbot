@@ -16,7 +16,6 @@ import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
   logAnnounceGiveUp,
-  MAX_ANNOUNCE_RETRY_COUNT,
   MIN_ANNOUNCE_RETRY_DELAY_MS,
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
@@ -71,14 +70,13 @@ export function createSubagentRegistryLifecycleCleanup(
 
   const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
     entry.expectsCompletionMessage === true &&
-    entry.cleanup === "keep" &&
     entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
     entry.execution.outcome?.status === "ok";
 
   const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
     runId: string;
     entry: SubagentRunRecord;
-    reason: "retry-limit" | "expiry";
+    reason: "expiry" | "permanent_failure";
   }) => {
     if (shouldSuspendPendingFinalDelivery(giveUpParams.entry)) {
       suspendPendingFinalDelivery({
@@ -297,6 +295,15 @@ export function createSubagentRegistryLifecycleCleanup(
       return;
     }
 
+    if (entry.delivery?.disposition === "session_queued") {
+      // The correlated queue owns transport now. Settlement, not admission,
+      // decides delivered versus blocked and re-enters cleanup afterward.
+      entry.cleanupHandled = false;
+      params.resumedRuns.delete(runId);
+      params.persist(runId);
+      return;
+    }
+
     const now = Date.now();
     const deferredDecision = resolveDeferredCleanupDecision({
       entry,
@@ -304,7 +311,6 @@ export function createSubagentRegistryLifecycleCleanup(
       activeDescendantRuns: Math.max(0, params.countPendingDescendantRuns(entry.childSessionKey)),
       announceExpiryMs: ANNOUNCE_EXPIRY_MS,
       announceCompletionHardExpiryMs: ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
-      maxAnnounceRetryCount: MAX_ANNOUNCE_RETRY_COUNT,
       deferDescendantDelayMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
       resolveAnnounceRetryDelayMs,
     });
@@ -385,6 +391,10 @@ export function createSubagentRegistryLifecycleCleanup(
       entry,
       error: didAnnounce ? undefined : "announce deferred or direct delivery failed",
     });
+    const delivery = ensureDeliveryState(entry);
+    delivery.windowStartedAt ??= entry.execution.endedAt ?? now;
+    delivery.deadlineAt ??= delivery.windowStartedAt + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
+    delivery.nextAttemptAt = now + (deferredDecision.resumeDelayMs ?? 0);
     entry.cleanupHandled = false;
     params.resumedRuns.delete(runId);
     params.persist(runId);
@@ -551,8 +561,9 @@ export function createSubagentRegistryLifecycleCleanup(
       task: pendingPayload.task,
       timeoutMs: params.subagentAnnounceTimeoutMs,
       cleanup: suppressSessionEffects ? "keep" : cleanup,
-      roundOneReply: pendingPayload.frozenResultText ?? undefined,
-      fallbackReply: pendingPayload.fallbackFrozenResultText ?? undefined,
+      roundOneReply: entry.completion?.resultText ?? undefined,
+      terminalReply: pendingPayload.terminalReply,
+      fallbackReply: entry.completion?.fallbackResultText ?? undefined,
       waitForCompletion: false,
       startedAt: pendingPayload.startedAt,
       endedAt: pendingPayload.endedAt,

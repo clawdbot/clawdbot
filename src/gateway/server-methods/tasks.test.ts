@@ -39,6 +39,7 @@ type TaskResponsePayload = {
   found?: boolean;
   cancelled?: boolean;
   nextCursor?: string;
+  results?: Array<{ taskId?: string; ok?: boolean; reason?: string }>;
 };
 
 let stateDir: string;
@@ -107,7 +108,7 @@ function createSnapshotTask(overrides: Partial<TaskRecord>): TaskRecord {
 }
 
 async function runTaskHandler(
-  method: "tasks.list" | "tasks.get" | "tasks.cancel",
+  method: "tasks.list" | "tasks.get" | "tasks.cancel" | "tasks.retry" | "tasks.dismiss",
   params: Record<string, unknown>,
 ) {
   const { calls, respond } = captureRespond();
@@ -563,5 +564,28 @@ describe("tasks gateway handlers", () => {
     expect(getTaskById(task.taskId)?.status).toBe("cancelled");
     expect(getTaskById(siblingTask.taskId)?.status).toBe("cancelled");
     expect(getTaskById(siblingTask.taskId)?.error).toBe("operator requested stop");
+  });
+
+  it.each([
+    ["tasks.retry", "task has no recoverable subagent completion"],
+    ["tasks.dismiss", "completion delivery is not blocked"],
+  ] as const)("returns one visible refusal per missing task for %s", async (method, reason) => {
+    const { calls, payload } = await runTaskHandler(method, {
+      taskIds: ["missing-one", "missing-two"],
+    });
+
+    expect(calls[0]?.[0]).toBe(true);
+    expect(payload?.results).toEqual([
+      {
+        taskId: "missing-one",
+        ok: false,
+        reason,
+      },
+      {
+        taskId: "missing-two",
+        ok: false,
+        reason,
+      },
+    ]);
   });
 });

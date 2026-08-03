@@ -14,6 +14,7 @@ type SessionStoreRuntime = typeof import("./session-store.runtime.js");
 type CliCompactionRuntime = typeof import("./cli-compaction.js");
 type TranscriptResolveRuntime =
   typeof import("../../config/sessions/transcript-resolve.runtime.js");
+type TranscriptAppendRuntime = typeof import("../../config/sessions/transcript.runtime.js");
 type CliDepsRuntime = typeof import("../../cli/deps.js");
 type ExecDefaultsRuntime = typeof import("../exec-defaults.js");
 type SkillsRuntime = {
@@ -47,6 +48,9 @@ const cliCompactionRuntimeLoader = createLazyImportLoader<CliCompactionRuntime>(
 );
 const transcriptResolveRuntimeLoader = createLazyImportLoader<TranscriptResolveRuntime>(
   () => import("../../config/sessions/transcript-resolve.runtime.js"),
+);
+const transcriptAppendRuntimeLoader = createLazyImportLoader<TranscriptAppendRuntime>(
+  () => import("../../config/sessions/transcript.runtime.js"),
 );
 const cliDepsRuntimeLoader = createLazyImportLoader<CliDepsRuntime>(
   () => import("../../cli/deps.js"),
@@ -99,6 +103,10 @@ export function loadCliCompactionRuntime(): Promise<CliCompactionRuntime> {
 
 export function loadTranscriptResolveRuntime(): Promise<TranscriptResolveRuntime> {
   return transcriptResolveRuntimeLoader.load();
+}
+
+export function loadTranscriptAppendRuntime(): Promise<TranscriptAppendRuntime> {
+  return transcriptAppendRuntimeLoader.load();
 }
 
 export function loadExecDefaultsRuntime(): Promise<ExecDefaultsRuntime> {

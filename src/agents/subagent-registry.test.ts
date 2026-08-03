@@ -3469,6 +3469,37 @@ describe("subagent registry seam flow", () => {
     expect(run?.execution.outcome?.status).toBe(expectedOutcome.status);
   });
 
+  it("carries producer reply evidence through a provider hard-timeout wait", async () => {
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": {
+        status: "error",
+        startedAt: 100,
+        endedAt: 250,
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "model timed out",
+        terminalReply: { disposition: "empty" },
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-hard-timeout-terminal-reply",
+      task: "provider timeout reply evidence",
+      expectsCompletionMessage: true,
+    });
+
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
+    expect(getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "timeout announce")).toMatchObject({
+      childRunId: "run-hard-timeout-terminal-reply",
+      outcome: { status: "timeout" },
+      terminalReply: { disposition: "empty" },
+    });
+    expect(findRequesterRun("run-hard-timeout-terminal-reply")?.completion).toMatchObject({
+      terminalReply: { disposition: "empty" },
+      resultText: null,
+    });
+  });
+
   it("publishes aborted agent.wait snapshots only after killed reconciliation", async () => {
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": {
@@ -5436,7 +5467,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("deletes delete-mode completion runs when announce cleanup gives up after retry limit", async () => {
+  it("retains delete-mode successful completions through the delivery deadline", async () => {
     mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
     const endedAt = Date.parse("2026-03-24T12:00:00Z");
     mocks.callGateway.mockResolvedValueOnce({
@@ -5462,22 +5493,22 @@ describe("subagent registry seam flow", () => {
       "delete give-up run",
     );
 
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(mocks.runSubagentAnnounceFlow.mock.calls.length).toBeGreaterThan(3);
+    expect(findRequesterRun("run-delete-give-up")?.delivery?.status).not.toBe("suspended");
 
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(3);
-
-    await vi.advanceTimersByTimeAsync(4_000);
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(3);
-    expect(
-      mod
-        .listSubagentRunsForRequester("agent:main:main")
-        .find((entry) => entry.runId === "run-delete-give-up"),
-    ).toBeUndefined();
+    const deadlineAt = findRequesterRun("run-delete-give-up")?.delivery?.deadlineAt;
+    expect(deadlineAt).toBeTypeOf("number");
+    vi.setSystemTime((deadlineAt ?? Date.now()) + 1);
+    mod.resumeSubagentRun("run-delete-give-up");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(findRequesterRun("run-delete-give-up")?.delivery).toMatchObject({
+      status: "suspended",
+      suspendedReason: "expiry",
+    });
   });
 
-  it("finalizes retry-budgeted completion delete runs during resume", async () => {
+  it("retries and retires completion delete runs regardless of prior attempt count", async () => {
     const endedHookRunner = {
       hasHooks: (hookName: string) => hookName === "subagent_ended",
       runSubagentEnded: mocks.runSubagentEnded,
@@ -5511,25 +5542,11 @@ describe("subagent registry seam flow", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    await waitForFast(() => {
-      expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    });
-    await waitForFast(() => {
-      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
-        childSessionKey: "agent:main:subagent:child",
-        reason: "deleted",
-        workspaceDir: undefined,
-      });
-    });
-    expect(
-      mod
-        .listSubagentRunsForRequester("agent:main:main")
-        .find((entry) => entry.runId === "run-resume-delete"),
-    ).toBeUndefined();
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    expect(findRequesterRun("run-resume-delete")).toBeUndefined();
   });
 
-  it("suspends retry-budgeted successful keep-mode completion deliveries during resume", async () => {
+  it("retries and settles keep-mode completions regardless of prior attempt count", async () => {
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;
       mergeOnly?: boolean;
@@ -5557,7 +5574,6 @@ describe("subagent registry seam flow", () => {
               endedAt: Date.parse("2026-03-24T11:59:30Z"),
               outcome: { status: "ok" },
               expectsCompletionMessage: true,
-              frozenResultText: "child completed successfully",
             },
           },
         }),
@@ -5569,20 +5585,11 @@ describe("subagent registry seam flow", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     const run = findRequesterRun("run-resume-keep");
-    expect(run).toMatchObject({
-      delivery: {
-        status: "suspended",
-        suspendedReason: "retry-limit",
-      },
-      cleanupHandled: false,
-    });
-    expect(run?.cleanupCompletedAt).toBeUndefined();
-    expect(run?.delivery?.payload).toMatchObject({
-      childRunId: "run-resume-keep",
-      frozenResultText: "child completed successfully",
-    });
+    expect(run?.delivery?.status).toBe("delivered");
+    expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+    expect(run?.completion?.resultText).toBe("child completed successfully");
   });
 
   it("clears suspended final delivery fields when reactivating a subagent run", () => {
@@ -5598,6 +5605,7 @@ describe("subagent registry seam flow", () => {
       endedReason: "subagent-error",
       outcome: { status: "error", error: "restart interrupted run" },
       terminalOwner: "interrupted-recovery",
+      completion: { required: true, resultText: "child completed successfully" },
       delivery: {
         status: "suspended",
         createdAt: endedAt + 1_000,
@@ -5611,10 +5619,9 @@ describe("subagent registry seam flow", () => {
           endedAt,
           outcome: { status: "ok" },
           expectsCompletionMessage: true,
-          frozenResultText: "child completed successfully",
         },
         suspendedAt: endedAt + 3_000,
-        suspendedReason: "retry-limit",
+        suspendedReason: "expiry",
       },
     });
 
@@ -6368,7 +6375,7 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("expires suspended cron final deliveries into compact tombstones", async () => {
+  it("expires suspended cron final deliveries after seven days", async () => {
     const now = Date.parse("2026-03-24T12:00:00Z");
     const runId = "run-suspended-cron-expired";
     mod.addSubagentRunForTests({
@@ -6380,14 +6387,15 @@ describe("subagent registry seam flow", () => {
       task: "cron suspended delivery",
       expectsCompletionMessage: true,
       spawnMode: "session",
-      createdAt: now - 3 * 60 * 60_000,
-      startedAt: now - 3 * 60 * 60_000,
-      endedAt: now - 3 * 60 * 60_000,
+      createdAt: now - 8 * 24 * 60 * 60_000,
+      startedAt: now - 8 * 24 * 60 * 60_000,
+      endedAt: now - 8 * 24 * 60 * 60_000,
       outcome: { status: "ok" },
+      completion: { required: true, resultText: "large final payload" },
       delivery: {
         status: "suspended",
-        createdAt: now - 3 * 60 * 60_000,
-        lastAttemptAt: now - 2 * 60 * 60_000 - 1,
+        createdAt: now - 8 * 24 * 60 * 60_000,
+        lastAttemptAt: now - 7 * 24 * 60 * 60_000 - 1,
         attemptCount: 3,
         lastError: "gateway request timeout for agent",
         payload: {
@@ -6396,13 +6404,12 @@ describe("subagent registry seam flow", () => {
           childSessionKey: "agent:main:subagent:suspended-cron",
           childRunId: runId,
           task: "cron suspended delivery",
-          endedAt: now - 3 * 60 * 60_000,
+          endedAt: now - 8 * 24 * 60 * 60_000,
           outcome: { status: "ok" },
           expectsCompletionMessage: true,
-          frozenResultText: "large final payload",
         },
-        suspendedAt: now - 2 * 60 * 60_000 - 1,
-        suspendedReason: "retry-limit",
+        suspendedAt: now - 7 * 24 * 60 * 60_000 - 1,
+        suspendedReason: "expiry",
       },
     });
 
@@ -6426,7 +6433,7 @@ describe("subagent registry seam flow", () => {
       requesterSessionKey: "agent:main:cron:cron-1:run:parent",
       childSessionKey: "agent:main:subagent:suspended-cron",
       childRunId: runId,
-      endedAt: now - 3 * 60 * 60_000,
+      endedAt: now - 8 * 24 * 60 * 60_000,
       status: "ok",
       lastError: "gateway request timeout for agent",
     });
@@ -6461,14 +6468,14 @@ describe("subagent registry seam flow", () => {
       cleanup: "delete",
       expectsCompletionMessage: true,
       spawnMode: "run",
-      createdAt: now - 25 * 60 * 60_000,
-      startedAt: now - 25 * 60 * 60_000,
-      endedAt: now - 25 * 60 * 60_000,
+      createdAt: now - 8 * 24 * 60 * 60_000,
+      startedAt: now - 8 * 24 * 60 * 60_000,
+      endedAt: now - 8 * 24 * 60 * 60_000,
       outcome: { status: "ok" },
       delivery: {
         status: "suspended",
-        createdAt: now - 25 * 60 * 60_000,
-        lastAttemptAt: now - 24 * 60 * 60_000 - 1,
+        createdAt: now - 8 * 24 * 60 * 60_000,
+        lastAttemptAt: now - 7 * 24 * 60 * 60_000 - 1,
         attemptCount: 3,
         lastError: "gateway request timeout for agent",
         payload: {
@@ -6477,13 +6484,12 @@ describe("subagent registry seam flow", () => {
           childSessionKey,
           childRunId: runId,
           task: "discard suspended delete delivery",
-          endedAt: now - 25 * 60 * 60_000,
+          endedAt: now - 8 * 24 * 60 * 60_000,
           outcome: { status: "ok" },
           expectsCompletionMessage: true,
-          frozenResultText: "final payload",
         },
-        suspendedAt: now - 24 * 60 * 60_000 - 1,
-        suspendedReason: "retry-limit",
+        suspendedAt: now - 7 * 24 * 60 * 60_000 - 1,
+        suspendedReason: "expiry",
       },
     });
     const original = structuredClone(mod.getSubagentRunByChildSessionKey(childSessionKey));
@@ -6504,7 +6510,7 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("pressure-prunes oldest suspended final deliveries when backlog exceeds hard cap", async () => {
+  it("retains suspended final deliveries when backlog exceeds the hard cap", async () => {
     const now = Date.parse("2026-03-24T12:00:00Z");
     for (let i = 0; i < 51; i += 1) {
       const runId = `run-suspended-pressure-${i}`;
@@ -6536,10 +6542,9 @@ describe("subagent registry seam flow", () => {
             endedAt: now - 60_000,
             outcome: { status: "ok" },
             expectsCompletionMessage: true,
-            frozenResultText: "final payload",
           },
           suspendedAt: now - 60_000 + i,
-          suspendedReason: "retry-limit",
+          suspendedReason: "expiry",
         },
       });
     }
@@ -6549,17 +6554,13 @@ describe("subagent registry seam flow", () => {
     const runs = Array.from({ length: 51 }, (_, i) =>
       mod.getSubagentRunByChildSessionKey(`agent:main:subagent:suspended-pressure-${i}`),
     );
-    const discarded = runs.filter((run) => run?.delivery?.discardReason === "pressure-pruned");
     const stillSuspended = runs.filter(
       (run) =>
         run?.delivery?.status === "suspended" && typeof run.delivery.suspendedAt === "number",
     );
-    expect(discarded).toHaveLength(41);
-    expect(stillSuspended).toHaveLength(10);
-    expect(discarded[0]?.runId).toBe("run-suspended-pressure-0");
-    expect(runs[40]?.delivery?.discardReason).toBe("pressure-pruned");
-    expect(runs[41]?.delivery?.status).toBe("suspended");
-    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+    expect(stillSuspended).toHaveLength(51);
+    expect(runs.every((run) => run?.delivery?.discardReason === undefined)).toBe(true);
+    expect(mod.getSubagentDeliveryBacklogPressure()).toEqual({ suspended: 51, blocked: true });
   });
 
   it("contains per-row and background sweeper failures", async () => {

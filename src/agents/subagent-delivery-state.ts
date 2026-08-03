@@ -1,3 +1,4 @@
+import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type {
   SubagentCompletionDeliveryState,
   SubagentCompletionState,
@@ -32,6 +33,11 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
     entry.pauseReason !== "sessions_yield"
       ? "interrupted-recovery"
       : undefined;
+  if (entry.completion) {
+    entry.completion.terminalReply = normalizeAgentRunTerminalReplySnapshot(
+      entry.completion.terminalReply,
+    );
+  }
   const killReconciliation = entry.killReconciliation;
   if (
     !killReconciliation ||
@@ -120,11 +126,6 @@ export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">):
 /** Reads the current delivery attempt count. */
 export function getDeliveryAttemptCount(entry: SubagentRunRecord): number {
   return entry.delivery?.attemptCount ?? 0;
-}
-
-/** Reads the timestamp of the last delivery attempt. */
-export function getDeliveryLastAttemptAt(entry: SubagentRunRecord): number | undefined {
-  return entry.delivery?.lastAttemptAt;
 }
 
 /** Reads the non-empty last delivery error. */

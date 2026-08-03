@@ -22,6 +22,7 @@ import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -47,6 +48,7 @@ import {
   filterCurrentDirectChildCompletionRows,
   readLatestSubagentOutputWithRetry,
   readSubagentOutput,
+  readSubagentTimeoutProgress,
   type SubagentRunOutcome,
   waitForSubagentRunOutcome,
 } from "./subagent-announce-output.js";
@@ -286,6 +288,7 @@ export async function runSubagentAnnounceFlow(params: {
   timeoutMs: number;
   cleanup: "delete" | "keep";
   roundOneReply?: string;
+  terminalReply?: AgentRunTerminalReplySnapshot;
   /**
    * Fallback text preserved from the pre-wake run when a wake continuation
    * completes with NO_REPLY despite an earlier final summary already existing.
@@ -337,7 +340,12 @@ export async function runSubagentAnnounceFlow(params: {
         ? childSessionEntry.lifecycleRevision.trim()
         : undefined;
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
-    let reply = params.roundOneReply;
+    let reply =
+      params.terminalReply?.disposition === "visible"
+        ? params.terminalReply.text
+        : params.terminalReply?.disposition === "silent"
+          ? SILENT_REPLY_TOKEN
+          : params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     if (childSessionId && isEmbeddedAgentRunActive(childSessionId)) {
       const settled = await waitForEmbeddedAgentRunEnd(childSessionId, settleTimeoutMs);
@@ -369,7 +377,7 @@ export async function runSubagentAnnounceFlow(params: {
     const failedTerminalOutcome = outcome.status === "error";
     const allowFailedOutputCapture =
       !failedTerminalOutcome || (!params.roundOneReply && !params.fallbackReply);
-    if (failedTerminalOutcome) {
+    if (failedTerminalOutcome && !params.terminalReply) {
       reply = undefined;
     }
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
@@ -457,55 +465,82 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (!childCompletionFindings) {
-      const fallbackReply = failedTerminalOutcome
-        ? undefined
-        : normalizeOptionalString(params.fallbackReply);
-      const fallbackIsSilent =
-        Boolean(fallbackReply) &&
-        (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
-
-      if (childSessionEffectsAllowed() && !reply && allowFailedOutputCapture) {
-        reply = await readSubagentOutput(params.childSessionKey, outcome);
+      if (params.terminalReply?.disposition === "silent") {
+        return true;
       }
-
-      if (childSessionEffectsAllowed() && !reply?.trim() && allowFailedOutputCapture) {
-        reply = await readLatestSubagentOutputWithRetry({
-          sessionKey: params.childSessionKey,
-          maxWaitMs: params.timeoutMs,
+      if (params.terminalReply?.disposition === "empty" && outcome.status === "timeout") {
+        const timeoutProgress = await readSubagentTimeoutProgress(
+          params.childSessionKey,
+          params.timeoutMs,
           outcome,
-        });
-      }
-
-      if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
-        reply = fallbackReply;
-      }
-
-      // A worker can finish just after the first wait request timed out.
-      // If we already have real completion content, do one cached recheck so
-      // the final completion event prefers the authoritative terminal state.
-      // This is best-effort; if the recheck fails, keep the known timeout
-      // outcome instead of dropping the announcement entirely.
-      if (outcome?.status === "timeout" && reply?.trim() && params.waitForCompletion !== false) {
-        try {
-          const rechecked = await waitForSubagentRunOutcome(params.childRunId, 0);
-          const applied = applySubagentWaitOutcome({
-            wait: rechecked,
-            outcome,
-            startedAt: params.startedAt,
-            endedAt: params.endedAt,
-          });
-          outcome = applied.outcome;
-          params.startedAt = applied.startedAt;
-          params.endedAt = applied.endedAt;
-        } catch {
-          // Best-effort recheck; keep the existing timeout outcome on failure.
+        );
+        // Empty remains the authoritative terminal fact. Transcript text is a
+        // timeout-only progress hint and must never reclassify silence as output.
+        if (timeoutProgress) {
+          reply = stripAndClassifyReply(timeoutProgress) ?? undefined;
         }
       }
+      if (!params.terminalReply) {
+        const fallbackReply = failedTerminalOutcome
+          ? undefined
+          : normalizeOptionalString(params.fallbackReply);
+        const fallbackIsSilent =
+          Boolean(fallbackReply) &&
+          (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
 
-      if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
-        if (fallbackReply && !fallbackIsSilent) {
-          const cleaned = stripAndClassifyReply(fallbackReply);
-          if (cleaned === null) {
+        if (childSessionEffectsAllowed() && !reply && allowFailedOutputCapture) {
+          reply = await readSubagentOutput(params.childSessionKey, outcome);
+        }
+
+        if (childSessionEffectsAllowed() && !reply?.trim() && allowFailedOutputCapture) {
+          reply = await readLatestSubagentOutputWithRetry({
+            sessionKey: params.childSessionKey,
+            maxWaitMs: params.timeoutMs,
+            outcome,
+          });
+        }
+
+        if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
+          reply = fallbackReply;
+        }
+
+        // A worker can finish just after the first wait request timed out.
+        // If we already have real completion content, do one cached recheck so
+        // the final completion event prefers the authoritative terminal state.
+        // This is best-effort; if the recheck fails, keep the known timeout
+        // outcome instead of dropping the announcement entirely.
+        if (outcome?.status === "timeout" && reply?.trim() && params.waitForCompletion !== false) {
+          try {
+            const rechecked = await waitForSubagentRunOutcome(params.childRunId, 0);
+            const applied = applySubagentWaitOutcome({
+              wait: rechecked,
+              outcome,
+              startedAt: params.startedAt,
+              endedAt: params.endedAt,
+            });
+            outcome = applied.outcome;
+            params.startedAt = applied.startedAt;
+            params.endedAt = applied.endedAt;
+          } catch {
+            // Best-effort recheck; keep the existing timeout outcome on failure.
+          }
+        }
+
+        if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
+          if (fallbackReply && !fallbackIsSilent) {
+            const cleaned = stripAndClassifyReply(fallbackReply);
+            if (cleaned === null) {
+              if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
+                logWarn(
+                  `cron job completion for session=${targetRequesterSessionKey} ` +
+                    `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
+                    `the agent replied with the skip sentinel instead of delivering a result`,
+                );
+              }
+              return true;
+            }
+            reply = cleaned;
+          } else {
             if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
               logWarn(
                 `cron job completion for session=${targetRequesterSessionKey} ` +
@@ -515,31 +550,21 @@ export async function runSubagentAnnounceFlow(params: {
             }
             return true;
           }
-          reply = cleaned;
-        } else {
-          if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
-            logWarn(
-              `cron job completion for session=${targetRequesterSessionKey} ` +
-                `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
-                `the agent replied with the skip sentinel instead of delivering a result`,
-            );
-          }
-          return true;
-        }
-      } else if (reply) {
-        const cleaned = stripAndClassifyReply(reply);
-        if (cleaned === null) {
-          if (fallbackReply && !fallbackIsSilent) {
-            const cleanedFallback = stripAndClassifyReply(fallbackReply);
-            if (cleanedFallback === null) {
+        } else if (reply) {
+          const cleaned = stripAndClassifyReply(reply);
+          if (cleaned === null) {
+            if (fallbackReply && !fallbackIsSilent) {
+              const cleanedFallback = stripAndClassifyReply(fallbackReply);
+              if (cleanedFallback === null) {
+                return true;
+              }
+              reply = cleanedFallback;
+            } else {
               return true;
             }
-            reply = cleanedFallback;
           } else {
-            return true;
+            reply = cleaned;
           }
-        } else {
-          reply = cleaned;
         }
       }
     }
@@ -676,6 +701,7 @@ export async function runSubagentAnnounceFlow(params: {
       completionDirectOrigin,
       directOrigin,
       sourceSessionKey: params.childSessionKey,
+      sourceRunId: params.childRunId,
       sourceChannel: INTERNAL_MESSAGE_CHANNEL,
       sourceTool: "subagent_announce",
       isSourceSessionEffectsAllowed: completionDeliveryAllowed,
@@ -688,7 +714,7 @@ export async function runSubagentAnnounceFlow(params: {
       signal: params.signal,
     });
     reportDeliveryResult(delivery);
-    didAnnounce = delivery.delivered || delivery.terminal === true;
+    didAnnounce = delivery.delivered || delivery.disposition === "intentional_non_delivery";
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
         `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

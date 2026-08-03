@@ -530,8 +530,8 @@ describe("subagent registry recovery scheduling", () => {
     entry.expectsCompletionMessage = true;
     entry.delivery = {
       status: "suspended",
-      suspendedAt: Date.now() - 25 * 60 * 60_000,
-      suspendedReason: "retry-limit",
+      suspendedAt: Date.now() - 8 * 24 * 60 * 60_000,
+      suspendedReason: "expiry",
       payload: {
         requesterSessionKey: entry.requesterSessionKey,
         requesterDisplayKey: entry.requesterDisplayKey,

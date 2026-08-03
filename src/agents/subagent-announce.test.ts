@@ -6,7 +6,12 @@ import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/r
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
-type AgentCallResponse = { runId?: string; status: string; error?: string; terminal?: boolean };
+type AgentCallResponse = {
+  runId?: string;
+  status: string;
+  error?: string;
+  disposition?: "ambiguous";
+};
 
 const agentSpy = vi.fn(
   async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
@@ -113,6 +118,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         path: "none",
         reason: "source_owner_changed",
         terminal: true,
+        disposition: "intentional_non_delivery",
       };
     }
     // The delivery mock preserves the key branch: active Discord requester
@@ -159,14 +165,14 @@ vi.mock("./subagent-announce-delivery.js", () => ({
               threadId: effectiveOrigin?.threadId,
             }),
       },
-    })) as { status?: string; error?: string; terminal?: boolean };
+    })) as { status?: string; error?: string; disposition?: "ambiguous" };
 
     if (response.status === "error") {
       return {
         delivered: false,
         path: "direct",
         error: response.error ?? "agent delivery failed",
-        ...(response.terminal === true ? { terminal: true } : {}),
+        ...(response.disposition ? { disposition: response.disposition } : {}),
       };
     }
 
@@ -694,19 +700,19 @@ describe("subagent announce seam flow", () => {
     logSpy.mockRestore();
   });
 
-  it("treats terminal direct completion failures as announced for cleanup", async () => {
+  it("does not treat ambiguous direct completion failures as announced", async () => {
     let deliveryResult:
       | {
           delivered: boolean;
           path: string;
           error?: string;
-          terminal?: boolean;
+          disposition?: string;
         }
       | undefined;
     agentSpy.mockResolvedValueOnce({
       status: "error",
       error: "prompt lock failed after visible send",
-      terminal: true,
+      disposition: "ambiguous",
     });
 
     const didAnnounce = await runSubagentAnnounceFlow({
@@ -732,12 +738,12 @@ describe("subagent announce seam flow", () => {
       },
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe(false);
     expect(deliveryResult).toMatchObject({
       delivered: false,
       path: "direct",
       error: "prompt lock failed after visible send",
-      terminal: true,
+      disposition: "ambiguous",
     });
   });
 });

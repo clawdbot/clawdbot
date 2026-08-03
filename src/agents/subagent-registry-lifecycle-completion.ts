@@ -1,8 +1,10 @@
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { recordSubagentTerminalState } from "../sessions/session-state-events.js";
 import type { DetachedTaskFindResult } from "../tasks/detached-task-runtime-contract.js";
 import { isProvisionalSubagentKillTask } from "../tasks/task-cancellation-state.js";
+import { mergeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
 import {
@@ -412,6 +414,28 @@ export function createSubagentRegistryLifecycleCompletion(
         ) {
           completion.resultText = completeParams.completionSnapshot.resultText;
           completion.capturedAt = completeParams.completionSnapshot.capturedAt;
+          mutated = true;
+        }
+      }
+
+      if (completeParams.terminalReply) {
+        const completion = ensureCompletionState(entry);
+        const terminalReply = mergeAgentRunTerminalReplySnapshot(
+          completion.terminalReply,
+          completeParams.terminalReply,
+        );
+        if (
+          terminalReply &&
+          JSON.stringify(terminalReply) !== JSON.stringify(completion.terminalReply)
+        ) {
+          completion.terminalReply = terminalReply;
+          completion.resultText =
+            terminalReply.disposition === "visible"
+              ? terminalReply.text
+              : terminalReply.disposition === "silent"
+                ? SILENT_REPLY_TOKEN
+                : null;
+          completion.capturedAt = endedAt;
           mutated = true;
         }
       }
