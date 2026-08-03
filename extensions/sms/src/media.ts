@@ -6,8 +6,13 @@ import {
   toInboundMediaFactsWithMetadata,
   type InboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
+import { MediaFetchError, unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   createHostedOutboundMediaStore,
@@ -17,7 +22,8 @@ import {
   type OutboundMediaLoadOptions,
 } from "openclaw/plugin-sdk/outbound-media";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
+import { safeEqualSecret, SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { getSmsRuntime } from "./runtime.js";
 import { TWILIO_MMS_MAX_BYTES } from "./twilio.js";
 import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
@@ -340,6 +346,34 @@ function createInboundMediaCleanup(paths: string[]): () => Promise<void> {
   };
 }
 
+function isRetryableSmsInboundMediaError(error: unknown): boolean {
+  if (!(error instanceof MediaFetchError)) {
+    return false;
+  }
+  if (error.code === "http_error") {
+    return (
+      error.status === 408 ||
+      error.status === 429 ||
+      (typeof error.status === "number" && error.status >= 500)
+    );
+  }
+  if (error.code !== "fetch_failed") {
+    return false;
+  }
+  const causes = collectErrorGraphCandidates(error.cause, (candidate) => [candidate.cause]);
+  if (causes.some((candidate) => candidate instanceof SsrFBlockedError)) {
+    return false;
+  }
+  return causes.some((candidate) => {
+    const name = readErrorName(candidate);
+    return (
+      classifyTransientNetworkErrorCode(extractErrorCode(candidate)) !== undefined ||
+      name === "AbortError" ||
+      name.endsWith("TimeoutError")
+    );
+  });
+}
+
 export async function materializeSmsInboundMedia(params: {
   account: ResolvedSmsAccount;
   msg: SmsInboundMessage;
@@ -419,8 +453,13 @@ export async function materializeSmsInboundMedia(params: {
           contentType: saved.contentType ?? media.contentType,
           messageId: params.msg.messageSid,
         });
-      } catch {
+      } catch (error) {
         abortSignal.throwIfAborted();
+        // Adoption tombstones the callback, so only a pre-adoption throw lets
+        // the durable sender lane retry a transient Twilio media failure.
+        if (isRetryableSmsInboundMediaError(error)) {
+          throw error;
+        }
         unavailableCount += 1;
         params.log?.warn?.(
           `Failed to download Twilio MMS attachment ${index + 1} for ${params.msg.messageSid}`,
