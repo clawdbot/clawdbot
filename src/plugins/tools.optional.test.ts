@@ -2337,7 +2337,7 @@ describe("resolvePluginTools optional tools", () => {
       tools: [...controls, expectDefined(cached, "cached network plugin tool")],
       toolHookContext: {
         ...context,
-        onToolOutcome: turnTaint.observe,
+        onToolOutcome: (outcome) => turnTaint.observe(outcome),
       },
     });
 
