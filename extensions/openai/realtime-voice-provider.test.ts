@@ -1503,13 +1503,22 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     expect(resolved).toEqual({
-      model: "gpt-realtime-2",
+      model: "gpt-realtime-2.1",
       voice: "verse",
       temperature: 0.6,
       silenceDurationMs: 850,
       vadThreshold: 0.35,
       reasoningEffort: "low",
     });
+  });
+
+  it("normalizes gpt-realtime-2 to gpt-realtime-2.1", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      rawConfig: { model: "gpt-realtime-2" },
+    });
+    expect(resolved?.model).toBe("gpt-realtime-2.1");
   });
 
   it("drops malformed realtime voice numeric settings", () => {

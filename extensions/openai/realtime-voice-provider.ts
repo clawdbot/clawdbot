@@ -156,6 +156,15 @@ const OPENAI_REALTIME_VOICES = [
   "cedar",
 ] as const satisfies readonly OpenAIRealtimeVoice[];
 
+function normalizeOpenAIRealtimeModel(value: unknown): string | undefined {
+  const model = trimToUndefined(value);
+  // gpt-realtime-2 is deprecated by OpenAI; map to the GA successor.
+  if (model === "gpt-realtime-2") {
+    return "gpt-realtime-2.1";
+  }
+  return model;
+}
+
 function normalizeOpenAIRealtimeVoice(value: unknown): OpenAIRealtimeVoice | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -261,7 +270,7 @@ function normalizeProviderConfig(
       value: raw?.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
-    model: trimToUndefined(raw?.model),
+    model: normalizeOpenAIRealtimeModel(raw?.model),
     voice: normalizeOpenAIRealtimeVoice(raw?.speakerVoice ?? raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
     vadThreshold: asUnitInterval(raw?.vadThreshold),
@@ -1889,7 +1898,8 @@ async function createOpenAIRealtimeBrowserSession(
     throw new Error("OpenAI Realtime browser sessions do not support Azure endpoints yet");
   }
 
-  const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+  const model =
+    normalizeOpenAIRealtimeModel(req.model) ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
   if (isOpenAIGptLiveModel(model)) {
     if (!quicksilverBroker) {
       throw new Error("OpenAI GPT-Live browser session broker is unavailable");
