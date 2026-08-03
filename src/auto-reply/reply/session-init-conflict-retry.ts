@@ -1,27 +1,8 @@
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isReplySessionInitConflictError } from "./session-init-conflict-error.js";
 
 const log = createSubsystemLogger("session-init");
-
-/**
- * Raised when reply-session initialization loses its revision compare-and-swap.
- * The message shape is load-bearing for channel retry classification.
- */
-export class ReplySessionInitConflictError extends Error {
-  constructor(sessionKey: string) {
-    super(`reply session initialization conflicted for ${sessionKey}`);
-    this.name = "ReplySessionInitConflictError";
-  }
-}
-
-const SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
-
-function isReplySessionInitConflictError(error: unknown): boolean {
-  return (
-    error instanceof ReplySessionInitConflictError ||
-    SESSION_INIT_CONFLICT_MESSAGE_RE.test(error instanceof Error ? error.message : String(error))
-  );
-}
 
 const SESSION_INIT_CONFLICT_MAX_ATTEMPTS = 5;
 const SESSION_INIT_CONFLICT_BACKOFF_POLICY = {

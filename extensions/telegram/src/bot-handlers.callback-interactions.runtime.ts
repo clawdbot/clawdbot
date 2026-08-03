@@ -4,6 +4,7 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { isReplySessionInitConflictError } from "openclaw/plugin-sdk/error-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type {
   TelegramCallbackButton,
@@ -28,7 +29,6 @@ const MULTI_SELECT_TOGGLE_PREFIX = `${MULTI_SELECT_PREFIX}toggle|`;
 const SELECT_PREFIX = "OC_SELECT|";
 const SELECTED_PREFIX = "✅ ";
 const TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS = [250, 1000, 2500] as const;
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 
 type TelegramManagedSelectCallback =
   | { type: "multi-toggle"; value: string }
@@ -137,9 +137,6 @@ const resolvePluginCallbackSubmitText = (submitText: unknown): string | undefine
   const trimmed = submitText.trim();
   return trimmed ? trimmed : undefined;
 };
-
-const isReplySessionInitConflictError = (err: unknown): boolean =>
-  REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(String(err instanceof Error ? err.message : err));
 
 const isReplySessionInitConflictResult = (result: TelegramMessageProcessingResult): boolean =>
   result.kind === "failed-retryable" && isReplySessionInitConflictError(result.error);

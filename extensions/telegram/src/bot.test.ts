@@ -5256,6 +5256,88 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("Make Alice funnier");
   });
 
+  it("settles spooled plugin callback text after a wrapped reply-session conflict retry succeeds", async () => {
+    // The migration replaces the previous top-level message check with a
+    // shared classifier that walks the `cause` / `.error` chain. This test
+    // locks the wrapped-error behavior so a future refactor cannot silently
+    // narrow the classifier back to a top-level message check.
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    let calls = 0;
+    replySpy.mockImplementation(async (_ctx, opts) => {
+      calls += 1;
+      await opts?.onReplyStart?.();
+      if (calls === 1) {
+        const wrapped = new Error("dispatch wrapper");
+        wrapped.cause = new Error(
+          "reply session initialization conflicted for agent:main:telegram:9",
+        );
+        throw wrapped;
+      }
+      return undefined;
+    });
+    registerPluginInteractiveHandler("smart-replies-plugin", {
+      channel: "telegram",
+      namespace: "openclaw-smart-replies",
+      handler: async () => ({ handled: true, submitText: "Make Alice funnier" }),
+    } satisfies TelegramInteractiveHandlerRegistration);
+    setTelegramPluginStateRuntimeForTests();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        config: {
+          channels: {
+            telegram: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+            },
+          },
+        },
+      });
+      const callbackHandler = getTelegramCallbackHandlerForTests();
+      const callbackQuery = {
+        id: "cbq-smart-reply-submit-retry-wrapped",
+        data: "openclaw-smart-replies:v1:TWFrZSBBbGljZSBmdW5uaWVy",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 9, type: "private" },
+          date: 1736380800,
+          message_id: 12,
+          text: "Pick a direction",
+        },
+      };
+      const update = { update_id: 404, callback_query: callbackQuery };
+      const callbackContext = {
+        update,
+        callbackQuery,
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+
+      const replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
+        await callbackHandler(callbackContext);
+      });
+      expect(replay.deferredWork).toBeDefined();
+      await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "completed" });
+    } finally {
+      clearTelegramRuntime();
+    }
+
+    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(9, 12, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    const payload = mockMsgContextArg(
+      replySpy as unknown as MockCallSource,
+      1,
+      0,
+      "replySpy wrapped-retry call",
+    );
+    expect(payload.Body).toContain("Make Alice funnier");
+  });
+
   it("releases plugin-owned callback dedupe when submitted text processing fails", async () => {
     let calls = 0;
     replySpy.mockImplementation(async (_ctx, opts) => {

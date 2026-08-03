@@ -4,10 +4,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import {
-  ReplySessionInitConflictError,
-  runWithSessionInitConflictRetry,
-} from "./session-init-conflict-retry.js";
+import { ReplySessionInitConflictError } from "./session-init-conflict-error.js";
+import { runWithSessionInitConflictRetry } from "./session-init-conflict-retry.js";
 import { initSessionState as initSessionStateRaw } from "./session.js";
 
 const initSessionState = (
