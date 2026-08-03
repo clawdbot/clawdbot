@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareSource, resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -12,6 +13,8 @@ import {
   testing,
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
+
+const sourceValidationConfig = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
 describe("Code Mode guest execution", () => {
   beforeEach(() => {
@@ -139,7 +142,7 @@ describe("Code Mode guest execution", () => {
   });
 
   it.each([
-    { code: "true;", value: null },
+    { code: "true;", value: null, realGuest: true },
     { code: "false;", value: null },
     { code: "return true || false;", value: true },
     { code: "return -1;", value: -1 },
@@ -166,8 +169,12 @@ describe("Code Mode guest execution", () => {
     { code: "pwd; var/**/{ pwd } = { pwd: 7 }; return pwd;", value: 7 },
     { code: "node -version; function/**/node() {}; var version = 1;", value: null },
   ])(
-    "executes valid shell-like JavaScript without false rejection: %j",
-    async ({ code, value }) => {
+    "preserves valid shell-like JavaScript without false rejection: %j",
+    async ({ code, value, realGuest }) => {
+      if (!realGuest) {
+        await expect(prepareSource({ code, config: sourceValidationConfig })).resolves.toBe(code);
+        return;
+      }
       const { config, catalogRef, tools } = createCodeModeHarness();
       applyCodeModeCatalog({
         tools: [...tools, pluginTool("fake_noop", "Noop")],
@@ -515,6 +522,7 @@ describe("Code Mode guest execution", () => {
       name: "template-literal import text",
       code: "return `import('node:fs')`;",
       value: "import('node:fs')",
+      realGuest: true,
     },
     {
       name: "template-literal require text",
@@ -561,7 +569,11 @@ describe("Code Mode guest execution", () => {
       code: "const api = { import: { meta: 42 } }; return api.import.meta;",
       value: 42,
     },
-  ])("executes harmless $name in the real guest worker", async ({ code, value }) => {
+  ])("preserves harmless $name in source validation", async ({ code, value, realGuest }) => {
+    if (!realGuest) {
+      await expect(prepareSource({ code, config: sourceValidationConfig })).resolves.toBe(code);
+      return;
+    }
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
