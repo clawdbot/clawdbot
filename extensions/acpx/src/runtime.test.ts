@@ -1729,6 +1729,41 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(exposedRuntime.managedToolsSessionDelegates.get(sessionKey)).toBe(scopedDelegate);
   });
 
+  it("keeps a background discard close attached to the pre-reset record", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    const oldRecord: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "old-session",
+    };
+    const load = vi.fn(async () => oldRecord);
+    const baseStore: TestSessionStore = {
+      load,
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, wrappedStore, delegate } = makeRuntime(baseStore);
+    await expect(wrappedStore.load(sessionKey)).resolves.toBe(oldRecord);
+    const baseLoadCount = load.mock.calls.length;
+    const close = vi.spyOn(delegate, "close").mockImplementation(async () => {
+      expect(await wrappedStore.load(sessionKey)).toBe(oldRecord);
+    });
+
+    const closePromise = runtime.close({
+      handle: {
+        sessionKey,
+        backend: "acpx",
+        runtimeSessionName: sessionKey,
+      },
+      reason: "new-in-place-reset",
+      discardPersistentState: true,
+    });
+    await runtime.prepareFreshSession({ sessionKey });
+    await closePromise;
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(load).toHaveBeenCalledTimes(baseLoadCount);
+  });
+
   it("marks the session fresh after discardPersistentState close", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
