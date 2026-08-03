@@ -428,8 +428,12 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     // Simulate a concurrent session update that keeps the same sessionId but bumps
     // updatedAt, e.g. another turn selecting a different model. The repair must not
     // attach this turn's primary origin to that newer state.
+    const baseEntry = sessionStore[sessionKey];
+    if (!baseEntry) {
+      throw new Error("concurrent-update base session entry missing");
+    }
     const concurrentEntry: SessionEntry = {
-      ...sessionStore[sessionKey],
+      ...baseEntry,
       updatedAt: Date.now() + 10_000,
       modelOverrideSource: "user",
     };

@@ -30,7 +30,7 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
     const storePath = path.join(tempDirs.make("repair-store"), "sessions.json");
     replaceSessionEntrySync({ storePath, sessionKey }, makeSessionEntry());
     // Use the canonical persisted snapshot as the observed state so updatedAt matches.
-    const sessionEntry = await loadSessionEntryReadOnly({ storePath, sessionKey });
+    const sessionEntry = loadSessionEntryReadOnly({ storePath, sessionKey });
     if (!sessionEntry) {
       throw new Error("session entry not loaded");
     }
@@ -56,7 +56,7 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
     const sessionStore: Record<string, SessionEntry> = {};
     const storePath = path.join(tempDirs.make("repair-store"), "sessions.json");
     replaceSessionEntrySync({ storePath, sessionKey }, makeSessionEntry());
-    const sessionEntry = await loadSessionEntryReadOnly({ storePath, sessionKey });
+    const sessionEntry = loadSessionEntryReadOnly({ storePath, sessionKey });
     if (!sessionEntry) {
       throw new Error("session entry not loaded");
     }

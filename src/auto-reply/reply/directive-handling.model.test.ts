@@ -318,7 +318,7 @@ let buildModelAliasIndex: typeof import("../../agents/model-selection.js").build
 let resolveModelSelectionFromDirective: typeof import("./directive-handling.model-selection.js").resolveModelSelectionFromDirective;
 let parseInlineDirectives: typeof import("./directive-handling.parse.js").parseInlineDirectives;
 let applyInlineDirectiveOverrides: typeof import("./get-reply-directives-apply.js").applyInlineDirectiveOverrides;
-let createFastTestModelSelectionState: typeof import("./model-selection.js").createFastTestModelSelectionState;
+let createFastTestModelSelectionState: typeof import("./model-selection-fast-test.js").createFastTestModelSelectionState;
 
 beforeAll(async () => {
   ({ testing: cliBackendsTesting } = await import("../../agents/cli-backends.test-support.js"));
@@ -330,7 +330,7 @@ beforeAll(async () => {
     await import("./directive-handling.model-selection.js"));
   ({ parseInlineDirectives } = await import("./directive-handling.parse.js"));
   ({ applyInlineDirectiveOverrides } = await import("./get-reply-directives-apply.js"));
-  ({ createFastTestModelSelectionState } = await import("./model-selection.js"));
+  ({ createFastTestModelSelectionState } = await import("./model-selection-fast-test.js"));
 });
 const queueMocks = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),

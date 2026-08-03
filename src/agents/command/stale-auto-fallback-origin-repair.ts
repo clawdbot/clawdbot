@@ -14,7 +14,7 @@ import {
   matchesStaleAutoFallbackOriginRepairSnapshot,
 } from "../agent-scope.js";
 
-export type StaleAutoFallbackOriginRepairResult = {
+type StaleAutoFallbackOriginRepairResult = {
   entry: SessionEntry;
   hasStoredOverride: boolean;
   storedModelOverrideSource: "auto" | "user" | undefined;

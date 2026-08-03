@@ -298,7 +298,9 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       locked: false,
       selfOrigin: true,
       targetAgentId: "subagent",
-      expectedProvider: "anthropic",
+      // A self-referential origin that no longer matches the configured primary is
+      // treated as polluted fallback metadata, so the session snaps back to the primary.
+      expectedProvider: "openai",
     },
     {
       source: "user" as const,
