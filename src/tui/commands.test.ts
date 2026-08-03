@@ -202,6 +202,16 @@ describe("helpText", () => {
     expect(output).toContain("/openclaw [request]");
   });
 
+  it.each(["goal", "btw", "queue", "stop"])(
+    "keeps /%s visible in completion and help across TUI modes",
+    (name) => {
+      for (const options of [{}, { local: true }]) {
+        expect(getSlashCommands(options).map((command) => command.name)).toContain(name);
+        expect(helpText(options)).toContain(`/${name}`);
+      }
+    },
+  );
+
   it("does not advertise Gateway-owned commands in local mode", () => {
     const output = helpText({ local: true });
 
