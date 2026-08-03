@@ -23,6 +23,7 @@ type BedrockEmbeddingClient = {
   region: string;
   model: string;
   dimensions?: number;
+  endpoint?: string;
 };
 
 /** Default Bedrock embedding model used when no explicit model is configured. */
@@ -149,15 +150,153 @@ function loadDefaultCredentialProvider(): Promise<AwsCredentialProvider | null> 
 // ---------------------------------------------------------------------------
 
 const MODEL_PREFIX_RE = /^(?:bedrock|amazon-bedrock|aws)\//;
-const REGION_RE = /bedrock-runtime\.([a-z0-9-]+)\./;
+const REGION_RE = /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\./u;
 
 function normalizeBedrockEmbeddingModel(model: string): string {
   const trimmed = model.trim();
   return trimmed ? trimmed.replace(MODEL_PREFIX_RE, "") : DEFAULT_BEDROCK_EMBEDDING_MODEL;
 }
 
-function regionFromUrl(url: string | undefined): string | undefined {
-  return url?.trim() ? REGION_RE.exec(url)?.[1] : undefined;
+function regionFromUrl(
+  url: string | undefined,
+  BedrockRuntimeClient: AwsSdk["BedrockRuntimeClient"],
+): string | undefined {
+  if (!url?.trim()) {
+    return undefined;
+  }
+  try {
+    const hostname = new URL(url).hostname;
+    const region = REGION_RE.exec(hostname)?.[1];
+    if (!region) {
+      return undefined;
+    }
+    const sdk = new BedrockRuntimeClient({ region });
+    try {
+      const useFipsEndpoint = hostname.includes("bedrock-runtime-fips.");
+      for (const useDualstackEndpoint of [false, true]) {
+        try {
+          const regionalHostname = sdk.config.endpointProvider({
+            Region: region,
+            UseFIPS: useFipsEndpoint,
+            UseDualStack: useDualstackEndpoint,
+          }).url.hostname;
+          if (hostname === regionalHostname) {
+            return region;
+          }
+
+          const servicePrefix = `bedrock-runtime${useFipsEndpoint ? "-fips" : ""}.${region}.`;
+          const privateLinkHostname = `${servicePrefix}vpce.${regionalHostname.slice(servicePrefix.length)}`;
+          if (hostname === privateLinkHostname || hostname.endsWith(`.${privateLinkHostname}`)) {
+            return region;
+          }
+        } catch {
+          // Some AWS partitions do not support every FIPS/dual-stack combination.
+        }
+      }
+      return undefined;
+    } finally {
+      sdk.destroy();
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeBedrockEmbeddingEndpoint(value: string): string {
+  const endpoint = new URL(value);
+  endpoint.pathname = endpoint.pathname.replace(/\/+$/u, "");
+  // URL keeps a root slash in href; remove only that pathname slash, never query/hash payload.
+  return endpoint.pathname === "/" ? endpoint.href.replace(/\/(?=[?#]|$)/u, "") : endpoint.href;
+}
+
+function parseBedrockEndpointQuery(search: string): Record<string, string | string[]> {
+  const valuesByName = new Map<string, string[]>();
+  for (const parameter of search.slice(1).split("&")) {
+    const separator = parameter.indexOf("=");
+    const name = decodeURIComponent(separator < 0 ? parameter : parameter.slice(0, separator));
+    // Smithy treats + literally; URLSearchParams would incorrectly sign it as a space.
+    const value = decodeURIComponent(separator < 0 ? "" : parameter.slice(separator + 1));
+    const existing = valuesByName.get(name);
+    if (existing) {
+      existing.push(value);
+    } else {
+      valuesByName.set(name, [value]);
+    }
+  }
+  return Object.fromEntries(
+    Array.from(valuesByName, ([name, values]) => [name, values.length === 1 ? values[0] : values]),
+  );
+}
+
+async function resolveEffectiveBedrockEmbeddingEndpoint(
+  client: BedrockEmbeddingClient,
+  BedrockRuntimeClient: AwsSdk["BedrockRuntimeClient"],
+): Promise<string | undefined> {
+  const region = client.region;
+  const sdk = new BedrockRuntimeClient({ region });
+  const retainEndpoint = async (endpoint: string): Promise<string> => {
+    // A FIPS region alias forces endpoint mode on even when SDK flags are explicitly disabled.
+    client.region = await sdk.config.region();
+    return endpoint;
+  };
+  let effectiveEndpoint = client.endpoint;
+  try {
+    const configuredSdkEndpoint = sdk.config.ignoreConfiguredEndpointUrls
+      ? undefined
+      : await sdk.config.serviceConfiguredEndpoint?.();
+    effectiveEndpoint ??= configuredSdkEndpoint
+      ? normalizeBedrockEmbeddingEndpoint(configuredSdkEndpoint)
+      : undefined;
+    if (!effectiveEndpoint) {
+      return undefined;
+    }
+
+    const candidate = new URL(effectiveEndpoint);
+    if (
+      candidate.protocol !== "https:" ||
+      candidate.port ||
+      candidate.href !== `${candidate.origin}/`
+    ) {
+      return retainEndpoint(effectiveEndpoint);
+    }
+
+    const [useFipsEndpoint, useDualstackEndpoint] = await Promise.all([
+      sdk.config.useFipsEndpoint(),
+      sdk.config.useDualstackEndpoint(),
+    ]);
+    const regionalEndpoint = sdk.config.endpointProvider({
+      Region: region,
+      UseFIPS: useFipsEndpoint,
+      UseDualStack: useDualstackEndpoint,
+    });
+    if (configuredSdkEndpoint) {
+      const effectiveSdkEndpoint = sdk.config.endpointProvider({
+        Region: region,
+        UseFIPS: useFipsEndpoint,
+        UseDualStack: useDualstackEndpoint,
+        Endpoint: configuredSdkEndpoint,
+      });
+      // Only genuine regional URLs may lose identity; matching custom overrides stay explicit.
+      return regionalEndpoint.url.href === candidate.href &&
+        effectiveSdkEndpoint.url.href === candidate.href
+        ? undefined
+        : retainEndpoint(effectiveEndpoint);
+    }
+    if (regionalEndpoint.url.href === candidate.href) {
+      return undefined;
+    }
+
+    // Plain regional config is shipped region metadata and must still inherit FIPS/dual-stack.
+    return sdk.config.endpointProvider({ Region: region, UseFIPS: false, UseDualStack: false }).url
+      .href === candidate.href
+      ? undefined
+      : retainEndpoint(effectiveEndpoint);
+  } catch {
+    // Invalid SDK endpoint modes must never turn an explicit operator endpoint into a fallback.
+    return effectiveEndpoint ? retainEndpoint(effectiveEndpoint) : undefined;
+  } finally {
+    sdk.destroy();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -306,8 +445,15 @@ if (process.env.VITEST === "true") {
 export async function createBedrockEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: BedrockEmbeddingClient }> {
-  const client = resolveBedrockEmbeddingClient(options);
   const { BedrockRuntimeClient, InvokeModelCommand } = await loadSdk();
+  const client = resolveBedrockEmbeddingClient(options, BedrockRuntimeClient);
+  const endpoint = await resolveEffectiveBedrockEmbeddingEndpoint(client, BedrockRuntimeClient);
+  if (endpoint) {
+    client.endpoint = endpoint;
+  } else {
+    // The SDK owns genuine regional endpoints, mode policy, and existing cache identity.
+    delete client.endpoint;
+  }
   const spec = resolveSpec(client.model);
   const family = spec?.family ?? inferFamily(client.model);
 
@@ -318,10 +464,50 @@ export async function createBedrockEmbeddingProvider(
     family,
   });
 
+  const endpointUrl = client.endpoint ? new URL(client.endpoint) : undefined;
+  const endpointSearch = endpointUrl?.search;
+  const endpointQuery = endpointSearch ? parseBedrockEndpointQuery(endpointSearch) : undefined;
+
   const invoke = async (body: string, signal?: AbortSignal): Promise<string> => {
     await refreshAwsSharedConfigCacheForBedrock();
-    const sdk = new BedrockRuntimeClient({ region: client.region });
+    const sdk = new BedrockRuntimeClient({
+      region: client.region,
+      ...(client.endpoint
+        ? { endpoint: client.endpoint, useFipsEndpoint: false, useDualstackEndpoint: false }
+        : {}),
+    });
     try {
+      if (endpointQuery && endpointSearch) {
+        // Smithy's EndpointV1 serializer drops endpoint query parameters; restore before signing.
+        sdk.middlewareStack.add(
+          (next) => (args) => {
+            const request = asRecord(args.request);
+            if (!request) {
+              throw new Error("Amazon Bedrock SDK did not create an HTTP request");
+            }
+            request.query = { ...endpointQuery, ...asRecord(request.query) };
+            return next(args);
+          },
+          { name: "bedrockCustomEndpointQuery", step: "build" },
+        );
+        sdk.middlewareStack.addRelativeTo(
+          (next) => (args) => {
+            const request = asRecord(args.request);
+            if (!request || typeof request.path !== "string") {
+              throw new Error("Amazon Bedrock SDK did not create a signed HTTP request");
+            }
+            // SigV4 canonicalizes the query bag; the post-sign wire path retains original ordering.
+            request.path += endpointSearch;
+            request.query = {};
+            return next(args);
+          },
+          {
+            name: "bedrockCustomEndpointWireQuery",
+            relation: "after",
+            toMiddleware: "httpSigningMiddleware",
+          },
+        );
+      }
       const res = await sdk.send(
         new InvokeModelCommand({
           modelId: client.model,
@@ -399,14 +585,21 @@ export async function createBedrockEmbeddingProvider(
 
 function resolveBedrockEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
+  BedrockRuntimeClient: AwsSdk["BedrockRuntimeClient"],
 ): BedrockEmbeddingClient {
   const model = normalizeBedrockEmbeddingModel(options.model);
   const spec = resolveSpec(model);
   const providerConfig = options.config.models?.providers?.["amazon-bedrock"];
+  const configuredEndpointValue =
+    normalizeOptionalString(options.remote?.baseUrl) ??
+    normalizeOptionalString(providerConfig?.baseUrl);
+  const configuredEndpoint = configuredEndpointValue
+    ? normalizeBedrockEmbeddingEndpoint(configuredEndpointValue)
+    : undefined;
 
   const region =
-    regionFromUrl(options.remote?.baseUrl) ??
-    regionFromUrl(providerConfig?.baseUrl) ??
+    regionFromUrl(options.remote?.baseUrl, BedrockRuntimeClient) ??
+    regionFromUrl(providerConfig?.baseUrl, BedrockRuntimeClient) ??
     normalizeOptionalString(process.env.AWS_REGION) ??
     normalizeOptionalString(process.env.AWS_DEFAULT_REGION) ??
     "us-east-1";
@@ -423,7 +616,12 @@ function resolveBedrockEmbeddingClient(
     dimensions = spec?.dims;
   }
 
-  return { region, model, dimensions };
+  return {
+    region,
+    model,
+    dimensions,
+    ...(configuredEndpoint ? { endpoint: configuredEndpoint } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------

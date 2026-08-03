@@ -23,7 +23,12 @@ function defaultCreateOptions() {
   };
 }
 
-function stubCreate(client: { region: string; model: string; dimensions?: number }) {
+function stubCreate(client: {
+  region: string;
+  model: string;
+  dimensions?: number;
+  endpoint?: string;
+}) {
   createBedrockEmbeddingProviderMock.mockResolvedValue({
     provider: {
       id: "bedrock",
@@ -43,6 +48,7 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   afterAll(() => {
@@ -88,6 +94,132 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
       },
     });
     expect(createBedrockEmbeddingProviderMock).toHaveBeenCalledOnce();
+  });
+
+  it("invalidates the embedding cache when its configured endpoint changes", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    const endpointA = "https://bedrock-a.internal.example";
+    const endpointB = "https://bedrock-b.internal.example";
+
+    stubCreate({
+      region: "us-east-1",
+      model: "amazon.titan-embed-text-v2:0",
+      dimensions: 1024,
+      endpoint: endpointA,
+    });
+    const first = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+
+    stubCreate({
+      region: "us-east-1",
+      model: "amazon.titan-embed-text-v2:0",
+      dimensions: 1024,
+      endpoint: endpointB,
+    });
+    const second = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+
+    expect(first.runtime?.cacheKeyData).toMatchObject({ endpoint: endpointA });
+    expect(second.runtime?.cacheKeyData).toMatchObject({ endpoint: endpointB });
+    expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
+  });
+
+  it("preserves trailing slashes in custom endpoint query values in cache identity", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    const actual =
+      await vi.importActual<typeof import("./embedding-provider.js")>("./embedding-provider.js");
+    createBedrockEmbeddingProviderMock.mockImplementation(actual.createBedrockEmbeddingProvider);
+
+    const result = await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      remote: {
+        baseUrl: "https://proxy.example/invoke/?upstream=https://bedrock/",
+      },
+    });
+
+    expect(result.runtime?.cacheKeyData).toMatchObject({
+      endpoint: "https://proxy.example/invoke?upstream=https://bedrock/",
+    });
+  });
+
+  it("invalidates cached embeddings when matching custom SDK endpoint overrides change", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    const actual =
+      await vi.importActual<typeof import("./embedding-provider.js")>("./embedding-provider.js");
+    createBedrockEmbeddingProviderMock.mockImplementation(actual.createBedrockEmbeddingProvider);
+    vi.stubEnv("AWS_REGION", "us-east-1");
+    vi.stubEnv("AWS_USE_FIPS_ENDPOINT", "false");
+    vi.stubEnv("AWS_USE_DUALSTACK_ENDPOINT", "false");
+    vi.stubEnv("AWS_ENDPOINT_URL", undefined);
+
+    const endpointA = "https://proxy-a.internal.example";
+    const endpointB = "https://proxy-b.internal.example";
+    vi.stubEnv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", endpointA);
+    const first = await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      remote: { baseUrl: endpointA },
+    });
+
+    vi.stubEnv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", endpointB);
+    const second = await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      remote: { baseUrl: endpointB },
+    });
+
+    expect(first.runtime?.cacheKeyData).toMatchObject({ endpoint: endpointA });
+    expect(second.runtime?.cacheKeyData).toMatchObject({ endpoint: endpointB });
+    expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
+  });
+
+  it.each(["AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "AWS_ENDPOINT_URL"] as const)(
+    "invalidates cached embeddings when an env-only %s endpoint changes",
+    async (overrideName) => {
+      hasAwsCredentialsMock.mockResolvedValue(true);
+      const actual =
+        await vi.importActual<typeof import("./embedding-provider.js")>("./embedding-provider.js");
+      createBedrockEmbeddingProviderMock.mockImplementation(actual.createBedrockEmbeddingProvider);
+      vi.stubEnv("AWS_REGION", "us-east-1");
+      vi.stubEnv("AWS_USE_FIPS_ENDPOINT", "false");
+      vi.stubEnv("AWS_USE_DUALSTACK_ENDPOINT", "false");
+      vi.stubEnv("AWS_ENDPOINT_URL", undefined);
+      vi.stubEnv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", undefined);
+
+      const endpointA = "https://proxy-a.internal.example";
+      const endpointB = "https://proxy-b.internal.example";
+      vi.stubEnv(overrideName, endpointA);
+      const first = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+
+      vi.stubEnv(overrideName, endpointB);
+      const second = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+
+      expect(first.runtime?.cacheKeyData).toMatchObject({ endpoint: endpointA });
+      expect(second.runtime?.cacheKeyData).toMatchObject({ endpoint: endpointB });
+      expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
+    },
+  );
+
+  it("preserves existing cache identity for SDK-managed standard Bedrock endpoints", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    stubCreate({ region: "us-east-1", model: "amazon.titan-embed-text-v2:0", dimensions: 1024 });
+
+    const result = await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.runtime?.cacheKeyData).toEqual({
+      provider: "bedrock",
+      region: "us-east-1",
+      model: "amazon.titan-embed-text-v2:0",
+      dimensions: 1024,
+    });
   });
 
   it("lets the auto-select loop skip bedrock when credentials are unavailable", async () => {
