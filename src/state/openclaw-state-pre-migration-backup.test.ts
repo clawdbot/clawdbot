@@ -237,6 +237,58 @@ describe("createPreMigrationStateBackup", () => {
     }
   });
 
+  it("does not reuse a look-alike file as a recovery copy", () => {
+    const dir = makeStateDir();
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    seedStateDb(dbPath, 5);
+    const backupDir = path.join(dir, PRE_MIGRATION_BACKUP_DIRNAME);
+    fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+    // Right prefix, wrong everything else. Trusting the name would skip
+    // VACUUM INTO and report this as the migration's rollback copy.
+    const impostor = path.join(backupDir, "openclaw-state-v5-to-v6-my-own-copy.sqlite");
+    fs.writeFileSync(impostor, "not a database");
+    const db = new DatabaseSync(dbPath);
+    try {
+      const result = createPreMigrationStateBackup(db, dbPath, 5, 6, Date.now());
+      expect(result).toMatchObject({ status: "created", reused: false });
+      if (result.status !== "created") {
+        return;
+      }
+      expect(result.backupPath).not.toBe(impostor);
+      // A real copy was taken, and the impostor was left where the operator put it.
+      expect(new DatabaseSync(result.backupPath, { readOnly: true }).close()).toBeUndefined();
+      expect(fs.readFileSync(impostor, "utf8")).toBe("not a database");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not prune a look-alike file", () => {
+    const dir = makeStateDir();
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    seedStateDb(dbPath, 5);
+    const backupDir = path.join(dir, PRE_MIGRATION_BACKUP_DIRNAME);
+    fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+    // Sorts before every real snapshot, so retention would evict it first.
+    const impostor = path.join(backupDir, "openclaw-state-v0-to-v1-operator-kept-this.sqlite");
+    fs.writeFileSync(impostor, "not a database");
+    const db = new DatabaseSync(dbPath);
+    try {
+      const base = Date.parse("2026-07-25T09:00:00Z");
+      for (let i = 0; i < PRE_MIGRATION_BACKUP_RETENTION + 2; i += 1) {
+        expect(
+          createPreMigrationStateBackup(db, dbPath, i + 1, i + 2, base + i * 60_000).status,
+        ).toBe("created");
+        prunePreMigrationStateBackups(dbPath);
+      }
+      // Retention only ever deletes files this module actually wrote.
+      expect(fs.existsSync(impostor)).toBe(true);
+      expect(fs.readFileSync(impostor, "utf8")).toBe("not a database");
+    } finally {
+      db.close();
+    }
+  });
+
   it("leaves unrelated files in the backup directory alone", () => {
     const dir = makeStateDir();
     const dbPath = path.join(dir, "openclaw.sqlite");

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
@@ -34,15 +35,53 @@ export type PreMigrationBackupResult =
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string };
 
-/**
- * Snapshot filename shape: `<prefix>v<from>-to-v<to>-<ISO stamp><suffix>`.
- *
- * Split out because pruning matches on it. Only files this module wrote are ever
- * considered for deletion, so an unrelated file that a human parked in the backup
- * directory is left alone.
- */
 const BACKUP_FILE_PREFIX = "openclaw-state-v";
 const BACKUP_FILE_SUFFIX = ".sqlite";
+
+/**
+ * Exact snapshot filename shape: `openclaw-state-v<from>-to-v<to>-<ISO stamp>.sqlite`.
+ *
+ * Anchored, and with the stamp shaped rather than open: a prefix-and-suffix test
+ * would also accept `openclaw-state-v5-to-v6-my-own-copy.sqlite`, and this name
+ * decides both what may be deleted and what may be trusted as an existing copy.
+ */
+const BACKUP_FILE_PATTERN =
+  /^openclaw-state-v\d+-to-v\d+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.sqlite$/;
+
+/** `SQLite format 3\0`, the header every SQLite database file starts with. */
+const SQLITE_HEADER = Buffer.from("53514c69746520666f726d6174203300", "hex");
+
+/**
+ * Whether this is a file this module could have written: the exact name shape
+ * AND an actual SQLite header.
+ *
+ * The name alone is not enough in either direction. Reusing a look-alike would
+ * report a recovery copy that may not be a database, leaving a migration with no
+ * real rollback. Pruning a look-alike would delete a file the operator put there,
+ * which is precisely what the managed-file boundary promises not to do.
+ */
+function isManagedSnapshot(filePath: string, name: string): boolean {
+  if (!BACKUP_FILE_PATTERN.test(name)) {
+    return false;
+  }
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const header = Buffer.alloc(SQLITE_HEADER.length);
+    const read = fs.readSync(fd, header, 0, header.length, 0);
+    return read === header.length && header.equals(SQLITE_HEADER);
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Nothing to do; the classification above already stands.
+      }
+    }
+  }
+}
 
 /**
  * Directory (relative to the state database) that holds pre-migration copies.
@@ -84,7 +123,7 @@ function pruneBackupDir(backupDir: string, keep: number): string[] {
     return removed;
   }
   const snapshots = entries
-    .filter((name) => name.startsWith(BACKUP_FILE_PREFIX) && name.endsWith(BACKUP_FILE_SUFFIX))
+    .filter((name) => isManagedSnapshot(path.join(backupDir, name), name))
     .toSorted()
     .toReversed();
   for (const name of snapshots.slice(Math.max(keep, 0))) {
@@ -96,6 +135,28 @@ function pruneBackupDir(backupDir: string, keep: number): string[] {
     }
   }
   return removed;
+}
+
+/**
+ * The `user_version` a snapshot actually holds, or undefined if it cannot be read.
+ *
+ * Opened read-only and separately from the live handle, because this runs before
+ * the migration and must not disturb it.
+ */
+function readSnapshotUserVersion(filePath: string): number | undefined {
+  try {
+    const snapshot = openNodeSqliteDatabase(filePath, { readOnly: true });
+    try {
+      const row = snapshot.prepare("PRAGMA user_version;").get() as
+        | { user_version?: number }
+        | undefined; // sqlite-allow-raw -- Offline snapshot maintenance boundary; PRAGMA has no Kysely form.
+      return row?.user_version;
+    } finally {
+      snapshot.close();
+    }
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -189,13 +250,23 @@ export function createPreMigrationStateBackup(
     // pruning only runs after a migration commits. Measured at 11,715 snapshots
     // and 19 GB in six minutes before this check existed.
     const pending = `${BACKUP_FILE_PREFIX}${fromVersion}-to-v${toVersion}-`;
-    const existing = fs
+    const reusable = fs
       .readdirSync(backupDir)
-      .filter((name) => name.startsWith(pending) && name.endsWith(BACKUP_FILE_SUFFIX))
-      .toSorted();
-    const reusable = existing.at(-1);
+      .filter((name) => name.startsWith(pending))
+      .toSorted()
+      .toReversed()
+      .map((name) => path.join(backupDir, name))
+      // Trusting the name alone would let a look-alike stand in for a recovery
+      // copy: the migration would skip VACUUM INTO and report a backup that may
+      // not be a database at all. Require the managed shape, a SQLite header, and
+      // the pre-migration version this copy claims to hold.
+      .find(
+        (candidate) =>
+          isManagedSnapshot(candidate, path.basename(candidate)) &&
+          readSnapshotUserVersion(candidate) === fromVersion,
+      );
     if (reusable !== undefined) {
-      return { status: "created", backupPath: path.join(backupDir, reusable), reused: true };
+      return { status: "created", backupPath: reusable, reused: true };
     }
     const stamp = new Date(now).toISOString().replace(/[:.]/g, "-");
     backupPath = path.join(
