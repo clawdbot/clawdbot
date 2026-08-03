@@ -130,6 +130,32 @@ describe("bridge/tools/channel", () => {
     expect(getAccessTokenMock).not.toHaveBeenCalled();
   });
 
+  it("does not expose the tool when the active account is disabled", () => {
+    const disabledAccount = {
+      ...cfg,
+      channels: {
+        qqbot: {
+          ...cfg.channels?.qqbot,
+          accounts: {
+            bot2: {
+              ...cfg.channels?.qqbot?.accounts?.bot2,
+              enabled: false,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      registerToolFactory(disabledAccount)({
+        messageChannel: "qqbot",
+        agentAccountId: "bot2",
+      }),
+    ).toBeNull();
+    expect(getAccessTokenMock).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
   it("does not treat another channel's account ID as a QQBot account", async () => {
     const tool = registerToolFactory()({ messageChannel: "discord", agentAccountId: "bot2" });
     expect(tool).not.toBeNull();

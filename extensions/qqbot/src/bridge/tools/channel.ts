@@ -29,7 +29,7 @@ function createChannelTool(
       ? (context.agentAccountId ?? context.deliveryContext?.accountId)
       : undefined,
   );
-  if (!account.appId || !account.clientSecret) {
+  if (!account.enabled || !account.appId || !account.clientSecret) {
     return null;
   }
 
