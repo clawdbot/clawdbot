@@ -474,7 +474,7 @@ export async function buildProductionControlUiE2e(outDir: string, buildId: strin
   const repoRoot = resolveRepoRoot();
   const uiRoot = path.join(repoRoot, "ui");
   const viteRoot = path.dirname(require.resolve("vite/package.json"));
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "production",
     OPENCLAW_CONTROL_UI_BUILD_ID: buildId,
