@@ -1681,7 +1681,9 @@ describe("streamContainerEvents", () => {
     abort.abort();
     const settledBeforeDrain = await Promise.race([
       stream.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10)),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 10);
+      }),
     ]);
     expect(settledBeforeDrain).toBe(false);
     expect(settled).toBe(false);
@@ -1780,7 +1782,9 @@ describe("streamContainerEvents", () => {
         abortSignal: abort.signal,
         onEvent: vi.fn(),
       }).then(() => "closed"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("still pending"), 25)),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("still pending"), 25);
+      }),
     ]);
 
     expect(result).toBe("closed");
