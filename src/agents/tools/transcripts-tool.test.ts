@@ -9,8 +9,9 @@ import type { TranscriptStopRequest } from "../../transcripts/provider-types.js"
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
 
-const { getTranscriptSourceProviderMock } = vi.hoisted(() => ({
+const { getTranscriptSourceProviderMock, listTranscriptSourceProvidersMock } = vi.hoisted(() => ({
   getTranscriptSourceProviderMock: vi.fn(),
+  listTranscriptSourceProvidersMock: vi.fn(() => []),
 }));
 
 vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
@@ -18,6 +19,7 @@ vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
   return {
     ...actual,
     getTranscriptSourceProvider: getTranscriptSourceProviderMock,
+    listTranscriptSourceProviders: listTranscriptSourceProvidersMock,
   };
 });
 
@@ -62,6 +64,7 @@ describe("transcripts tool", () => {
 
   beforeEach(() => {
     getTranscriptSourceProviderMock.mockReset();
+    listTranscriptSourceProvidersMock.mockClear();
   });
 
   it("creates the core transcripts tool", async () => {
@@ -115,6 +118,7 @@ describe("transcripts tool", () => {
   it("binds same-channel live capture to the trusted turn account", async () => {
     const stateDir = await makeStateDir();
     const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    const stop = vi.fn(async () => ({ ok: true as const, sessionId: "account-bound" }));
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       aliases: ["discord"],
@@ -122,6 +126,7 @@ describe("transcripts tool", () => {
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
+      stop,
     });
     const { tool } = await createHarness(stateDir, {}, "main", {
       channel: "discord",
@@ -151,11 +156,46 @@ describe("transcripts tool", () => {
     );
     await expect(storeFor(stateDir).readSession("account-bound")).resolves.toMatchObject({
       source: { accountId: "account-a" },
+      metadata: {
+        agentId: "main",
+        ownerAccountId: "account-a",
+        ownerChannel: "discord",
+      },
     });
     expect(result.details).toMatchObject({ accountId: "account-a" });
     expect(result.content).toEqual([
       { type: "text", text: "Transcripts started: account-bound\nAccount: account-a" },
     ]);
+    await expect(
+      tool.execute("call-owner-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "account-bound" })] },
+    });
+
+    const { tool: otherAccountTool } = await createHarness(stateDir, {}, "main", {
+      channel: "discord",
+      accountId: "account-b",
+    });
+    await expect(
+      otherAccountTool.execute("call-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({ details: { active: [] } });
+    await expect(
+      otherAccountTool.execute(
+        "call-summarize",
+        { action: "summarize", sessionId: "account-bound" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: account-bound");
+    await expect(
+      otherAccountTool.execute(
+        "call-stop",
+        { action: "stop", sessionId: "account-bound" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: account-bound");
+    expect(stop).not.toHaveBeenCalled();
   });
 
   it("preserves an explicit account for a different provider channel", async () => {

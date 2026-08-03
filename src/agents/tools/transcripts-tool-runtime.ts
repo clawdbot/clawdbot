@@ -116,21 +116,27 @@ function bindSourceToTurnAccount(params: {
   ctx: TranscriptsRuntimeContext;
   provider: TranscriptSourceProvider;
   source: TranscriptSourceLocator;
-}): TranscriptSourceLocator {
+}): {
+  source: TranscriptSourceLocator;
+  owner?: { ownerChannel: string; ownerAccountId: string };
+} {
   const channel = params.ctx.agentChannel?.trim().toLowerCase();
   const accountId = params.ctx.agentAccountId?.trim();
   if (!channel || !accountId) {
-    return params.source;
+    return { source: params.source };
   }
   const providerChannels = (params.provider.accountBindingChannels ?? []).map((entry) =>
     entry.trim().toLowerCase(),
   );
   if (!providerChannels.includes(channel)) {
-    return params.source;
+    return { source: params.source };
   }
   // Same-channel capture stays on the trusted inbound account; model input
-  // cannot redirect a live source through another configured channel account.
-  return { ...params.source, accountId };
+  // cannot redirect or later control another configured channel account.
+  return {
+    source: { ...params.source, accountId },
+    owner: { ownerChannel: channel, ownerAccountId: accountId },
+  };
 }
 
 export function toolText(text: string, details?: Record<string, unknown>) {
@@ -180,11 +186,12 @@ export async function startTranscripts(params: {
   if (!provider?.start) {
     throw new Error(`transcripts provider ${requestedSource.providerId} cannot start live capture`);
   }
-  const providerSource = bindSourceToTurnAccount({
+  const boundSource = bindSourceToTurnAccount({
     ctx: params.ctx,
     provider,
     source: requestedSource,
   });
+  const providerSource = boundSource.source;
   const session: TranscriptSessionDescriptor = {
     sessionId:
       readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
@@ -192,7 +199,14 @@ export async function startTranscripts(params: {
     title: readTranscriptStringParam(params.rawParams, "title", { trim: true }),
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
-    ...(params.ctx.agentId ? { metadata: { agentId: params.ctx.agentId } } : {}),
+    ...(params.ctx.agentId || boundSource.owner
+      ? {
+          metadata: {
+            ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+            ...boundSource.owner,
+          },
+        }
+      : {}),
   };
   if (activeSessions.has(session.sessionId) || startingSessionIds.has(session.sessionId)) {
     throw new Error(`transcripts session already active: ${session.sessionId}`);

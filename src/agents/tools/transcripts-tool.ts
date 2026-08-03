@@ -53,7 +53,18 @@ function ownsTranscriptSession(
   }
   const ownerAgentId = session.metadata?.agentId;
   if (typeof ownerAgentId === "string") {
-    return ownerAgentId === ctx.agentId;
+    if (ownerAgentId !== ctx.agentId) {
+      return false;
+    }
+    const ownerChannel = session.metadata?.ownerChannel;
+    const ownerAccountId = session.metadata?.ownerAccountId;
+    if (typeof ownerChannel === "string" && typeof ownerAccountId === "string") {
+      return (
+        ctx.agentChannel?.trim().toLowerCase() === ownerChannel &&
+        ctx.agentAccountId?.trim() === ownerAccountId
+      );
+    }
+    return true;
   }
   // Shipped rows predate agent attribution. Treat them as operator-owned legacy
   // state: main can curate them, but isolated agents cannot claim them.
