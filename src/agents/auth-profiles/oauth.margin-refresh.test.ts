@@ -47,9 +47,10 @@ const {
 } = getOAuthProviderRuntimeMocks();
 
 vi.mock("../../llm/oauth.js", () => ({
-  // The fixed branch is generic across built-in providers; cover a second one
-  // (github-copilot, which applies the same parse-time refresh skew) to prove
-  // the behavior is not Anthropic-specific.
+  // The fixed branch is generic across whatever getOAuthProviders() returns, so a
+  // second descriptor proves the behavior is not Anthropic-specific. `github-copilot`
+  // is a stand-in id only — #118063 moved that provider out of the built-in registry
+  // into its own plugin, and this stub registry is what the branch iterates.
   getOAuthProviders: () => [
     { id: "anthropic", refreshToken: refreshTokenMock },
     { id: "github-copilot", refreshToken: refreshTokenMock },
