@@ -1,6 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AgentMessage } from "../runtime/index.js";
 import { AgentSessionCompaction } from "./agent-session-compaction.js";
-import type { AgentMessage, AssistantMessage } from "../runtime/index.js";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+
+// Test-only subclass to expose the protected checkCompaction method.
+// AgentSessionCompaction is abstract; this concrete subclass lets the test
+// call checkCompaction via a public wrapper without changing production code.
+class TestableAgentSessionCompaction extends AgentSessionCompaction {
+  public override async checkCompaction(
+    assistantMessage: AssistantMessage,
+    skipAbortedCheck = true,
+  ): Promise<boolean> {
+    return super.checkCompaction(assistantMessage, skipAbortedCheck);
+  }
+}
 
 function createAssistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
   return {
@@ -74,7 +87,7 @@ describe("AgentSessionCompaction.checkCompaction — zero contextWindow guard (#
       },
     });
 
-    const result = await AgentSessionCompaction.prototype.checkCompaction.call(
+    const result = await TestableAgentSessionCompaction.prototype.checkCompaction.call(
       mockThis,
       assistantMessage,
       true,
@@ -132,7 +145,7 @@ describe("AgentSessionCompaction.checkCompaction — zero contextWindow guard (#
       },
     });
 
-    const result = await AgentSessionCompaction.prototype.checkCompaction.call(
+    const result = await TestableAgentSessionCompaction.prototype.checkCompaction.call(
       mockThis,
       assistantMessage,
       true,
