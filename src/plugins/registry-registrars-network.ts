@@ -6,7 +6,7 @@ import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { normalizePluginHttpPath } from "./http-path.js";
-import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
+import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
 import {
   resolvePluginRegistrationCapabilities,
   type PluginRegistryState,
@@ -142,25 +142,29 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       return;
     }
     const match = params.match ?? "exact";
-    const overlappingRoute = findOverlappingPluginHttpRoute(registry.httpRoutes, {
-      path: normalizedPath,
-      match,
-    });
-    if (overlappingRoute && overlappingRoute.auth !== params.auth) {
+    const { authOverlap, canonicalMatches } = findPluginHttpRouteRegistrationConflicts(
+      registry.httpRoutes,
+      {
+        path: normalizedPath,
+        match,
+        auth: params.auth,
+      },
+    );
+    if (authOverlap) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
         message:
           `http route overlap rejected: ${normalizedPath} (${match}, ${params.auth}) ` +
-          `overlaps ${overlappingRoute.path} (${overlappingRoute.match}, ${overlappingRoute.auth}) ` +
-          `owned by ${describeHttpRouteOwner(overlappingRoute)}`,
+          `overlaps ${authOverlap.path} (${authOverlap.match}, ${authOverlap.auth}) ` +
+          `owned by ${describeHttpRouteOwner(authOverlap)}`,
       });
       return;
     }
-    const existingIndex = registry.httpRoutes.findIndex(
-      (entry) => entry.path === normalizedPath && entry.match === match,
-    );
+    const existingIndex = canonicalMatches[0]
+      ? registry.httpRoutes.indexOf(canonicalMatches[0])
+      : -1;
     const registration = {
       pluginId: record.id,
       path: normalizedPath,
@@ -182,25 +186,25 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       if (!existing) {
         return;
       }
-      if (!params.replaceExisting && existing.pluginId !== record.id) {
+      const foreignOwner = canonicalMatches.find((route) => route.pluginId !== record.id);
+      if (foreignOwner) {
         pushDiagnostic({
           level: "error",
           pluginId: record.id,
           source: record.source,
-          message: `http route already registered: ${normalizedPath} (${match}) by ${describeHttpRouteOwner(existing)}`,
-        });
-        return;
-      }
-      if (existing.pluginId && existing.pluginId !== record.id) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `http route replacement rejected: ${normalizedPath} (${match}) owned by ${describeHttpRouteOwner(existing)}`,
+          message: params.replaceExisting
+            ? `http route replacement rejected: ${normalizedPath} (${match}) owned by ${describeHttpRouteOwner(foreignOwner)}`
+            : `http route already registered: ${normalizedPath} (${match}) by ${describeHttpRouteOwner(foreignOwner)}`,
         });
         return;
       }
       registry.httpRoutes[existingIndex] = registration;
+      for (const route of canonicalMatches.toReversed()) {
+        const index = registry.httpRoutes.indexOf(route);
+        if (index >= 0 && index !== existingIndex) {
+          registry.httpRoutes.splice(index, 1);
+        }
+      }
       return;
     }
     record.httpRoutes += 1;

@@ -81,12 +81,8 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProvider: () => undefined,
 }));
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
+vi.mock("../plugins/provider-runtime.js", () => {
   return {
-    ...actual,
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
     resolveExternalAuthProfilesWithPlugins: () => [],
     shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {

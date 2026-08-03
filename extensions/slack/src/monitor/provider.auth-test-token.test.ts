@@ -1,6 +1,8 @@
 // Slack tests cover auth.test token handling during provider boot.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   disposeSlackTestRuntime,
@@ -13,6 +15,7 @@ import {
   stopSlackMonitor,
   useRealSlackStartupAuthClientOnce,
 } from "../monitor.test-helpers.js";
+import { getSlackRuntime } from "../runtime.js";
 
 const { monitorSlackProvider } = await import("./provider.js");
 
@@ -338,6 +341,87 @@ describe("auth.test boot call", () => {
     await expect(monitor.run).rejects.toThrow(
       /supports DMs only with dm\.enabled=false.*dmPolicy="open"/,
     );
+  });
+});
+
+describe("presence polling transport", () => {
+  it("aborts a stalled presence request when the provider stops", async () => {
+    const events: string[] = [];
+    for (const key of PROXY_ENV_KEYS) {
+      vi.stubEnv(key, "");
+    }
+    const server = await startStalledSlackApiServer(events);
+    vi.stubEnv("SLACK_API_URL", server.apiUrl);
+    resetSlackTestState({
+      channels: {
+        slack: {
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          presenceEvents: { mode: "on" },
+        },
+      },
+    });
+    getSlackRuntime().state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateSyncKeyedStoreForTests<T>("slack", {
+        ...options,
+        env: options.env ?? process.env,
+      });
+    getSlackTestState().replyMock.mockResolvedValue({ text: "ok" });
+
+    const nativeSetInterval = globalThis.setInterval;
+    let triggerPresencePoll: (() => void) | undefined;
+    const intervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((
+      handler: (...args: unknown[]) => void,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (timeout === 60_000 && !triggerPresencePoll) {
+        triggerPresencePoll = () => handler(...args);
+        return nativeSetInterval(() => undefined, 60 * 60 * 1_000);
+      }
+      return nativeSetInterval(handler, timeout, ...args);
+    }) as typeof setInterval);
+
+    const monitor = startSlackMonitor(monitorSlackProvider);
+    try {
+      const handler = await getSlackHandlerOrThrow("message");
+      await handler({
+        event: {
+          type: "message",
+          user: "U_STALLED",
+          text: "hello",
+          ts: "100.000",
+          channel: "D_STALLED",
+          channel_type: "im",
+        },
+        context: { botUserId: "bot-user" },
+        body: {},
+      });
+      expect(triggerPresencePoll).toBeTypeOf("function");
+      triggerPresencePoll?.();
+      await vi.waitFor(() => expect(server.requestCount).toBe(1), { timeout: 1_000 });
+
+      const startedAt = Date.now();
+      monitor.controller.abort();
+      const outcome = await Promise.race([
+        monitor.run.then(() => "settled" as const),
+        new Promise<"timed-out">((resolve) => {
+          setTimeout(() => resolve("timed-out"), 2_000);
+        }),
+      ]);
+
+      expect(outcome).toBe("settled");
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      await vi.waitFor(() => expect(events).toContain("socket-closed"), { timeout: 1_000 });
+      expect(server.requestUrl).toBe("/api/users.getPresence");
+    } finally {
+      intervalSpy.mockRestore();
+      monitor.controller.abort();
+      await server.close();
+      await monitor.run;
+    }
   });
 });
 
