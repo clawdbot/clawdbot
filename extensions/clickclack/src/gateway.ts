@@ -4,6 +4,7 @@
  */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
@@ -289,14 +290,7 @@ export async function startClickClackGatewayAccount(
         ctx.abortSignal.addEventListener("abort", abort, { once: true });
         removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
         socket.on("open", () => {
-          ctx.setStatus({
-            accountId: account.accountId,
-            connected: true,
-            lifecycle: "ready",
-            lastConnectedAt: Date.now(),
-            lastError: null,
-            terminalDisconnect: undefined,
-          });
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
         });
         socket.on("message", (data) => {
           if (closing || settled) {
@@ -364,11 +358,6 @@ export async function startClickClackGatewayAccount(
       }
     }
   } finally {
-    ctx.setStatus({
-      accountId: account.accountId,
-      running: false,
-      connected: false,
-      lifecycle: "stopped",
-    });
+    ctx.setStatus(channelStoppedPatch({ accountId: account.accountId }));
   }
 }

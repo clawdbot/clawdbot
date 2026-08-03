@@ -62,9 +62,10 @@ export function createParallelWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using Parallel. Returns ranked, LLM-optimized dense excerpts from web sources. Pass an `objective` describing the underlying question along with 2-3 short keyword `search_queries` (Parallel's recommended pairing). For multi-step research, thread the prior result's `sessionId` back in as `session_id` to keep Parallel's context grouped.",
       parameters: ParallelSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
+        context?.signal?.throwIfAborted();
         const { executeParallelWebSearchProviderTool } = await loadParallelWebSearchRuntime();
-        return await executeParallelWebSearchProviderTool(ctx, args);
+        return await executeParallelWebSearchProviderTool(ctx, args, context?.signal);
       },
     }),
   };

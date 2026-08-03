@@ -43,6 +43,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   formatGeneratedAttachmentLines,
+  sanitizeGeneratedMediaDisplayText,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import {
@@ -509,39 +510,7 @@ function modelDisablesImageResolution(
 }
 
 function formatIgnoredImageGenerationOverride(override: ImageGenerationIgnoredOverride): string {
-  return `${override.key}=${sanitizeInlineDirectiveText(override.value)}`;
-}
-
-function sanitizeInlineDirectiveText(value: string): string {
-  let sanitized = "";
-  for (const char of value) {
-    switch (char) {
-      case "\\":
-        sanitized += "\\\\";
-        break;
-      case "\r":
-        sanitized += "\\r";
-        break;
-      case "\n":
-        sanitized += "\\n";
-        break;
-      case "\t":
-        sanitized += "\\t";
-        break;
-      default:
-        if (isInlineDirectiveControlCharacter(char)) {
-          sanitized += `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
-        } else {
-          sanitized += char;
-        }
-    }
-  }
-  return sanitized;
-}
-
-function isInlineDirectiveControlCharacter(char: string): boolean {
-  const code = char.charCodeAt(0);
-  return code <= 0x1f || code === 0x7f || code === 0x2028 || code === 0x2029;
+  return `${sanitizeGeneratedMediaDisplayText(override.key)}=${sanitizeGeneratedMediaDisplayText(override.value)}`;
 }
 
 function validateImageGenerationCapabilities(params: {
@@ -783,8 +752,8 @@ async function executeImageGenerationJob(params: {
     });
   }
   const ignoredOverrides = result.ignoredOverrides ?? [];
-  const displayProvider = sanitizeInlineDirectiveText(result.provider);
-  const displayModel = sanitizeInlineDirectiveText(result.model);
+  const displayProvider = sanitizeGeneratedMediaDisplayText(result.provider);
+  const displayModel = sanitizeGeneratedMediaDisplayText(result.model);
   const warning =
     ignoredOverrides.length > 0
       ? `Ignored unsupported overrides for ${displayProvider}/${displayModel}: ${ignoredOverrides.map(formatIgnoredImageGenerationOverride).join(", ")}.`

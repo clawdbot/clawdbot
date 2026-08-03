@@ -1,14 +1,14 @@
 ---
-summary: "Twilio SMS channel setup, access controls, and webhook configuration"
+summary: "Twilio SMS/MMS setup, access controls, and webhook configuration"
 read_when:
-  - You want to connect OpenClaw to SMS through Twilio
-  - You need SMS webhook or allowlist setup
+  - You want to connect OpenClaw to SMS or MMS through Twilio
+  - You need SMS/MMS webhook or allowlist setup
 title: "SMS"
 ---
 
-OpenClaw receives and sends SMS through a Twilio phone number or Messaging Service. The Gateway registers an inbound webhook route (default `/webhooks/sms`), validates Twilio request signatures by default, and sends replies back through Twilio's Messages API.
+OpenClaw receives and sends SMS/MMS through a Twilio phone number or Messaging Service. The Gateway registers an inbound webhook route (default `/webhooks/sms`), validates Twilio request signatures by default, and sends replies back through Twilio's Messages API.
 
-Status: official plugin, installed separately. Text only: no MMS/media, direct messages only.
+Status: official plugin, installed separately. SMS text and MMS attachments, direct messages only.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -27,7 +27,7 @@ Status: official plugin, installed separately. Text only: no MMS/media, direct m
 You need:
 
 - The official SMS plugin installed with `openclaw plugins install @openclaw/sms`.
-- A Twilio account with an SMS-capable phone number, or a Twilio Messaging Service.
+- A Twilio account with an SMS-capable phone number, or a Twilio Messaging Service. MMS requires an MMS-capable sender; native MMS delivery also depends on the destination country and carrier.
 - The Twilio Account SID and Auth Token.
 - A public HTTPS URL that reaches your OpenClaw Gateway.
 - A sender policy choice: `pairing` (default) for private use, `allowlist` for preapproved phone numbers, or `open` only for intentionally public SMS access.
@@ -43,7 +43,7 @@ One Twilio number can serve both SMS and [Voice Call](/plugins/voice-call) if it
     ```
   </Step>
   <Step title="Create or choose a Twilio sender">
-    In Twilio, open **Phone Numbers > Manage > Active numbers** and choose an SMS-capable number. Save:
+    In Twilio, open **Phone Numbers > Manage > Active numbers** and choose an SMS-capable number. To send attachments, choose one that is also MMS-capable. Save:
 
     - Account SID, for example `ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
     - Auth Token
@@ -93,7 +93,7 @@ https://gateway.example.com/webhooks/sms
   </Step>
 
   <Step title="Expose the exact SMS webhook path">
-    Your public URL must route the SMS path to the Gateway process (default port `18789`). If you use Tailscale Funnel for local testing, expose `/webhooks/sms` explicitly:
+    Your public URL must route the SMS path to the Gateway process (default port `18789`). The same path serves inbound Twilio webhooks and short-lived, tokenized attachments when OpenClaw sends MMS. If you use Tailscale Funnel for local testing, expose `/webhooks/sms` explicitly:
 
 ```bash
 tailscale funnel --bg --set-path /webhooks/sms http://127.0.0.1:<gateway-port>/webhooks/sms
@@ -126,21 +126,21 @@ openclaw pairing approve sms <CODE>
 
 All keys live under `channels.sms` (and per account under `channels.sms.accounts.<id>`):
 
-| Key                                     | Default         | Purpose                                                             |
-| --------------------------------------- | --------------- | ------------------------------------------------------------------- |
-| `enabled`                               | `true`          | Enable or disable the channel/account.                              |
-| `accountSid`                            | —               | Twilio Account SID (`AC...`).                                       |
-| `authToken`                             | —               | Twilio Auth Token; plaintext string or SecretRef.                   |
-| `fromNumber`                            | —               | E.164 sender number.                                                |
-| `messagingServiceSid`                   | —               | Messaging Service SID (`MG...`) used when no `fromNumber` resolves. |
-| `defaultTo`                             | —               | Default destination when a send flow omits an explicit target.      |
-| `webhookPath`                           | `/webhooks/sms` | Gateway HTTP path for inbound Twilio webhooks.                      |
-| `publicWebhookUrl`                      | —               | Public URL configured in Twilio; required for signature validation. |
-| `dangerouslyDisableSignatureValidation` | `false`         | Skip `X-Twilio-Signature` checks; local tunnel testing only.        |
-| `dmPolicy`                              | `"pairing"`     | `pairing`, `allowlist`, `open`, or `disabled`.                      |
-| `allowFrom`                             | `[]`            | Allowed sender numbers in E.164, or `"*"` with `dmPolicy: "open"`.  |
-| `textChunkLimit`                        | `1500`          | Maximum characters per outbound SMS chunk.                          |
-| `accounts`, `defaultAccount`            | —               | Multi-account map and default account id.                           |
+| Key                                     | Default         | Purpose                                                                                |
+| --------------------------------------- | --------------- | -------------------------------------------------------------------------------------- |
+| `enabled`                               | `true`          | Enable or disable the channel/account.                                                 |
+| `accountSid`                            | —               | Twilio Account SID (`AC...`).                                                          |
+| `authToken`                             | —               | Twilio Auth Token; plaintext string or SecretRef.                                      |
+| `fromNumber`                            | —               | E.164 sender number.                                                                   |
+| `messagingServiceSid`                   | —               | Messaging Service SID (`MG...`) used when no `fromNumber` resolves.                    |
+| `defaultTo`                             | —               | Default destination when a send flow omits an explicit target.                         |
+| `webhookPath`                           | `/webhooks/sms` | Gateway HTTP path for inbound Twilio webhooks.                                         |
+| `publicWebhookUrl`                      | —               | Public Twilio webhook URL; required for signature validation and outbound MMS hosting. |
+| `dangerouslyDisableSignatureValidation` | `false`         | Skip `X-Twilio-Signature` checks; local tunnel testing only.                           |
+| `dmPolicy`                              | `"pairing"`     | `pairing`, `allowlist`, `open`, or `disabled`.                                         |
+| `allowFrom`                             | `[]`            | Allowed sender numbers in E.164, or `"*"` with `dmPolicy: "open"`.                     |
+| `textChunkLimit`                        | `1500`          | Maximum characters per outbound SMS chunk.                                             |
+| `accounts`, `defaultAccount`            | —               | Multi-account map and default account id.                                              |
 
 ### Config file
 
@@ -305,6 +305,26 @@ Agent replies from inbound SMS conversations automatically go back to the sender
 
 SMS output is plain text. OpenClaw strips markdown, flattens fenced code blocks, rewrites links as `label (url)`, and splits long replies into chunks of at most `textChunkLimit` characters (default 1500) before sending them through Twilio.
 
+### Sending MMS
+
+Use the normal structured media field or the CLI `--media` option:
+
+```bash
+openclaw message send \
+  --channel sms \
+  --target sms:+15551234567 \
+  --message "photo" \
+  --media ./photo.jpg
+```
+
+OpenClaw loads the attachment through the shared outbound-media policy, stores it temporarily in plugin-scoped SQLite state, and gives Twilio a tokenized HTTPS URL on the configured `publicWebhookUrl` path. Media-only sends are supported.
+
+The generated media URL is a bearer capability that expires after 10 minutes. Treat its full query string as a secret: configure reverse-proxy and access logs to omit the query string or redact every query value. OpenClaw Gateway route diagnostics record only the pathname, but cannot control upstream proxy logs.
+
+Outbound OpenClaw deliveries attach one media item. OpenClaw caps JPEG, JPG, PNG, and GIF attachments at 5,000,000 bytes; other supported media types are capped at 500,000 bytes. `application/vcard` attachments must be media-only; Twilio does not accept them with a caption. Destination carriers may enforce smaller limits or reject unsupported formats. Twilio must be able to fetch the generated URL without HTTP authentication, so `publicWebhookUrl` cannot contain embedded userinfo; query-based reverse-proxy tokens are preserved.
+
+For incoming MMS, OpenClaw processes at most 10 attachments and downloads at most 5 MiB total. Any additional or unavailable attachments produce a visible unavailable-media notice instead of discarding the signed message or silently delivering an empty turn. Downloads happen only after sender authorization, with Twilio authentication and an `api.twilio.com` host restriction.
+
 ## Verify Setup
 
 After the Gateway starts:
@@ -352,7 +372,7 @@ The webhook route also enforces, independent of signature validation:
 - Dispatchable callback rate limit of 30 accepted callbacks per minute per SMS account, webhook route, and validated sender after body parsing and signature validation pass (HTTP 429 above that). The sender key is the canonicalized, signature-covered `From` value, so equivalent SMS/RCS address forms share one budget, one flooding sender exhausts only its own budget, and callbacks from other senders behind Twilio's shared egress addresses remain dispatchable. Invalid or missing sender values share a separate empty-sender budget.
 - Aggregate validated-callback ceiling of 300 accepted callbacks per minute per SMS account and webhook route. This bounds durable-ingress pressure from many distinct signed senders without recreating shared-egress cross-throttling. If signature validation is disabled, nothing authenticates `From`; the stricter 30/min resolved-client-address dispatch cap applies instead of the validated sender and aggregate policy.
 - Client addresses are resolved through the shared Gateway trusted-proxy rules. If `gateway.trustedProxies` contains the reverse proxy that forwards Twilio callbacks, OpenClaw keys the address-based limits from the forwarded client address; otherwise it falls back to the direct socket address.
-- The payload `AccountSid` must match the configured `accountSid`. The raw callback is first committed to the durable ingress queue and acknowledged; a mismatch is then marked as a permanent invalid-payload failure during drain and is never dispatched.
+- The payload `AccountSid` must exactly match the configured `accountSid`. Direct-number callbacks must target the configured `fromNumber`; Messaging Service callbacks must carry the configured `MessagingServiceSid`. The raw callback is first committed to the durable ingress queue and acknowledged; an identity mismatch is then marked as a permanent invalid-payload failure during drain and is never dispatched or allowed to download media.
 - Replayed `MessageSid` values are deduplicated by the durable ingress queue. Completed-message tombstones are retained for 24 hours (up to 20,000 entries per account); permanent-failure tombstones are retained for 30 days (up to 1,000 entries).
 - Request bodies over 32 KB are rejected.
 
@@ -405,7 +425,7 @@ Each account must use a distinct `webhookPath`; the Gateway refuses to register 
 
 Check that `publicWebhookUrl` exactly matches the URL configured in Twilio, including scheme, host, path, and query string. Twilio signs the public URL string, so proxy rewrites and alternate hostnames can break signature validation.
 
-A 403 with `Invalid account` means the inbound payload's `AccountSid` does not match the configured `accountSid`; check that the webhook points at the account that owns the number.
+If Twilio receives a durable acknowledgement but no pairing request appears, check the Gateway log for a permanent invalid-payload failure. Confirm the callback's `AccountSid` and `To` match the configured account and `fromNumber`, or that its `MessagingServiceSid` matches the configured Messaging Service.
 
 ### No pairing request appears
 
