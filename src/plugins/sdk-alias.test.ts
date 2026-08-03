@@ -1033,7 +1033,13 @@ describe("plugin sdk alias helpers", () => {
     const owners = ownerCases.map((owner) => {
       const entry = writePluginEntry(fixture.root, owner.entryPath);
       fs.writeFileSync(entry, entryBody, "utf-8");
-      return { ...owner, entry };
+      return {
+        entry,
+        entryPath: owner.entryPath,
+        expectedAliasTarget: owner.expectedAliasTarget,
+        resolution: owner.resolution,
+        tryNative: owner.tryNative,
+      };
     });
     const sourceOtherPluginEntry = writePluginEntry(
       fixture.root,
@@ -1058,12 +1064,15 @@ describe("plugin sdk alias helpers", () => {
       }),
     );
     const ownersWithAliases = owners.map((owner) => ({
-      ...owner,
       aliases: withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
         owner.resolution === "dist"
           ? buildPluginLoaderAliasMap(owner.entry, undefined, undefined, "dist")
           : buildPluginLoaderAliasMap(owner.entry),
       ),
+      entry: owner.entry,
+      entryPath: owner.entryPath,
+      expectedAliasTarget: owner.expectedAliasTarget,
+      tryNative: owner.tryNative,
     }));
     const otherAliases = withEnv(
       { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
