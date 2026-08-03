@@ -26,7 +26,7 @@ export type MemoryCitationsMode = "auto" | "on" | "off";
 /** QMD command mode used for search calls. */
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 /** Backend used when the configured QMD engine is unavailable. */
-export type MemoryQmdFallback = "builtin" | "none";
+type MemoryQmdFallback = "builtin" | "none";
 /** QMD startup policy for background indexing. */
 export type MemoryQmdStartupMode = "off" | "idle" | "immediate";
 
