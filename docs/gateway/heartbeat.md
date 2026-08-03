@@ -327,17 +327,17 @@ By default, `HEARTBEAT_OK` acknowledgments are suppressed while alert content is
 ```yaml
 channels:
   defaults:
-    heartbeat:
+    heartbeatVisibility:
       showOk: false # Hide HEARTBEAT_OK (default)
       showAlerts: true # Show alert messages (default)
       useIndicator: true # Emit indicator events (default)
   telegram:
-    heartbeat:
+    heartbeatVisibility:
       showOk: true # Show OK acknowledgments on Telegram
   whatsapp:
     accounts:
       work:
-        heartbeat:
+        heartbeatVisibility:
           showAlerts: false # Suppress alert delivery for this account
 ```
 
@@ -356,30 +356,30 @@ If **all three** are false, OpenClaw skips the heartbeat run entirely (no model 
 ```yaml
 channels:
   defaults:
-    heartbeat:
+    heartbeatVisibility:
       showOk: false
       showAlerts: true
       useIndicator: true
   slack:
-    heartbeat:
+    heartbeatVisibility:
       showOk: true # all Slack accounts
     accounts:
       ops:
-        heartbeat:
+        heartbeatVisibility:
           showAlerts: false # suppress alerts for the ops account only
   telegram:
-    heartbeat:
+    heartbeatVisibility:
       showOk: true
 ```
 
 ### Common patterns
 
-| Goal                                     | Config                                                                                   |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Default behavior (silent OKs, alerts on) | _(no config needed)_                                                                     |
-| Fully silent (no messages, no indicator) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
-| Indicator-only (no messages)             | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OKs in one channel only                  | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| Goal                                     | Config                                                                                             |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Default behavior (silent OKs, alerts on) | _(no config needed)_                                                                               |
+| Fully silent (no messages, no indicator) | `channels.defaults.heartbeatVisibility: { showOk: false, showAlerts: false, useIndicator: false }` |
+| Indicator-only (no messages)             | `channels.defaults.heartbeatVisibility: { showOk: false, showAlerts: false, useIndicator: true }`  |
+| OKs in one channel only                  | `channels.telegram.heartbeatVisibility: { showOk: true }`                                          |
 
 ## Monitor scratch (optional)
 

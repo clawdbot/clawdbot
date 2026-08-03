@@ -139,6 +139,29 @@ describe("startSmsGatewayAccount", () => {
     expect(registerPluginHttpRoute).not.toHaveBeenCalled();
   });
 
+  it("stops ingress and rejects startup when the webhook route cannot bind", async () => {
+    const statusSink = vi.fn();
+    registerPluginHttpRoute.mockImplementationOnce(() => {
+      throw new Error("SMS route conflict");
+    });
+
+    await expect(
+      startRoute({
+        cfg: {},
+        account: createAccount("default"),
+        channelRuntime: {} as SmsChannelRuntime,
+        statusSink,
+      }),
+    ).rejects.toThrow("SMS route conflict");
+
+    expect(registerPluginHttpRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ throwOnFailure: true }),
+    );
+    expect(stopSmsIngress).toHaveBeenCalledOnce();
+    expect(startSmsIngress).not.toHaveBeenCalled();
+    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
+  });
+
   it("rejects duplicate webhook paths across SMS accounts", async () => {
     const channelRuntime = {} as SmsChannelRuntime;
     await startRoute({

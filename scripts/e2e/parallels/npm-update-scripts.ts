@@ -30,6 +30,20 @@ const macosGuestPath =
   "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
 const macosOpenClawCommand = '"$OPENCLAW_BIN"';
 
+function posixProviderApiKeyFunction(auth: ProviderAuth): string {
+  return `with_provider_api_key() {
+  # Killed background jobs print their command; keep the secret inside the function body.
+  export ${auth.apiKeyEnv}=${shellQuote(auth.apiKeyValue)}
+  if "$@"; then
+    provider_command_status=0
+  else
+    provider_command_status=$?
+  fi
+  unset ${auth.apiKeyEnv}
+  return "$provider_command_status"
+}`;
+}
+
 function posixNpmRegistryEnv(registry: string | undefined): string {
   if (!registry) {
     return "";
@@ -98,7 +112,7 @@ for attempt in 1 2; do
   rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
   output_file="$(mktemp)"
   set +e
-  OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds(platform)} --json >"$output_file" 2>&1
+  OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" with_provider_api_key ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds(platform)} --json >"$output_file" 2>&1
   rc=$?
   set -e
   print_log_tail "$output_file"
@@ -199,6 +213,7 @@ if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`;
 export function macosUpdateScript(input: NpmUpdateScriptInput): string {
   return String.raw`set -euo pipefail
 export PATH=${macosGuestPath}
+${posixProviderApiKeyFunction(input.auth)}
 ${posixPrintLogTailFunction()}
 resolve_required_command() {
   command -v "$1" || {
@@ -248,9 +263,7 @@ start_openclaw_gateway() {
   stop_openclaw_gateway_processes
   rm -f /tmp/openclaw-parallels-macos-gateway.log
   trap '' HUP
-  /usr/bin/env OPENCLAW_HOME="$HOME" OPENCLAW_STATE_DIR="$HOME/.openclaw" OPENCLAW_CONFIG_PATH="$HOME/.openclaw/openclaw.json" ${input.auth.apiKeyEnv}=${shellQuote(
-    input.auth.apiKeyValue,
-  )} "$OPENCLAW_BIN" gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-macos-gateway.log 2>&1 </dev/null &
+  with_provider_api_key /usr/bin/env OPENCLAW_HOME="$HOME" OPENCLAW_STATE_DIR="$HOME/.openclaw" OPENCLAW_CONFIG_PATH="$HOME/.openclaw/openclaw.json" "$OPENCLAW_BIN" gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-macos-gateway.log 2>&1 </dev/null &
   sleep 1
 }
 wait_for_gateway() {
@@ -363,6 +376,7 @@ export function linuxUpdateScript(input: NpmUpdateScriptInput): string {
   return String.raw`set -euo pipefail
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin
 export OPENCLAW_ALLOW_ROOT=1
+${posixProviderApiKeyFunction(input.auth)}
 ${posixPrintLogTailFunction()}
 scrub_future_plugin_entries() {
   node - <<'JS'
@@ -392,10 +406,8 @@ stop_openclaw_gateway_processes() {
 start_openclaw_gateway() {
   pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
   rm -f /tmp/openclaw-parallels-linux-gateway.log
-  setsid sh -lc ${shellQuote(
-    `exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json OPENCLAW_DISABLE_BONJOUR=1 OPENCLAW_ALLOW_ROOT=1 ${input.auth.apiKeyEnv}=${shellQuote(
-      input.auth.apiKeyValue,
-    )} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1`,
+  with_provider_api_key setsid sh -lc ${shellQuote(
+    "exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json OPENCLAW_DISABLE_BONJOUR=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1",
   )} >/dev/null 2>&1 < /dev/null &
 }
 wait_for_gateway() {
