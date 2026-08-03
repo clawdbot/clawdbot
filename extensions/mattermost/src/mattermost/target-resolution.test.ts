@@ -11,7 +11,9 @@ vi.mock("./accounts.js", () => ({
   resolveMattermostAccount,
 }));
 
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async () => ({
+  parseMattermostApiStatus: (await vi.importActual<typeof import("./client.js")>("./client.js"))
+    .parseMattermostApiStatus,
   createMattermostClient,
   fetchMattermostUser,
   fetchMattermostChannel,

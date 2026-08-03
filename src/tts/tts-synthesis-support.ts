@@ -1,18 +1,9 @@
-import type {
-  OpenClawConfig,
-  ResolvedTtsPersona,
-  TtsProvider,
-} from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  canonicalizeSpeechProviderId,
-  getSpeechProvider,
-  type SpeechProviderConfig,
-  type SpeechProviderOverrides,
-} from "openclaw/plugin-sdk/speech-core";
-import type { VoiceModelRef, VoiceProviderCandidate } from "../voice-models.js";
+import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
+import { logVerbose } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
+import type { SpeechProviderConfig, SpeechProviderOverrides } from "./provider-types.js";
 import {
   getResolvedSpeechProviderConfigForVoiceModel,
   mergeProviderConfigWithPersona,
@@ -22,6 +13,7 @@ import {
   resolveTtsProvider,
   resolveTtsProviderCandidates,
 } from "./tts-provider-resolution.js";
+import type { TtsProviderAttempt } from "./tts-runtime-types.js";
 import {
   getTtsPersona,
   resolveTtsConfig,
@@ -29,7 +21,7 @@ import {
   resolveTtsRuntimeConfig,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
-import type { TtsProviderAttempt } from "./tts-types.js";
+import type { VoiceModelRef, VoiceProviderCandidate } from "./voice-models.js";
 
 export function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
   const error = err instanceof Error ? err : new Error(String(err));

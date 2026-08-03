@@ -52,6 +52,7 @@ import {
 } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
+  type AuthorizedGatewayHttpRequest,
   authorizeOpenAiCompatibleHttpModelOverride,
   getBearerToken,
   getHeader,
@@ -126,16 +127,15 @@ function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSes
 function resolveResponseSessionAuthSubject(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
+  requestAuth: AuthorizedGatewayHttpRequest;
 }): string {
+  // Proxy-verified identity owns continuation; forwarded bearers are unverified.
+  if (params.requestAuth.authMethod === "trusted-proxy") {
+    return `trusted-proxy:${params.requestAuth.user}`;
+  }
   const bearer = getBearerToken(params.req);
   if (bearer) {
     return `bearer:${createHash("sha256").update(bearer).digest("hex")}`;
-  }
-  if (params.auth.mode === "trusted-proxy" && params.auth.trustedProxy?.userHeader) {
-    const user = getHeader(params.req, params.auth.trustedProxy.userHeader)?.trim();
-    if (user) {
-      return `trusted-proxy:${user}`;
-    }
   }
   return `gateway-auth:${params.auth.mode}`;
 }
@@ -143,10 +143,11 @@ function resolveResponseSessionAuthSubject(params: {
 function createResponseSessionScope(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
+  requestAuth: AuthorizedGatewayHttpRequest;
   agentId: string;
 }): ResponseSessionScope {
   return normalizeResponseSessionScope({
-    authSubject: resolveResponseSessionAuthSubject({ req: params.req, auth: params.auth }),
+    authSubject: resolveResponseSessionAuthSubject(params),
     agentId: params.agentId,
     requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
   });
@@ -647,6 +648,7 @@ export async function handleOpenResponsesHttpRequest(
   const responseSessionScope = createResponseSessionScope({
     req,
     auth: opts.auth,
+    requestAuth: handled.requestAuth,
     agentId: resolved.agentId,
   });
   // Resolve session key: reuse previous_response_id only when it matches the

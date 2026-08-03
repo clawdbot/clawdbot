@@ -1,6 +1,6 @@
 // Speaker-selection compatibility helpers for plugins that renamed voice fields
 // over time but still need one normalized config object.
-export type SpeakerSelectionConfig = Record<string, unknown>;
+type SpeakerSelectionConfig = Record<string, unknown>;
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;

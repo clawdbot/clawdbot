@@ -1,17 +1,16 @@
-import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
-import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
-import {
-  canonicalizeSpeechProviderId,
-  getSpeechProvider,
-  parseTtsDirectives,
-  type SpeechProviderOverrides,
-  type TtsDirectiveOverrides,
-  type TtsDirectiveParseResult,
-} from "openclaw/plugin-sdk/speech-core";
+import type { OpenClawConfig, TtsConfig } from "../config/types.js";
+import { mergeDeep } from "../infra/deep-merge.js";
+import { parseTtsDirectives } from "./directives.js";
+import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
+import type {
+  SpeechProviderOverrides,
+  TtsDirectiveOverrides,
+  TtsDirectiveParseResult,
+} from "./provider-types.js";
 import { resolveTtsProvider } from "./tts-provider-resolution.js";
 import { resolveTtsConfig, resolveTtsPrefsPath, resolveTtsRuntimeConfig } from "./tts-settings.js";
 
-export type PreparedTtsRequest = {
+type PreparedTtsRequest = {
   cfg: OpenClawConfig;
   directives: TtsDirectiveParseResult;
 };

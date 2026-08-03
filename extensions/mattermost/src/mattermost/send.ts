@@ -26,6 +26,7 @@ import {
   fetchMattermostUserByUsername,
   fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
+  parseMattermostApiStatus,
   uploadMattermostFile,
   type MattermostUser,
   type CreateDmChannelRetryOptions,
@@ -233,8 +234,10 @@ async function resolveChannelIdByName(params: {
         );
         return channel.id;
       }
-    } catch {
-      // Channel not found in this team, try next
+    } catch (error) {
+      if (parseMattermostApiStatus(error) !== 404) {
+        throw error;
+      }
     }
   }
   throw new Error(`Mattermost channel "#${name}" not found in any team the bot belongs to`);

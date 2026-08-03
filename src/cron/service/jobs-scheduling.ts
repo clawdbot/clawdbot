@@ -14,12 +14,25 @@ import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../st
 import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import { normalizePayloadToSystemText } from "./normalize.js";
-import { isQueuedCronRun, isQueuedForceCronRun } from "./run-admission.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
+
+// A matching process reservation keeps its durable queued/running marker live;
+// disabled jobs additionally require force-run ownership.
+function ownsCronRunMarker(
+  state: CronServiceState,
+  jobId: string,
+  markerAtMs: number,
+  requireForce = false,
+): boolean {
+  const reservation = state.queuedRunReservationsByJobId.get(jobId);
+  return (
+    reservation?.markerAtMs === markerAtMs && (!requireForce || reservation.preserveWhenDisabled)
+  );
+}
 
 export function normalizeStreamScheduleBounds(schedule: CronSchedule): CronSchedule {
   if (schedule.kind !== "stream") {
@@ -439,14 +452,14 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     }
     if (
       job.state.queuedAtMs !== undefined &&
-      !isQueuedForceCronRun(state, job.id, job.state.queuedAtMs)
+      !ownsCronRunMarker(state, job.id, job.state.queuedAtMs, true)
     ) {
       job.state.queuedAtMs = undefined;
       changed = true;
     }
     if (
       job.state.runningAtMs !== undefined &&
-      !isQueuedForceCronRun(state, job.id, job.state.runningAtMs) &&
+      !ownsCronRunMarker(state, job.id, job.state.runningAtMs, true) &&
       !isCronJobActive(job.id)
     ) {
       job.state.runningAtMs = undefined;
@@ -474,7 +487,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   if (
     typeof queuedAt === "number" &&
     Math.abs(nowMs - queuedAt) > STUCK_RUN_MS &&
-    !isQueuedCronRun(state, job.id, queuedAt)
+    !ownsCronRunMarker(state, job.id, queuedAt)
   ) {
     state.deps.log.warn(
       { jobId: job.id, queuedAtMs: queuedAt },
@@ -488,7 +501,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   if (
     typeof runningAt === "number" &&
     Math.abs(nowMs - runningAt) > STUCK_RUN_MS &&
-    !isQueuedCronRun(state, job.id, runningAt)
+    !ownsCronRunMarker(state, job.id, runningAt)
   ) {
     state.deps.log.warn(
       { jobId: job.id, runningAtMs: runningAt },
@@ -535,6 +548,7 @@ function recomputeJobNextRunAtMs(params: {
   job: CronJob;
   nowMs: number;
   deferredNotifications?: DeferredCronNotifications;
+  skipScheduleErrorHandling?: boolean;
 }) {
   let changed = false;
   try {
@@ -562,6 +576,9 @@ function recomputeJobNextRunAtMs(params: {
       changed = true;
     }
   } catch (err) {
+    if (params.skipScheduleErrorHandling) {
+      return false;
+    }
     if (
       recordScheduleComputeError({
         state: params.state,
@@ -611,6 +628,7 @@ export function recomputeNextRunsForMaintenance(
     repairFutureCronNextRunAtMs?: boolean;
     preserveExpiredPacedNextRunJobId?: string;
     deferredNotifications?: DeferredCronNotifications;
+    skipScheduleErrorHandling?: boolean;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
@@ -621,6 +639,7 @@ export function recomputeNextRunsForMaintenance(
       job,
       nowMs,
       deferredNotifications: opts?.deferredNotifications,
+      skipScheduleErrorHandling: opts?.skipScheduleErrorHandling,
     });
   return walkSchedulableJobs(
     state,

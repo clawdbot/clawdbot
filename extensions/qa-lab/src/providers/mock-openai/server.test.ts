@@ -2688,6 +2688,68 @@ describe("qa mock openai server", () => {
     expect(outputText(payload)).toBe(expected);
   });
 
+  it("binds crossed same-case parent responses to their matching workers", async () => {
+    const server = await startMockServer();
+    const firstChildSessionKey = "agent:qa:subagent:child-1";
+    const secondChildSessionKey = "agent:qa:subagent:child-2";
+    const startChild = (runtimeSessionId: string, childSessionKey: string) =>
+      postNonStreamingResponses(server, {
+        model: "gpt-5.6-luna",
+        instructions: [
+          `Runtime: embedded | sessionId=${runtimeSessionId}`,
+          `- Your session: ${childSessionKey}.`,
+        ].join("\n"),
+        input: [makeUserInput("Subagent terminal reply QA worker: visible.")],
+      });
+    const settleParent = async (
+      runtimeSessionId: string,
+      childSessionKey: string,
+      callId: string,
+    ) => {
+      const parent = await expectNonStreamingResponsesJson(server, {
+        model: "gpt-5.6-luna",
+        instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+        tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+        input: [
+          makeUserInput("Subagent terminal reply QA check: visible."),
+          makeToolOutputWithCallId(
+            callId,
+            JSON.stringify({ status: "accepted", childSessionKey, runId: `run-${callId}` }),
+          ),
+        ],
+      });
+      expect(outputText(parent)).toBe("NO_REPLY");
+    };
+
+    const firstChildResponse = startChild("qa-terminal-child-1", firstChildSessionKey);
+    const secondChildResponse = startChild("qa-terminal-child-2", secondChildSessionKey);
+    let firstChildSettled = false;
+    let secondChildSettled = false;
+    void firstChildResponse.then(() => {
+      firstChildSettled = true;
+    });
+    void secondChildResponse.then(() => {
+      secondChildSettled = true;
+    });
+
+    await expect
+      .poll(async () => {
+        const inflight = await getJson<unknown[]>(server, "/debug/inflight-requests");
+        return inflight.length;
+      })
+      .toBe(2);
+
+    await settleParent("qa-terminal-parent-2", secondChildSessionKey, "call_spawn_2");
+    const secondChild = await (await expectOk(secondChildResponse)).json();
+    expect(outputText(secondChild)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
+    expect(secondChildSettled).toBe(true);
+    expect(firstChildSettled).toBe(false);
+
+    await settleParent("qa-terminal-parent-1", firstChildSessionKey, "call_spawn_1");
+    const firstChild = await (await expectOk(firstChildResponse)).json();
+    expect(outputText(firstChild)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
+  });
+
   it("keeps the empty terminal worker empty across retry prompts", async () => {
     const server = await startMockServer();
     const payload = await expectNonStreamingResponsesJson(server, {

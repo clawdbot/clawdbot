@@ -1,16 +1,16 @@
-import { resolveChannelTtsVoiceDelivery } from "openclaw/plugin-sdk/channel-targets";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { transcodeAudioBuffer } from "openclaw/plugin-sdk/media-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type { TtsDirectiveOverrides } from "openclaw/plugin-sdk/speech-core";
+import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabilities.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { logVerbose } from "../globals.js";
+import { transcodeAudioBuffer } from "../media/media-services.js";
+import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
+import type { TtsResult, TtsSynthesisResult } from "./tts-runtime-types.js";
 import {
   executeTtsProviderAttempts,
   resolveTtsRequestSetup,
   sanitizeTtsErrorForLog,
 } from "./tts-synthesis-support.js";
-import type { TtsResult, TtsSynthesisResult } from "./tts-types.js";
 
 export type TtsAudioPersistence = (params: {
   audioBuffer: Buffer;

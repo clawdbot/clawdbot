@@ -485,7 +485,7 @@ describe("gateway run option collisions", () => {
     expect(gatewayStartOptions().auth?.mode).toBe(mode);
   }
 
-  it("runs the fast-path bootstrap hook before gateway startup", async () => {
+  it("composes gateway run registration through startup after the fast-path bootstrap", async () => {
     normalizeStateDirEnv.mockImplementation((_env?: NodeJS.ProcessEnv) => {
       callOrder.push("normalize");
     });
@@ -498,6 +498,15 @@ describe("gateway run option collisions", () => {
 
     expect(beforeRun).toHaveBeenCalledOnce();
     expect(callOrder).toEqual(["bootstrap", "normalize", "normalize", "start"]);
+  });
+
+  it("rejects invalid gateway ports before startup", async () => {
+    await expect(
+      runGatewayCli(["gateway", "--port", "0", "--token", "test-token"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Invalid --port. Use a port number from 1 to 65535");
   });
 
   it("suppresses ambient channel triggers for dev gateways by default", async () => {
@@ -1029,6 +1038,18 @@ describe("gateway run option collisions", () => {
     expect(startGatewayServer).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("openclaw gateway run --dev");
     expect(runtimeErrors.join("\n")).toContain("--profile <name> with a free port");
+  });
+
+  it("reports forced port cleanup failures before startup", async () => {
+    forceFreePortAndWait.mockRejectedValueOnce(new Error("boom"));
+
+    await expect(
+      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--force"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Could not free port 18789: boom");
+    expect(runtimeErrors.join("\n")).toContain("openclaw gateway status --deep");
   });
 
   it("marks service-mode gateway descendants with the live gateway pid", async () => {
@@ -1671,6 +1692,9 @@ describe("gateway run option collisions", () => {
     });
 
     expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
+    expect(startGatewayServer).toHaveBeenCalledWith(port, expect.any(Object));
+    expect(runtimeErrors.join("\n")).toContain(`gateway already running on port ${port}`);
+    expect(runtimeErrors.join("\n")).toContain("gateway stop");
   });
 
   it("exits 78 and parks launchd for a repairable shared-state schema", async () => {

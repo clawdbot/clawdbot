@@ -61,10 +61,8 @@ import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
-  buildBootstrapInjectionStats,
-  buildBootstrapPromptWarning,
+  buildBootstrapBudgetState,
   buildBootstrapTruncationReportMeta,
-  analyzeBootstrapBudget,
 } from "../bootstrap-budget.js";
 import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
@@ -85,11 +83,6 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import {
-  resolveBootstrapMaxChars,
-  resolveBootstrapPromptTruncationWarningMode,
-  resolveBootstrapTotalMaxChars,
-} from "../embedded-agent-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -881,20 +874,17 @@ export async function prepareCliRunContext(
   const bootstrapFilesForInjectionStats = includeBootstrapInSystemContext
     ? bootstrapFiles
     : bootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
-  const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, sessionAgentId);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, sessionAgentId);
-  const bootstrapAnalysis = analyzeBootstrapBudget({
-    files: buildBootstrapInjectionStats({
-      bootstrapFiles: bootstrapFilesForInjectionStats,
-      injectedFiles: contextFiles,
-    }),
+  const {
+    bootstrapAnalysis,
     bootstrapMaxChars,
+    bootstrapPromptWarning,
+    bootstrapPromptWarningMode,
     bootstrapTotalMaxChars,
-  });
-  const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(params.config);
-  const bootstrapPromptWarning = buildBootstrapPromptWarning({
-    analysis: bootstrapAnalysis,
-    mode: bootstrapPromptWarningMode,
+  } = buildBootstrapBudgetState({
+    config: params.config,
+    agentId: sessionAgentId,
+    bootstrapFiles: bootstrapFilesForInjectionStats,
+    injectedFiles: contextFiles,
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });

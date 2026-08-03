@@ -189,6 +189,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: typed owner-required error for session store path resolution.
       // +1: native approval messaging target resolver.
       // +1: shared plugin SecretRef setup plan helper.
+      // +2: shared low-cardinality diagnostic dimension normalizers.
+      // +1: shared plugin SecretRef setup CLI factory.
       // +1: shared multi-claim ingress lifecycle fan-in.
       // +3: channel prompt-context entry/compat types and channel metadata builder.
       // +4: focused CLI root-option constants and parsers.
@@ -210,7 +212,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
-      4822,
+      4825,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -234,6 +236,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: focused media-local-roots helpers.
       // +3: channel DM policy factory and its account/patch callbacks.
       // +1: native approval messaging target resolver.
+      // +2: shared low-cardinality diagnostic dimension normalizers.
+      // +1: shared plugin SecretRef setup CLI factory.
       // +1: shared multi-claim ingress lifecycle fan-in.
       // +1: channel metadata builder.
       // +3: focused CLI root-option parsers.
@@ -252,7 +256,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
-      2899,
+      2902,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

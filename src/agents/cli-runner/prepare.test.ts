@@ -100,6 +100,8 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
 vi.mock("../video-generation-task-status.js", () => ({

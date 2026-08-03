@@ -110,6 +110,34 @@ function directChannelRetryCall() {
   ) as [unknown, unknown, MattermostDirectRetryOptions?];
 }
 
+async function createMattermostProviderFailure(
+  status: number,
+  statusText: string,
+  message: string,
+): Promise<Error> {
+  const { createMattermostClient } =
+    await vi.importActual<typeof import("./client.js")>("./client.js");
+  const client = createMattermostClient({
+    baseUrl: "https://mattermost.example.com",
+    botToken: "test-bot-token",
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ message }), {
+        status,
+        statusText,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  try {
+    await client.request("/teams/team-first/channels/name/release-alerts");
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected the Mattermost provider request to fail");
+}
+
 vi.mock("../../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
@@ -162,7 +190,9 @@ vi.mock("./accounts.js", () => ({
   resolveMattermostAccount: mockState.resolveMattermostAccount,
 }));
 
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async () => ({
+  parseMattermostApiStatus: (await vi.importActual<typeof import("./client.js")>("./client.js"))
+    .parseMattermostApiStatus,
   createMattermostClient: mockState.createMattermostClient,
   createMattermostDirectChannelWithRetry: mockState.createMattermostDirectChannelWithRetry,
   createMattermostPost: mockState.createMattermostPost,
@@ -261,6 +291,90 @@ describe("sendMessageMattermost", () => {
       cfg: providedCfg,
       accountId: "work",
     });
+  });
+
+  it("continues searching later teams only when a channel is genuinely absent", async () => {
+    mockState.fetchMattermostUserTeams.mockResolvedValueOnce([
+      { id: "team-first" },
+      { id: "team-second" },
+    ]);
+    mockState.fetchMattermostChannelByName
+      .mockRejectedValueOnce(await createMattermostProviderFailure(404, "Not Found", "missing"))
+      .mockResolvedValueOnce({ id: "channel-second" });
+
+    const result = await sendMessageMattermost("#release-alerts", "hello", { cfg: TEST_CFG });
+
+    expect(result.channelId).toBe("channel-second");
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenNthCalledWith(
+      1,
+      {},
+      "team-first",
+      "release-alerts",
+    );
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenNthCalledWith(
+      2,
+      {},
+      "team-second",
+      "release-alerts",
+    );
+    expect(mockState.createMattermostPost).toHaveBeenCalledOnce();
+  });
+
+  it("reports a missing named channel after every team returns not found", async () => {
+    mockState.fetchMattermostUserTeams.mockResolvedValueOnce([
+      { id: "team-first" },
+      { id: "team-second" },
+    ]);
+    mockState.fetchMattermostChannelByName.mockRejectedValue(
+      await createMattermostProviderFailure(404, "Not Found", "missing channel"),
+    );
+
+    await expect(
+      sendMessageMattermost("#release-alerts", "hello", { cfg: TEST_CFG }),
+    ).rejects.toThrow('Mattermost channel "#release-alerts" not found in any team');
+
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenCalledTimes(2);
+    expect(mockState.createMattermostPost).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "an expired bot token",
+      createError: () => createMattermostProviderFailure(401, "Unauthorized", "bot token expired"),
+    },
+    {
+      name: "missing channel permissions",
+      createError: () => createMattermostProviderFailure(403, "Forbidden", "access denied"),
+    },
+    {
+      name: "provider rate limiting",
+      createError: () => createMattermostProviderFailure(429, "Too Many Requests", "retry later"),
+    },
+    {
+      name: "an outage whose detail mentions a missing resource",
+      createError: () =>
+        createMattermostProviderFailure(503, "Service Unavailable", "upstream returned 404"),
+    },
+    {
+      name: "a network failure",
+      createError: async () => new Error("connect ECONNRESET 192.0.2.12:443"),
+    },
+  ])("preserves $name while resolving a named channel", async ({ createError }) => {
+    const error = await createError();
+    mockState.fetchMattermostUserTeams.mockResolvedValueOnce([
+      { id: "team-first" },
+      { id: "team-second" },
+    ]);
+    mockState.fetchMattermostChannelByName
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce({ id: "channel-second" });
+
+    await expect(sendMessageMattermost("#release-alerts", "hello", { cfg: TEST_CFG })).rejects.toBe(
+      error,
+    );
+
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenCalledOnce();
+    expect(mockState.createMattermostPost).not.toHaveBeenCalled();
   });
 
   it.each(MATTERMOST_MARKDOWN_GOLDENS)("$name", async ({ input, before, after }) => {

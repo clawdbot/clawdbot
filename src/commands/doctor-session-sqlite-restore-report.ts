@@ -5,9 +5,11 @@ import {
   restoreSessionSqliteMigrationRuns,
 } from "./doctor-session-sqlite-migration-run.js";
 import { readSqliteEntryCount, resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
-import type {
-  DoctorSessionSqliteReport,
-  DoctorSessionSqliteTargetReport,
+import {
+  createDoctorSessionSqliteTargetReport,
+  createDoctorSessionSqliteTotals,
+  type DoctorSessionSqliteReport,
+  type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
 
 export async function restoreDoctorSessionSqliteTargets(params: {
@@ -40,44 +42,23 @@ export async function restoreDoctorSessionSqliteTargets(params: {
 }
 
 function createEmptyTargetReport(target: SessionStoreTarget): DoctorSessionSqliteTargetReport {
-  return {
+  return createDoctorSessionSqliteTargetReport({
     agentId: target.agentId,
-    archivedTranscriptFiles: [],
-    archivedUnreferencedJsonlFiles: [],
-    importedEntries: 0,
-    importedTranscriptEvents: 0,
-    issues: [],
-    legacyEntries: 0,
-    referencedTranscriptFiles: 0,
     sqliteEntries: readSqliteEntryCount(target),
     sqlitePath: resolveTargetSqlitePath(target),
     storePath: target.storePath,
-    unreferencedJsonlFiles: [],
-    validatedEntries: 0,
-    validatedTranscriptEvents: 0,
-  };
+  });
 }
 
 function createSyntheticRestoreTargetReport(
   env: NodeJS.ProcessEnv,
   manifestPath: string,
 ): DoctorSessionSqliteTargetReport {
-  return {
+  return createDoctorSessionSqliteTargetReport({
     agentId: "restore",
-    archivedTranscriptFiles: [],
-    archivedUnreferencedJsonlFiles: [],
-    importedEntries: 0,
-    importedTranscriptEvents: 0,
-    issues: [],
-    legacyEntries: 0,
-    referencedTranscriptFiles: 0,
-    sqliteEntries: 0,
     sqlitePath: "",
     storePath: manifestPath || resolveSessionSqliteMigrationRunsDir(env),
-    unreferencedJsonlFiles: [],
-    validatedEntries: 0,
-    validatedTranscriptEvents: 0,
-  };
+  });
 }
 
 function summarizeRestoreReport(
@@ -86,18 +67,6 @@ function summarizeRestoreReport(
   return {
     mode: "restore",
     targets,
-    totals: {
-      archivedTranscriptFiles: 0,
-      archivedUnreferencedJsonlFiles: 0,
-      importedEntries: 0,
-      importedTranscriptEvents: 0,
-      issues: targets.reduce((total, target) => total + target.issues.length, 0),
-      legacyEntries: 0,
-      sqliteEntries: targets.reduce((total, target) => total + target.sqliteEntries, 0),
-      targets: targets.length,
-      unreferencedJsonlFiles: 0,
-      validatedEntries: 0,
-      validatedTranscriptEvents: 0,
-    },
+    totals: createDoctorSessionSqliteTotals(targets),
   };
 }

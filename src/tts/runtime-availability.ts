@@ -1,4 +1,4 @@
-/** Host-owned availability guard shared by every speech-core entrypoint. */
+/** Host-owned availability guard shared by every speech runtime entrypoint. */
 
 let assertRuntimeAvailable: (() => void) | undefined;
 

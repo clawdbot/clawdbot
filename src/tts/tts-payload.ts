@@ -1,25 +1,20 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  markReplyPayloadAsTtsSupplement,
-  resolveSendableOutboundReplyParts,
-  type ReplyPayload,
-} from "openclaw/plugin-sdk/reply-payload";
-import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  canonicalizeSpeechProviderId,
-  getSpeechProvider,
-  parseTtsDirectives,
-  summarizeText,
-  type SpeechVoiceOption,
-} from "openclaw/plugin-sdk/speech-core";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { markReplyPayloadAsTtsSupplement, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { isVerbose, logVerbose } from "../globals.js";
+import { resolveSendableOutboundReplyParts } from "../infra/outbound/reply-payload-parts.js";
+import { truncateUtf16Safe } from "../utils.js";
+import { parseTtsDirectives } from "./directives.js";
+import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
+import type { SpeechVoiceOption } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { isCodeHeavySpeechText, normalizeSpeechText } from "./speech-text.js";
+import { summarizeText } from "./tts-core.js";
 import {
   getResolvedSpeechProviderConfig,
   resolveSpeechProviderTimeoutMs,
   resolveTtsProvider,
 } from "./tts-provider-resolution.js";
+import type { TtsStatusEntry } from "./tts-runtime-types.js";
 import {
   getTtsMaxLength,
   isSummarizationEnabled,
@@ -29,7 +24,6 @@ import {
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
 import { textToSpeech, type TtsAudioPersistence } from "./tts-synthesis.js";
-import type { TtsStatusEntry } from "./tts-types.js";
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
 

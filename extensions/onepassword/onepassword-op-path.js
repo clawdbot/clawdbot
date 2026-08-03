@@ -6,8 +6,6 @@ function errorCode(error) {
 }
 
 const resolveTrustedExecutablePath = pluginSecretRefSetup.resolveTrustedExecutablePath;
-export const resolveTrustedOnePasswordDirectoryPath =
-  pluginSecretRefSetup.resolveTrustedDirectoryPath;
 
 export async function resolveTrustedOnePasswordCli(options = {}) {
   const configuredPath = options.configuredPath?.trim();

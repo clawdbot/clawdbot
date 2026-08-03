@@ -252,6 +252,14 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
       return await createMemoryRuntime(host).getMemorySearchManager(params);
     },
+    async authorizeSearchHits(params) {
+      const { createMemoryRuntime } = await loadRuntimeProviderModule();
+      const runtime = createMemoryRuntime(host);
+      if (!runtime.authorizeSearchHits) {
+        throw new Error("memory-core runtime search authorization is unavailable");
+      }
+      return await runtime.authorizeSearchHits(params);
+    },
     resolveMemoryBackendConfig(params) {
       return resolveMemoryBackendConfig(params);
     },

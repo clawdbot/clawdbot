@@ -1,4 +1,4 @@
-import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
 
 export const CODE_HEAVY_SPOKEN_FALLBACK = "I've put the detailed response on screen.";
 

@@ -1869,31 +1869,88 @@ describe("diagnostics-otel service", () => {
     }
   });
 
-  test("falls back to default OTLP agents when env proxy agent creation fails", async () => {
+  test.each([
+    ["traces", { traces: true }, "unsupported proxy protocol"],
+    ["metrics", { metrics: true }, "invalid proxy URL"],
+    ["logs", { logs: true }, "unsupported proxy protocol"],
+  ] as const)(
+    "refuses direct %s export when the configured proxy cannot initialize",
+    async (_signal, signals, errorMessage) => {
+      createNodeProxyAgentMock.mockImplementation(() => {
+        throw new Error(errorMessage);
+      });
+
+      await expect(
+        startOtelService({ endpoint: "https://collector.example.com/otlp", ...signals }),
+      ).rejects.toThrow(
+        "Configured telemetry proxy is invalid or unsupported; refusing direct export",
+      );
+
+      expect(traceExporterCtor).not.toHaveBeenCalled();
+      expect(metricExporterCtor).not.toHaveBeenCalled();
+      expect(logExporterCtor).not.toHaveBeenCalled();
+    },
+  );
+
+  test("redacts proxy credentials from telemetry startup failures", async () => {
+    const proxyPassword = "qa-otel-proxy-password-sentinel";
     createNodeProxyAgentMock.mockImplementation(() => {
-      throw new Error("unsupported proxy protocol");
+      throw new Error(`Invalid proxy URL: "https://operator:${proxyPassword}@proxy.example.com"`);
     });
 
-    const { ctx } = await startOtelService({
+    const failure = await startOtelService({
       endpoint: "https://collector.example.com/otlp",
       traces: true,
-      metrics: true,
-      logs: true,
-    });
+    }).catch((error: unknown) => error);
 
-    expect(firstExporterOptions(traceExporterCtor).httpAgentOptions).toBeUndefined();
-    expect(firstExporterOptions(metricExporterCtor).httpAgentOptions).toBeUndefined();
-    expect(firstExporterOptions(logExporterCtor).httpAgentOptions).toBeUndefined();
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "diagnostics-otel: env proxy agent unavailable for OTLP traces exporter; falling back to default Node agent",
-    );
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "diagnostics-otel: env proxy agent unavailable for OTLP metrics exporter; falling back to default Node agent",
-    );
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "diagnostics-otel: env proxy agent unavailable for OTLP logs exporter; falling back to default Node agent",
-    );
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({
+      message: "Configured telemetry proxy is invalid or unsupported; refusing direct export",
+    });
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(proxyPassword);
+    expect(traceExporterCtor).not.toHaveBeenCalled();
   });
+
+  test.each([
+    {
+      disabledSignal: "traces",
+      enabledSignal: "metrics",
+      disabledEndpoint: "tracesEndpoint",
+      signals: { traces: false, metrics: true },
+    },
+    {
+      disabledSignal: "metrics",
+      enabledSignal: "traces",
+      disabledEndpoint: "metricsEndpoint",
+      signals: { traces: true, metrics: false },
+    },
+  ] as const)(
+    "does not resolve proxy settings for disabled $disabledSignal export",
+    async ({ disabledSignal, enabledSignal, disabledEndpoint, signals }) => {
+      createNodeProxyAgentMock.mockImplementation(({ targetUrl }: { targetUrl: string }) => {
+        if (targetUrl.includes(`disabled-${disabledSignal}.example.com`)) {
+          throw new Error("invalid disabled-signal proxy");
+        }
+        return nodeProxyAgent;
+      });
+
+      await startOtelService({
+        endpoint: "https://collector.example.com/otlp",
+        ...signals,
+        configure: (ctx) => {
+          ctx.config.diagnostics!.otel![disabledEndpoint] =
+            `https://disabled-${disabledSignal}.example.com/otlp`;
+        },
+      });
+
+      expect(createNodeProxyAgentCalls()).toEqual([
+        expect.objectContaining({
+          targetUrl: `https://collector.example.com/otlp/v1/${enabledSignal}`,
+        }),
+      ]);
+    },
+  );
 
   test("leaves OTLP HTTP exporters on their default agents when env proxy is bypassed", async () => {
     await startOtelService({
