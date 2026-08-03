@@ -359,7 +359,7 @@ describe("monitorZaloProvider lifecycle", () => {
       webhookUrl: "https://example.com/hooks/zalo",
     });
 
-    await expect(run).rejects.toThrow("route replacement denied");
+    await expect(run).rejects.toThrow("route reuse denied");
 
     expect(getWebhookInfoMock).not.toHaveBeenCalled();
     expect(getUpdatesMock).not.toHaveBeenCalled();
@@ -367,7 +367,7 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(statusSink).toHaveBeenCalledWith({
       connected: false,
       lifecycle: "recovering",
-      lastError: expect.stringContaining("route replacement denied"),
+      lastError: expect.stringContaining("route reuse denied"),
     });
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
     expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");

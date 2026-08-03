@@ -142,21 +142,19 @@ const loadZaloWebhookModule = createLazyRuntimeModule(async () => ({
 
 function registerSharedHostedMediaRoute(params: {
   path: string;
-  accountId: string;
   log?: (message: string) => void;
 }): () => void {
   const routeKey = canonicalizeWebhookRouteKey(params.path);
-  // Every account registers the account-agnostic handler so a swapped registry is populated.
-  // Exact unregister handles stay leased until the final account releases the shared route.
+  // Every account attempts the account-agnostic route so the first acquire after a registry swap
+  // repopulates it; exact same-owner conflicts reuse the existing route without replacement.
   const unregister = registerPluginHttpRoute({
     auth: "plugin",
     match: "prefix",
     path: params.path,
     pluginId: "zalo",
     source: "zalo-hosted-media",
-    accountId: params.accountId,
     log: params.log,
-    replaceExisting: true,
+    reuseExistingSameOwner: true,
     throwOnFailure: true,
     handler: async (req, res) => {
       const handled = await tryHandleHostedZaloMediaRequest(req, res);
@@ -931,7 +929,6 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     if (hostedMediaRoutePath) {
       const unregisterHostedMediaRoute = registerSharedHostedMediaRoute({
         path: hostedMediaRoutePath,
-        accountId: account.accountId,
         log: runtime.log,
       });
       stopHandlers.push(unregisterHostedMediaRoute);
