@@ -20,7 +20,7 @@ import {
   normalizeOtelLogString,
   type OtelContentCapturePolicy,
 } from "./service-content-normalization.js";
-import { errorCategory, formatError, resolveOtelHttpAgentOptions } from "./service-exporter.js";
+import { errorCategory, formatError } from "./service-exporter.js";
 import {
   addTraceAttributes,
   contextForTrustedTraceContext,
@@ -28,6 +28,8 @@ import {
 } from "./service-trace-context.js";
 import type {
   BuiltOtelLogRecord,
+  OtelHttpAgentFactory,
+  OtelHttpAgentOptions,
   OtelLogger,
   TelemetryExporterDiagnosticEvent,
 } from "./service-types.js";
@@ -50,6 +52,7 @@ export function createDiagnosticsLogExporter(params: {
   logsEnabled: boolean;
   logsToOtlp: boolean;
   logsToStdout: boolean;
+  logHttpAgentOptions?: OtelHttpAgentFactory | OtelHttpAgentOptions;
   logUrl?: string;
   resource: Resource;
   serviceName: string;
@@ -63,6 +66,7 @@ export function createDiagnosticsLogExporter(params: {
     logsEnabled,
     logsToOtlp,
     logsToStdout,
+    logHttpAgentOptions,
     logUrl,
     resource,
     serviceName,
@@ -86,11 +90,6 @@ export function createDiagnosticsLogExporter(params: {
 
     let otelLogger: { emit: (logRecord: LogRecord) => void } | undefined;
     if (logsToOtlp) {
-      const logHttpAgentOptions = resolveOtelHttpAgentOptions({
-        url: logUrl,
-        signalIdentifier: "LOGS",
-        logger,
-      });
       const logExporter = new OTLPLogExporter({
         ...(logUrl ? { url: logUrl } : {}),
         ...(headers ? { headers } : {}),

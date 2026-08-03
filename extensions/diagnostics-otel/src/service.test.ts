@@ -1928,11 +1928,14 @@ describe("diagnostics-otel service", () => {
     try {
       const rootCertificatePath = path.join(certDir, "root.pem");
       const clientCertificatePath = path.join(certDir, "client.pem");
+      const sharedClientCertificatePath = path.join(certDir, "shared-client.pem");
       const clientKeyPath = path.join(certDir, "client-key.pem");
       writeFileSync(rootCertificatePath, "root-certificate");
       writeFileSync(clientCertificatePath, "trace-client-certificate");
+      writeFileSync(sharedClientCertificatePath, "shared-client-certificate");
       writeFileSync(clientKeyPath, "client-key");
       process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = rootCertificatePath;
+      process.env.OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE = sharedClientCertificatePath;
       process.env.OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE = clientCertificatePath;
       process.env.OTEL_EXPORTER_OTLP_CLIENT_KEY = clientKeyPath;
       createNodeProxyAgentMock.mockReturnValue(nodeProxyAgent);
@@ -1959,6 +1962,7 @@ describe("diagnostics-otel service", () => {
       expect(metricCall.agentOptions).toEqual({
         keepAlive: true,
         ca: Buffer.from("root-certificate"),
+        cert: Buffer.from("shared-client-certificate"),
         key: Buffer.from("client-key"),
       });
     } finally {
@@ -1990,6 +1994,131 @@ describe("diagnostics-otel service", () => {
     } finally {
       rmSync(certDir, { force: true, recursive: true });
     }
+  });
+
+  test("pins validated collector TLS material on direct HTTPS exporter agents", async () => {
+    const certDir = mkdtempSync(path.join(tmpdir(), "openclaw-otel-direct-tls-"));
+    try {
+      const rootCertificatePath = path.join(certDir, "root.pem");
+      writeFileSync(rootCertificatePath, "explicit-root-certificate");
+      process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = rootCertificatePath;
+
+      await startOtelService({
+        endpoint: "https://collector.example.com/otlp",
+        traces: true,
+      });
+
+      expect(firstExporterOptions(traceExporterCtor).httpAgentOptions).toEqual({
+        keepAlive: true,
+        ca: Buffer.from("explicit-root-certificate"),
+      });
+    } finally {
+      rmSync(certDir, { force: true, recursive: true });
+    }
+  });
+
+  test("validates log TLS before constructing any trace, metric, or SDK owner", async () => {
+    process.env.OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE =
+      "/definitely-missing/qa-otel-log-root-atomic.pem";
+
+    await expect(
+      startOtelService({
+        endpoint: "https://collector.example.com/otlp",
+        traces: true,
+        metrics: true,
+        logs: true,
+      }),
+    ).rejects.toThrow(
+      "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
+    );
+
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(metricExporterCtor).not.toHaveBeenCalled();
+    expect(logExporterCtor).not.toHaveBeenCalled();
+    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(sdkStart).not.toHaveBeenCalled();
+  });
+
+  test("never falls back from an unreadable signal TLS file to readable shared trust", async () => {
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = process.execPath;
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE =
+      "/definitely-missing/qa-otel-signal-override.pem";
+
+    await expect(startOtelService({ traces: true })).rejects.toThrow(
+      "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
+    );
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+  });
+
+  test("lets a readable signal TLS file shadow an unreadable shared trust file", async () => {
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE =
+      "/definitely-missing/qa-otel-shadowed-shared-root.pem";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = process.execPath;
+
+    await startOtelService({ traces: true });
+
+    expect(traceExporterCtor).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps valid ambient TLS material compatible with plain HTTP collectors", async () => {
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = process.execPath;
+
+    await startOtelService({ endpoint: "http://collector.example.com/otlp", traces: true });
+
+    expect(traceExporterCtor).toHaveBeenCalledTimes(1);
+    expect(firstExporterOptions(traceExporterCtor).httpAgentOptions).toBeUndefined();
+  });
+
+  test("does not validate TLS material owned by a preloaded SDK", async () => {
+    process.env.OPENCLAW_OTEL_PRELOADED = "1";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE =
+      "/definitely-missing/qa-otel-preloaded-traces-root.pem";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE =
+      "/definitely-missing/qa-otel-preloaded-metrics-root.pem";
+
+    await startOtelService({ traces: true, metrics: true, logs: false });
+
+    expect(sdkCtor).not.toHaveBeenCalled();
+  });
+
+  test("still validates plugin-owned OTLP logs when a trace SDK is preloaded", async () => {
+    process.env.OPENCLAW_OTEL_PRELOADED = "1";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE =
+      "/definitely-missing/qa-otel-preloaded-log-root.pem";
+
+    await expect(startOtelService({ traces: true, logs: true })).rejects.toThrow(
+      "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
+    );
+    expect(logExporterCtor).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    {
+      signal: "disabled traces",
+      envKey: "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+      flags: { traces: false, metrics: true, logs: false },
+    },
+    {
+      signal: "disabled metrics",
+      envKey: "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+      flags: { traces: true, metrics: false, logs: false },
+    },
+    {
+      signal: "disabled logs",
+      envKey: "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
+      flags: { traces: true, metrics: false, logs: false },
+    },
+    {
+      signal: "stdout-only logs",
+      envKey: "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
+      flags: { traces: true, metrics: false, logs: true, logsExporter: "stdout" },
+    },
+  ] as const)("does not read TLS files for $signal", async ({ envKey, flags }) => {
+    process.env[envKey] = "/definitely-missing/qa-otel-inactive-signal-root.pem";
+
+    await startOtelService(flags);
+
+    expect(sdkCtor).toHaveBeenCalledTimes(1);
   });
 
   test.each([

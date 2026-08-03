@@ -8,6 +8,9 @@
 // Trace cases use the OPENCLAW_OTEL_PRELOADED seam to retain this file's tracer provider.
 // Collector-boundary cases start the real NodeSDK, so teardown restores every global SDK
 // registration; otherwise a shutdown provider would poison later real-SDK cases.
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opentelemetry/api";
 import { logs } from "@opentelemetry/api-logs";
 import {
@@ -37,6 +40,18 @@ const ENDPOINT_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
   "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
   "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_CLIENT_KEY",
+  "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY",
+  "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY",
+  "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY",
   "OTEL_LOG_LEVEL",
 ] as const;
 const OTEL_GLOBAL_API_KEY = Symbol.for("opentelemetry.js.api.1");
@@ -466,6 +481,147 @@ test.each([
     try {
       await service.start(ctx);
       expect(diagnostics.join("\n")).not.toContain(credential);
+    } finally {
+      await service.stop?.(ctx);
+    }
+  },
+);
+
+const OTEL_TLS_MATERIAL_CASES = [
+  { suffix: "CERTIFICATE", label: "TLS root certificate" },
+  { suffix: "CLIENT_CERTIFICATE", label: "mTLS client certificate" },
+  { suffix: "CLIENT_KEY", label: "mTLS client private key" },
+] as const;
+
+const OTEL_TLS_FILE_SECURITY_CASES = OTEL_ENDPOINT_SIGNAL_CASES.flatMap((signal) =>
+  OTEL_TLS_MATERIAL_CASES.flatMap((material) =>
+    (["shared", "signal"] as const).map((scope) => Object.assign({ scope }, signal, material)),
+  ),
+);
+
+test.each(OTEL_TLS_FILE_SECURITY_CASES)(
+  "refuses the real $signal exporter when its $scope $label file cannot be read",
+  async ({ signal, suffix, label, scope, flags }) => {
+    process.env[PRELOAD_ENV] = "0";
+    const pathSentinel = `qa-otel-${signal}-${suffix.toLowerCase()}-file-sentinel`;
+    const missingPath = `/definitely-missing/${pathSentinel}.pem`;
+    const envKey =
+      scope === "shared"
+        ? `OTEL_EXPORTER_OTLP_${suffix}`
+        : `OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_${suffix}`;
+    process.env[envKey] = missingPath;
+
+    const diagnostics = captureOtelDiagnostics();
+    const ctx = createOtelContext("https://collector.example.com/otlp", flags);
+    ctx.internalDiagnostics!.emit = () => {};
+    const service = createDiagnosticsOtelService();
+    let failure: unknown;
+    try {
+      await service.start(ctx);
+    } catch (error) {
+      failure = error;
+    } finally {
+      await service.stop?.(ctx);
+    }
+
+    expect(failure).toBeInstanceOf(Error);
+    const startupError = failure as Error;
+    expect(startupError.message).toBe(
+      `Configured OpenTelemetry ${label} file is missing, empty, or unreadable; refusing insecure export`,
+    );
+    expect(startupError.stack).not.toContain(pathSentinel);
+    expect(startupError).not.toHaveProperty("cause");
+    expect(diagnostics.join("\n")).not.toContain(pathSentinel);
+    expect(JSON.stringify(vi.mocked(ctx.logger.error).mock.calls)).not.toContain(pathSentinel);
+    expect(JSON.stringify(vi.mocked(ctx.logger.warn).mock.calls)).not.toContain(pathSentinel);
+  },
+);
+
+test.each(OTEL_ENDPOINT_SIGNAL_CASES)(
+  "refuses invalid TLS material before the real default $signal exporter is constructed",
+  async ({ signal, flags }) => {
+    process.env[PRELOAD_ENV] = "0";
+    process.env[`OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_CERTIFICATE`] =
+      "/definitely-missing/qa-otel-default-root.pem";
+    const ctx = createOtelContext("", flags);
+    ctx.internalDiagnostics!.emit = () => {};
+    const service = createDiagnosticsOtelService();
+
+    try {
+      await expect(service.start(ctx)).rejects.toThrow(
+        "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
+      );
+    } finally {
+      await service.stop?.(ctx);
+    }
+  },
+);
+
+test.each(
+  OTEL_ENDPOINT_SIGNAL_CASES.flatMap((signal) =>
+    OTEL_TLS_MATERIAL_CASES.map((material) => Object.assign({}, signal, material)),
+  ),
+)(
+  "rejects an empty $signal $label file before the SDK can silently downgrade trust",
+  async ({ signal, suffix, label, flags }) => {
+    process.env[PRELOAD_ENV] = "0";
+    const certDir = mkdtempSync(path.join(tmpdir(), "openclaw-otel-empty-tls-"));
+    const emptyMaterialPath = path.join(certDir, "empty.pem");
+    writeFileSync(emptyMaterialPath, "");
+    process.env[`OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_${suffix}`] = emptyMaterialPath;
+    const ctx = createOtelContext("https://collector.example.com/otlp", flags);
+    ctx.internalDiagnostics!.emit = () => {};
+    const service = createDiagnosticsOtelService();
+
+    try {
+      await expect(service.start(ctx)).rejects.toThrow(
+        `Configured OpenTelemetry ${label} file is missing, empty, or unreadable; refusing insecure export`,
+      );
+    } finally {
+      await service.stop?.(ctx);
+      rmSync(certDir, { force: true, recursive: true });
+    }
+  },
+);
+
+test.each(OTEL_ENDPOINT_SIGNAL_CASES)(
+  "rejects the raw whitespace-padded $signal TLS certificate path the SDK cannot read",
+  async ({ signal, flags }) => {
+    process.env[PRELOAD_ENV] = "0";
+    process.env[`OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_CERTIFICATE`] = ` ${process.execPath} `;
+    const ctx = createOtelContext("https://collector.example.com/otlp", flags);
+    ctx.internalDiagnostics!.emit = () => {};
+    const service = createDiagnosticsOtelService();
+
+    try {
+      await expect(service.start(ctx)).rejects.toThrow(
+        "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
+      );
+    } finally {
+      await service.stop?.(ctx);
+    }
+  },
+);
+
+test.each(
+  OTEL_ENDPOINT_SIGNAL_CASES.flatMap((signal) =>
+    (["CLIENT_CERTIFICATE", "CLIENT_KEY"] as const).map((suffix) =>
+      Object.assign({ suffix }, signal),
+    ),
+  ),
+)(
+  "rejects the real $signal exporter when only $suffix mTLS material is configured",
+  async ({ signal, suffix, flags }) => {
+    process.env[PRELOAD_ENV] = "0";
+    process.env[`OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_${suffix}`] = process.execPath;
+    const ctx = createOtelContext("https://collector.example.com/otlp", flags);
+    ctx.internalDiagnostics!.emit = () => {};
+    const service = createDiagnosticsOtelService();
+
+    try {
+      await expect(service.start(ctx)).rejects.toThrow(
+        "Configured OpenTelemetry mTLS requires both a client certificate and private key; refusing insecure export",
+      );
     } finally {
       await service.stop?.(ctx);
     }
