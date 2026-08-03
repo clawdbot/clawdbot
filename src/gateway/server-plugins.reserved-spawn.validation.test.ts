@@ -65,6 +65,7 @@ function requesterLoadResult(params: { lifecycleRevisionPresent: boolean; value?
     pluginOwnerId: "agentic-os",
     sessionId: "requester-session",
     createdAt: 1,
+    updatedAt: 1,
     ...(params.lifecycleRevisionPresent ? { lifecycleRevision: params.value } : {}),
   };
   return {
@@ -124,6 +125,7 @@ describe("createGatewaySubagentRuntime.spawnReserved validation", () => {
         sessionId: "requester-session",
         lifecycleRevision: "1",
         createdAt: 1,
+        updatedAt: 1,
       },
     });
   });
@@ -242,6 +244,7 @@ describe("createGatewaySubagentRuntime.spawnReserved validation", () => {
         sessionId: "requester-session",
         lifecycleRevision: "1",
         createdAt: 1,
+        updatedAt: 1,
       },
     });
 
