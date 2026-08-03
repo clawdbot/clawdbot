@@ -54,11 +54,9 @@ switch (scenario) {
   case "local-password":
     assertLocalWizard();
     expectEqual("gateway.auth.mode", cfg?.gateway?.auth?.mode, "password");
-    expectEqual(
-      "gateway.auth.password",
-      cfg?.gateway?.auth?.password,
-      "openclaw-onboard-password-e2e",
-    );
+    if (cfg?.gateway?.auth?.password !== "openclaw-onboard-password-e2e") {
+      errors.push("gateway.auth.password mismatch");
+    }
     break;
   case "remote-non-interactive":
     expectEqual("gateway.mode", cfg?.gateway?.mode, "remote");

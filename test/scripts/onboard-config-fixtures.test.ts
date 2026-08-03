@@ -232,6 +232,26 @@ describe("onboard config fixture helpers", () => {
 
     expect(passwordResult.status).toBe(0);
     expect(passwordResult.stderr).toBe("");
+
+    const secretValue = "must-not-appear-in-assertion-output";
+    writeFileSync(
+      passwordConfigPath,
+      `${JSON.stringify(
+        {
+          gateway: { mode: "local", auth: { mode: "password", password: secretValue } },
+          wizard: { lastRunMode: "local" },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const mismatchResult = runScript(ASSERT_CONFIG_SCRIPT, ["local-password", passwordConfigPath]);
+
+    expect(mismatchResult.status).toBe(1);
+    expect(mismatchResult.stderr).toContain("gateway.auth.password mismatch");
+    expect(mismatchResult.stderr).not.toContain(secretValue);
   });
 
   it("accepts channel configuration assertions for scrubbed channel secrets", () => {
