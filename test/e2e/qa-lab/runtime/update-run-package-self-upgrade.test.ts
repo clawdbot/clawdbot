@@ -142,11 +142,9 @@ describe("update.run package self-upgrade producer", () => {
     expect(script).toContain(
       '! git -C "$source_repo" cat-file -e "$SOURCE_TAG^{commit}" 2>/dev/null',
     );
+    expect(script).toContain('tar -C "$checkout_root" -cf "$QA_CHANNEL_FIXTURE_ARCHIVE" dist');
     expect(script).toContain(
-      'tar -C "$checkout_root" -cf "$QA_CHANNEL_FIXTURE_ARCHIVE" dist/extensions/qa-channel',
-    );
-    expect(script).toContain(
-      "tar --no-same-owner -xf /tmp/openclaw-update-run-qa-channel.tar -C /tmp/openclaw-update-run-build",
+      "tar --no-same-owner -xf /tmp/openclaw-update-run-historical-dist.tar -C /tmp/openclaw-update-run-build",
     );
     expect(script).not.toContain(
       '-v "$QA_CHANNEL_FIXTURE_ROOT/checkout:/tmp/openclaw-update-run-build:ro"',
