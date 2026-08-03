@@ -51,7 +51,11 @@ type SubagentSpawnReservedParams = {
   targetAgentId: string;
   /** Child identity reserved by the plugin before calling core. Raw UTF-8 must fit within 1024 bytes. */
   childSessionKey: string;
-  /** Run identity reserved by the plugin before calling core. Raw UTF-8 must fit within 1024 bytes. */
+  /**
+   * Run identity reserved by the plugin before calling core. Raw UTF-8 must fit
+   * within 1024 bytes. Reserved namespaces: agent:*, chat:*, and
+   * exec-approval-followup:*.
+   */
   runId: string;
   task: string;
   /** Optional stable task alias matching [a-z][a-z0-9_-]{0,63}; "all" and "last" are reserved. */

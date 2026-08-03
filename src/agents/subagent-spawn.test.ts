@@ -1,6 +1,8 @@
+import { promises as fs } from "node:fs";
 // Subagent spawn tests cover target policy, session patching, runtime model
 // persistence, registry registration, and lifecycle event emission.
 import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -1079,6 +1081,88 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(admittedResult.status).toBe("accepted");
     expect(deleteCalls).toBe(4);
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps retained attachment cleanup until deletion or replacement proof releases admission", async () => {
+    const attachmentsRootDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-retained-attachments-"),
+    );
+    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "evidence.txt"), "staged evidence");
+    hoisted.quarantineFailedSubagentSpawnMock.mockImplementation(() => {
+      throw new Error("registry persistence unavailable");
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    const childSessionKey = "agent:worker:subagent:quarantine-persist-attachments";
+    const sessionIdentity = {
+      expectedSessionId: "retained-attachments-original-session",
+      expectedLifecycleRevision: "retained-attachments-original-lifecycle",
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: {
+        sessionId: sessionIdentity.expectedSessionId,
+        lifecycleRevision: sessionIdentity.expectedLifecycleRevision,
+        updatedAt: Date.now(),
+        status: "running",
+      },
+    };
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "sessions.delete") {
+        throw new Error("session deletion did not settle");
+      }
+      return {};
+    });
+    let released = false;
+
+    expect(
+      spawnFailureQuarantine.recordSpawnPipelineIndeterminateFailedSubagentSpawn(
+        { id: "retained-attachments-slot", release: () => void (released = true) },
+        {
+          runId: "run-quarantine-persist-attachments",
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          requesterAgentId: "main",
+          task: "retain staged attachments after failed spawn quarantine persistence",
+          agentId: "worker",
+          cleanup: "delete",
+          runTimeoutSeconds: 30,
+          spawnMode: "run",
+          reason: "context unavailable",
+          sessionIdentity,
+          attachmentsDir,
+          attachmentsRootDir,
+        },
+      ),
+    ).toBe(false);
+
+    expect(released).toBe(false);
+    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+
+    await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+    expect(released).toBe(false);
+    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+    expect(spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions()).toEqual([
+      expect.objectContaining({
+        childSessionKey,
+        status: "retrying",
+      }),
+    ]);
+
+    store[childSessionKey] = {
+      ...store[childSessionKey],
+      sessionId: "retained-attachments-replacement-session",
+      lifecycleRevision: "retained-attachments-replacement-lifecycle",
+      updatedAt: Date.now(),
+      status: "running",
+    };
+    await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+
+    expect(released).toBe(true);
+    await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions()).toEqual([]);
   });
 
   it("ignores caller-supplied provisional-count fields outside the shared admission owner", async () => {

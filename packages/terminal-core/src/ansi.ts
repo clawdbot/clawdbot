@@ -418,14 +418,19 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
       return undefined;
     }
     let body = "";
+    let paramsForResetDetection = "";
     for (let index = introducerLength; index < value.length - 1; index += 1) {
       const code = value.charCodeAt(index);
       if (code === 0x09) {
         continue;
       }
-      body += value.charAt(index);
+      const char = value.charAt(index);
+      body += char;
+      if (code > 0x1f && code !== 0x7f) {
+        paramsForResetDetection += char;
+      }
     }
-    const params = body.replace(/[ -/]+$/u, "");
+    const params = paramsForResetDetection.replace(/[ -/]+$/u, "");
     const resets =
       params === "" ||
       params.split(/[;:]/u).some((part) => part === "" || Number.parseInt(part, 10) === 0);

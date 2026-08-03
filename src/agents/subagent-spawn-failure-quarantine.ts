@@ -1,6 +1,7 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { summarizeSpawnError } from "./spawn-error.js";
+import { safeRemoveAttachmentsPath } from "./subagent-registry-helpers.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   hasSubagentRunIdentity,
@@ -40,6 +41,10 @@ type RetainedFailedSpawnAdmission = {
   maxAttempts: number;
   status: RetainedFailedSpawnAdmissionStatus;
   sessionIdentity?: ProvisionalSessionCleanupIdentity;
+  attachments?: {
+    attachmentsDir: string;
+    attachmentsRootDir: string;
+  };
 };
 
 type RetainedFailedSpawnAdmissionState = {
@@ -101,6 +106,22 @@ function retainedFailedSpawnAdmissionOriginalGone(holder: RetainedFailedSpawnAdm
   }
 }
 
+async function releaseRetainedFailedSpawnAdmission(
+  state: RetainedFailedSpawnAdmissionState,
+  holder: RetainedFailedSpawnAdmission,
+): Promise<boolean> {
+  if (state.holders.get(holder.slot.id) !== holder) {
+    return true;
+  }
+  if (holder.attachments && !(await safeRemoveAttachmentsPath(holder.attachments))) {
+    return false;
+  }
+  clearRetainedFailedSpawnAdmissionTimer(holder);
+  state.holders.delete(holder.slot.id);
+  holder.slot.release();
+  return true;
+}
+
 async function reconcileRetainedFailedSpawnAdmission(
   holder: RetainedFailedSpawnAdmission,
 ): Promise<void> {
@@ -117,16 +138,14 @@ async function reconcileRetainedFailedSpawnAdmission(
         ...(holder.sessionIdentity ? { expectedIdentity: holder.sessionIdentity } : {}),
       })
     ) {
-      clearRetainedFailedSpawnAdmissionTimer(holder);
-      state.holders.delete(holder.slot.id);
-      holder.slot.release();
-      return;
+      if (await releaseRetainedFailedSpawnAdmission(state, holder)) {
+        return;
+      }
     }
     if (retainedFailedSpawnAdmissionOriginalGone(holder)) {
-      clearRetainedFailedSpawnAdmissionTimer(holder);
-      state.holders.delete(holder.slot.id);
-      holder.slot.release();
-      return;
+      if (await releaseRetainedFailedSpawnAdmission(state, holder)) {
+        return;
+      }
     }
   } finally {
     holder.inFlight = false;
@@ -145,6 +164,8 @@ function retainFailedSpawnAdmissionSlotUntilDeletion(params: {
   slot: RetainableAdmissionSlot;
   childSessionKey: string;
   sessionIdentity?: ProvisionalSessionCleanupIdentity;
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
 }): void {
   const state = getRetainedFailedSpawnAdmissionState();
   const existing = state.holders.get(params.slot.id);
@@ -159,6 +180,14 @@ function retainFailedSpawnAdmissionSlotUntilDeletion(params: {
     maxAttempts: RETAINED_FAILED_SPAWN_ADMISSION_MAX_ATTEMPTS,
     status: "retrying",
     ...(params.sessionIdentity ? { sessionIdentity: params.sessionIdentity } : {}),
+    ...(params.attachmentsDir && params.attachmentsRootDir
+      ? {
+          attachments: {
+            attachmentsDir: params.attachmentsDir,
+            attachmentsRootDir: params.attachmentsRootDir,
+          },
+        }
+      : {}),
   };
   state.holders.set(params.slot.id, holder);
   scheduleRetainedFailedSpawnAdmission(holder);
@@ -259,6 +288,8 @@ function recordIndeterminateFailedSubagentSpawn(
         slot: admissionSlot,
         childSessionKey: params.childSessionKey,
         ...(params.sessionIdentity ? { sessionIdentity: params.sessionIdentity } : {}),
+        ...(params.attachmentsDir ? { attachmentsDir: params.attachmentsDir } : {}),
+        ...(params.attachmentsRootDir ? { attachmentsRootDir: params.attachmentsRootDir } : {}),
       });
     }
     return false;

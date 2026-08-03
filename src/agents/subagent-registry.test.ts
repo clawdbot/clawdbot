@@ -1240,6 +1240,72 @@ describe("subagent registry seam flow", () => {
     expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
   });
 
+  it.each(["missing", "deleted"] as const)(
+    "archives %s failed-spawn cleanup records without deleting a recreated child",
+    async (status) => {
+      const now = Date.now();
+      const childSessionKey = `agent:worker:subagent:failed-spawn-${status}-archive-child`;
+      const runId = `failed-spawn-${status}-archive-run`;
+      const sessionIdentity = {
+        expectedSessionId: `${status}-archive-original-session`,
+        expectedLifecycleRevision: `${status}-archive-original-lifecycle`,
+      };
+      mocks.loadSessionStore.mockReturnValue(
+        createSessionStore(
+          {
+            sessionId: `${status}-archive-replacement-session`,
+            lifecycleRevision: `${status}-archive-replacement-lifecycle`,
+            updatedAt: now,
+            status: "running",
+          },
+          childSessionKey,
+        ),
+      );
+      mockGatewayMethods(mocks.callGateway, {
+        "sessions.delete": new Error("must not delete recreated child"),
+      });
+      mod.addSubagentRunForTests({
+        runId,
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: `failed spawn ${status} archived after recreated child`,
+        cleanup: "delete",
+        createdAt: now - 10_000,
+        cleanupHandled: true,
+        cleanupCompletedAt: now - 5_000,
+        archiveAtMs: now - 1,
+        completion: { required: false },
+        delivery: { status: "not_required" },
+        execution: {
+          status: "terminal",
+          endedAt: now - 5_000,
+          outcome: { status: "error", error: "failed spawn original gone" },
+        },
+        spawnFailureCleanup: {
+          status,
+          reason: "ambiguous dispatch failure",
+          recordedAt: now - 10_000,
+          attempts: 0,
+          maxAttempts: 3,
+          sessionDeletion: "indeterminate",
+          sessionIdentity,
+          lastError: null,
+        },
+      });
+
+      await mod.testing.sweepOnceForTests();
+
+      expect(mod.getSubagentRunByRunId(runId)).toBeUndefined();
+      expect(
+        mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
+      ).toHaveLength(0);
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(mocks.resolveContextEngine).not.toHaveBeenCalled();
+      expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps a sweeper archive mutation root-admitted until deletion settles", async () => {
     const now = Date.now();
     mocks.loadSessionStore.mockReturnValue(

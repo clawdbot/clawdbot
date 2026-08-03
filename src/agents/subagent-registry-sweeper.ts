@@ -134,6 +134,11 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperPar
     workspaceDir: entry.workspaceDir,
   });
 
+  const failedSpawnOriginalGone = (entry: SubagentRunRecord): boolean => {
+    const status = entry.spawnFailureCleanup?.status;
+    return status === "replaced" || status === "missing" || status === "deleted";
+  };
+
   async function sweepOnce() {
     if (sweepInProgress) {
       return;
@@ -413,12 +418,13 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperPar
         }
         params.clearPendingLifecycleError(runId);
         const replacedFailedSpawnSession = entry.spawnFailureCleanup?.status === "replaced";
+        const originalFailedSpawnSessionGone = failedSpawnOriginalGone(entry);
         const terminalFailedSpawnSessionIdentity =
           entry.spawnFailureCleanup?.status === "terminal_registered"
             ? entry.spawnFailureCleanup.sessionIdentity
             : undefined;
         const suppressSessionEffects =
-          replacedFailedSpawnSession ||
+          originalFailedSpawnSessionGone ||
           (!terminalFailedSpawnSessionIdentity &&
             shouldSuppressSubagentRecoverySessionEffects(entry));
         let sessionOwnershipChanged = false;

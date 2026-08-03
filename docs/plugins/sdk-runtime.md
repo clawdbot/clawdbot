@@ -421,9 +421,12 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     Reserved identity inputs are bounded before core claims or dispatches the
     child: `requesterSessionKey`, `childSessionKey`, and `runId` each must fit
-    within 1024 raw UTF-8 bytes. Optional `taskName` is a stable task alias, not
-    display text: it must be 1-64 safe ASCII characters matching
-    `[a-z][a-z0-9_-]{0,63}`, and `all` plus `last` are reserved target words.
+    within 1024 raw UTF-8 bytes. `runId` is plugin-owned and must not use
+    backend-reserved namespaces: `agent:*`, `chat:*`, or
+    `exec-approval-followup:*`. Use an opaque plugin prefix instead. Optional
+    `taskName` is a stable task alias, not display text: it must be 1-64 safe
+    ASCII characters matching `[a-z][a-z0-9_-]{0,63}`, and `all` plus `last`
+    are reserved target words.
 
     <Warning>
     Model overrides (`provider`/`model`) require operator opt-in via `plugins.entries.<id>.subagent.allowModelOverride: true` in config. Untrusted plugins can still run subagents, but override requests are rejected.
