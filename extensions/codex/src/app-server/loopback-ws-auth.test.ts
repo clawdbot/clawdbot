@@ -1,16 +1,18 @@
-// Covers DNS hostname bypass of the remote-auth WS loopback boundary.
-// Fix: guard `host.startsWith("127.")` with `isIP(host) === 4` so
-// hostnames like `127.evil.com` don't skip authToken/Authorization.
+// Regression tests: DNS hostname bypass of the remote-auth WS loopback boundary.
+// Origin/main uses isLoopbackHost() from openclaw/plugin-sdk/ssrf-runtime in
+// config-security.ts, which correctly rejects DNS hostnames via
+// parseCanonicalIpAddress. These tests lock in the behavior against regression.
 import { describe, expect, it } from "vitest";
 
-// Reach into config.ts for the internal helper; test through its canonical
-// consumer `assertCodexAppServerConnectionSecurity` where possible.
+// Import through config.ts (the stable re-export facade) which delegates
+// to config-security.ts — the active authentication boundary.
 const { assertCodexAppServerConnectionSecurity } = await import("./config.js");
 
 describe("isLoopbackWebSocketUrl (via assertCodexAppServerConnectionSecurity)", () => {
   it("rejects DNS hostnames that start with 127.", () => {
     // DNS hostnames must NOT bypass the remote-auth boundary.
-    // Before the fix, host.startsWith("127.") classified these as loopback.
+    // Origin/main uses isLoopbackHost → parseCanonicalIpAddress which
+    // only accepts literal IPs — DNS hostnames are correctly rejected.
     expect(() =>
       assertCodexAppServerConnectionSecurity({
         transport: "websocket",
@@ -61,6 +63,7 @@ describe("isLoopbackWebSocketUrl (via assertCodexAppServerConnectionSecurity)", 
   });
 
   it("still classifies localhost and ::1 as loopback", () => {
+    // isLoopbackHost handles localhost at the parseHostForAddressChecks level.
     expect(() =>
       assertCodexAppServerConnectionSecurity({
         transport: "websocket",
