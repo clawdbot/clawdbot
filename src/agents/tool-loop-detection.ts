@@ -25,7 +25,7 @@ import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
-type LoopDetectorKind =
+export type LoopDetectorKind =
   | "generic_repeat"
   | "argument_churn"
   | "unknown_tool_repeat"
@@ -33,7 +33,7 @@ type LoopDetectorKind =
   | "global_circuit_breaker"
   | "ping_pong";
 
-type LoopDetectionResult =
+export type LoopDetectionResult =
   | { stuck: false }
   | {
       stuck: true;

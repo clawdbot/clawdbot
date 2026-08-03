@@ -1,0 +1,144 @@
+import type { InternalToolBatchCall, ToolLoopIntervention } from "@openclaw/agent-core";
+import {
+  beforeToolCallLog as log,
+  loadBeforeToolCallRuntime,
+  shouldEmitLoopWarning,
+} from "./agent-tools.before-tool-call.diagnostics.js";
+import { recordBatchAdmittedToolCall } from "./agent-tools.before-tool-call.state.js";
+import type { HookContext } from "./agent-tools.before-tool-call.types.js";
+import { hashToolCall } from "./tool-loop-detection.js";
+import { normalizeToolName } from "./tool-policy.js";
+
+type ToolLoopCall = {
+  toolName: string;
+  params: unknown;
+  toolCallId?: string;
+};
+
+async function evaluateToolLoopCall(
+  call: ToolLoopCall,
+  ctx: HookContext,
+): Promise<ToolLoopIntervention | undefined> {
+  if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
+    return undefined;
+  }
+  const toolName = normalizeToolName(call.toolName || "tool");
+  const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop } =
+    await loadBeforeToolCallRuntime();
+  const sessionState = getDiagnosticSessionState({
+    sessionKey: ctx.sessionKey,
+    sessionId: ctx.sessionId,
+  });
+  const result = detectToolCallLoop(
+    sessionState,
+    toolName,
+    call.params,
+    ctx.loopDetection,
+    ctx.runId ? { runId: ctx.runId } : undefined,
+  );
+  if (!result.stuck) {
+    return undefined;
+  }
+  if (result.level === "critical") {
+    log.error(`Blocking ${toolName} due to critical loop: ${result.message}`);
+    logToolLoopAction({
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
+      toolName,
+      level: "critical",
+      action: "block",
+      detector: result.detector,
+      count: result.count,
+      message: result.message,
+      pairedToolName: result.pairedToolName,
+    });
+    return {
+      kind: "critical-tool-loop",
+      toolCallId: call.toolCallId ?? "",
+      toolName,
+      actionKey: hashToolCall(toolName, call.params),
+      detector: result.detector,
+      count: result.count,
+      reason: result.message,
+    };
+  }
+  const baseWarningKey = result.warningKey ?? `${result.detector}:${toolName}`;
+  const warningKey = ctx.runId ? `${ctx.runId}:${baseWarningKey}` : baseWarningKey;
+  if (shouldEmitLoopWarning(sessionState, warningKey, result.count)) {
+    log.warn(`Loop warning for ${toolName}: ${result.message}`);
+    logToolLoopAction({
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
+      toolName,
+      level: "warning",
+      action: "warn",
+      detector: result.detector,
+      count: result.count,
+      message: result.message,
+      pairedToolName: result.pairedToolName,
+    });
+  }
+  return undefined;
+}
+
+async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise<void> {
+  if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
+    return;
+  }
+  const { getDiagnosticSessionState, recordToolCall } = await loadBeforeToolCallRuntime();
+  recordToolCall(
+    getDiagnosticSessionState({ sessionKey: ctx.sessionKey, sessionId: ctx.sessionId }),
+    normalizeToolName(call.toolName || "tool"),
+    call.params,
+    call.toolCallId,
+    ctx.loopDetection,
+    ctx.runId ? { runId: ctx.runId } : undefined,
+  );
+}
+
+/** Preserve the existing single-call admission path for harnesses without batch control. */
+export async function admitSingleToolCallLoop(
+  call: ToolLoopCall,
+  ctx: HookContext,
+): Promise<ToolLoopIntervention | undefined> {
+  const intervention = await evaluateToolLoopCall(call, ctx);
+  if (!intervention) {
+    await recordToolLoopCall(call, ctx);
+  }
+  return intervention;
+}
+
+/**
+ * Admit an assistant tool batch atomically. Calls are only recorded after every
+ * sibling passes detection, so no side effect can start before a later veto.
+ */
+export async function admitToolCallBatch(
+  calls: InternalToolBatchCall[],
+  ctx: HookContext,
+): Promise<ToolLoopIntervention | undefined> {
+  for (const call of calls) {
+    const intervention = await evaluateToolLoopCall(
+      {
+        toolName: call.toolCall.name,
+        params: call.args,
+        toolCallId: call.toolCall.id,
+      },
+      ctx,
+    );
+    if (intervention) {
+      return intervention;
+    }
+  }
+  for (const call of calls) {
+    await recordToolLoopCall(
+      {
+        toolName: call.toolCall.name,
+        params: call.args,
+        toolCallId: call.toolCall.id,
+      },
+      ctx,
+    );
+    recordBatchAdmittedToolCall(call.toolCall.id, ctx.runId);
+  }
+  return undefined;
+}

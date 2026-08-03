@@ -41,10 +41,12 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
   return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
 }
 
-function nativePreToolUseMayRunLoopDetection(
-  registration: ActiveNativeHookRelayRegistration,
-): boolean {
-  if (!registration.preToolUseLoopDetection || !registration.sessionKey) {
+function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayRegistration): boolean {
+  const relayEnabled =
+    "preToolUseLoopDetection" in registration
+      ? registration.preToolUseLoopDetection !== false
+      : true;
+  if (!relayEnabled || !registration.sessionKey) {
     return false;
   }
   const loopDetection = resolveToolLoopDetectionConfig({
@@ -124,6 +126,12 @@ async function runNativeHookRelayPreToolUse(params: {
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
+  const loopDetection = nativePreToolUseMayRunLoopDetection(params.registration)
+    ? resolveToolLoopDetectionConfig({
+        cfg: params.registration.config,
+        agentId: params.registration.agentId,
+      })
+    : undefined;
   const outcome = await runBeforeToolCallHook({
     toolName,
     params: toolInput,
@@ -136,6 +144,7 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
       ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
+      ...(loopDetection ? { loopDetection } : {}),
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
       ...(params.registration.requester ? { requester: params.registration.requester } : {}),
       ...params.registration.approvalContext,
@@ -145,8 +154,15 @@ async function runNativeHookRelayPreToolUse(params: {
     },
   });
   if (outcome.blocked) {
+    // Native harnesses do not expose their provider run loop here. Deny the
+    // action before execution and tell the native model to choose a different
+    // action; embedded runs get the bounded whole-run controller in agent-core.
+    const reason =
+      outcome.deniedReason === "tool-loop"
+        ? `${outcome.reason}\n\nDo not repeat this exact tool action. Reassess the task and choose a different action or answer without another tool call.`
+        : outcome.reason;
     return params.adapter.renderPreToolUseBlockResponse(
-      outcome.reason,
+      reason,
       outcome.kind === "failure" && outcome.disposition !== "blocked"
         ? outcome.disposition
         : undefined,
