@@ -20,7 +20,7 @@ scenario:
   gatewayRuntime:
     allowUnhealthyStartup: true
   successCriteria:
-    - channels.status exposes lifecycle and derived healthState as blocked.
+    - channels.status exposes lifecycle blocked with terminalDisconnect true.
     - The account remains running without a pending restart.
     - The health monitor does not change lastStartAt after its startup-grace check.
     - A fresh Slack event repairs identity and publishes ready without restarting the account task.
@@ -46,11 +46,11 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "((status) => { const account = (status.channelAccounts?.slack ?? []).find((candidate) => candidate.accountId === transport.accountId); return account?.lifecycle === 'blocked' && account?.healthState === 'blocked' ? account : undefined; })(await env.gateway.call('channels.status', { probe: false, timeoutMs: 10000 }, { timeoutMs: 15000 }))"
+                expr: "((status) => { const account = (status.channelAccounts?.slack ?? []).find((candidate) => candidate.accountId === transport.accountId); return account?.lifecycle === 'blocked' && account?.terminalDisconnect === true ? account : undefined; })(await env.gateway.call('channels.status', { probe: false, timeoutMs: 10000 }, { timeoutMs: 15000 }))"
             - 30000
             - 250
         - assert:
-            expr: "initialAccount?.lifecycle === 'blocked' && initialAccount?.healthState === 'blocked' && initialAccount?.running === true && initialAccount?.restartPending !== true && typeof initialAccount?.lastStartAt === 'number'"
+            expr: "initialAccount?.lifecycle === 'blocked' && initialAccount?.terminalDisconnect === true && initialAccount?.running === true && initialAccount?.restartPending !== true && typeof initialAccount?.lastStartAt === 'number'"
             message:
               expr: "`Slack did not expose the blocked lifecycle through channels.status: ${JSON.stringify(initialAccount)}`"
         - call: sleep
@@ -67,7 +67,7 @@ flow:
           value:
             expr: "(finalStatus.channelAccounts?.slack ?? []).find((account) => account.accountId === transport.accountId)"
         - assert:
-            expr: "finalAccount?.lifecycle === 'blocked' && finalAccount?.healthState === 'blocked' && finalAccount?.running === true && finalAccount?.restartPending !== true && finalAccount?.lastStartAt === initialAccount.lastStartAt"
+            expr: "finalAccount?.lifecycle === 'blocked' && finalAccount?.terminalDisconnect === true && finalAccount?.running === true && finalAccount?.restartPending !== true && finalAccount?.lastStartAt === initialAccount.lastStartAt"
             message:
               expr: "`Health monitor restarted or obscured the blocked Slack account: ${JSON.stringify({ initialAccount, finalAccount })}`"
         - sendInbound:
