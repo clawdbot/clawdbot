@@ -157,7 +157,7 @@ describe("runSystemAgent", () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     let runGatewayRestartCalls = 0;
     let onReadyCalls = 0;
-    const verified = await createVerifiedRunOptions({
+    const verified = createVerifiedRunOptions({
       runGatewayRestart: async () => {
         runGatewayRestartCalls += 1;
       },
@@ -200,7 +200,7 @@ describe("runSystemAgent", () => {
       .mockResolvedValueOnce(configSnapshot(verifiedConfig))
       .mockResolvedValue(configSnapshot(changedConfig));
     const runGatewayRestart = vi.fn(async () => {});
-    const verified = await createVerifiedRunOptions(
+    const verified = createVerifiedRunOptions(
       {
         readConfigFileSnapshot: readConfigFileSnapshot as never,
         runGatewayRestart,
@@ -235,7 +235,7 @@ describe("runSystemAgent", () => {
       .mockResolvedValueOnce(configSnapshot(verifiedConfig))
       .mockResolvedValue(configSnapshot(changedConfig));
     const runGatewayRestart = vi.fn(async () => {});
-    const verified = await createVerifiedRunOptions(
+    const verified = createVerifiedRunOptions(
       {
         readConfigFileSnapshot: readConfigFileSnapshot as never,
         runGatewayRestart,
@@ -264,7 +264,7 @@ describe("runSystemAgent", () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     let plannerCalls = 0;
     let onReadyCalls = 0;
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await runSystemAgent(
       {
@@ -289,7 +289,7 @@ describe("runSystemAgent", () => {
 
   it("prints an explicit one-shot overview exactly once", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await runSystemAgent(
       {
@@ -309,7 +309,7 @@ describe("runSystemAgent", () => {
     { name: "invalid command", plan: { command: "invent a new operation" } },
   ])("fails a fuzzy one-shot when inference returns $name", async ({ plan }) => {
     const { runtime } = createSystemAgentTestRuntime();
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await expect(
       runSystemAgent(
@@ -326,7 +326,7 @@ describe("runSystemAgent", () => {
 
   it("prints a valid reply-only one-shot plan", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await runSystemAgent(
       {
@@ -347,7 +347,7 @@ describe("runSystemAgent", () => {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
     } satisfies OpenClawConfig;
     let currentConfig: OpenClawConfig = verifiedConfig;
-    const verified = await createVerifiedRunOptions(
+    const verified = createVerifiedRunOptions(
       {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
       },
@@ -375,7 +375,7 @@ describe("runSystemAgent", () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     let runInteractiveTuiCalls = 0;
     let onReadyCalls = 0;
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await runSystemAgent(
       {
@@ -401,7 +401,7 @@ describe("runSystemAgent", () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     let loadOverviewCalls = 0;
     let runInteractiveTuiCalls = 0;
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await runSystemAgent(
       {
@@ -440,7 +440,7 @@ describe("runSystemAgent", () => {
   ])("exits non-zero when $name", async ({ input, output, interactive }) => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     let runInteractiveTuiCalls = 0;
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await expect(
       runSystemAgent(
