@@ -45,7 +45,7 @@ async function findBuildAsset(buildId: string): Promise<BuildAsset> {
 }
 
 async function ensureControlledPage(page: Page, pageErrors: string[], expectedBuildId: string) {
-  const registration = await page.evaluate(async (expectedBuildId) => {
+  const registration = await page.evaluate(async (workerBuildId) => {
     const ready = navigator.serviceWorker.ready.then((value) => ({
       activeState: value.active?.state ?? null,
       controlled: navigator.serviceWorker.controller !== null,
@@ -59,7 +59,7 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
       window.setTimeout(() => {
         void (async () => {
           const registrations = await navigator.serviceWorker.getRegistrations();
-          const response = await fetch(`/sw.js?v=${expectedBuildId}`);
+          const response = await fetch(`/sw.js?v=${workerBuildId}`);
           resolve({
             activeState: null,
             controlled: navigator.serviceWorker.controller !== null,
