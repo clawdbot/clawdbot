@@ -161,6 +161,10 @@ let cachedReloadRules: ReloadRule[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginHttpRouteRegistry> | null = null;
 let cachedGatewayRegistryVersion = -1;
 
+function isOwnedChannelConfigPath(path: string, channelId: ChannelId): boolean {
+  return path.startsWith(`channels.${channelId}.`);
+}
+
 function listReloadRules(): ReloadRule[] {
   // Reload metadata is gateway policy owned by the process-root registry.
   const registry = getActivePluginHttpRouteRegistry();
@@ -191,8 +195,9 @@ function listReloadRules(): ReloadRule[] {
       }
       return rule;
     });
-    const accountIndexRules = (plugin.reload?.accountIndexReloadPaths ?? []).map(
-      (prefix): ReloadRule => {
+    const accountIndexRules = (plugin.reload?.accountIndexReloadPaths ?? [])
+      .filter((prefix) => isOwnedChannelConfigPath(prefix, plugin.id))
+      .map((prefix): ReloadRule => {
         const rule: ReloadRule = {
           prefix,
           match: "exact",
@@ -203,8 +208,7 @@ function listReloadRules(): ReloadRule[] {
           rule.accountScopedPlugin = plugin;
         }
         return rule;
-      },
-    );
+      });
     return hotPrefixRules.concat(accountIndexRules).concat(
       (plugin.reload?.noopPrefixes ?? []).map(
         (prefix): ReloadRule => ({

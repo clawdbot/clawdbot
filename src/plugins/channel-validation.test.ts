@@ -161,4 +161,47 @@ describe("normalizeRegisteredChannelPlugin", () => {
       },
     ]);
   });
+
+  it("drops account-index reload paths outside the owning channel config", () => {
+    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+
+    const normalized = normalizeRegisteredChannelPlugin({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      plugin: createChannelPlugin({
+        reload: {
+          configPrefixes: ["channels.demo"],
+          accountScopedRestart: true,
+          accountIndexReloadPaths: [
+            "channels.demo.channelConfigUpdatedAt",
+            " gateway.auth.mode ",
+            "channels.other.channelConfigUpdatedAt",
+          ],
+        },
+      }),
+      pushDiagnostic,
+    });
+
+    expect(normalized?.reload).toEqual({
+      configPrefixes: ["channels.demo"],
+      accountScopedRestart: true,
+      accountIndexReloadPaths: ["channels.demo.channelConfigUpdatedAt"],
+    });
+    expect(diagnostics).toEqual([
+      {
+        level: "warn",
+        pluginId: "demo-plugin",
+        source: "/tmp/demo/index.ts",
+        message:
+          'channel "demo" account-index reload path ignored outside owning config: gateway.auth.mode',
+      },
+      {
+        level: "warn",
+        pluginId: "demo-plugin",
+        source: "/tmp/demo/index.ts",
+        message:
+          'channel "demo" account-index reload path ignored outside owning config: channels.other.channelConfigUpdatedAt',
+      },
+    ]);
+  });
 });

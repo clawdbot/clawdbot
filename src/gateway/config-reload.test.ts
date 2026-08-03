@@ -196,7 +196,7 @@ describe("buildGatewayReloadPlan", () => {
     reload: {
       configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
       noopPrefixes: ["channels.whatsapp"],
-      accountIndexReloadPaths: ["channels.whatsapp.channelConfigUpdatedAt"],
+      accountIndexReloadPaths: ["channels.whatsapp.channelConfigUpdatedAt", "gateway.auth.mode"],
     },
   };
   const mattermostPlugin: ChannelPlugin = {
@@ -544,6 +544,17 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.hotReasons).toEqual([path]);
     expect(plan.noopPaths).toStrictEqual([]);
     expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+  });
+
+  it("ignores account-index reload paths outside the owning channel config", () => {
+    const path = "gateway.auth.mode";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual([path]);
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.hotReasons).toStrictEqual([]);
+    expect(resolveConfigReloadMetadata(path).kind).toBe("restart");
   });
 
   it("does not treat descendants of account-index reload paths as channel hot reloads", () => {
