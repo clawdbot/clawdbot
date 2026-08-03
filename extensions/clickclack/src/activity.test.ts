@@ -266,6 +266,33 @@ describe("createClickClackActivityPublisher", () => {
     expect(onError).toHaveBeenCalledTimes(1);
   });
 
+  it("abandons a commentary segment after an ambiguous create timeout", async () => {
+    const onError = vi.fn();
+    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const createActivityMessage = vi.fn().mockRejectedValueOnce(timeout);
+    const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
+    const publisher = createClickClackActivityPublisher({
+      client: { createActivityMessage, updateMessageBody } as ActivityClient,
+      target: { channelId: "chn_1" },
+      turnId: "msg_turn",
+      flushMs: 10,
+      onError,
+    });
+
+    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First" });
+    await publisher.finalize();
+    publisher.onItemEvent({
+      itemId: "c1",
+      kind: "preamble",
+      progressText: "First and second",
+    });
+    await publisher.finalize();
+
+    expect(createActivityMessage).toHaveBeenCalledTimes(1);
+    expect(updateMessageBody).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
   it("stamps resolved provenance onto rows posted after setProvenance", async () => {
     const { client, createActivityMessage } = createClientMock();
     const publisher = createClickClackActivityPublisher({

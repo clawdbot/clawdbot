@@ -127,6 +127,8 @@ type CommentarySegment = {
   messageId?: string;
   body: string;
   dirty: boolean;
+  /** A failed create may have committed remotely; never POST this segment again. */
+  createAbandoned?: boolean;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -193,7 +195,7 @@ export function createClickClackActivityPublisher(params: {
       clearTimeout(segment.timer);
       segment.timer = undefined;
     }
-    if (!segment.dirty || !segment.body.trim()) {
+    if (segment.createAbandoned || !segment.dirty || !segment.body.trim()) {
       return Promise.resolve();
     }
     segment.dirty = false;
@@ -203,8 +205,15 @@ export function createClickClackActivityPublisher(params: {
         await params.client.updateMessageBody(segment.messageId, body);
         return;
       }
-      const posted = await postRow("agent_commentary", body);
-      segment.messageId = posted.id;
+      try {
+        const posted = await postRow("agent_commentary", body);
+        segment.messageId = posted.id;
+      } catch (error) {
+        // Activity is best-effort. A failed POST may already exist remotely, so
+        // abandon this logical segment instead of duplicating it on a later frame.
+        segment.createAbandoned = true;
+        throw error;
+      }
     });
   };
 
@@ -223,6 +232,9 @@ export function createClickClackActivityPublisher(params: {
     if (!segment) {
       segment = { body: "", dirty: false };
       commentaryByItem.set(key, segment);
+    }
+    if (segment.createAbandoned) {
+      return;
     }
     // Snapshots are cumulative per item; never shrink the row body on a
     // shorter (stale or whitespace-normalized) frame, and skip identical

@@ -56,6 +56,52 @@ describe("ClickClack HTTP client timeouts", () => {
         }),
     },
     {
+      operation: "managed-channel update",
+      method: "PATCH",
+      path: "/api/channels/channel-1",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.updateChannel("channel-1", { archived: true }),
+    },
+    {
+      operation: "nonce-keyed channel message",
+      method: "POST",
+      path: "/api/channels/channel-1/messages",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.createChannelMessage("channel-1", "message", { nonce: "message-nonce" }),
+    },
+    {
+      operation: "nonce-keyed thread reply",
+      method: "POST",
+      path: "/api/messages/message-1/thread/replies",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.createThreadReply("message-1", "reply", { nonce: "message-nonce" }),
+    },
+    {
+      operation: "nonce-keyed direct message",
+      method: "POST",
+      path: "/api/dms/conversation-1/messages",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.createDirectMessage("conversation-1", "message", { nonce: "message-nonce" }),
+    },
+    {
+      operation: "activity row creation",
+      method: "POST",
+      path: "/api/channels/activity-channel/messages",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.createActivityMessage({
+          channelId: "activity-channel",
+          body: "working",
+          kind: "agent_commentary",
+        }),
+    },
+    {
+      operation: "activity row update",
+      method: "PATCH",
+      path: "/api/messages/activity-message",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.updateMessageBody("activity-message", "done"),
+    },
+    {
       operation: "attachment association",
       method: "POST",
       path: "/api/messages/message-1/attachments",
@@ -127,39 +173,6 @@ describe("ClickClack HTTP client timeouts", () => {
 
       resolveResponse(Response.json({ message: { id: "message-1" } }));
       await expect(message).resolves.toMatchObject({ id: "message-1" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not impose the response-header deadline on ambiguous channel updates", async () => {
-    vi.useFakeTimers();
-    try {
-      let resolveResponse: (response: Response) => void = () => {
-        throw new Error("channel update response resolver was not initialized");
-      };
-      let settled = false;
-      const fetchMock = vi.fn(
-        async (_input: string | URL | Request, _init?: RequestInit) =>
-          await new Promise<Response>((resolve) => {
-            resolveResponse = resolve;
-          }),
-      );
-      const client = createClickClackClient({
-        baseUrl: "https://clickclack.example",
-        token: "fake",
-        fetch: fetchMock as unknown as typeof fetch,
-      });
-
-      const update = client.updateChannel("channel-1", { archived: true }).finally(() => {
-        settled = true;
-      });
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(settled).toBe(false);
-      expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeUndefined();
-
-      resolveResponse(Response.json({ channel: { id: "channel-1", archived: true } }));
-      await expect(update).resolves.toMatchObject({ id: "channel-1", archived: true });
     } finally {
       vi.useRealTimers();
     }

@@ -8,7 +8,11 @@ import {
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
 import { discussionCredentialFingerprint } from "./naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
-import { assertChannelPatch, assertManagedChannelListContract } from "./service-open.js";
+import {
+  assertChannelPatch,
+  assertManagedChannelListContract,
+  updateChannelWithReconciliation,
+} from "./service-open.js";
 import {
   TEST_DESTINATION_IDENTITY,
   createHarness,
@@ -17,6 +21,78 @@ import {
 } from "./service-test-support.js";
 
 describe("ClickClack discussion service contracts", () => {
+  const managedChannel = (archived: boolean) => ({
+    id: "chn_managed",
+    route_id: "managed-route",
+    workspace_id: "wsp_team",
+    name: "managed",
+    kind: "public" as const,
+    external_managed: true,
+    external_ref: "openclaw:discussion:example",
+    external_url: "",
+    sidebar_section: "Sessions",
+    archived,
+    created_at: "2026-07-19T00:00:00.000Z",
+  });
+
+  it("accepts a committed channel patch after response headers time out", async () => {
+    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const updateChannel = vi.fn().mockRejectedValueOnce(timeout);
+    const channels = vi.fn(async () => [managedChannel(true)]);
+    const client = { updateChannel, channels } as unknown as ClickClackClient;
+
+    await expect(
+      updateChannelWithReconciliation({
+        client,
+        workspaceId: "wsp_team",
+        channelId: "chn_managed",
+        patch: { archived: true },
+      }),
+    ).resolves.toMatchObject({ id: "chn_managed", archived: true });
+
+    expect(updateChannel).toHaveBeenCalledTimes(1);
+    expect(channels).toHaveBeenCalledWith("wsp_team");
+  });
+
+  it("retries a timed-out channel patch only after relist proves it absent", async () => {
+    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const updateChannel = vi
+      .fn()
+      .mockRejectedValueOnce(timeout)
+      .mockResolvedValueOnce(managedChannel(true));
+    const channels = vi.fn(async () => [managedChannel(false)]);
+    const client = { updateChannel, channels } as unknown as ClickClackClient;
+
+    await expect(
+      updateChannelWithReconciliation({
+        client,
+        workspaceId: "wsp_team",
+        channelId: "chn_managed",
+        patch: { archived: true },
+      }),
+    ).resolves.toMatchObject({ id: "chn_managed", archived: true });
+
+    expect(updateChannel).toHaveBeenCalledTimes(2);
+    expect(channels).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a completed but unapplied channel patch for the owner to reject", async () => {
+    const updateChannel = vi.fn(async () => managedChannel(false));
+    const channels = vi.fn();
+    const client = { updateChannel, channels } as unknown as ClickClackClient;
+
+    const updated = await updateChannelWithReconciliation({
+      client,
+      workspaceId: "wsp_team",
+      channelId: "chn_managed",
+      patch: { archived: true },
+    });
+
+    expect(updated.archived).toBe(false);
+    expect(updateChannel).toHaveBeenCalledTimes(1);
+    expect(channels).not.toHaveBeenCalled();
+  });
+
   it("preflights the managed-channel list contract before creating", async () => {
     const harness = createHarness({ label: "Unsupported server" });
     vi.mocked(harness.channels).mockResolvedValue([

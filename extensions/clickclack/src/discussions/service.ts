@@ -50,6 +50,7 @@ import {
   assertManagedChannelListContract,
   openClickClackDiscussionBinding,
   resolveAvailableChannelName,
+  updateChannelWithReconciliation,
 } from "./service-open.js";
 
 const RECONCILE_INTERVAL_MS = 60_000;
@@ -433,7 +434,12 @@ export class ClickClackDiscussionService {
             ownChannelId: binding.channelId,
           });
           try {
-            const renamed = await client.updateChannel(binding.channelId, patch);
+            const renamed = await updateChannelWithReconciliation({
+              client,
+              workspaceId: binding.workspaceId,
+              channelId: binding.channelId,
+              patch,
+            });
             assertChannelPatch(renamed, patch);
             return renamed;
           } catch (error) {
@@ -448,7 +454,12 @@ export class ClickClackDiscussionService {
         throw new Error("ClickClack discussion channel name retries were exhausted");
       });
     } else {
-      updated = await client.updateChannel(binding.channelId, patch);
+      updated = await updateChannelWithReconciliation({
+        client,
+        workspaceId: binding.workspaceId,
+        channelId: binding.channelId,
+        patch,
+      });
       assertChannelPatch(updated, patch);
     }
     if (deleted) {
@@ -528,7 +539,12 @@ export class ClickClackDiscussionService {
         serverBaseUrl: pending.serverBaseUrl,
         channelId: channel.id,
       });
-      const updated = await client.updateChannel(channel.id, { archived: true });
+      const updated = await updateChannelWithReconciliation({
+        client,
+        workspaceId: pending.workspaceId,
+        channelId: channel.id,
+        patch: { archived: true },
+      });
       assertChannelPatch(updated, { archived: true });
     }
     clearDiscussionBindingGeneration({
@@ -560,8 +576,11 @@ export class ClickClackDiscussionService {
     }
     // Eligibility checks revoke routing/tool authority immediately, while the
     // durable binding remains as the retry record until archival is verified.
-    const updated = await this.#clientFactory(boundAccount).updateChannel(binding.channelId, {
-      archived: true,
+    const updated = await updateChannelWithReconciliation({
+      client: this.#clientFactory(boundAccount),
+      workspaceId: binding.workspaceId,
+      channelId: binding.channelId,
+      patch: { archived: true },
     });
     assertChannelPatch(updated, { archived: true });
     this.#revokeAndDeleteBinding(sessionKey, binding);
@@ -573,8 +592,11 @@ export class ClickClackDiscussionService {
     account: ResolvedClickClackAccount,
   ): Promise<void> {
     clearDiscussionBindingGeneration({ runtime: this.#runtime, sessionKey });
-    const updated = await this.#clientFactory(account).updateChannel(binding.channelId, {
-      archived: true,
+    const updated = await updateChannelWithReconciliation({
+      client: this.#clientFactory(account),
+      workspaceId: binding.workspaceId,
+      channelId: binding.channelId,
+      patch: { archived: true },
     });
     assertChannelPatch(updated, { archived: true });
     this.#revokeAndDeleteBinding(sessionKey, binding);

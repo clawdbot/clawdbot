@@ -280,6 +280,7 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ channel: ClickClackChannel }>(
         `/api/channels/${encodeURIComponent(channelId)}`,
         { method: "PATCH", body: JSON.stringify(patch) },
+        { responseHeaderTimeoutSafe: true },
       );
       return data.channel;
     },
@@ -434,6 +435,7 @@ export function createClickClackClient(options: ClientOptions) {
             ...provenanceFields(opts?.provenance),
           }),
         },
+        opts?.nonce ? { responseHeaderTimeoutSafe: true } : undefined,
       );
       return data.message;
     },
@@ -452,6 +454,7 @@ export function createClickClackClient(options: ClientOptions) {
             ...provenanceFields(opts?.provenance),
           }),
         },
+        opts?.nonce ? { responseHeaderTimeoutSafe: true } : undefined,
       );
       return data.message;
     },
@@ -539,15 +542,19 @@ export function createClickClackClient(options: ClientOptions) {
       const path = params.channelId
         ? `/api/channels/${encodeURIComponent(params.channelId)}/messages`
         : `/api/dms/${encodeURIComponent(params.conversationId ?? "")}/messages`;
-      const data = await request<{ message: ClickClackMessage }>(path, {
-        method: "POST",
-        body: JSON.stringify({
-          body: params.body,
-          kind: params.kind,
-          turn_id: params.turnId,
-          ...provenanceFields(params.provenance),
-        }),
-      });
+      const data = await request<{ message: ClickClackMessage }>(
+        path,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            body: params.body,
+            kind: params.kind,
+            turn_id: params.turnId,
+            ...provenanceFields(params.provenance),
+          }),
+        },
+        { responseHeaderTimeoutSafe: true },
+      );
       return data.message;
     },
     /** PATCHes the body of an existing message (activity row coalescing). */
@@ -555,6 +562,7 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ message: ClickClackMessage }>(
         `/api/messages/${encodeURIComponent(messageId)}`,
         { method: "PATCH", body: JSON.stringify({ body }) },
+        { responseHeaderTimeoutSafe: true },
       );
       return data.message;
     },
@@ -573,6 +581,7 @@ export function createClickClackClient(options: ClientOptions) {
             ...(opts?.nonce ? { nonce: opts.nonce } : {}),
           }),
         },
+        opts?.nonce ? { responseHeaderTimeoutSafe: true } : undefined,
       );
       return data.message;
     },
