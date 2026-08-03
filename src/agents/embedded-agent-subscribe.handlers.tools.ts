@@ -88,7 +88,10 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
-import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
+import {
+  buildAgentHarnessQuestionPromptPayload,
+  deliverAgentHarnessQuestionPrompt,
+} from "./harness/user-input-bridge.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
@@ -151,6 +154,20 @@ function readUpdatePlanResult(
   const steps = normalizeAgentPlanSteps(details.plan) ?? [];
   const explanation = readStringValue(details.explanation);
   return { ...(explanation ? { explanation } : {}), steps };
+}
+
+/**
+ * True when this run has somewhere to render an `ask_user` prompt.
+ *
+ * `onToolResult` is the CLI tool-result stream. Channel runs (Telegram,
+ * Discord, Slack, …) do not have one — they render through the reply path.
+ * Reserving and delivering only for CLI meant a channel `ask_user` was never
+ * shown to the human while the tool kept waiting, so it could only time out.
+ */
+function hasAskUserPromptSurface(
+  params: Pick<ToolHandlerParams, "onToolResult" | "onBlockReply" | "onPartialReply">,
+): boolean {
+  return Boolean(params.onToolResult ?? params.onBlockReply ?? params.onPartialReply);
 }
 
 function buildAskUserPromptPayload(
@@ -979,7 +996,7 @@ export function handleToolExecutionStart(
 ): void | Promise<void> {
   const startToolName = normalizeToolName(evt.toolName);
   const askUserPromptReservation =
-    startToolName === "ask_user" && ctx.params.onToolResult
+    startToolName === "ask_user" && hasAskUserPromptSurface(ctx.params)
       ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
       : undefined;
   const cancelAskUserPromptReservation = () => {
@@ -1219,7 +1236,7 @@ export function handleToolExecutionStart(
       }
     }
 
-    if (toolName === "ask_user" && ctx.params.onToolResult) {
+    if (toolName === "ask_user" && hasAskUserPromptSurface(ctx.params)) {
       const payload = askUserPromptReservation;
       if (payload) {
         const questionId = payload.questionId;
@@ -1228,13 +1245,29 @@ export function handleToolExecutionStart(
             if (!questions) {
               return;
             }
-            return ctx.params.onToolResult?.(
+            const promptQuestions = questions.map(({ questionId: id, ...question }) => ({
+              ...question,
+              id,
+            }));
+            // CLI surfaces render the prompt from the tool-result stream. Channel
+            // surfaces (Telegram, Discord, Slack, …) have no such stream, so the
+            // prompt has to go out over the reply path or the question is never
+            // shown and ask_user can only ever time out.
+            if (!ctx.params.onToolResult) {
+              return deliverAgentHarnessQuestionPrompt(
+                {
+                  onBlockReply: ctx.params.onBlockReply,
+                  onPartialReply: ctx.params.onPartialReply,
+                },
+                questionId,
+                promptQuestions,
+                { intro: "Question for you:" },
+              );
+            }
+            return ctx.params.onToolResult(
               buildAgentHarnessQuestionPromptPayload({
                 questionId,
-                questions: questions.map(({ questionId: id, ...question }) => ({
-                  ...question,
-                  id,
-                })),
+                questions: promptQuestions,
                 options: { intro: "Question for you:" },
               }),
             );

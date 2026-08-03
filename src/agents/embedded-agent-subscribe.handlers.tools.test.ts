@@ -428,6 +428,67 @@ describe("handleToolExecutionStart read path checks", () => {
     await activation.finish();
   });
 
+  it("delivers the ask_user prompt over the reply path when there is no tool-result stream", async () => {
+    // Channel runs (Telegram, Discord, Slack, …) have no `onToolResult`.
+    // Before this, the prompt was reserved and delivered only for CLI runs, so
+    // a channel `ask_user` was never shown and could only time out.
+    const { ctx } = createTestContext();
+    ctx.params.onToolResult = undefined;
+    const onBlockReply = vi.fn();
+    ctx.params.onBlockReply = onBlockReply;
+    const args = {
+      questions: [
+        {
+          id: "deploy_target",
+          header: "Target",
+          question: "Where should this deploy?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ],
+    };
+
+    await startTool(ctx, {
+      toolName: "ask_user",
+      toolCallId: "ask-call-channel-1",
+      args,
+    });
+    const activation = await activateAskUserPrompt("ask-call-channel-1", args);
+    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce());
+
+    const payload = onBlockReply.mock.calls[0]?.[0];
+    expect(payload?.channelData?.askUser?.questionId).toBe(activation.questionId);
+    expect(payload?.presentation?.blocks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "buttons" })]),
+    );
+    await activation.finish();
+  });
+
+  it("still skips ask_user prompt delivery when the run has no surface at all", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.onToolResult = undefined;
+    ctx.params.onBlockReply = undefined;
+    ctx.params.onPartialReply = undefined;
+
+    await startTool(ctx, {
+      toolName: "ask_user",
+      toolCallId: "ask-call-no-surface-1",
+      args: {
+        questions: [
+          {
+            id: "deploy_target",
+            header: "Target",
+            question: "Where should this deploy?",
+            options: [{ label: "Staging" }, { label: "Production" }],
+          },
+        ],
+      },
+    });
+
+    // Nothing to render the prompt on: the tool start must stay a no-op rather
+    // than reserving a delivery nobody can settle.
+    expect(ctx.state.messagingToolSentTargets).toHaveLength(0);
+  });
+
   it.each([
     {
       name: "multi-question",
