@@ -163,6 +163,20 @@ export function loadGlobalRuntimeDotEnvFiles(opts?: GlobalRuntimeDotEnvOptions) 
     });
     parsedFiles.push(gatewayEnv);
   }
+
+  // Also load systemd env files from the state directory so CLI commands (e.g. status)
+  // can resolve env-based SecretRefs when the gateway is not reachable locally.
+  const stateEnvDir = path.dirname(stateEnvPath);
+  for (const filename of ["gateway.systemd.env", "node.systemd.env"]) {
+    const systemdEnv = readDotEnvFile({
+      entryFilter: opts?.entryFilter,
+      filePath: path.join(stateEnvDir, filename),
+      quiet,
+    });
+    if (systemdEnv) {
+      parsedFiles.push(systemdEnv);
+    }
+  }
   const parsed = parsedFiles.filter((file): file is LoadedDotEnvFile => file !== null);
   const appliedKeysByFile = loadParsedDotEnvFiles(parsed);
   return {
