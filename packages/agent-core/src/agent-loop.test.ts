@@ -1507,7 +1507,7 @@ describe("agentLoop tool termination", () => {
     });
   });
 
-  it("does not start later sibling tools after a sequential tool yields", async () => {
+  it("does not execute later sibling tools after a sequential tool yields", async () => {
     const controller = new AbortController();
     const executed: string[] = [];
     const yieldingTool: AgentTool = {
@@ -1560,7 +1560,13 @@ describe("agentLoop tool termination", () => {
             event.type === "tool_execution_start",
         )
         .map((event) => event.toolName),
-    ).toEqual(["ask_user"]);
+    ).toEqual(["ask_user", "side_effect"]);
+    expect(
+      events.find(
+        (event) =>
+          event.type === "tool_execution_end" && event.toolName === "side_effect",
+      ),
+    ).toMatchObject({ executionStarted: false, isError: true });
   });
 
   it("turns an unsupported finalized control into a tool error", async () => {
