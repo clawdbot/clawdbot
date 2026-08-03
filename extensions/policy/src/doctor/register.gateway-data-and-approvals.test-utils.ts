@@ -11,21 +11,10 @@ import {
   ctx,
   registerChecks,
   runPolicyDoctorLint,
-  describe0BeforeEach0,
-  describe0AfterEach1,
+  setupPolicyDoctorTest,
+  teardownPolicyDoctorTest,
+  writePolicyFixture,
 } from "./register.test-harness.js";
-
-async function writePolicyFixture(...json: Parameters<typeof JSON.stringify>): Promise<string> {
-  const [policy] = json;
-  const configPath = join(workspaceDir, "openclaw.jsonc");
-  await fs.writeFile(configPath, "{}", "utf-8");
-  await fs.writeFile(
-    join(workspaceDir, "policy.jsonc"),
-    typeof policy === "string" ? policy : JSON.stringify(...json),
-    "utf-8",
-  );
-  return configPath;
-}
 
 function writeExecApprovalsPolicyFixture(execApprovals: object): Promise<string> {
   return writePolicyFixture({ execApprovals });
@@ -41,9 +30,9 @@ function runRegisteredPolicyDoctor(configPath: string, cfg: OpenClawConfig) {
 }
 
 describe("registerPolicyDoctorChecks", () => {
-  beforeEach(describe0BeforeEach0);
+  beforeEach(setupPolicyDoctorTest);
 
-  afterEach(describe0AfterEach1);
+  afterEach(teardownPolicyDoctorTest);
 
   it("does not report Responses URL fetching when it is disabled", async () => {
     const cfg = {
