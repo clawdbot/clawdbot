@@ -489,6 +489,7 @@ vi.mock("./agent-scope.js", () => ({
     state.hasLegacyAutoFallbackWithoutOriginMock(entry),
   hasSessionAutoModelFallbackProvenance: () => false,
   isStaleAutoFallbackOriginOverride: () => false,
+  matchesStaleAutoFallbackOriginRepairSnapshot: () => true,
   listAgentEntries: () => [],
   listAgentIds: () => ["default"],
   markAutoFallbackPrimaryProbe: vi.fn(),

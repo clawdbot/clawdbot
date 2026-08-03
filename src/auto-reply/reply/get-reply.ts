@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   isStaleAutoFallbackOriginOverride,
+  matchesStaleAutoFallbackOriginRepairSnapshot,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
   resolveAgentDir,
@@ -19,6 +20,7 @@ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
@@ -718,12 +720,21 @@ export async function getReplyFromConfig(
     };
     const nextEntry = { ...sessionEntry, ...originPatch };
     if (storePath) {
+      const observedSnapshot = sessionEntry;
+      let comparedEntry: SessionEntry | undefined;
       const persistedEntry = await updateSessionEntry(
         { storePath, sessionKey },
-        (entry) => (entry.sessionId === nextEntry.sessionId ? originPatch : null),
+        (entry) => {
+          comparedEntry = entry;
+          return matchesStaleAutoFallbackOriginRepairSnapshot(entry, observedSnapshot)
+            ? originPatch
+            : null;
+        },
         { skipMaintenance: true, takeCacheOwnership: true },
       );
-      sessionEntry = persistedEntry ?? nextEntry;
+      // The persisted comparison owns selection freshness. Publish its updated
+      // result, or refresh the cache from the entry that rejected this repair.
+      sessionEntry = persistedEntry ?? comparedEntry ?? nextEntry;
     } else {
       sessionEntry = nextEntry;
     }

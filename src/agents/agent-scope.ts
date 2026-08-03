@@ -162,6 +162,53 @@ export function isStaleAutoFallbackOriginOverride(
   return originProvider !== normalizedPrimaryProvider || originModel !== normalizedPrimaryModel;
 }
 
+/** Verifies a persisted session entry still matches the automatic-fallback snapshot this turn
+ *  observed before repairing its origin. Without this guard a concurrent reset, user selection,
+ *  or newer automatic fallback could keep the same sessionId while changing the selection state,
+ *  causing the repair to attach stale origin metadata to newer state. */
+export function matchesStaleAutoFallbackOriginRepairSnapshot(
+  persisted: SessionEntry | null | undefined,
+  observed: SessionEntry | null | undefined,
+): boolean {
+  if (!persisted || !observed) {
+    return false;
+  }
+  if (persisted.sessionId !== observed.sessionId) {
+    return false;
+  }
+  if (persisted.updatedAt !== observed.updatedAt) {
+    return false;
+  }
+  if (persisted.modelOverrideSource !== observed.modelOverrideSource) {
+    return false;
+  }
+  if (
+    normalizeOptionalString(persisted.providerOverride) !==
+    normalizeOptionalString(observed.providerOverride)
+  ) {
+    return false;
+  }
+  if (
+    normalizeOptionalString(persisted.modelOverride) !==
+    normalizeOptionalString(observed.modelOverride)
+  ) {
+    return false;
+  }
+  if (
+    normalizeOptionalString(persisted.modelOverrideFallbackOriginProvider) !==
+    normalizeOptionalString(observed.modelOverrideFallbackOriginProvider)
+  ) {
+    return false;
+  }
+  if (
+    normalizeOptionalString(persisted.modelOverrideFallbackOriginModel) !==
+    normalizeOptionalString(observed.modelOverrideFallbackOriginModel)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function resolveAutoFallbackPrimaryProbe(params: {
   entry:
     | Pick<

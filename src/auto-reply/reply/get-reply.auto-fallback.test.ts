@@ -177,7 +177,7 @@ function mockAutoFallbackSession(
       bodyStripped: "hello",
     }),
   );
-  return { sessionKey, sessionStore, sessionEntryHandle };
+  return { sessionKey, sessionStore, sessionEntryHandle, storePath };
 }
 
 function mockFallbackDirectiveResult(params: {
@@ -418,5 +418,36 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(storedEntry?.modelOverrideSource).toBe("auto");
     expect(storedEntry?.modelOverrideFallbackOriginProvider).toBe("openai");
     expect(storedEntry?.modelOverrideFallbackOriginModel).toBe("gpt-5.5");
+  });
+
+  it("does not repair origin when the persisted entry changed concurrently", async () => {
+    const { sessionKey, sessionStore, storePath } = mockAutoFallbackSession({
+      originProvider: "anthropic",
+      originModel: "claude-fallback",
+    });
+    // Simulate a concurrent session update that keeps the same sessionId but bumps
+    // updatedAt, e.g. another turn selecting a different model. The repair must not
+    // attach this turn's primary origin to that newer state.
+    const concurrentEntry: SessionEntry = {
+      ...sessionStore[sessionKey],
+      updatedAt: Date.now() + 10_000,
+      modelOverrideSource: "user",
+    };
+    replaceSessionEntrySync({ storePath, sessionKey }, concurrentEntry);
+    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), undefined, makeReasoningModelConfig()),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    const runParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+    // The newer user override remains authoritative; the stale origin is not repaired.
+    expect(runParams?.provider).toBe("anthropic");
+    expect(runParams?.model).toBe("claude-fallback");
+    const storedEntry = sessionStore[sessionKey];
+    expect(storedEntry?.modelOverrideSource).toBe("user");
+    expect(storedEntry?.modelOverrideFallbackOriginProvider).toBe("anthropic");
+    expect(storedEntry?.modelOverrideFallbackOriginModel).toBe("claude-fallback");
   });
 });

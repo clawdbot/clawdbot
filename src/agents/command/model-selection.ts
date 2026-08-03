@@ -27,7 +27,6 @@ import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
-  isStaleAutoFallbackOriginOverride,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
@@ -69,6 +68,7 @@ import { normalizeExplicitOverrideInput } from "./prepare.js";
 import type { resolveAgentRunContext } from "./run-context.js";
 import { loadTranscriptResolveRuntime } from "./runtime-loaders.js";
 import { persistSessionEntry } from "./session-helpers.js";
+import { repairStaleAutoFallbackOriginOverride } from "./stale-auto-fallback-origin-repair.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type AgentRunContext = ReturnType<typeof resolveAgentRunContext>;
@@ -285,40 +285,31 @@ export async function resolveEmbeddedModelSelection(params: {
   // A polluted fallback origin (recorded as the chain's failed model instead of the
   // configured primary) prevents the snap-back probe from firing. Clear it so this
   // attempt can retry the primary and, if needed, recreate a clean auto-fallback pin.
+  // The write is guarded by the exact observed automatic-fallback snapshot so a
+  // concurrent reset, user selection, or newer automatic fallback does not receive
+  // stale origin-clear metadata.
   if (
     sessionEntry &&
     params.sessionStore &&
     params.sessionKey &&
-    !params.suppressVisibleSessionEffects &&
-    isStaleAutoFallbackOriginOverride(sessionEntry, primaryProvider, primaryModel)
+    !params.suppressVisibleSessionEffects
   ) {
-    const initialEntry = sessionEntry;
-    const entry = { ...sessionEntry };
-    const { updated } = applyModelOverrideToSessionEntry({
-      entry,
-      selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
+    const repair = await repairStaleAutoFallbackOriginOverride({
+      sessionEntry,
+      sessionStore: params.sessionStore,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      primaryProvider,
+      primaryModel,
     });
-    if (updated) {
-      sessionEntry = await persistSessionEntry({
-        sessionStore: params.sessionStore,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-        initialEntry,
-        entry,
-      });
-      const adoptedHasStoredOverride = Boolean(
-        sessionEntry?.modelOverride || sessionEntry?.providerOverride,
-      );
-      storedModelOverrideSource = adoptedHasStoredOverride
-        ? sessionEntry?.modelOverrideSource
-        : undefined;
-      storedModelOverrideRouteResolution = adoptedHasStoredOverride
-        ? resolveSessionModelOverrideRouteResolution(sessionEntry)
-        : undefined;
-      hasStoredAutoFallbackProvenance =
-        adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
+    if (repair.entry !== sessionEntry) {
+      sessionEntry = repair.entry;
+      params.sessionStore[params.sessionKey] = sessionEntry;
+      storedModelOverrideSource = repair.storedModelOverrideSource;
+      storedModelOverrideRouteResolution = repair.storedModelOverrideRouteResolution;
+      hasStoredAutoFallbackProvenance = repair.hasStoredAutoFallbackProvenance;
       hasLegacyAutoFallbackOverrideWithoutOrigin =
-        adoptedHasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
+        repair.hasLegacyAutoFallbackOverrideWithoutOrigin;
     }
   }
   const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
