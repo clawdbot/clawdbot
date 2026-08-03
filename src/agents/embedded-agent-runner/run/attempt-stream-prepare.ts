@@ -25,6 +25,7 @@ import {
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { isToolResultError } from "../../tool-result-error.js";
 import {
   projectToolSearchTargetTranscriptMessages,
   type ToolSearchCatalogToolExecutor,
@@ -355,6 +356,9 @@ export function prepareEmbeddedAttemptStream(input: {
         toolName: toolParams.toolName,
         input: toolParams.input,
         result: acceptedResult,
+        // Fulfilled tools can still carry a canonical failure result (for example MCP isError).
+        // Preserve that fact before the hidden target call is projected into session history.
+        ...(isToolResultError(acceptedResult) ? { isError: true } : {}),
         timestamp: Date.now(),
       });
       notifyToolActivity(attempt.runId);

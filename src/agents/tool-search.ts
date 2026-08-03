@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
@@ -213,13 +214,19 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
         const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
-        return jsonResult(
-          await runtime.call(call.id, call.input, {
-            parentToolCallId: toolCallId,
-            signal,
-            onUpdate,
-          }),
-        );
+        const callResult = await runtime.call(call.id, call.input, {
+          parentToolCallId: toolCallId,
+          signal,
+          onUpdate,
+        });
+        const wrappedResult = jsonResult(callResult);
+        const failureKind = resolveToolResultFailureKind(callResult.result);
+        if (!failureKind) {
+          return wrappedResult;
+        }
+        // Keep the model-visible `{ tool, result }` envelope stable while the
+        // outer lifecycle reads its own canonical failure marker from details.
+        return { ...wrappedResult, details: { ...callResult, status: failureKind } };
       },
     },
   ];
