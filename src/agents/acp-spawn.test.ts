@@ -18,8 +18,8 @@ import {
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { reserveChildAdmissionSlot } from "./child-admission.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
+import { reserveChildAdmissionSlot } from "./child-admission.js";
 import { createAcpVisibleTextAccumulator } from "./command/attempt-execution.helpers.js";
 import {
   buildAcpResult,
