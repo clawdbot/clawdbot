@@ -5,6 +5,15 @@ import type { JsonSchemaObject } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 
 type GoogleManifest = {
+  setup?: {
+    providers?: Array<{
+      id?: string;
+      authEvidence?: Array<{
+        fileEnvVar?: string;
+        fallbackPaths?: string[];
+      }>;
+    }>;
+  };
   providerAuthChoices?: Array<{
     provider?: string;
     method?: string;
@@ -86,6 +95,23 @@ function loadManifest(): GoogleManifest {
 }
 
 describe("google manifest model catalog", () => {
+  it("checks relocated Cloud SDK ADC before platform-specific fallback paths", () => {
+    const vertex = loadManifest().setup?.providers?.find(
+      (provider) => provider.id === "google-vertex",
+    );
+
+    expect(vertex?.authEvidence).toEqual([
+      expect.objectContaining({
+        fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
+        fallbackPaths: [
+          "${CLOUDSDK_CONFIG}/application_default_credentials.json",
+          "${HOME}/.config/gcloud/application_default_credentials.json",
+          "${APPDATA}/gcloud/application_default_credentials.json",
+        ],
+      }),
+    ]);
+  });
+
   it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
     const choices = loadManifest().providerAuthChoices ?? [];
 
