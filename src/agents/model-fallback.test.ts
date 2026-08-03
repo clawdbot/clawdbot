@@ -2942,7 +2942,7 @@ describe("runWithModelFallback", () => {
         defaults: {
           model: {
             primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
+            fallbacks: ["anthropic/claude-haiku-3-5", "deepseek/deepseek-chat"],
           },
         },
       },
@@ -2970,8 +2970,8 @@ describe("runWithModelFallback", () => {
       run,
     });
     expect(result.result).toBe("ok");
-    expect(result.provider).toBe("openrouter");
-    expect(result.model).toBe("openrouter/deepseek-chat");
+    expect(result.provider).toBe("deepseek");
+    expect(result.model).toBe("deepseek-chat");
     expect(run).toHaveBeenCalledTimes(3);
   });
 
