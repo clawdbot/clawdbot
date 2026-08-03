@@ -7,7 +7,8 @@ export function canonicalizeGoogleProviderBase64(value: string): string | undefi
   if (usesStandardAlphabet && usesUrlSafeAlphabet) {
     return undefined;
   }
-  return canonicalizeBase64(
-    usesUrlSafeAlphabet ? value.replaceAll("-", "+").replaceAll("_", "/") : value,
-  );
+  if (!usesUrlSafeAlphabet) {
+    return canonicalizeBase64(value);
+  }
+  return canonicalizeBase64(value.replace(/[-_]/g, (symbol) => (symbol === "-" ? "+" : "/")));
 }
