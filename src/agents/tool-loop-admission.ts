@@ -146,6 +146,21 @@ export async function admitToolCallBatch(
       projectedCall.outcomeKind = "tool-loop-veto";
     }
   };
+  const projectLoopVeto = (call: InternalToolBatchCall) => {
+    // A batch is admitted atomically, so unrelated siblings must not evict the
+    // real pre-batch history before a later candidate is checked. Build each
+    // synthetic record through the canonical recorder, then append it to the
+    // unbounded projection used only for this admission pass.
+    const scratchState: SessionState = {
+      ...sessionState,
+      toolCallHistory: [],
+    };
+    recordLoopVeto(scratchState, call);
+    const projectedCall = scratchState.toolCallHistory?.at(-1);
+    if (projectedCall) {
+      projectedState.toolCallHistory?.push(projectedCall);
+    }
+  };
   for (const call of calls) {
     const toolName = normalizeToolName(call.toolCall.name || "tool");
     const intervention = await evaluateToolLoopCall(
@@ -173,7 +188,7 @@ export async function admitToolCallBatch(
       return intervention;
     }
     // A later sibling must assume this candidate makes no progress.
-    recordLoopVeto(projectedState, call);
+    projectLoopVeto(call);
   }
   for (const call of calls) {
     await recordToolLoopCall(

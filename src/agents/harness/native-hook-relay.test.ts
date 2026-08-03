@@ -8,10 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
-  getDiagnosticSessionState,
-  resetDiagnosticSessionStateForTest,
-} from "../../logging/diagnostic-session-state.js";
-import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
@@ -20,7 +16,7 @@ import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { recordToolCall, recordToolCallOutcome } from "../tool-loop-detection.js";
+import { loadBeforeToolCallRuntime } from "../agent-tools.before-tool-call.diagnostics.js";
 import { invokeNativeHookRelayBridge } from "./native-hook-relay-client.js";
 import {
   deleteNativeHookRelayBridgeRecordIfOwned,
@@ -44,7 +40,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
-  resetDiagnosticSessionStateForTest();
   testing.clearNativeHookRelaysForTests();
 });
 
@@ -659,6 +654,8 @@ describe("native hook relay registry", () => {
     const runId = "run-native-loop";
     const loopDetection = { enabled: true } as const;
     const pollArgs = { action: "poll", sessionId: "process-1" };
+    const { getDiagnosticSessionState, detectToolCallLoop, recordToolCall, recordToolCallOutcome } =
+      await loadBeforeToolCallRuntime();
     const state = getDiagnosticSessionState({ sessionKey, sessionId: "session-1" });
     for (let index = 0; index < 20; index += 1) {
       const toolCallId = `prior-${index}`;
@@ -675,6 +672,11 @@ describe("native hook relay registry", () => {
         runId,
       });
     }
+    expect(detectToolCallLoop(state, "process", pollArgs, loopDetection, { runId })).toMatchObject({
+      stuck: true,
+      level: "critical",
+      detector: "known_poll_no_progress",
+    });
     const onCriticalToolLoop = vi.fn();
     const relay = registerNativeHookRelay({
       provider: "codex",
