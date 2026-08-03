@@ -2,7 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
-export const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
+const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
 
 export type AgentRunTerminalReplySnapshot =
   | { disposition: "visible"; text: string }
