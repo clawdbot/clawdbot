@@ -85,6 +85,127 @@ const rejectedTerminalToolBatchFixture = (params: {
   },
 });
 
+const rejectedStreamedToolFixture = (params: {
+  name: string;
+  status: "completed" | "incomplete";
+  arguments?: string;
+  error: string;
+  started?: boolean;
+}): ParityFixture => {
+  const item = {
+    id: "fc_rejected_streamed",
+    call_id: "call_rejected_streamed",
+    type: "function_call",
+    name: "lookup",
+    ...(params.arguments === undefined ? {} : { arguments: params.arguments }),
+    status: params.status,
+  };
+  const started = params.started
+    ? [
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { ...item, arguments: "", status: "in_progress" },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: item.id,
+          delta: "{",
+        },
+      ]
+    : [];
+  return {
+    name: params.name,
+    events: [
+      ...started,
+      { type: "response.output_item.done", output_index: 0, item },
+      completed("resp_rejected_streamed_tool", [item]),
+    ],
+    canonical: {
+      events: params.started
+        ? [
+            { type: "toolcall_start", contentIndex: 0 },
+            { type: "toolcall_delta", contentIndex: 0, delta: "{" },
+          ]
+        : [],
+      content: params.started
+        ? [
+            {
+              type: "toolCall",
+              id: "call_rejected_streamed|fc_rejected_streamed",
+              name: "lookup",
+              arguments: {},
+              partialJson: false,
+            },
+          ]
+        : [],
+      responseId: null,
+      stopReason: "stop",
+      error: params.error,
+    },
+  };
+};
+
+const unsafeIntegerToolFixture = (source: "streamed" | "terminal"): ParityFixture => {
+  const item = {
+    id: "fc_unsafe_integer",
+    call_id: "call_unsafe_integer",
+    type: "function_call",
+    name: "send_message",
+    arguments:
+      '{"to":1481220477346119781,"safe":42,"maxSafe":9007199254740991,"nested":{"ids":[9007199254740993,-9007199254740992]}}',
+    status: "completed",
+  };
+  const streamed =
+    source === "streamed"
+      ? [
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { ...item, arguments: "", status: "in_progress" },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            output_index: 0,
+            item_id: item.id,
+            delta: '{"to":',
+          },
+          { type: "response.output_item.done", output_index: 0, item },
+        ]
+      : [];
+  return {
+    name: `${source} completed tool arguments preserve unsafe integers`,
+    events: [...streamed, completed("resp_unsafe_integer_tool", [item])],
+    canonical: {
+      events: [
+        { type: "toolcall_start", contentIndex: 0 },
+        ...(source === "streamed"
+          ? [{ type: "toolcall_delta", contentIndex: 0, delta: '{"to":' }]
+          : []),
+        { type: "toolcall_end", contentIndex: 0 },
+      ],
+      content: [
+        {
+          type: "toolCall",
+          id: "call_unsafe_integer|fc_unsafe_integer",
+          name: "send_message",
+          arguments: {
+            to: "1481220477346119781",
+            safe: 42,
+            maxSafe: 9007199254740991,
+            nested: { ids: ["9007199254740993", "-9007199254740992"] },
+          },
+          partialJson: false,
+        },
+      ],
+      responseId: "resp_unsafe_integer_tool",
+      stopReason: "toolUse",
+      error: null,
+    },
+  };
+};
+
 const rejectedOutOfOrderTerminalFixture = (
   state: "completed" | "started" | "reasoning",
 ): ParityFixture => {
@@ -342,6 +463,32 @@ const fixtures: ParityFixture[] = [
     arguments: '{"q":',
     error: "Responses stream completed tool call with invalid JSON arguments",
   }),
+  rejectedStreamedToolFixture({
+    name: "streamed malformed tool arguments never complete their started call",
+    status: "completed",
+    arguments: '{"q":',
+    error: "Responses stream completed tool call with invalid JSON arguments",
+    started: true,
+  }),
+  rejectedStreamedToolFixture({
+    name: "streamed non-object tool arguments never start a call",
+    status: "completed",
+    arguments: "[]",
+    error: "Responses stream completed tool call with invalid JSON arguments",
+  }),
+  rejectedStreamedToolFixture({
+    name: "streamed missing tool arguments never fabricate an empty call",
+    status: "completed",
+    error: "Responses stream completed tool call with invalid JSON arguments",
+  }),
+  rejectedStreamedToolFixture({
+    name: "streamed incomplete tool calls never start a call",
+    status: "incomplete",
+    arguments: '{"q":"x"}',
+    error: "Responses stream completed with an incomplete terminal tool call",
+  }),
+  unsafeIntegerToolFixture("streamed"),
+  unsafeIntegerToolFixture("terminal"),
   rejectedTerminalToolBatchFixture({
     name: "terminal tool batch rejects a later incomplete call before executing earlier calls",
     status: "incomplete",

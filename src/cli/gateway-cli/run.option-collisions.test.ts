@@ -123,6 +123,10 @@ const bootLifecycle = vi.hoisted(() => ({
   record: vi.fn(
     (_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string): string | undefined => "boot-id",
   ),
+  recover: vi.fn(
+    (_bootId?: string, _env?: NodeJS.ProcessEnv, _nowMs?: number): string | undefined =>
+      "recovered-boot-id",
+  ),
   complete: vi.fn(),
 }));
 const netState = vi.hoisted(() => ({
@@ -317,6 +321,8 @@ vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
     bootLifecycle.inspect(env, nowMs),
   recordGatewayBootStart: (env?: NodeJS.ProcessEnv, nowMs?: number, reason?: string) =>
     bootLifecycle.record(env, nowMs, reason),
+  recordGatewayCrashLoopRecovery: (bootId?: string, env?: NodeJS.ProcessEnv, nowMs?: number) =>
+    bootLifecycle.recover(bootId, env, nowMs),
   completeGatewayBootLifecycle: (bootId: string | undefined, completion: unknown) =>
     bootLifecycle.complete(bootId, completion),
 }));
@@ -409,6 +415,7 @@ describe("gateway run option collisions", () => {
     bootLifecycle.decisions.length = 0;
     bootLifecycle.inspect.mockClear();
     bootLifecycle.record.mockClear();
+    bootLifecycle.recover.mockClear();
     bootLifecycle.complete.mockClear();
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
@@ -467,6 +474,7 @@ describe("gateway run option collisions", () => {
       auth?: { mode?: string; token?: string; password?: string };
       bind?: string;
       channelAutostartSuppression?: { reason?: string; message?: string };
+      tryRecoverChannelAutostartSuppression?: () => boolean;
       ambientEnvTriggers?: "allow" | "suppress";
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
@@ -1591,6 +1599,55 @@ describe("gateway run option collisions", () => {
       bootLifecycle.manualChannelStartHint,
     );
     expect(gatewayStartOptions(1).channelAutostartSuppression).toBeUndefined();
+    expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
+  });
+
+  it("recovers channel autostart only after the full breaker window drains", async () => {
+    runGatewayLoop.mockImplementationOnce(
+      async ({
+        beginBoot,
+        start,
+      }: {
+        beginBoot?: (startedAtMs: number) => Promise<void> | void;
+        start: GatewayLoopStart;
+      }) => {
+        await beginBoot?.(1000);
+        await start({ startupStartedAt: 1000 });
+      },
+    );
+    bootLifecycle.decisions.push({
+      tripped: true,
+      uncleanBoots: 3,
+      windowMs: 300_000,
+      shouldWriteStabilityBundle: false,
+      recovered: false,
+    });
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    const recover = gatewayStartOptions().tryRecoverChannelAutostartSuppression;
+    expect(recover).toBeTypeOf("function");
+    bootLifecycle.decisions.push(
+      {
+        tripped: false,
+        uncleanBoots: 1,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: false,
+        recovered: true,
+      },
+      {
+        tripped: false,
+        uncleanBoots: 0,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: false,
+        recovered: true,
+      },
+    );
+
+    expect(recover?.()).toBe(false);
+    expect(bootLifecycle.recover).not.toHaveBeenCalled();
+    expect(recover?.()).toBe(true);
+    expect(bootLifecycle.recover).toHaveBeenCalledWith("boot-id", process.env, undefined);
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
   });
 

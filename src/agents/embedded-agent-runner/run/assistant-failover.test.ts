@@ -697,7 +697,7 @@ describe("handleAssistantFailover", () => {
       // partial prompt-timeout fragment. Throwing a FailoverError here would
       // short-circuit that synthesis and break
       // timeout-compaction retry coverage in
-      // `run.timeout-triggered-compaction.test.ts`. The throw path is
+      // `run.timeout-context-recovery.test.ts`. The throw path is
       // reserved for concrete provider failures that have no other
       // downstream surface.
       const outcome = await handleAssistantFailover(

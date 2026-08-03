@@ -8,6 +8,10 @@ title: "Tailscale"
 
 OpenClaw can auto-configure Tailscale **Serve** (tailnet) or **Funnel** (public) for the Gateway dashboard and WebSocket port. This keeps the gateway bound to loopback while Tailscale provides HTTPS, routing, and (for Serve) identity headers.
 
+<Note>
+Looking for the step-by-step setup? See [Give your Gateway a stable HTTPS URL](/gateway/stable-https-url).
+</Note>
+
 ## Modes
 
 `gateway.tailscale.mode`:

@@ -154,6 +154,34 @@ describe("memory-wiki plugin", () => {
     }
   });
 
+  it("forwards protected recall authorization to wiki search", () => {
+    const { api, registerTool } = createPluginApi();
+    plugin.register(api);
+    const registration = registerTool.mock.calls.find((call) => call[1]?.name === "wiki_search");
+    const factory = registration?.[0];
+    const conversationRecall = {
+      anchorSessionKey: "agent:main:telegram:direct:owner",
+      scope: "same-agent-private",
+      corpus: "sessions",
+    } as const;
+
+    expect(
+      factory?.({
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:owner:active-memory:abcdef123456",
+        sandboxed: false,
+        conversationRecall,
+      }),
+    ).toMatchObject({
+      testMemoryContext: {
+        agentId: "main",
+        agentSessionKey: "agent:main:telegram:direct:owner:active-memory:abcdef123456",
+        sandboxed: false,
+        conversationRecall,
+      },
+    });
+  });
+
   it("activates an initialized legacy vault before an external compile", async () => {
     const rootDir = await createTempDir("memory-wiki-index-legacy-vault-");
     await fs.mkdir(path.join(rootDir, ".openclaw-wiki"), { recursive: true });

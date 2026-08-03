@@ -1,3 +1,4 @@
+import { Value } from "typebox/value";
 // Gateway Protocol tests cover cron validators behavior.
 import { describe, expect, it } from "vitest";
 import {
@@ -9,6 +10,7 @@ import {
   validateCronRunsParams,
   validateCronUpdateParams,
 } from "./index.js";
+import { CronJobSchema } from "./schema/cron.js";
 
 /**
  * Cron validator regressions for public scheduler RPC payloads.
@@ -43,6 +45,26 @@ function expectCases(
 describe("cron protocol validators", () => {
   it("accepts minimal add params", () => {
     expectCases(validateCronAddParams, true, [minimalAddParams]);
+  });
+
+  it("reports auto-disable state without accepting it in writable patches", () => {
+    const job = {
+      ...minimalAddParams,
+      id: "job-1",
+      enabled: false,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      state: {
+        consecutiveErrors: 10,
+        autoDisabled: {
+          reason: "consecutive-failures",
+          atMs: 2,
+          consecutiveErrors: 10,
+        },
+      },
+    };
+    expect(Value.Check(CronJobSchema, job)).toBe(true);
+    expect(validateCronUpdateParams(update({ state: job.state }))).toBe(false);
   });
 
   it("rejects client-authored scheduled authority provenance", () => {

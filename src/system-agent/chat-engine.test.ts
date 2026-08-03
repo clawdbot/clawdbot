@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   fingerprintAuthProfileCredential,
   fingerprintOpaqueRuntimeOwner,
@@ -25,7 +25,11 @@ import {
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
-import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
+import {
+  createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
@@ -49,6 +53,7 @@ const mocks = vi.hoisted(() => ({
   runSetupMemoryImportStep: vi.fn(),
   writeWizardConfigFile: vi.fn(),
   runCollectedChannelOnboardingPostWriteHooks: vi.fn(async () => {}),
+  sharedVerifiedInference: undefined as SystemAgentVerifiedInferenceBinding | undefined,
 }));
 
 type MemoryImportStepParams = Parameters<typeof runSetupMemoryImportStep>[0];
@@ -90,6 +95,23 @@ vi.mock("../plugins/providers.js", async (importOriginal) => ({
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
 }));
 
+vi.mock("./verified-inference.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./verified-inference.js")>();
+  return {
+    ...actual,
+    resolveSystemAgentVerifiedInferenceRoute: (
+      ...args: Parameters<typeof actual.resolveSystemAgentVerifiedInferenceRoute>
+    ) => {
+      // Most cases own chat state, not inference ownership. Explicit bindings
+      // still run the real resolver so every drift and apply-boundary test stays end-to-end.
+      if (args[0] === mocks.sharedVerifiedInference) {
+        return Promise.resolve(args[0].execution);
+      }
+      return actual.resolveSystemAgentVerifiedInferenceRoute(...args);
+    },
+  };
+});
+
 const tempDirs: string[] = [];
 
 const sharedVerifiedInferenceConfig = {
@@ -117,11 +139,13 @@ const sharedVerifiedInferenceConfig = {
 
 let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
 let sharedVerifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 function useTempStateDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-engine-"));
   tempDirs.push(dir);
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
   return dir;
 }
 
@@ -298,18 +322,27 @@ async function advanceGatewayWizardToToken(engine: SystemAgentChatEngine) {
 }
 
 beforeAll(async () => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
+    sharedVerifiedInferenceConfig,
+  );
   const fixture = await createSystemAgentVerifiedInferenceTestFixture(
     sharedVerifiedInferenceConfig,
   );
   sharedVerifiedInference = fixture.binding;
+  mocks.sharedVerifiedInference = fixture.binding;
   sharedVerifiedInferenceDeps = fixture.deps;
   mocks.readConfigFileSnapshot.mockResolvedValue(
     configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,
   );
 });
 
+afterAll(() => {
+  pluginMetadataSnapshot?.restore();
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
   vi.clearAllMocks();
   mocks.readConfigFileSnapshot.mockResolvedValue(
     configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,
@@ -1343,11 +1376,13 @@ describe("SystemAgentChatEngine", () => {
         },
       },
     };
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
     // The route flips between the final turn's entry gate and the
     // persistent-apply recheck; only the apply boundary can catch it.
     let baseReadsRemaining = Number.POSITIVE_INFINITY;
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
+      verifiedInference,
       runAgentTurn: async () => null,
       planWithAssistant: async () => null,
       deps: {

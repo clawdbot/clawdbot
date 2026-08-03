@@ -84,6 +84,8 @@ describe("config view", () => {
     resetTextScale: vi.fn(),
     sidebarLiveActivity: true,
     setSidebarLiveActivity: vi.fn(),
+    hiddenSessionCatalogIds: new Set<string>(),
+    setSessionCatalogHidden: vi.fn(),
     chatMessageMaxWidth: undefined,
     setChatMessageMaxWidth: vi.fn(),
     showAdvancedSettings: false,
@@ -2104,6 +2106,28 @@ describe("config view", () => {
     expect(row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(true);
     row?.click();
     expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
+  });
+
+  it("lists hidden session sections and offers to show them", () => {
+    const setSessionCatalogHidden = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      hiddenSessionCatalogIds: new Set(["codex"]),
+      setSessionCatalogHidden,
+    });
+
+    const heading = Array.from(container.querySelectorAll("h3")).find(
+      (candidate) => candidate.textContent?.trim() === "Hidden session sections",
+    );
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "codex",
+    );
+    expect(heading).toBeDefined();
+    expect(row).toBeDefined();
+    row?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(setSessionCatalogHidden).toHaveBeenCalledWith("codex", false);
   });
 
   it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {

@@ -205,6 +205,10 @@ describe("runBrowserHatchHandoff", () => {
       expect.stringContaining(target.dashboardUrl),
       "Continue in your browser",
     );
+    expect(prompter.note).not.toHaveBeenCalledWith(
+      expect.stringContaining(target.sshHint),
+      "Continue in your browser",
+    );
   });
 
   it("returns the poll timeout without claiming a handoff", async () => {

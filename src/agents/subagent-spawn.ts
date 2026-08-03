@@ -130,7 +130,13 @@ export async function spawnSubagentDirect(
       launchReplayKey: swarmLaunchReplayKey,
       reservationPending,
     },
-    admission: { resolve: resolveAdmission, initial: admission, childDepth, maxSpawnDepth },
+    admission: {
+      resolve: resolveAdmission,
+      initial: admission,
+      reservation: admissionReservation,
+      childDepth,
+      maxSpawnDepth,
+    },
     childIdem,
   } = requestResolution.resolved;
   let modelApplied = false;
@@ -466,6 +472,7 @@ export async function spawnSubagentDirect(
     };
     const pipelineResult = await runSpawnPipeline({
       adapter,
+      admissionReservation,
       progressOrigin,
       progressSessionKey: requesterInternalKey,
       buildRegistration: (_state, runId) => {
@@ -635,6 +642,7 @@ export async function spawnSubagentDirect(
       attachments: attachmentsReceipt,
     };
   } finally {
+    admissionReservation?.release();
     if (swarmReservationPending) {
       removeQueuedSwarmRun(childRunId);
     }

@@ -65,6 +65,7 @@ describe("renderChannelWizard busy controls", () => {
       confirm.container.querySelectorAll<HTMLButtonElement>(".channels-wizard__footer button"),
     );
     expect(confirmButtons).toHaveLength(2);
+    expect(confirmButtons.map((button) => button.textContent?.trim())).toEqual(["No", "Yes"]);
     expect(confirmButtons.every((button) => button.disabled)).toBe(true);
     confirmButtons.forEach((button) => button.click());
     expect(confirm.onAnswer).not.toHaveBeenCalled();

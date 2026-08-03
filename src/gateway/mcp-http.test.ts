@@ -21,6 +21,7 @@ type MockGatewayTool = {
 
 type MockGatewayScopedTools = {
   agentId: string;
+  workspaceDir?: string;
   tools: MockGatewayTool[];
 };
 
@@ -113,6 +114,7 @@ type BeforeToolCallHookInput = {
     turnSourceTo?: string;
     turnSourceAccountId?: string;
     turnSourceThreadId?: string | number;
+    workspaceDir?: string;
     loopDetection?: unknown;
   };
   signal?: unknown;
@@ -1426,6 +1428,23 @@ describe("mcp loopback server", () => {
       turnSourceThreadId: "bound-thread",
     });
     expect(getBeforeToolCallHookInput(0).ctx).toHaveProperty("loopDetection");
+  });
+
+  it("carries the resolved workspace dir into the before-tool-call hook context", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [makeMessageTool()],
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    const { runtime } = await startLoopbackServerForTest();
+
+    await callMainSessionTool({
+      token: runtime?.ownerToken,
+      name: "message",
+      args: { body: "hello" },
+    });
+
+    expect(getBeforeToolCallHookInput(0).ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
   it("revalidates a CLI grant after async preparation before tool execution", async () => {

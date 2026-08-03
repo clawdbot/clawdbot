@@ -127,4 +127,167 @@ describe("chat session sharing menu", () => {
     expect(onVisibilityChange).toHaveBeenCalledWith("shared");
     expect(root.querySelectorAll('wa-dropdown-item[value="visibility:shared"]')).toHaveLength(1);
   });
+
+  it("keeps read-only owner controls visible but refuses disabled synthetic actions", () => {
+    const onOpen = vi.fn();
+    const onVisibilityChange = vi.fn();
+    const onMemberChange = vi.fn();
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "shared",
+          sharingRole: "owner",
+        },
+        state: {
+          loading: false,
+          result: {
+            sessionKey: "agent:main:main",
+            members: [{ identityId: "alice", addedBy: "owner", addedAt: 1 }],
+            identities: [
+              { type: "human", id: "alice", label: "Alice" },
+              { type: "human", id: "bob", label: "Bob" },
+            ],
+            role: "owner",
+            allowedVisibilities: ["shared", "read-only"],
+          },
+        },
+        visibilityDisabledReason: "Requires write",
+        memberAddDisabledReason: "Requires write",
+        memberRemoveDisabledReason: "Requires write",
+        onOpen,
+        onVisibilityChange,
+        onMemberChange,
+      }),
+    );
+    const dropdown = root.querySelector("wa-dropdown");
+    expect(dropdown).not.toBeNull();
+    expect(
+      root.querySelector<HTMLElement>('wa-dropdown-item[value="visibility:read-only"]')?.title,
+    ).toBe("Requires write");
+    expect(
+      root.querySelector('wa-dropdown-item[value="member:alice"]')?.hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      root.querySelector('wa-dropdown-item[value="member:bob"]')?.hasAttribute("disabled"),
+    ).toBe(true);
+
+    dropdown?.dispatchEvent(new CustomEvent("wa-show"));
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "visibility:read-only" } },
+      }),
+    );
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "member:alice" } },
+      }),
+    );
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "member:bob" } },
+      }),
+    );
+
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(onVisibilityChange).not.toHaveBeenCalled();
+    expect(onMemberChange).not.toHaveBeenCalled();
+  });
+
+  it("disables opening when sharing reads are unavailable", () => {
+    const onOpen = vi.fn();
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "shared",
+          sharingRole: "owner",
+        },
+        state: undefined,
+        openDisabledReason: "Connect to the Gateway",
+        onOpen,
+        onVisibilityChange: vi.fn(),
+        onMemberChange: vi.fn(),
+      }),
+    );
+
+    expect(root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled).toBe(
+      true,
+    );
+    root.querySelector("wa-dropdown")?.dispatchEvent(new CustomEvent("wa-show"));
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("keeps visibility controls usable without member-list support", () => {
+    const onOpen = vi.fn();
+    const onVisibilityChange = vi.fn();
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "shared",
+          sharingRole: "owner",
+        },
+        state: undefined,
+        allowedVisibilities: ["shared", "read-only"],
+        membersAvailable: false,
+        onOpen,
+        onVisibilityChange,
+        onMemberChange: vi.fn(),
+      }),
+    );
+
+    expect(root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled).toBe(
+      false,
+    );
+    expect(root.querySelector('wa-dropdown-item[value="visibility:read-only"]')).not.toBeNull();
+    expect(root.textContent).not.toContain("People");
+
+    const dropdown = root.querySelector("wa-dropdown");
+    dropdown?.dispatchEvent(new CustomEvent("wa-show"));
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "visibility:read-only" } },
+      }),
+    );
+
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
+  });
+
+  it.each([
+    { name: "visibility-only", membersAvailable: false },
+    { name: "member-enabled", membersAvailable: true },
+  ])("shows rejected sharing changes for $name Gateways", ({ membersAvailable }) => {
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "shared",
+          sharingRole: "owner",
+        },
+        state: { loading: false, error: "Visibility update rejected" },
+        allowedVisibilities: ["shared", "read-only"],
+        membersAvailable,
+        onOpen: vi.fn(),
+        onVisibilityChange: vi.fn(),
+        onMemberChange: vi.fn(),
+      }),
+    );
+
+    expect(root.querySelector(".chat-pane__sharing-status--error")?.textContent).toContain(
+      "Visibility update rejected",
+    );
+    expect(root.querySelectorAll(".chat-pane__sharing-title")).toHaveLength(
+      membersAvailable ? 2 : 1,
+    );
+  });
 });

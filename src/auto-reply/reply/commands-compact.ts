@@ -20,6 +20,7 @@ import {
   OPENAI_PROVIDER_ID,
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
+import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
@@ -310,7 +311,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     },
     customInstructions,
     trigger: "manual",
-    ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+    ownerNumbers: resolveOwnerPromptNumbers({
+      ownerNumbers: params.command.ownerList,
+      senderId: params.command.senderId,
+      senderIsOwner: params.command.senderIsOwner,
+    }),
   });
 
   const tokensAfterCompaction = result.result?.tokensAfter;

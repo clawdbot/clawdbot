@@ -145,6 +145,8 @@ describe("oxlint config", () => {
       "dist/",
       "dist-runtime/",
       "docs/_layouts/",
+      ".agents/skills/autoreview/tests/fixtures/**",
+      "test/fixtures/oxlint-boundary-guards/**",
       "**/a2ui.bundle.js",
       "extensions/browser/chrome-extension/modules/copilot-runtime.js",
       "extensions/diffs/assets/viewer-runtime.js",
@@ -162,6 +164,15 @@ describe("oxlint config", () => {
       "**/dist/**",
       "**/dist-runtime/**",
       "**/node_modules/**",
+    ]);
+  });
+
+  it("allows ecosystem contract fields with leading underscores", () => {
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+
+    expect(config.rules?.["eslint/no-underscore-dangle"]).toEqual([
+      "error",
+      { allow: ["__typename", "_meta"] },
     ]);
   });
 

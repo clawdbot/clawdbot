@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
+import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
@@ -28,6 +30,8 @@ const {
 vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
   getActiveMemorySearchManager: getActiveMemorySearchManagerMock,
 }));
+
+vi.mock("@openclaw/memory-core/api.js", { spy: true });
 
 vi.mock("openclaw/plugin-sdk/memory-host-core", () => ({
   resolveDefaultAgentId: resolveDefaultAgentIdMock,
@@ -75,6 +79,7 @@ beforeEach(() => {
   loadCombinedSessionStoreForGatewayMock.mockReturnValue({ storePath: "(test)", store: {} });
   resolveDefaultAgentIdMock.mockClear();
   resolveSessionAgentIdMock.mockClear();
+  vi.mocked(filterMemorySearchHitsBySessionVisibility).mockClear();
 });
 
 beforeAll(async () => {
@@ -930,6 +935,60 @@ describe("searchMemoryWiki", () => {
       "sessions/child-session.jsonl",
       "MEMORY.md",
     ]);
+  });
+
+  it("delegates protected QMD recall with the raw hit identity intact", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+    const appConfig = createSessionVisibilityAppConfig();
+    const conversationRecall = {
+      anchorSessionKey: "agent:main:telegram:direct:owner",
+      scope: "same-agent-private",
+      corpus: "sessions",
+    } as const;
+    const requesterSessionKey = "agent:main:telegram:direct:owner:active-memory:abcdef123456";
+    const qmdIdentity = Symbol("qmd-identity");
+    const qmdHit: MemorySearchResult = {
+      path: "qmd/sessions-main/visible-export.md",
+      startLine: 1,
+      endLine: 2,
+      score: 30,
+      snippet: "protected transcript",
+      source: "sessions",
+    };
+    Object.defineProperty(qmdHit, qmdIdentity, {
+      value: { agentId: "peer", sessionId: "peer-session" },
+    });
+    const manager = createMemoryManager({ searchResults: [qmdHit] });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+    vi.mocked(filterMemorySearchHitsBySessionVisibility).mockResolvedValueOnce([]);
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig,
+      agentId: "main",
+      agentSessionKey: requesterSessionKey,
+      sandboxed: false,
+      conversationRecall,
+      query: "protected",
+    });
+
+    expect(results).toStrictEqual([]);
+    expect(filterMemorySearchHitsBySessionVisibility).toHaveBeenCalledWith({
+      cfg: appConfig,
+      agentId: "main",
+      requesterSessionKey,
+      sandboxed: false,
+      hits: [qmdHit],
+      conversationRecall,
+      trustedAgentScope: false,
+    });
+    expect(Reflect.get(qmdHit, qmdIdentity)).toEqual({
+      agentId: "peer",
+      sessionId: "peer-session",
+    });
   });
 
   it("keeps QMD archived session search hits inside visibility policy", async () => {

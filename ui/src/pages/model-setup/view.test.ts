@@ -85,9 +85,9 @@ const detected: SystemAgentSetupDetectResult = {
     {
       id: "llama-cpp",
       brandId: "llama-cpp",
-      label: "Local model (llama.cpp)",
-      hint: "Download and run a private GGUF model",
-      actionLabel: "Review download",
+      label: "llama.cpp",
+      hint: "Run one private GGUF model directly inside this Gateway",
+      actionLabel: "Set up model",
     },
   ],
   recommendedInstalls: [
@@ -159,7 +159,11 @@ function text(container: Element): string {
   return container.textContent?.replace(/\s+/gu, " ").trim() ?? "";
 }
 
-function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLDivElement {
+function wizardStep(
+  step: WizardStep,
+  value: unknown = step.initialValue,
+  wizardMode: ModelSetupViewProps["wizardMode"] = "auth",
+): HTMLDivElement {
   return mount(
     props({
       wizard: {
@@ -169,6 +173,7 @@ function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLD
         busy: false,
         validationError: null,
       },
+      wizardMode,
       wizardValue: value,
     }),
   );
@@ -502,7 +507,7 @@ describe("renderModelSetup", () => {
       '[data-prepare-choice="llama-cpp"] button',
     );
     expect(ollama?.textContent).toContain("Choose connection");
-    expect(llamaCpp?.textContent).toContain("Review download");
+    expect(llamaCpp?.textContent).toContain("Set up model");
     expect(
       container.querySelector<HTMLButtonElement>('[data-prepare-choice="lmstudio"] button')
         ?.textContent,
@@ -1027,6 +1032,15 @@ describe("renderModelSetup", () => {
     const confirm = wizardStep({ id: "confirm", type: "confirm", message: "Continue?" });
     expect(text(confirm)).toContain("Yes");
     expect(text(confirm)).toContain("No");
+
+    const prepareConfirm = wizardStep(
+      { id: "confirm", type: "confirm", message: "Set up this model?" },
+      undefined,
+      "prepare",
+    );
+    expect(text(prepareConfirm)).toContain("Continue");
+    expect(text(prepareConfirm)).toContain("No");
+    expect(text(prepareConfirm)).not.toContain("Yes");
   });
 
   it.each(["multiselect", "action"] as const)("renders the %s wizard step", (type) => {

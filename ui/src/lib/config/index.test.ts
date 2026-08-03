@@ -633,6 +633,269 @@ describe("config form auto-save", () => {
     runtimeConfig.dispose();
   });
 
+  it.each([
+    ["automatic save", "123"],
+    ["automatic save", "z.ai"],
+    ["automatic save", "a.models.3"],
+    ["manual save", "123"],
+    ["manual save", "z.ai"],
+    ["manual save", "a.models.3"],
+    ["manual save", "$&"],
+    ["apply", "123"],
+    ["apply", "z.ai"],
+    ["apply", "a.models.3"],
+  ] as const)(
+    "formats the rejected %s validation path for provider %s without changing the Gateway issue",
+    async (operation, providerId) => {
+      vi.useFakeTimers();
+      const issue = {
+        path: `models.providers.${providerId}.models.3.name`,
+        message: "Invalid model name",
+      };
+      const rejection = new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: `invalid config: ${issue.path}: ${issue.message}`,
+        details: { issues: [issue] },
+      });
+      const config = {
+        models: {
+          providers: {
+            [providerId]: {
+              models: [
+                { name: "First" },
+                { name: "Second" },
+                { name: "Third" },
+                { name: "Fourth" },
+              ],
+            },
+          },
+        },
+      };
+      const request = vi.fn(async (method: string) => {
+        if (method === "config.get") {
+          return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+        }
+        if (method === "config.set" || method === "config.apply") {
+          throw rejection;
+        }
+        return {};
+      });
+      const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+      await runtimeConfig.ensureLoaded();
+      expect(runtimeConfig.state.configSchema).toBeNull();
+
+      if (operation === "automatic save") {
+        runtimeConfig.patchForm(["models", "providers", providerId, "models", 3, "name"], "");
+        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      } else if (operation === "manual save") {
+        runtimeConfig.patchForm(["models", "providers", providerId, "models", 3, "name"], "");
+        await expect(runtimeConfig.save()).resolves.toBe(false);
+      } else {
+        await expect(runtimeConfig.apply()).resolves.toBe(false);
+      }
+
+      expect(runtimeConfig.state.configSnapshot?.valid).toBe(true);
+      expect(runtimeConfig.state.configIssues).toEqual([]);
+      expect(runtimeConfig.state.lastError).toBe(
+        `GatewayRequestError: invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
+      );
+      expect(issue.path).toBe(`models.providers.${providerId}.models.3.name`);
+      expect(rejection.message).toBe(
+        `invalid config: models.providers.${providerId}.models.3.name: Invalid model name`,
+      );
+      expect(rejection.details).toEqual({ issues: [issue] });
+      runtimeConfig.dispose();
+    },
+  );
+
+  it("preserves raw validation paths when dotted draft keys have multiple interpretations", async () => {
+    const issue = {
+      path: "models.providers.a.models.3.name",
+      message: "Invalid model name",
+    };
+    const config = {
+      models: {
+        providers: {
+          a: {
+            models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, { name: "Fourth" }],
+          },
+          "a.models.3.name": { models: [{ name: "Ambiguous provider" }] },
+        },
+      },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+      }
+      if (method === "config.set") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: `invalid config: ${issue.path}: ${issue.message}`,
+          details: { issues: [issue] },
+        });
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["models", "providers", "a", "models", 3, "name"], "");
+
+    await expect(runtimeConfig.save()).resolves.toBe(false);
+    expect(runtimeConfig.state.lastError).toBe(
+      "GatewayRequestError: invalid config: models.providers.a.models.3.name: Invalid model name",
+    );
+    expect(issue.path).toBe("models.providers.a.models.3.name");
+    runtimeConfig.dispose();
+  });
+
+  it("rewrites only complete validation fields when issue paths overlap", async () => {
+    const issues = [
+      { path: "foo.items.0.name", message: "Invalid numeric record" },
+      { path: "items.0.name", message: "Invalid array item" },
+    ];
+    const config = {
+      foo: { items: { "0": { name: "Record" } } },
+      items: [{ name: "Array" }],
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+      }
+      if (method === "config.set") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message:
+            "invalid config: foo.items.0.name: Invalid numeric record; items.0.name: Invalid array item",
+          details: { issues },
+        });
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["items", 0, "name"], "");
+
+    await expect(runtimeConfig.save()).resolves.toBe(false);
+    expect(runtimeConfig.state.lastError).toBe(
+      "GatewayRequestError: invalid config: foo.items.0.name: Invalid numeric record; items.#1.name: Invalid array item",
+    );
+    expect(issues.map((issue) => issue.path)).toEqual(["foo.items.0.name", "items.0.name"]);
+    runtimeConfig.dispose();
+  });
+
+  it("preserves machine-indexed validation paths for raw-editor submissions", async () => {
+    const issue = { path: "models.3.name", message: "Invalid model name" };
+    const config = {
+      models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, { name: "Fourth" }],
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+      }
+      if (method === "config.set") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: `invalid config: ${issue.path}: ${issue.message}`,
+          details: { issues: [issue] },
+        });
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.setRaw(
+      JSON.stringify({
+        models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, { name: "" }],
+      }),
+    );
+
+    await expect(runtimeConfig.save()).resolves.toBe(false);
+    expect(runtimeConfig.state.configFormMode).toBe("raw");
+    expect(runtimeConfig.state.lastError).toBe(
+      "GatewayRequestError: invalid config: models.3.name: Invalid model name",
+    );
+    runtimeConfig.dispose();
+  });
+
+  it.each(["automatic save", "manual save", "apply"] as const)(
+    "formats rejected %s paths against the submitted draft after a mid-flight edit",
+    async (operation) => {
+      vi.useFakeTimers();
+      const pendingWrite = deferred<unknown>();
+      const issue = {
+        path: "models.providers.a.models.3.models.3.name",
+        message: "Invalid model name",
+      };
+      const config = {
+        models: {
+          providers: {
+            "a.models.3": {
+              models: [
+                { name: "First" },
+                { name: "Second" },
+                { name: "Third" },
+                { name: "Fourth" },
+              ],
+            },
+          },
+        },
+      };
+      const request = vi.fn((method: string) => {
+        if (method === "config.get") {
+          return Promise.resolve({
+            config,
+            raw: JSON.stringify(config),
+            hash: "hash-1",
+            valid: true,
+            issues: [],
+          });
+        }
+        if (method === "config.set" || method === "config.apply") {
+          return pendingWrite.promise;
+        }
+        return Promise.resolve({});
+      });
+      const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+      await runtimeConfig.ensureLoaded();
+
+      let write: Promise<boolean> | undefined;
+      if (operation === "automatic save") {
+        runtimeConfig.patchForm(["models", "providers", "a.models.3", "models", 3, "name"], "");
+        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      } else if (operation === "manual save") {
+        runtimeConfig.patchForm(["models", "providers", "a.models.3", "models", 3, "name"], "");
+        write = runtimeConfig.save();
+      } else {
+        write = runtimeConfig.apply();
+      }
+      expect(request).toHaveBeenCalledWith(
+        operation === "apply" ? "config.apply" : "config.set",
+        expect.any(Object),
+      );
+
+      runtimeConfig.patchForm(["models", "providers", "a"], {
+        models: [{}, {}, {}, { models: [{}, {}, {}, { name: "Overlapping provider" }] }],
+      });
+      pendingWrite.reject(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: `invalid config: ${issue.path}: ${issue.message}`,
+          details: { issues: [issue] },
+        }),
+      );
+      if (write) {
+        await expect(write).resolves.toBe(false);
+      } else {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(runtimeConfig.state.lastError).toBe(
+        "GatewayRequestError: invalid config: models.providers.a.models.3.models.#4.name: Invalid model name",
+      );
+      runtimeConfig.dispose();
+    },
+  );
+
   it("clears needsApply only on apply; a discarding refresh keeps the banner", async () => {
     vi.useFakeTimers();
     const server = createConfigServerMock();

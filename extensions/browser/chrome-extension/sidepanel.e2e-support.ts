@@ -138,7 +138,9 @@ export async function waitForLoadedExtensionId(
   browserCdp: CDPSession,
   extensionPath: string,
 ): Promise<string> {
-  const expectedPath = path.resolve(extensionPath);
+  // macOS os.tmpdir() is a /var -> /private/var symlink; Chromium reports the
+  // canonical path, so compare realpaths or this never matches on Mac.
+  const expectedPath = await fs.realpath(path.resolve(extensionPath));
   const deadline = Date.now() + 10_000;
   do {
     const result = (await browserCdp.send("Extensions.getExtensions")) as {

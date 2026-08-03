@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fingerprintAuthProfileCredential,
   fingerprintAwsSdkRuntimeOwner,
@@ -13,6 +13,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { resolvePersistentApplyInference } from "./setup-inference.js";
+import {
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   resolveSystemAgentVerifiedInferenceRoute,
@@ -76,6 +80,15 @@ const profile = {
 };
 
 const runtime = { log: () => {}, error: () => {}, exit: () => {} } as never;
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+
+beforeAll(() => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(config());
+});
+
+afterAll(() => {
+  pluginMetadataSnapshot?.restore();
+});
 
 type TestPluginRecord = {
   pluginId: string;
@@ -111,6 +124,7 @@ function pluginRecord(
 }
 
 beforeEach(() => {
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
   pluginRegistryState.providerOwnerIds = ["provider-owner"];
   pluginRegistryState.records = [pluginRecord("provider-owner"), pluginRecord("codex")];
   harnessRuntimeArtifactState.id = "codex-app-server";
