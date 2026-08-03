@@ -220,7 +220,7 @@ export function normalizeTasksCancelResult(value: unknown): NormalizedTasksCance
   };
 }
 
-export type NormalizedTasksRecoveryResult = Omit<TasksRecoveryResult, "results"> & {
+type NormalizedTasksRecoveryResult = Omit<TasksRecoveryResult, "results"> & {
   results: Array<Omit<TasksRecoveryResult["results"][number], "task"> & { task?: TaskSummary }>;
 };
 

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareClaimedSessionDelivery } from "../infra/session-delivery-queue.js";
+import { prepareClaimedSessionDelivery } from "../infra/session-delivery-queue-storage.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,

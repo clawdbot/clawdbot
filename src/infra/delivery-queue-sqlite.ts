@@ -30,7 +30,7 @@ export type DeliveryQueueCompletionRetention =
     }>;
 
 /** Indexed metadata extracted from queue payloads for diagnostics and recovery. */
-export type DeliveryQueueRowMetadata = {
+type DeliveryQueueRowMetadata = {
   entryKind?: string;
   sessionKey?: string;
   channel?: string;
@@ -59,7 +59,7 @@ export type DeliveryQueueEntryState = {
   recoveryState?: string;
 };
 
-export type UpsertDeliveryQueueEntryParams = {
+type UpsertDeliveryQueueEntryParams = {
   queueName: string;
   entry: DeliveryQueueEntryState;
   metadata?: DeliveryQueueRowMetadata;
@@ -71,7 +71,7 @@ export type UpsertDeliveryQueueEntryParams = {
   completeExisting?: boolean;
 };
 
-export type BoundDeliveryQueueEntry = {
+type BoundDeliveryQueueEntry = {
   row: Insertable<DeliveryQueueTable>;
   insertOnly: boolean;
   reviveFailedOrCorruptPending: boolean;

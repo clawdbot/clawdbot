@@ -48,7 +48,6 @@ import {
 import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
-export { SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP } from "./subagent-registry-suspended-delivery.js";
 const log = createSubsystemLogger("agents/subagent-registry");
 
 type SubagentRegistryRestorer = ReturnType<typeof createSubagentRegistryRestorer>;

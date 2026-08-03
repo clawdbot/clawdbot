@@ -5,7 +5,7 @@
  * steering a subagent and directly delivering a message, with phase evidence.
  */
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
-export type SubagentAnnounceDeliveryDisposition =
+type SubagentAnnounceDeliveryDisposition =
   | "delivered"
   | "session_queued"
   | "intentional_non_delivery"

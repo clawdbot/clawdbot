@@ -10,7 +10,6 @@ export {
   loadPendingSessionDelivery,
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
-  prepareClaimedSessionDelivery,
   releaseSessionDeliveryClaim,
   SESSION_DELIVERY_QUEUE_NAME,
   SessionDeliveryDeadLetteredError,
@@ -21,7 +20,6 @@ export {
 export type {
   QueuedSessionDelivery,
   QueuedSessionDeliveryPayload,
-  SessionDeliveryOwnerReference,
   SessionDeliveryRoute,
 } from "./session-delivery-queue-storage.js";
 export {
