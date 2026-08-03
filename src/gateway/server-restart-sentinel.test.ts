@@ -23,6 +23,8 @@ type InProcessDispatchMock = (
 ) => Promise<Record<string, unknown>>;
 type AdvanceSessionDeliveryAgentRunMock =
   typeof import("../infra/session-delivery-queue.js").advanceSessionDeliveryAgentRun;
+type RecoverPendingSessionDeliveriesMock =
+  typeof import("../infra/session-delivery-queue.js").recoverPendingSessionDeliveries;
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -168,6 +170,7 @@ const mocks = vi.hoisted(() => {
       messageId: "generated-media-transcript",
     })),
     removeCronRunContinuationSessionIfIdle: vi.fn(async () => {}),
+    settleCorrelatedSubagentDelivery: vi.fn(async () => {}),
     loadPendingSessionDelivery: vi.fn(
       async (id: string) => state.queuedSessionDeliveries.get(id) ?? null,
     ),
@@ -177,6 +180,10 @@ const mocks = vi.hoisted(() => {
         log: { warn: (message: string) => void };
         selectEntry: (entry: Record<string, unknown>, now: number) => { match: boolean };
         deliver: (entry: Record<string, unknown>) => Promise<void>;
+        onSettled?: (
+          entry: Record<string, unknown>,
+          outcome: "recovered" | "moved-to-failed",
+        ) => Promise<void> | void;
       }) => {
         const selected = [...state.queuedSessionDeliveries.entries()]
           .map(([id, payload]) => ({ id, payload }))
@@ -219,7 +226,7 @@ const mocks = vi.hoisted(() => {
         }
       },
     ),
-    recoverPendingSessionDeliveries: vi.fn(async () => ({
+    recoverPendingSessionDeliveries: vi.fn<RecoverPendingSessionDeliveriesMock>(async () => ({
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
@@ -249,6 +256,11 @@ const mocks = vi.hoisted(() => {
 
 vi.unmock("./server-restart-sentinel.js");
 vi.resetModules();
+
+vi.mock("../agents/subagent-completion-delivery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/subagent-completion-delivery.js")>()),
+  settleCorrelatedSubagentDelivery: mocks.settleCorrelatedSubagentDelivery,
+}));
 
 vi.mock("../agents/agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/agent-scope.js")>(
@@ -480,8 +492,10 @@ vi.mock("./server-methods/agent-timestamp.js", () => ({
 const {
   deliverQueuedSessionDelivery,
   getLatestUpdateRestartSentinel,
+  recoverPendingRestartContinuationDeliveries,
   refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake,
+  settleQueuedSessionDelivery,
 } = await import("./server-restart-sentinel.js");
 const { resetGatewayWorkAdmission } = await import("../process/gateway-work-admission.js");
 
@@ -703,6 +717,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.markSessionDeliverySettlement.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     mocks.removeCronRunContinuationSessionIfIdle.mockClear();
+    mocks.settleCorrelatedSubagentDelivery.mockClear();
     mocks.loadPendingSessionDelivery.mockClear();
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
@@ -719,6 +734,42 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.logInfo.mockClear();
     mocks.logWarn.mockClear();
     mocks.logError.mockClear();
+  });
+
+  it.each(["recovered", "moved-to-failed"] as const)(
+    "uses one producer settlement callback for startup session recovery (%s)",
+    async (outcome) => {
+      await recoverPendingRestartContinuationDeliveries({ deps: {} as never });
+
+      const recovery = mocks.recoverPendingSessionDeliveries.mock.calls[0]?.[0];
+      expect(recovery?.onSettled).toBe(settleQueuedSessionDelivery);
+      const entry = {
+        id: "correlated-completion-1",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "retained completion",
+        messageId: "completion-1",
+        enqueuedAt: 1,
+        retryCount: 0,
+      } as const;
+      await recovery?.onSettled?.(entry, outcome);
+
+      expect(mocks.settleCorrelatedSubagentDelivery).toHaveBeenCalledWith(entry, outcome);
+      expect(mocks.removeCronRunContinuationSessionIfIdle).toHaveBeenCalledWith(
+        entry.sessionKey,
+        entry.id,
+      );
+      expect(mocks.settleCorrelatedSubagentDelivery.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.removeCronRunContinuationSessionIfIdle.mock.invocationCallOrder[0] ?? 0,
+      );
+    },
+  );
+
+  it("uses the same producer settlement callback for targeted recovery", async () => {
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    const targeted = mocks.drainPendingSessionDeliveries.mock.calls[0]?.[0];
+    expect(targeted?.onSettled).toBe(settleQueuedSessionDelivery);
   });
 
   it("enqueues the sentinel note and wakes the session even when outbound delivery succeeds", async () => {

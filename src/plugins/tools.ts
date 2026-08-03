@@ -1109,6 +1109,12 @@ function registryHasScopedPluginTools(
   return Array.from(scopedPluginIds).every((pluginId) => registryPluginIds.has(pluginId));
 }
 
+type PreparedPluginToolRuntime = {
+  loadContext?: ReturnType<typeof resolvePluginRuntimeLoadContext>;
+  metadataSnapshot: PluginMetadataManifestView;
+  registry?: PluginRegistry;
+};
+
 function resolvePluginToolLoadState(params: {
   context: OpenClawPluginToolContext;
   toolAllowlist?: string[];
@@ -1116,6 +1122,7 @@ function resolvePluginToolLoadState(params: {
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
+  preparedRuntime?: PreparedPluginToolRuntime;
 }):
   | {
       context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
@@ -1128,11 +1135,19 @@ function resolvePluginToolLoadState(params: {
   | undefined {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
-  const context = resolvePluginRuntimeLoadContext({
-    config: baseConfig,
-    env,
-    workspaceDir: params.context.workspaceDir,
-  });
+  const preparedLoadContext = params.preparedRuntime?.loadContext;
+  const usePreparedRuntime =
+    preparedLoadContext !== undefined &&
+    (baseConfig === preparedLoadContext.rawConfig || baseConfig === preparedLoadContext.config) &&
+    env === preparedLoadContext.env &&
+    params.context.workspaceDir === preparedLoadContext.workspaceDir;
+  const context = usePreparedRuntime
+    ? preparedLoadContext
+    : resolvePluginRuntimeLoadContext({
+        config: baseConfig,
+        env,
+        workspaceDir: params.context.workspaceDir,
+      });
   const normalized = normalizePluginsConfig(context.config.plugins);
   if (!normalized.enabled) {
     return undefined;
@@ -1141,11 +1156,14 @@ function resolvePluginToolLoadState(params: {
   const runtimeOptions = params.allowGatewaySubagentBinding
     ? { allowGatewaySubagentBinding: true as const }
     : undefined;
-  const snapshot = loadManifestContractSnapshot({
-    config: context.config,
-    workspaceDir: context.workspaceDir,
-    env,
-  });
+  const snapshot =
+    usePreparedRuntime && params.preparedRuntime
+      ? params.preparedRuntime.metadataSnapshot
+      : loadManifestContractSnapshot({
+          config: context.config,
+          workspaceDir: context.workspaceDir,
+          env,
+        });
   const onlyPluginIds = resolvePluginToolRuntimePluginIds({
     config: context.config,
     availabilityConfig: params.context.runtimeConfig ?? context.config,
@@ -1198,6 +1216,7 @@ export function resolvePluginTools(params: {
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
   runtimeRegistry?: PluginRegistry;
+  preparedRuntime?: PreparedPluginToolRuntime;
 }): AnyAgentTool[] {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
   // This matters a lot for unit tests and for tool construction hot paths.
@@ -1258,8 +1277,12 @@ export function resolvePluginTools(params: {
     onlyPluginIds: runtimePluginIds,
     runtimeOptions,
   });
-  let registry = registryHasScopedPluginTools(params.runtimeRegistry, runtimePluginIds)
-    ? params.runtimeRegistry
+  const preparedOrExplicitRegistry =
+    context === params.preparedRuntime?.loadContext
+      ? params.preparedRuntime.registry
+      : params.runtimeRegistry;
+  let registry = registryHasScopedPluginTools(preparedOrExplicitRegistry, runtimePluginIds)
+    ? preparedOrExplicitRegistry
     : undefined;
   if (!registry) {
     registry = resolvePluginToolRegistry({

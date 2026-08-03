@@ -290,12 +290,14 @@ export function uiSessionEventMatches(
     : selectedAgentId === resolveUiDefaultAgentId(host);
 }
 
-export function isUiSelectedGlobalSessionKey(sessionKey: string | undefined | null): boolean {
+export function isUiSelectedGlobalSessionKey(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  sessionKey: string | undefined | null,
+): boolean {
   if (isUiGlobalSessionKey(sessionKey)) {
     return true;
   }
-  const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeLowercaseStringOrEmpty(parsed?.rest) === DEFAULT_MAIN_KEY;
+  return resolveUiMainAliasAgentId(host, sessionKey) !== null;
 }
 
 export function resolveUiSelectedSessionAgentId(

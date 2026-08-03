@@ -139,7 +139,9 @@ export function resolveImageGenerationOverrides(params: {
         ? resolveClosestSize({
             requestedSize: params.size,
             requestedAspectRatio: aspectRatio,
-            supportedSizes: modelGeometry.sizes,
+            // Unconstrained models still use provider-wide sizes as aspect-ratio hints.
+            supportedSizes:
+              modelGeometry.sizes?.length === 0 ? geometry?.sizes : modelGeometry.sizes,
           })
         : undefined;
     let translated = false;

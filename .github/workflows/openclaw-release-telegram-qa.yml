@@ -1819,8 +1819,15 @@ jobs:
           sut_tmp="${temp_root}/sut-tmp"
           install -d -o "$SUT_UID" -g "$SUT_GID" -m 0700 "$sut_tmp"
           export TMPDIR="$sut_tmp"
+          workspace="${temp_root}/workspace"
+          [[ -d "$workspace" && ! -L "$workspace" ]]
+          [[ "$(realpath -e "$workspace")" == "$workspace" ]]
+          # The trusted scenario host creates fixtures while the isolated SUT reads
+          # and mutates the workspace. Keep every other runtime directory SUT-private.
+          chown -R "$RUNNER_UID:$SUT_GID" "$workspace"
+          chmod -R u=rwX,g=rwX,o= "$workspace"
+          find "$workspace" -type d -exec chmod g+s {} +
           for path in \
-            "$temp_root/workspace" \
             "${OPENCLAW_HOME:?}" \
             "${OPENCLAW_STATE_DIR:?}" \
             "${XDG_CACHE_HOME:?}" \

@@ -85,6 +85,30 @@ helper_bin_for_arch() {
   echo "$(helper_build_path_for_arch "$1")/$BUILD_CONFIG/$MLX_TTS_HELPER_PRODUCT"
 }
 
+build_mlx_tts_helper() {
+  local arch="$1"
+  local swift_path
+  local toolchain_metal
+  local swift_args=(build)
+
+  swift_path="$(xcrun --find swift)"
+  toolchain_metal="$(dirname "$swift_path")/metal"
+
+  if [[ -x "$toolchain_metal" ]] &&
+    ! "$toolchain_metal" --version >/dev/null 2>&1 &&
+    xcrun metal --version >/dev/null 2>&1; then
+    echo "⚠️  Xcode's default Metal shim cannot use the installed toolchain; using the native SwiftPM backend"
+    swift_args+=(--build-system native)
+  fi
+
+  swift "${swift_args[@]}" \
+    --package-path "$MLX_TTS_HELPER_ROOT" \
+    -c "$BUILD_CONFIG" \
+    --product "$MLX_TTS_HELPER_PRODUCT" \
+    --build-path "$(helper_build_path_for_arch "$arch")" \
+    --arch "$arch"
+}
+
 sparkle_framework_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
 }
@@ -373,7 +397,7 @@ for arch in "${BUILD_ARCHS[@]}"; do
   run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   restore_swiftpm_resource_sources
   echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
-  swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
+  build_mlx_tts_helper "$arch"
 done
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"

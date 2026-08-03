@@ -1254,25 +1254,6 @@ function extractWebSocketCloseError(event: unknown): Error {
   return new Error("WebSocket closed");
 }
 
-async function decodeWebSocketData(data: unknown): Promise<string | null> {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (data instanceof ArrayBuffer) {
-    return new TextDecoder().decode(new Uint8Array(data));
-  }
-  if (ArrayBuffer.isView(data)) {
-    const view = data;
-    return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
-  }
-  if (data && typeof data === "object" && "arrayBuffer" in data) {
-    const blobLike = data as { arrayBuffer: () => Promise<ArrayBuffer> };
-    const arrayBuffer = await blobLike.arrayBuffer();
-    return new TextDecoder().decode(new Uint8Array(arrayBuffer));
-  }
-  return null;
-}
-
 async function* parseWebSocket(
   socket: WebSocketLike,
   signal?: AbortSignal,
@@ -1293,40 +1274,42 @@ async function* parseWebSocket(
   };
 
   const onMessage: WebSocketListener = (event) => {
-    void (async () => {
-      let text: string | null = null;
-      try {
-        if (!event || typeof event !== "object" || !("data" in event)) {
-          return;
-        }
-        text = await decodeWebSocketData((event as { data?: unknown }).data);
-        if (!text) {
-          return;
-        }
-        const parsed = JSON.parse(text) as Record<string, unknown>;
-        const type = typeof parsed.type === "string" ? parsed.type : "";
-        if (
-          type === "response.completed" ||
-          type === "response.done" ||
-          type === "response.incomplete"
-        ) {
-          sawCompletion = true;
-          done = true;
-        }
-        queue.push(parsed);
-        wake();
-      } catch (cause) {
-        failed = new CodexProtocolError(
-          `Invalid Codex WebSocket JSON: ${formatThrownValue(cause)}`,
-          {
-            cause,
-            payload: text,
-          },
-        );
+    const data =
+      event && typeof event === "object" && "data" in event
+        ? (event as { data?: unknown }).data
+        : undefined;
+    if (typeof data !== "string") {
+      // Codex response events are text frames. Keep malformed transport failures
+      // on the shared marker so callers receive the canonical retry guidance.
+      failed = new CodexProtocolError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {
+        payload: data,
+      });
+      done = true;
+      wake();
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(data) as Record<string, unknown>;
+      const type = typeof parsed.type === "string" ? parsed.type : "";
+      if (
+        type === "response.completed" ||
+        type === "response.done" ||
+        type === "response.incomplete"
+      ) {
+        sawCompletion = true;
         done = true;
-        wake();
       }
-    })();
+      queue.push(parsed);
+      wake();
+    } catch (cause) {
+      failed = new CodexProtocolError(`Invalid Codex WebSocket JSON: ${formatThrownValue(cause)}`, {
+        cause,
+        payload: data,
+      });
+      done = true;
+      wake();
+    }
   };
 
   const onError: WebSocketListener = (event) => {

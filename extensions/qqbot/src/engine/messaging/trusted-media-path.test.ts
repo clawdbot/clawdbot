@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 function makeTtsStyleVoiceFile(): string {
-  // Mirrors cron auto-TTS: speech-core writes the voice file under the preferred
+  // Mirrors cron auto-TTS: the TTS runtime writes the voice file under the preferred
   // OpenClaw temp root, which is outside the QQ Bot media storage tree.
   const tmpRoot = resolvePreferredOpenClawTmpDir();
   const ttsDir = makeTrackedDir(tmpRoot, "tts-");

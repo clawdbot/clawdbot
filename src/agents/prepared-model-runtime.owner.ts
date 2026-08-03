@@ -27,6 +27,7 @@ import {
   toPreparedModelRuntimeError,
 } from "./prepared-model-runtime.errors.js";
 import type {
+  PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
   PreparedModelRuntimeOwner,
@@ -34,7 +35,6 @@ import type {
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
 
-export { startSerializedSnapshotBuildBatch };
 export type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLease,
@@ -389,6 +389,10 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
   owners: Map<string, PreparedModelRuntimeOwner>;
   agentBuildCompletions: Map<string, Promise<void>>;
   buildTimeoutMs: number;
+  isPublicationCurrent?: () => boolean;
+  isBuildCurrent?: () => boolean;
+  onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
+  registerEntriesAfterBuildStart?: boolean;
 }): Promise<void> {
   const candidates = params.entries.map(({ owner, input }) => {
     owner.input = input;
@@ -398,10 +402,24 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
     owner.refreshError = undefined;
     const generation = owner.generation;
     const key = ownerKey(input);
+    let registered = params.owners.get(key) === owner;
     return {
       catalogMode: owner.catalogMode,
       input,
-      isCurrent: () => owner.generation === generation && params.owners.get(key) === owner,
+      isEligible: () =>
+        (params.isPublicationCurrent?.() ?? true) &&
+        owner.generation === generation &&
+        (registered
+          ? params.owners.get(key) === owner
+          : params.registerEntriesAfterBuildStart === true),
+      isCurrent: () =>
+        (params.isPublicationCurrent?.() ?? true) &&
+        owner.generation === generation &&
+        params.owners.get(key) === owner,
+      key,
+      markRegistered: () => {
+        registered = true;
+      },
       owner,
     };
   });
@@ -419,7 +437,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
     try {
       while (true) {
         const attempt = candidates.filter(
-          (candidate) => candidate.isCurrent() && !snapshots.has(candidate.owner),
+          (candidate) => candidate.isEligible() && !snapshots.has(candidate.owner),
         );
         if (attempt.length === 0) {
           break;
@@ -429,7 +447,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
           // so one mutation cannot reintroduce broad plugin/catalog fanout on constrained hosts.
           for (const [catalogMode, group] of groups) {
             const currentGroup = group.filter(
-              (candidate) => candidate.isCurrent() && !snapshots.has(candidate.owner),
+              (candidate) => candidate.isEligible() && !snapshots.has(candidate.owner),
             );
             if (currentGroup.length === 0) {
               continue;
@@ -439,10 +457,17 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
               params.agentBuildCompletions,
               params.buildTimeoutMs,
               catalogMode,
-              undefined,
+              params.onBuildStats,
               new Map(currentGroup.map((candidate) => [candidate.input, candidate.isCurrent])),
+              params.isBuildCurrent,
             );
             for (const candidate of currentGroup) {
+              if (params.registerEntriesAfterBuildStart === true) {
+                // First-build hooks may emit auth mutations. Publish the owner only after those
+                // hooks start so an event cannot refresh a generation that was not visible yet.
+                params.owners.set(candidate.key, candidate.owner);
+                candidate.markRegistered();
+              }
               candidate.owner.buildCompletion = build.completion;
               void build.completion.then(() => {
                 if (candidate.owner.buildCompletion === build.completion) {
@@ -461,6 +486,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
           const lostCandidate = attempt.some((candidate) => !candidate.isCurrent());
           if (
             !(refreshError instanceof PreparedModelRuntimePublicationSupersededError) ||
+            !(params.isPublicationCurrent?.() ?? true) ||
             !lostCandidate
           ) {
             throw refreshError;

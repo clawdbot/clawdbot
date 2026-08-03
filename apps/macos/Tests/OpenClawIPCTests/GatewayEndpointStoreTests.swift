@@ -153,9 +153,9 @@ private actor GatewayEndpointRemoteEnsureGate {
 
 struct GatewayEndpointStoreTests {
     private func makeLaunchAgentSnapshot(
-        env: [String: String],
-        token: String?,
-        password: String?) -> LaunchAgentPlistSnapshot
+        env: [String: String] = [:],
+        token: String? = nil,
+        password: String? = nil) -> LaunchAgentPlistSnapshot
     {
         LaunchAgentPlistSnapshot(
             programArguments: [],
@@ -173,6 +173,14 @@ struct GatewayEndpointStoreTests {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return defaults
+    }
+
+    private func makeLaunchAgentTokenSnapshot(_ token: String) -> LaunchAgentPlistSnapshot {
+        self.makeLaunchAgentSnapshot(env: ["OPENCLAW_GATEWAY_TOKEN": token], token: token)
+    }
+
+    private func makeLaunchAgentPasswordSnapshot(_ password: String) -> LaunchAgentPlistSnapshot {
+        self.makeLaunchAgentSnapshot(env: ["OPENCLAW_GATEWAY_PASSWORD": password], password: password)
     }
 
     private func source(
@@ -210,11 +218,73 @@ struct GatewayEndpointStoreTests {
                 : nil)
     }
 
+    private func localAuthRoot(_ key: String, value: String) -> [String: Any] {
+        ["gateway": ["auth": [key: value]]]
+    }
+
+    private func makeStore(
+        sourceSnapshot: @escaping @Sendable () async -> GatewayEndpointStore.SourceSnapshot,
+        token: @escaping @Sendable () -> String? = { nil },
+        remoteRouteIfRunning: @escaping @Sendable () async -> RemoteTunnelManager.Route? = { nil },
+        remoteRouteIsCurrent: @escaping @Sendable (RemoteTunnelManager.Route) async -> Bool = { _ in true },
+        canStartRemoteTunnel: @escaping @Sendable () -> Bool = { true },
+        ensureRemoteTunnel: @escaping @Sendable () async throws -> RemoteTunnelManager.Route = {
+            throw CancellationError()
+        },
+        liveSourceIsCurrent: @escaping @Sendable (GatewayEndpointStore.SourceSnapshot) async -> Bool = { _ in true })
+        -> GatewayEndpointStore
+    {
+        GatewayEndpointStore(deps: .init(
+            token: token,
+            password: { nil },
+            localPort: { 18789 },
+            remoteRouteIfRunning: remoteRouteIfRunning,
+            remoteRouteIsCurrent: remoteRouteIsCurrent,
+            canStartRemoteTunnel: canStartRemoteTunnel,
+            ensureRemoteTunnel: ensureRemoteTunnel,
+            liveSourceIsCurrent: liveSourceIsCurrent,
+            sourceSnapshot: sourceSnapshot))
+    }
+
+    private func resolveMode(
+        configMode: String? = nil,
+        storedMode: String,
+        remoteURL: String? = nil) -> EffectiveConnectionMode
+    {
+        let defaults = self.makeDefaults()
+        defaults.set(storedMode, forKey: connectionModeKey)
+        var gateway: [String: Any] = [:]
+        if let configMode {
+            gateway["mode"] = configMode
+        }
+        if let remoteURL {
+            gateway["remote"] = ["url": remoteURL]
+        }
+        let root: [String: Any] = gateway.isEmpty ? [:] : ["gateway": gateway]
+        return ConnectionModeResolver.resolve(root: root, defaults: defaults)
+    }
+
+    private func dashboardURL(
+        _ endpoint: String,
+        mode: AppState.ConnectionMode,
+        localBasePath: String,
+        token: String? = nil,
+        password: String? = nil,
+        authToken: String? = nil) throws -> URL
+    {
+        let config: GatewayConnection.Config = try (
+            url: #require(URL(string: endpoint)),
+            token: token,
+            password: password)
+        return try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: mode,
+            localBasePath: localBasePath,
+            authToken: authToken)
+    }
+
     @Test func `resolve gateway token prefers env and falls back to launchd`() {
-        let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
-            token: "launchd-token",
-            password: nil)
+        let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
 
         let envToken = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: false,
@@ -232,17 +302,8 @@ struct GatewayEndpointStoreTests {
     }
 
     @Test func `resolve gateway token skips unresolved env template before launchd fallback`() throws {
-        let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
-            token: "launchd-token",
-            password: nil)
-        let root: [String: Any] = [
-            "gateway": [
-                "auth": [
-                    "token": "${OPENCLAW_GATEWAY_TOKEN}",
-                ],
-            ],
-        ]
+        let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
+        let root = self.localAuthRoot("token", value: "${OPENCLAW_GATEWAY_TOKEN}")
 
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: false,
@@ -251,29 +312,17 @@ struct GatewayEndpointStoreTests {
             launchdSnapshot: snapshot)
         #expect(token == "launchd-token")
 
-        let config: GatewayConnection.Config = try (
-            url: #require(URL(string: "ws://127.0.0.1:18789")),
-            token: token,
-            password: nil)
-        let url = try GatewayEndpointStore.dashboardURL(
-            for: config,
+        let url = try self.dashboardURL(
+            "ws://127.0.0.1:18789",
             mode: .local,
-            localBasePath: "/control")
+            localBasePath: "/control",
+            token: token)
         #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=launchd-token")
     }
 
     @Test func `resolve gateway token skips unresolved env shorthand before launchd fallback`() {
-        let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
-            token: "launchd-token",
-            password: nil)
-        let root: [String: Any] = [
-            "gateway": [
-                "auth": [
-                    "token": "$OPENCLAW_GATEWAY_TOKEN",
-                ],
-            ],
-        ]
+        let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
+        let root = self.localAuthRoot("token", value: "$OPENCLAW_GATEWAY_TOKEN")
 
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: false,
@@ -289,15 +338,8 @@ struct GatewayEndpointStoreTests {
                 "CUSTOM_GATEWAY_TOKEN": "service-token",
                 "OPENCLAW_GATEWAY_TOKEN": "launchd-token",
             ],
-            token: "launchd-token",
-            password: nil)
-        let root: [String: Any] = [
-            "gateway": [
-                "auth": [
-                    "token": "${CUSTOM_GATEWAY_TOKEN}",
-                ],
-            ],
-        ]
+            token: "launchd-token")
+        let root = self.localAuthRoot("token", value: "${CUSTOM_GATEWAY_TOKEN}")
 
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: false,
@@ -309,16 +351,8 @@ struct GatewayEndpointStoreTests {
 
     @Test func `resolve gateway token resolves env template from gateway service environment`() {
         let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["CUSTOM_GATEWAY_TOKEN": "  service-token  "],
-            token: nil,
-            password: nil)
-        let root: [String: Any] = [
-            "gateway": [
-                "auth": [
-                    "token": "${CUSTOM_GATEWAY_TOKEN}",
-                ],
-            ],
-        ]
+            env: ["CUSTOM_GATEWAY_TOKEN": "  service-token  "])
+        let root = self.localAuthRoot("token", value: "${CUSTOM_GATEWAY_TOKEN}")
 
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: false,
@@ -329,17 +363,8 @@ struct GatewayEndpointStoreTests {
     }
 
     @Test func `resolve gateway token keeps invalid env template as plaintext`() {
-        let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
-            token: "launchd-token",
-            password: nil)
-        let root: [String: Any] = [
-            "gateway": [
-                "auth": [
-                    "token": "${custom_gateway_token}",
-                ],
-            ],
-        ]
+        let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
+        let root = self.localAuthRoot("token", value: "${custom_gateway_token}")
 
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: false,
@@ -350,13 +375,7 @@ struct GatewayEndpointStoreTests {
     }
 
     @Test func `resolve gateway token omits unresolved env template without fallback`() throws {
-        let root: [String: Any] = [
-            "gateway": [
-                "auth": [
-                    "token": "${OPENCLAW_GATEWAY_TOKEN}",
-                ],
-            ],
-        ]
+        let root = self.localAuthRoot("token", value: "${OPENCLAW_GATEWAY_TOKEN}")
 
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: false,
@@ -365,22 +384,16 @@ struct GatewayEndpointStoreTests {
             launchdSnapshot: nil)
         #expect(token == nil)
 
-        let config: GatewayConnection.Config = try (
-            url: #require(URL(string: "ws://127.0.0.1:18789")),
-            token: token,
-            password: nil)
-        let url = try GatewayEndpointStore.dashboardURL(
-            for: config,
+        let url = try self.dashboardURL(
+            "ws://127.0.0.1:18789",
             mode: .local,
-            localBasePath: "/control")
+            localBasePath: "/control",
+            token: token)
         #expect(url.absoluteString == "http://127.0.0.1:18789/control/")
     }
 
     @Test func `resolve gateway token ignores launchd in remote mode`() {
-        let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
-            token: "launchd-token",
-            password: nil)
+        let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
 
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: true,
@@ -418,10 +431,7 @@ struct GatewayEndpointStoreTests {
     }
 
     @Test func `resolve gateway password falls back to launchd`() {
-        let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
-            token: nil,
-            password: "launchd-pass")
+        let snapshot = self.makeLaunchAgentPasswordSnapshot("launchd-pass")
 
         let password = GatewayEndpointStore._testResolveGatewayPassword(
             isRemote: false,
@@ -432,17 +442,8 @@ struct GatewayEndpointStoreTests {
     }
 
     @Test func `resolve gateway password skips unresolved env template before launchd fallback`() {
-        let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
-            token: nil,
-            password: "launchd-pass")
-        let root: [String: Any] = [
-            "gateway": [
-                "auth": [
-                    "password": "${OPENCLAW_GATEWAY_PASSWORD}",
-                ],
-            ],
-        ]
+        let snapshot = self.makeLaunchAgentPasswordSnapshot("launchd-pass")
+        let root = self.localAuthRoot("password", value: "${OPENCLAW_GATEWAY_PASSWORD}")
 
         let password = GatewayEndpointStore._testResolveGatewayPassword(
             isRemote: false,
@@ -453,17 +454,8 @@ struct GatewayEndpointStoreTests {
     }
 
     @Test func `resolve gateway password skips unresolved env shorthand before launchd fallback`() {
-        let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
-            token: nil,
-            password: "launchd-pass")
-        let root: [String: Any] = [
-            "gateway": [
-                "auth": [
-                    "password": "$OPENCLAW_GATEWAY_PASSWORD",
-                ],
-            ],
-        ]
+        let snapshot = self.makeLaunchAgentPasswordSnapshot("launchd-pass")
+        let root = self.localAuthRoot("password", value: "$OPENCLAW_GATEWAY_PASSWORD")
 
         let password = GatewayEndpointStore._testResolveGatewayPassword(
             isRemote: false,
@@ -475,16 +467,8 @@ struct GatewayEndpointStoreTests {
 
     @Test func `resolve gateway password resolves env template from gateway service environment`() {
         let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["CUSTOM_GATEWAY_PASSWORD": "  service-pass  "],
-            token: nil,
-            password: nil)
-        let root: [String: Any] = [
-            "gateway": [
-                "auth": [
-                    "password": "${CUSTOM_GATEWAY_PASSWORD}",
-                ],
-            ],
-        ]
+            env: ["CUSTOM_GATEWAY_PASSWORD": "  service-pass  "])
+        let root = self.localAuthRoot("password", value: "${CUSTOM_GATEWAY_PASSWORD}")
 
         let password = GatewayEndpointStore._testResolveGatewayPassword(
             isRemote: false,
@@ -495,68 +479,27 @@ struct GatewayEndpointStoreTests {
     }
 
     @Test func `connection mode resolver prefers config mode over defaults`() {
-        let defaults = self.makeDefaults()
-        defaults.set("remote", forKey: connectionModeKey)
-
-        let root: [String: Any] = [
-            "gateway": [
-                "mode": " local ",
-            ],
-        ]
-
-        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+        let resolved = self.resolveMode(configMode: " local ", storedMode: "remote")
         #expect(resolved.mode == .local)
     }
 
     @Test func `connection mode resolver trims config mode`() {
-        let defaults = self.makeDefaults()
-        defaults.set("local", forKey: connectionModeKey)
-
-        let root: [String: Any] = [
-            "gateway": [
-                "mode": " remote ",
-            ],
-        ]
-
-        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+        let resolved = self.resolveMode(configMode: " remote ", storedMode: "local")
         #expect(resolved.mode == .remote)
     }
 
     @Test func `connection mode resolver falls back to defaults when missing config`() {
-        let defaults = self.makeDefaults()
-        defaults.set("remote", forKey: connectionModeKey)
-
-        let resolved = ConnectionModeResolver.resolve(root: [:], defaults: defaults)
+        let resolved = self.resolveMode(storedMode: "remote")
         #expect(resolved.mode == .remote)
     }
 
     @Test func `connection mode resolver falls back to defaults on unknown config`() {
-        let defaults = self.makeDefaults()
-        defaults.set("local", forKey: connectionModeKey)
-
-        let root: [String: Any] = [
-            "gateway": [
-                "mode": "staging",
-            ],
-        ]
-
-        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+        let resolved = self.resolveMode(configMode: "staging", storedMode: "local")
         #expect(resolved.mode == .local)
     }
 
     @Test func `connection mode resolver prefers remote URL when mode missing`() {
-        let defaults = self.makeDefaults()
-        defaults.set("local", forKey: connectionModeKey)
-
-        let root: [String: Any] = [
-            "gateway": [
-                "remote": [
-                    "url": " ws://umbrel:18789 ",
-                ],
-            ],
-        ]
-
-        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+        let resolved = self.resolveMode(storedMode: "local", remoteURL: " ws://umbrel:18789 ")
         #expect(resolved.mode == .remote)
     }
 }
@@ -567,19 +510,13 @@ extension GatewayEndpointStoreTests {
             let admitted = LockIsolated(false)
             let tunnelStarts = LockIsolated(0)
             let source = self.source(mode: .remote, transport: .ssh)
-            let store = GatewayEndpointStore(deps: .init(
-                token: { nil },
-                password: { nil },
-                localPort: { 18789 },
-                remoteRouteIfRunning: { nil },
-                remoteRouteIsCurrent: { _ in true },
+            let store = self.makeStore(
+                sourceSnapshot: { source },
                 canStartRemoteTunnel: { admitted.withValue { $0 } },
                 ensureRemoteTunnel: {
                     tunnelStarts.withValue { $0 += 1 }
                     return .init(localPort: 18789, generation: 1)
-                },
-                liveSourceIsCurrent: { _ in true },
-                sourceSnapshot: { source }))
+                })
 
             await store.refresh()
             #expect(tunnelStarts.withValue { $0 } == 0)
@@ -596,16 +533,7 @@ extension GatewayEndpointStoreTests {
             let source = self.source(mode: .local, token: "same-token")
             let sourceGate = GatewayEndpointSourceGate(source)
             await sourceGate.suspendNextRead()
-            let store = GatewayEndpointStore(deps: .init(
-                token: { nil },
-                password: { nil },
-                localPort: { 18789 },
-                remoteRouteIfRunning: { nil },
-                remoteRouteIsCurrent: { _ in true },
-                canStartRemoteTunnel: { true },
-                ensureRemoteTunnel: { throw CancellationError() },
-                liveSourceIsCurrent: { _ in true },
-                sourceSnapshot: { await sourceGate.snapshot() }))
+            let store = self.makeStore(sourceSnapshot: { await sourceGate.snapshot() })
 
             let first = Task { try await store.requireEndpoint() }
             await sourceGate.waitUntilSuspendedReadStarts()
@@ -624,16 +552,10 @@ extension GatewayEndpointStoreTests {
         try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
             let source = self.source(mode: .local, token: "same-token", routingGeneration: 7)
             let sourceGate = GatewayEndpointSourceGate(source)
-            let store = GatewayEndpointStore(deps: .init(
-                token: { nil },
-                password: { nil },
-                localPort: { 18789 },
-                remoteRouteIfRunning: { nil },
-                remoteRouteIsCurrent: { _ in true },
-                canStartRemoteTunnel: { true },
-                ensureRemoteTunnel: { throw CancellationError() },
+            let store = self.makeStore(
+                sourceSnapshot: { await sourceGate.snapshot() },
                 liveSourceIsCurrent: { $0.routingGeneration == 7 },
-                sourceSnapshot: { await sourceGate.snapshot() }))
+            )
 
             _ = try await store.requireEndpoint()
             #expect(await sourceGate.reads() == 1)
@@ -673,16 +595,7 @@ extension GatewayEndpointStoreTests {
                 directURL: url,
                 tlsFingerprint: String(repeating: "a", count: 64))
             let sourceGate = GatewayEndpointSourceGate(sourceA)
-            let store = GatewayEndpointStore(deps: .init(
-                token: { nil },
-                password: { nil },
-                localPort: { 18789 },
-                remoteRouteIfRunning: { nil },
-                remoteRouteIsCurrent: { _ in true },
-                canStartRemoteTunnel: { true },
-                ensureRemoteTunnel: { throw CancellationError() },
-                liveSourceIsCurrent: { _ in true },
-                sourceSnapshot: { await sourceGate.snapshot() }))
+            let store = self.makeStore(sourceSnapshot: { await sourceGate.snapshot() })
 
             let first = try await store.requireEndpoint()
             await sourceGate.update(self.source(
@@ -709,16 +622,7 @@ extension GatewayEndpointStoreTests {
                     mode: .remote,
                     transport: .direct,
                     directURL: url)
-                let store = GatewayEndpointStore(deps: .init(
-                    token: { nil },
-                    password: { nil },
-                    localPort: { 18789 },
-                    remoteRouteIfRunning: { nil },
-                    remoteRouteIsCurrent: { _ in true },
-                    canStartRemoteTunnel: { true },
-                    ensureRemoteTunnel: { throw CancellationError() },
-                    liveSourceIsCurrent: { _ in true },
-                    sourceSnapshot: { source }))
+                let store = self.makeStore(sourceSnapshot: { source })
 
                 let first = try await store.requireEndpoint()
                 let fingerprint = String(repeating: "a", count: 64)
@@ -745,16 +649,10 @@ extension GatewayEndpointStoreTests {
                 directURL: remoteURL)
             let sourceGate = GatewayEndpointSourceGate(sourceA)
             let routeGate = GatewayEndpointRouteLookupGate()
-            let store = GatewayEndpointStore(deps: .init(
-                token: { nil },
-                password: { nil },
-                localPort: { 18789 },
+            let store = self.makeStore(
+                sourceSnapshot: { await sourceGate.snapshot() },
                 remoteRouteIfRunning: { await routeGate.lookup() },
-                remoteRouteIsCurrent: { _ in true },
-                canStartRemoteTunnel: { true },
-                ensureRemoteTunnel: { throw CancellationError() },
-                liveSourceIsCurrent: { _ in true },
-                sourceSnapshot: { await sourceGate.snapshot() }))
+            )
 
             let staleRequest = Task { try await store.requireEndpoint() }
             await routeGate.waitUntilStarted()
@@ -789,18 +687,11 @@ extension GatewayEndpointStoreTests {
             let currentRoutingGeneration = LockIsolated<UInt64>(1)
             let sourceGate = GatewayEndpointSourceGate(sourceA)
             await sourceGate.suspendNextRead(returningCapturedSource: true)
-            let store = GatewayEndpointStore(deps: .init(
-                token: { nil },
-                password: { nil },
-                localPort: { 18789 },
-                remoteRouteIfRunning: { nil },
-                remoteRouteIsCurrent: { _ in true },
-                canStartRemoteTunnel: { true },
-                ensureRemoteTunnel: { throw CancellationError() },
+            let store = self.makeStore(
+                sourceSnapshot: { await sourceGate.snapshot() },
                 liveSourceIsCurrent: { source in
                     currentRoutingGeneration.withValue { $0 == source.routingGeneration }
-                },
-                sourceSnapshot: { await sourceGate.snapshot() }))
+                })
 
             let staleRequest = Task { try await store.requireEndpoint() }
             await sourceGate.waitUntilSuspendedReadStarts()
@@ -821,16 +712,7 @@ extension GatewayEndpointStoreTests {
         await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
             let sourceGate = GatewayEndpointSourceGate(self.source(mode: .local))
             await sourceGate.suspendNextRead()
-            let store = GatewayEndpointStore(deps: .init(
-                token: { nil },
-                password: { nil },
-                localPort: { 18789 },
-                remoteRouteIfRunning: { nil },
-                remoteRouteIsCurrent: { _ in true },
-                canStartRemoteTunnel: { true },
-                ensureRemoteTunnel: { throw CancellationError() },
-                liveSourceIsCurrent: { _ in true },
-                sourceSnapshot: { await sourceGate.snapshot() }))
+            let store = self.makeStore(sourceSnapshot: { await sourceGate.snapshot() })
 
             let request = Task { try await store.requireEndpoint() }
             await sourceGate.waitUntilSuspendedReadStarts()
@@ -857,16 +739,10 @@ extension GatewayEndpointStoreTests {
                 transport: .direct,
                 directURL: remoteURL)
             let sourceGate = GatewayEndpointSourceGate(fallbackSource)
-            let store = GatewayEndpointStore(deps: .init(
+            let store = self.makeStore(
+                sourceSnapshot: { await sourceGate.snapshot() },
                 token: { "local-token" },
-                password: { nil },
-                localPort: { 18789 },
-                remoteRouteIfRunning: { nil },
-                remoteRouteIsCurrent: { _ in true },
-                canStartRemoteTunnel: { true },
-                ensureRemoteTunnel: { throw CancellationError() },
-                liveSourceIsCurrent: { _ in true },
-                sourceSnapshot: { await sourceGate.snapshot() }))
+            )
             let initialURL = try #require(URL(string: "ws://127.0.0.1:18789"))
 
             await sourceGate.suspendNextRead()
@@ -898,16 +774,7 @@ extension GatewayEndpointStoreTests {
                 directURL: url,
                 deviceAuthGatewayID: "route-b")
             let sourceGate = GatewayEndpointSourceGate(sourceA)
-            let store = GatewayEndpointStore(deps: .init(
-                token: { nil },
-                password: { nil },
-                localPort: { 18789 },
-                remoteRouteIfRunning: { nil },
-                remoteRouteIsCurrent: { _ in true },
-                canStartRemoteTunnel: { true },
-                ensureRemoteTunnel: { throw CancellationError() },
-                liveSourceIsCurrent: { _ in true },
-                sourceSnapshot: { await sourceGate.snapshot() }))
+            let store = self.makeStore(sourceSnapshot: { await sourceGate.snapshot() })
             let stream = await store.subscribe(bufferingNewest: 10)
             var iterator = stream.makeAsyncIterator()
             _ = await iterator.next()
@@ -942,16 +809,12 @@ extension GatewayEndpointStoreTests {
                 transport: .ssh)
             let remoteGate = GatewayEndpointRemoteEnsureGate(
                 route: .init(localPort: 28789, generation: 7))
-            let store = GatewayEndpointStore(deps: .init(
-                token: { nil },
-                password: { nil },
-                localPort: { 18789 },
+            let store = self.makeStore(
+                sourceSnapshot: { source },
                 remoteRouteIfRunning: { await remoteGate.routeIfRunning() },
                 remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
-                canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { await remoteGate.ensure() },
-                liveSourceIsCurrent: { _ in true },
-                sourceSnapshot: { source }))
+            )
 
             let cancelledWaiter = Task { try await store.requireEndpoint() }
             await remoteGate.waitUntilEnsureStarts()
@@ -982,16 +845,12 @@ extension GatewayEndpointStoreTests {
                 transport: .ssh)
             let remoteGate = GatewayEndpointRemoteEnsureGate(
                 route: .init(localPort: 28789, generation: 9))
-            let store = GatewayEndpointStore(deps: .init(
-                token: { nil },
-                password: { nil },
-                localPort: { 18789 },
+            let store = self.makeStore(
+                sourceSnapshot: { source },
                 remoteRouteIfRunning: { await remoteGate.routeIfRunning() },
                 remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
-                canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { await remoteGate.ensure() },
-                liveSourceIsCurrent: { _ in true },
-                sourceSnapshot: { source }))
+            )
 
             let first = Task { try await store.requireEndpoint() }
             await remoteGate.waitUntilEnsureStarts()
@@ -1073,68 +932,46 @@ extension GatewayEndpointStoreTests {
     }
 
     @Test func `dashboard URL uses local base path in local mode`() throws {
-        let config: GatewayConnection.Config = try (
-            url: #require(URL(string: "ws://127.0.0.1:18789")),
-            token: nil,
-            password: nil)
-
-        let url = try GatewayEndpointStore.dashboardURL(
-            for: config,
+        let url = try self.dashboardURL(
+            "ws://127.0.0.1:18789",
             mode: .local,
             localBasePath: " control ")
         #expect(url.absoluteString == "http://127.0.0.1:18789/control/")
     }
 
     @Test func `dashboard URL skips local base path in remote mode`() throws {
-        let config: GatewayConnection.Config = try (
-            url: #require(URL(string: "ws://gateway.example:18789")),
-            token: nil,
-            password: nil)
-
-        let url = try GatewayEndpointStore.dashboardURL(
-            for: config,
+        let url = try self.dashboardURL(
+            "ws://gateway.example:18789",
             mode: .remote,
             localBasePath: "/local-ui")
         #expect(url.absoluteString == "http://gateway.example:18789/")
     }
 
     @Test func `dashboard URL prefers path from config URL`() throws {
-        let config: GatewayConnection.Config = try (
-            url: #require(URL(string: "wss://gateway.example:443/remote-ui")),
-            token: nil,
-            password: nil)
-
-        let url = try GatewayEndpointStore.dashboardURL(
-            for: config,
+        let url = try self.dashboardURL(
+            "wss://gateway.example:443/remote-ui",
             mode: .remote,
             localBasePath: "/local-ui")
         #expect(url.absoluteString == "https://gateway.example:443/remote-ui/")
     }
 
     @Test func `dashboard URL uses fragment token and omits password`() throws {
-        let config: GatewayConnection.Config = try (
-            url: #require(URL(string: "ws://127.0.0.1:18789")),
+        let url = try self.dashboardURL(
+            "ws://127.0.0.1:18789",
+            mode: .local,
+            localBasePath: "/control",
             token: "abc123",
             password: "sekret") // pragma: allowlist secret
-
-        let url = try GatewayEndpointStore.dashboardURL(
-            for: config,
-            mode: .local,
-            localBasePath: "/control")
         #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=abc123")
         #expect(url.query == nil)
     }
 
     @Test func `dashboard URL can use native auth token override`() throws {
-        let config: GatewayConnection.Config = try (
-            url: #require(URL(string: "ws://127.0.0.1:18789")),
-            token: nil,
-            password: "sekret") // pragma: allowlist secret
-
-        let url = try GatewayEndpointStore.dashboardURL(
-            for: config,
+        let url = try self.dashboardURL(
+            "ws://127.0.0.1:18789",
             mode: .local,
             localBasePath: "/control",
+            password: "sekret", // pragma: allowlist secret
             authToken: "device-token")
         #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=device-token")
         #expect(url.query == nil)

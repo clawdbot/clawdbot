@@ -1417,6 +1417,17 @@ export function createAgentEventHandler({
         ...(explanation ? { explanation } : {}),
       };
     }
+    if (
+      chatLink &&
+      isControlUiVisible &&
+      !isAborted &&
+      ((isToolEvent && !suppressHeartbeatToolEvents) || isItemEvent)
+    ) {
+      // Persist the client-facing identity after run/session remapping. Route
+      // changes discard transient UI rows, so history replay must use the same
+      // payload identity as live delivery or tool results cannot reconcile.
+      chatRunState.recordProgressEvent(clientRunId, agentPayload);
+    }
     if (evt.stream === "run_status") {
       const phase = readChatRunStartupPhase(evt.data?.phase);
       if (phase && chatLink && isControlUiVisible && sessionKey && !isAborted) {

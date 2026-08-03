@@ -28,7 +28,7 @@ function createHarness(params?: { embedError?: unknown; closeError?: Error }) {
     { registerCli } as unknown as OpenClawPluginApi,
     { search } as unknown as MemoryDB,
     embeddings,
-    () => "main",
+    (rawAgentId) => (typeof rawAgentId === "string" ? rawAgentId : "main"),
     undefined,
   );
   const registrar = registerCli.mock.calls[0]?.[0] as
@@ -54,6 +54,28 @@ describe("memory-lancedb CLI embedding lifecycle", () => {
 
     expect(harness.embed).toHaveBeenCalledTimes(1);
     expect(harness.search).toHaveBeenCalledTimes(1);
+    expect(harness.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("embeds a CLI search with the explicitly requested agent's authentication", async () => {
+    const harness = createHarness();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      await harness.program.parseAsync([
+        "node",
+        "openclaw",
+        "ltm",
+        "search",
+        "private account memory",
+        "--agent",
+        "private",
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+
+    expect(harness.embed).toHaveBeenCalledWith("private", "private account memory");
+    expect(harness.search).toHaveBeenCalledWith("private", [0.1, 0.2], 5, 0.3);
     expect(harness.close).toHaveBeenCalledTimes(1);
   });
 

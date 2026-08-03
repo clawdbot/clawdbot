@@ -7,7 +7,7 @@ import {
   mockedResolveAuthProfileOrder,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
-  resetRunOverflowCompactionHarnessMocks,
+  resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
@@ -34,7 +34,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
   });
 
   beforeEach(() => {
-    resetRunOverflowCompactionHarnessMocks();
+    resetSharedRunIntegrationHarnessMocks();
   });
 
   it("adopts a compacted transcript and retries with the complete runtime context", async () => {

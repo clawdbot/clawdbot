@@ -42,6 +42,7 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
       required: true,
       resultText: "done",
       capturedAt: 260,
+      terminalReply: { disposition: "visible", text: "done" },
     },
     delivery: {
       status: "pending",
@@ -138,6 +139,68 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
+  it.each([
+    {
+      name: "visible",
+      terminalReply: { disposition: "visible", text: "restart-visible" } as const,
+      resultText: "restart-visible",
+    },
+    {
+      name: "silent",
+      terminalReply: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+    },
+  ])(
+    "restores $name terminal reply in completion and pending delivery after restart",
+    async ({ name, terminalReply, resultText }) => {
+      await withTempStateEnv(async () => {
+        const runId = `run-restart-${name}`;
+        const run = createRun({
+          runId,
+          childSessionKey: `agent:main:subagent:${name}`,
+          completion: {
+            required: true,
+            resultText,
+            capturedAt: 260,
+            terminalReply,
+          },
+          delivery: {
+            status: "pending",
+            createdAt: 270,
+            attemptCount: 0,
+            payload: {
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              childSessionKey: `agent:main:subagent:${name}`,
+              childRunId: runId,
+              task: "check terminal reply restart",
+              startedAt: 110,
+              endedAt: 250,
+              outcome: { status: "ok" },
+              expectsCompletionMessage: true,
+              terminalReply,
+            },
+          },
+        });
+
+        saveSubagentRegistryToSqlite(new Map([[runId, run]]));
+        closeOpenClawStateDatabaseForTest();
+
+        const restored = loadSubagentRegistryFromSqlite().get(runId);
+        expect(restored?.completion).toMatchObject({ terminalReply, resultText });
+        expect(restored?.delivery).toMatchObject({
+          status: "pending",
+          payload: { terminalReply },
+        });
+      });
+    },
+  );
+
   it("uses save calls as whole-registry snapshots", async () => {
     await withTempStateEnv(async () => {
       const first = createRun({ runId: "run-one", childSessionKey: "agent:main:subagent:one" });
@@ -195,6 +258,69 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
+  it("promotes legacy retained results into canonical completion state once", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({
+        completion: { required: true, resultText: "NO_REPLY" },
+        delivery: {
+          status: "suspended",
+          suspendedAt: 300,
+          suspendedReason: "retry-limit",
+          payload: {
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            childSessionKey: "agent:main:subagent:one",
+            childRunId: "run-one",
+            task: "check sqlite persistence",
+            outcome: { status: "ok" },
+            expectsCompletionMessage: true,
+            frozenResultText: "NO_REPLY",
+            fallbackFrozenResultText: "legacy retained result",
+          } as NonNullable<SubagentRunRecord["delivery"]>["payload"] & {
+            frozenResultText: string;
+            fallbackFrozenResultText: string;
+          },
+        },
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      closeOpenClawStateDatabaseForTest();
+
+      const restored = loadSubagentRegistryFromSqlite().get(run.runId);
+      expect(restored?.completion).toMatchObject({
+        resultText: "NO_REPLY",
+        fallbackResultText: "legacy retained result",
+      });
+      expect(restored?.delivery?.payload).not.toHaveProperty("frozenResultText");
+      expect(restored?.delivery?.payload).not.toHaveProperty("fallbackFrozenResultText");
+
+      const stored = openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT payload_json, frozen_result_text, fallback_frozen_result_text FROM subagent_runs WHERE run_id = ?",
+        )
+        .get(run.runId) as {
+        payload_json: string;
+        frozen_result_text: string | null;
+        fallback_frozen_result_text: string | null;
+      };
+      expect(stored.frozen_result_text).toBe("NO_REPLY");
+      expect(stored.fallback_frozen_result_text).toBe("legacy retained result");
+      const storedPayload = JSON.parse(stored.payload_json) as SubagentRunRecord;
+      expect(storedPayload.completion).toMatchObject({
+        required: true,
+        resultText: "NO_REPLY",
+        fallbackResultText: "legacy retained result",
+      });
+      expect(storedPayload.delivery?.payload).not.toHaveProperty("frozenResultText");
+      expect(storedPayload.delivery?.payload).not.toHaveProperty("fallbackFrozenResultText");
+
+      closeOpenClawStateDatabaseForTest();
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.completion).toMatchObject({
+        resultText: "NO_REPLY",
+        fallbackResultText: "legacy retained result",
+      });
+    });
+  });
+
   it("loads a canonical lightweight session-list projection", async () => {
     await withTempStateEnv(async () => {
       const run = createRun({
@@ -214,7 +340,7 @@ describe("subagent registry sqlite store", () => {
         delivery: {
           status: "suspended",
           suspendedAt: 275,
-          suspendedReason: "retry-limit",
+          suspendedReason: "expiry",
         },
         task: "x".repeat(8_192),
       });

@@ -19,7 +19,7 @@ import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admi
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   bootstrapCacheMocks,
   subagentLifecycleHookMocks,
   subagentLifecycleHookState,
@@ -37,7 +37,7 @@ import {
   sessionHookMocks,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
 type ResetAcpState = {
   backend?: string;

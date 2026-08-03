@@ -887,6 +887,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentThreadId: options?.messageThreadId,
             nativeChannelId: options?.nativeChannelId,
             agentDir: options?.agentDir,
+            preparedModelRuntime: options?.preparedModelRuntime,
             workspaceDir: workspaceRoot,
             config: options?.config,
             fsPolicy,

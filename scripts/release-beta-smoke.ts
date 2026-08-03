@@ -4,8 +4,14 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  booleanFlag,
+  parseFlagArgs,
+  stringFlag,
+  stripLeadingPackageManagerSeparator,
+} from "./lib/arg-utils.mjs";
 
-interface Options {
+type Options = {
   beta: string;
   model: string;
   providerMode: string;
@@ -13,7 +19,7 @@ interface Options {
   repo: string;
   skipParallels: boolean;
   skipTelegram: boolean;
-}
+};
 
 export type RunOptions = {
   capture?: boolean;
@@ -52,6 +58,8 @@ Options:
 
 export function parseArgs(argv: string[]): Options {
   const args = stripLeadingPackageManagerSeparator(argv);
+  const terminatorIndex = args.indexOf("--");
+  const cliArgs = terminatorIndex === -1 ? args : args.slice(0, terminatorIndex);
   const options: Options = {
     beta: "beta",
     model: "openai/gpt-5.4",
@@ -61,56 +69,43 @@ export function parseArgs(argv: string[]): Options {
     skipParallels: false,
     skipTelegram: false,
   };
-  parseArgv: for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    switch (arg) {
-      case "--":
-        break parseArgv;
-      case "--beta":
-        options.beta = requireValue(args, ++i, arg);
-        break;
-      case "--model":
-        options.model = requireValue(args, ++i, arg);
-        break;
-      case "--provider-mode":
-        options.providerMode = requireValue(args, ++i, arg);
-        break;
-      case "--ref":
-        options.ref = requireValue(args, ++i, arg);
-        break;
-      case "--repo":
-        options.repo = requireValue(args, ++i, arg);
-        break;
-      case "--skip-parallels":
-        options.skipParallels = true;
-        break;
-      case "--skip-telegram":
-        options.skipTelegram = true;
-        break;
-      case "-h":
-      case "--help":
-        process.stdout.write(usage());
-        process.exit(0);
-      default:
+  const helpIndex = cliArgs.findIndex((arg) => arg === "-h" || arg === "--help");
+  parseFlagArgs(
+    helpIndex === -1 ? cliArgs : cliArgs.slice(0, helpIndex),
+    options,
+    [
+      ...(
+        [
+          ["--beta", "beta"],
+          ["--model", "model"],
+          ["--provider-mode", "providerMode"],
+          ["--ref", "ref"],
+          ["--repo", "repo"],
+        ] as const
+      ).map(([flag, key]) =>
+        stringFlag(flag, key, {
+          allowInline: false,
+          rejectShortOptions: true,
+          repeatable: true,
+        }),
+      ),
+      booleanFlag("--skip-parallels", "skipParallels", true, { repeatable: true }),
+      booleanFlag("--skip-telegram", "skipTelegram", true, { repeatable: true }),
+    ],
+    {
+      onUnhandledArg(arg) {
         throw new Error(`unknown option: ${arg}`);
-    }
+      },
+    },
+  );
+  if (helpIndex !== -1) {
+    process.stdout.write(usage());
+    process.exit(0);
   }
   if (options.skipParallels && options.skipTelegram) {
     throw new Error("--skip-parallels and --skip-telegram cannot be used together");
   }
   return options;
-}
-
-function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
-  return argv[0] === "--" ? argv.slice(1) : argv;
-}
-
-function requireValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
 }
 
 const CAPTURE_MAX_BUFFER_BYTES = 32 * 1024 * 1024;

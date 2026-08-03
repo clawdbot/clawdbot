@@ -18,6 +18,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import "./server-startup-outcomes.test-support.js";
 
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn<() => Promise<PluginServicesHandle | null>>(async () => null);
@@ -32,7 +33,7 @@ const hoisted = vi.hoisted(() => {
   const scheduleGatewayUpdateCheck = vi.fn(() => () => {});
   const startGatewayTailscaleExposure = vi.fn(async () => null);
   const logGatewayStartup = vi.fn();
-  const scheduleSubagentOrphanRecovery = vi.fn();
+  const scheduleSubagentRegistrySweep = vi.fn();
   const markStartupOrphanedMainSessionsForRecovery = vi.fn(async () => ({
     marked: 0,
     skipped: 0,
@@ -91,7 +92,7 @@ const hoisted = vi.hoisted(() => {
     scheduleGatewayUpdateCheck,
     startGatewayTailscaleExposure,
     logGatewayStartup,
-    scheduleSubagentOrphanRecovery,
+    scheduleSubagentRegistrySweep,
     markStartupOrphanedMainSessionsForRecovery,
     scheduleRestartAbortedMainSessionRecovery,
     scheduleRestartSentinelWake,
@@ -121,7 +122,7 @@ vi.mock("../agents/session-dirs.js", () => ({
 }));
 
 vi.mock("../agents/subagent-registry.js", () => ({
-  scheduleSubagentOrphanRecovery: hoisted.scheduleSubagentOrphanRecovery,
+  scheduleSubagentRegistrySweep: hoisted.scheduleSubagentRegistrySweep,
 }));
 
 vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
@@ -336,7 +337,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.scheduleGatewayUpdateCheck.mockClear();
     hoisted.startGatewayTailscaleExposure.mockClear();
     hoisted.logGatewayStartup.mockClear();
-    hoisted.scheduleSubagentOrphanRecovery.mockClear();
+    hoisted.scheduleSubagentRegistrySweep.mockClear();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockReset();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockResolvedValue({
       marked: 0,
@@ -390,14 +391,19 @@ describe("startGatewayPostAttachRuntime", () => {
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
     const methodsAtRecoveryRegistration: string[][] = [];
-    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(() => {
-      methodsAtRecoveryRegistration.push([...unavailableGatewayMethods]);
-    });
+    const currentConfig = { agents: { list: [{ id: "main" }, { id: "work" }] } };
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
+      (params: { getConfig: () => unknown }) => {
+        methodsAtRecoveryRegistration.push([...unavailableGatewayMethods]);
+        expect(params.getConfig()).toBe(currentConfig);
+      },
+    );
     const onSidecarsReady = vi.fn();
     const log = { info: vi.fn(), warn: vi.fn() };
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
+      getConfig: () => currentConfig,
       log,
       unavailableGatewayMethods,
       onSidecarsReady,
@@ -419,13 +425,13 @@ describe("startGatewayPostAttachRuntime", () => {
     );
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
-      cfg: { hooks: { internal: { enabled: false } } },
       delayMs: 0,
+      getConfig: expect.any(Function),
       shouldContinue: expect.any(Function),
       waitForStart: undefined,
       gatewayRuntime: expect.any(Object),
     });
-    expect(hoisted.scheduleSubagentOrphanRecovery).toHaveBeenCalledWith();
+    expect(hoisted.scheduleSubagentRegistrySweep).toHaveBeenCalledWith();
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
@@ -2821,6 +2827,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
   return {
     minimalTestGateway: false,
     cfgAtStart: { hooks: { internal: { enabled: false } } } as never,
+    getConfig: () => ({ hooks: { internal: { enabled: false } } }) as never,
     bindHost: "127.0.0.1",
     bindHosts: ["127.0.0.1"],
     port: 18789,

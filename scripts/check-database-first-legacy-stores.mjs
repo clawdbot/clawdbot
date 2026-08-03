@@ -12,7 +12,8 @@ import {
   mergeLegacyObjectPropertyValues,
   mergeLegacyPathBranchAssignments,
 } from "./lib/legacy-store-path-domain.mjs";
-import { resolveRepoRoot, runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
 const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packages"];
 const databaseFirstNativeSourceRoots = ["apps/macos/Sources/OpenClaw"];

@@ -958,6 +958,35 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it("keeps gateway subagent binding off for embedded /btw side questions", async () => {
+    // The embedded TUI runs the side question locally, so it must not borrow the
+    // active registry's subagent and node capabilities. Only gateway-hosted
+    // callers opt into allowGatewaySubagentBinding.
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: "global",
+      storePath: "/tmp/openclaw-btw-sessions.json",
+      store: {},
+      entry: { sessionId: "session-btw-local" },
+    });
+    runBtwSideQuestionMock.mockResolvedValueOnce({ text: "side done" });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "global",
+      message: "/btw local only",
+      runId: "run-btw-local",
+    });
+    await vi.waitFor(() => expect(runBtwSideQuestionMock).toHaveBeenCalledTimes(1));
+    await backend.stop();
+
+    expect(runBtwSideQuestionMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "allowGatewaySubagentBinding",
+    );
+  });
+
   it("reports the newest matching non-BTW local run in embedded history", async () => {
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
       cfg: {},

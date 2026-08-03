@@ -78,6 +78,10 @@ type BoundedStringLog = string[] & {
 };
 
 type OpenClawTestChildProcess = Pick<OpenClawTestProcess, "kill" | "pid">;
+type OpenClawTestProcessReadiness = Pick<OpenClawTestProcess, "exitCode" | "signalCode"> & {
+  once: (event: "exit", listener: () => void) => unknown;
+  off: (event: "exit", listener: () => void) => unknown;
+};
 
 function createBoundedStringLog(): string[] {
   const log = [] as BoundedStringLog;
@@ -213,44 +217,83 @@ const getFreePort = async () => {
   return addr.port;
 };
 
-async function waitForPortOpen(
-  proc: Pick<OpenClawTestProcess, "exitCode" | "signalCode">,
+async function waitForGatewayReady(
+  proc: OpenClawTestProcessReadiness,
   chunksOut: string[],
   chunksErr: string[],
   port: number,
   timeoutMs: number,
+  fetchImpl: typeof fetch = fetch,
 ) {
+  const exitedBeforeReadinessError = () =>
+    new Error(
+      `gateway exited before readiness (code=${String(proc.exitCode)} signal=${String(
+        proc.signalCode,
+      )})\n${formatLogs(chunksOut, chunksErr)}`,
+    );
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (hasChildExited(proc)) {
-      throw new Error(
-        `gateway exited before listening (code=${String(proc.exitCode)} signal=${String(
-          proc.signalCode,
-        )})\n${formatLogs(chunksOut, chunksErr)}`,
-      );
+      throw exitedBeforeReadinessError();
     }
 
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    const attemptTimeoutMs = Math.min(1_000, Math.max(1, remainingMs));
+    const probeAbort = new AbortController();
+    let attemptTimeout: ReturnType<typeof setTimeout> | undefined;
+    let handleExit = () => {};
+    const exitPromise = new Promise<never>((_resolve, reject) => {
+      handleExit = () => {
+        const error = exitedBeforeReadinessError();
+        probeAbort.abort(error);
+        reject(error);
+      };
+      proc.once("exit", handleExit);
+    });
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      attemptTimeout = setTimeout(() => {
+        const error = new Error("gateway readiness probe timed out");
+        probeAbort.abort(error);
+        reject(error);
+      }, attemptTimeoutMs);
+      attemptTimeout.unref?.();
+    });
     try {
-      await new Promise<void>((resolve, reject) => {
-        const socket = net.connect({ host: "127.0.0.1", port });
-        socket.once("connect", () => {
-          socket.destroy();
-          resolve();
-        });
-        socket.once("error", (err) => {
-          socket.destroy();
-          reject(err);
-        });
-      });
-      return;
+      // A dead child cannot complete readiness. Race the owner lifecycle against
+      // both HTTP headers and body parsing so a stuck probe never hides its exit.
+      const ready = await Promise.race([
+        (async () => {
+          const response = await fetchImpl(`http://127.0.0.1:${port}/readyz`, {
+            signal: probeAbort.signal,
+          });
+          const readiness: unknown = await response.json();
+          return response.ok && isRecord(readiness) && readiness.ready === true;
+        })(),
+        exitPromise,
+        timeoutPromise,
+      ]);
+      if (ready) {
+        return;
+      }
     } catch {
+      if (hasChildExited(proc)) {
+        throw exitedBeforeReadinessError();
+      }
       // keep polling
+    } finally {
+      if (attemptTimeout) {
+        clearTimeout(attemptTimeout);
+      }
+      proc.off("exit", handleExit);
     }
 
-    await sleep(10);
+    const delayMs = Math.min(10, timeoutMs - (Date.now() - startedAt));
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
   }
   throw new Error(
-    `timeout waiting for gateway to listen on port ${port}\n${formatLogs(chunksOut, chunksErr)}`,
+    `timeout waiting for gateway readiness on port ${port}\n${formatLogs(chunksOut, chunksErr)}`,
   );
 }
 
@@ -415,7 +458,7 @@ export async function createOpenClawTestInstance(
       child.stderr?.on("data", (d) => appendLogChunk(stderr, d));
 
       try {
-        await waitForPortOpen(
+        await waitForGatewayReady(
           child,
           stdout,
           stderr,
@@ -539,5 +582,5 @@ export const testing = {
   formatLogs,
   hasChildExited,
   signalOpenClawTestProcess,
-  waitForPortOpen,
+  waitForGatewayReady,
 };

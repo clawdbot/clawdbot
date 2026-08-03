@@ -82,6 +82,7 @@ export async function finishGatewayStartup(params: {
     startupTrace,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
+    readPreparedGatewayModelCatalog,
     refreshGatewayHealthSnapshotWithRuntime,
     getRuntimeSnapshot,
     broadcast,
@@ -212,6 +213,7 @@ export async function finishGatewayStartup(params: {
       listSessionPendingApprovals: approvalSessionEvents.replay,
       loadGatewayModelCatalog,
       loadGatewayModelCatalogSnapshot,
+      readPreparedGatewayModelCatalog,
       getHealthCache,
       refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
       logHealth,
@@ -408,6 +410,7 @@ export async function finishGatewayStartup(params: {
         startGatewayPostAttachRuntime({
           minimalTestGateway,
           cfgAtStart,
+          getConfig: getRuntimeConfig,
           bindHost,
           bindHosts: httpBindHosts,
           port,
