@@ -5,18 +5,28 @@ import path from "node:path";
 import process from "node:process";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
+  runCommandWithTimeout: runCommandWithTimeoutMock,
+}));
+
 import {
   createCodexCliSessionNodeHostCommands,
   listCodexCliSessionsOnNode,
+  resumeCodexCliSessionOnNode,
 } from "./node-cli-sessions.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
+const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
 
 let tempDir: string;
 let previousCodexHome: string | undefined;
 
 describe("codex cli node sessions", () => {
   beforeEach(async () => {
+    runCommandWithTimeoutMock.mockReset();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-cli-sessions-"));
     previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = tempDir;
@@ -30,6 +40,134 @@ describe("codex cli node sessions", () => {
     }
     vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("routes CLI resume through the shared process-tree command runner", async () => {
+    const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd";
+    runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
+      const outputFlagIndex = argv.indexOf("--output-last-message");
+      const outputPath = argv[outputFlagIndex + 1];
+      if (!outputPath) {
+        throw new Error("missing Codex output path");
+      }
+      await fs.writeFile(outputPath, " resumed reply \n");
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSION_RESUME_COMMAND,
+    );
+    const raw = await command?.handle(
+      JSON.stringify({
+        sessionId,
+        prompt: "finish the task",
+        cwd: tempDir,
+        timeoutMs: 1_234,
+      }),
+    );
+
+    expect(JSON.parse(raw ?? "{}")).toEqual({ ok: true, sessionId, text: "resumed reply" });
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledOnce();
+    const [argv, options] = runCommandWithTimeoutMock.mock.calls[0] ?? [];
+    expect(argv?.slice(-7)).toEqual([
+      "exec",
+      "resume",
+      "--skip-git-repo-check",
+      "--output-last-message",
+      expect.any(String),
+      sessionId,
+      "-",
+    ]);
+    expect(options).toMatchObject({
+      cwd: tempDir,
+      input: "finish the task",
+      killProcessTree: true,
+      timeoutMs: 1_234,
+    });
+    expect(options?.env).toBe(process.env);
+  });
+
+  it("preserves the owned timeout error from the shared command runner", async () => {
+    const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5ce";
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      code: 124,
+      signal: null,
+      killed: true,
+      termination: "timeout",
+    });
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSION_RESUME_COMMAND,
+    );
+
+    await expect(
+      command?.handle(
+        JSON.stringify({
+          sessionId,
+          prompt: "finish the task",
+          cwd: tempDir,
+          timeoutMs: 1_234,
+        }),
+      ),
+    ).rejects.toThrow("codex exec resume timed out after 1234ms");
+  });
+
+  it("prefers Codex stderr for a nonzero shared-runner exit", async () => {
+    const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cf";
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "fallback stdout",
+      stderr: "resume failed",
+      code: 7,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSION_RESUME_COMMAND,
+    );
+
+    await expect(
+      command?.handle(
+        JSON.stringify({
+          sessionId,
+          prompt: "finish the task",
+          cwd: tempDir,
+          timeoutMs: 1_234,
+        }),
+      ),
+    ).rejects.toThrow("resume failed");
+  });
+
+  it("keeps enough outer invoke budget for shared Windows tree cleanup", async () => {
+    const invoke = vi.fn(async () => ({
+      payload: { ok: true, sessionId: "session-1", text: "done" },
+    }));
+    const runtime = { nodes: { invoke } } as unknown as PluginRuntime;
+
+    await resumeCodexCliSessionOnNode({
+      runtime,
+      nodeId: "node-1",
+      sessionId: "session-1",
+      prompt: "finish the task",
+      timeoutMs: 1_234,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "node-1",
+        timeoutMs: 11_234,
+      }),
+    );
   });
 
   it("lists recent sessions from Codex history and hydrates cwd from session files", async () => {

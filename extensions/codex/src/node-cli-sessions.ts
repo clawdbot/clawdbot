@@ -1,5 +1,4 @@
 // Codex plugin module implements node cli sessions behavior.
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +10,7 @@ import type {
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -27,6 +27,7 @@ export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
 const DEFAULT_SESSION_LIMIT = 10;
 const MAX_SESSION_LIMIT = 50;
 const DEFAULT_RESUME_TIMEOUT_MS = 20 * 60_000;
+const RESUME_NODE_INVOKE_CLEANUP_GRACE_MS = 10_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const activeResumeSessions = new Set<string>();
 
@@ -164,7 +165,8 @@ export async function resumeCodexCliSessionOnNode(params: {
       cwd: params.cwd,
       timeoutMs: params.timeoutMs,
     },
-    timeoutMs: (params.timeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS) + 5_000,
+    timeoutMs:
+      (params.timeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS) + RESUME_NODE_INVOKE_CLEANUP_GRACE_MS,
     scopes: ["operator.write"],
   });
   const payload = unwrapNodeInvokePayload(raw);
@@ -273,48 +275,28 @@ async function runCodexExecResume(params: {
       params.sessionId,
       "-",
     ];
-    const invocation = resolveCodexCliResumeSpawnInvocation(args, {
+    const argv = resolveCodexCliResumeArgv(args, {
       platform: process.platform,
       env: process.env,
       execPath: process.execPath,
     });
-    const child = spawn(invocation.command, invocation.args, {
+    const result = await runCommandWithTimeout(argv, {
       cwd: params.cwd || process.cwd(),
-      stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
-      shell: invocation.shell,
-      windowsHide: invocation.windowsHide,
+      input: params.prompt,
+      killProcessTree: true,
+      timeoutMs: params.timeoutMs,
     });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let timedOut = false;
-    let forceKillTimeout: NodeJS.Timeout | undefined;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      forceKillTimeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
-      forceKillTimeout.unref?.();
-    }, params.timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.stdin.end(params.prompt);
-    const exitCode = await new Promise<number | null>((resolve, reject) => {
-      child.on("error", reject);
-      child.on("exit", (code) => resolve(code));
-    }).finally(() => {
-      clearTimeout(timeout);
-      if (forceKillTimeout) {
-        clearTimeout(forceKillTimeout);
-      }
-    });
-    if (timedOut) {
+    if (result.termination === "timeout" || result.termination === "no-output-timeout") {
       throw new Error(`codex exec resume timed out after ${String(params.timeoutMs)}ms`);
     }
-    if (exitCode !== 0) {
+    if (result.termination !== "exit" || result.code !== 0) {
       const message =
-        Buffer.concat(stderr).toString("utf8").trim() ||
-        Buffer.concat(stdout).toString("utf8").trim() ||
-        `codex exec resume exited with code ${String(exitCode)}`;
+        result.stderr.trim() ||
+        result.stdout.trim() ||
+        (result.signal
+          ? `codex exec resume terminated by ${result.signal}`
+          : `codex exec resume exited with code ${String(result.code)}`);
       throw new Error(message);
     }
     return await fs.readFile(outputPath, "utf8");
@@ -323,10 +305,10 @@ async function runCodexExecResume(params: {
   }
 }
 
-function resolveCodexCliResumeSpawnInvocation(
+function resolveCodexCliResumeArgv(
   args: string[],
   runtime: CodexCliResumeSpawnRuntime = DEFAULT_RESUME_SPAWN_RUNTIME,
-): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+): string[] {
   const program = resolveWindowsSpawnProgram({
     command: "codex",
     platform: runtime.platform,
@@ -335,12 +317,7 @@ function resolveCodexCliResumeSpawnInvocation(
     packageName: "@openai/codex",
   });
   const resolved = materializeWindowsSpawnProgram(program, args);
-  return {
-    command: resolved.command,
-    args: resolved.argv,
-    shell: resolved.shell,
-    windowsHide: resolved.windowsHide,
-  };
+  return [resolved.command, ...resolved.argv];
 }
 
 async function readHistorySessions(
