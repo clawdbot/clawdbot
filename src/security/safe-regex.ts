@@ -11,6 +11,7 @@ type QuantifierRead = {
 };
 
 type TokenState = {
+  captureKeys: string[];
   containsRepetition: boolean;
   containsAlternation: boolean;
   hasAmbiguousAlternation: boolean;
@@ -34,7 +35,9 @@ type ParseFrame = {
   altMinLength: number | null;
   altMaxLength: number | null;
   branchPaths: string[][] | null;
+  branchCaptureKeys: Set<string>;
   alternativePaths: Array<string[][] | null>;
+  alternativeCaptureKeys: Array<Set<string>>;
   branchSignatures: string[];
   alternativeSignatures: string[][];
 };
@@ -95,7 +98,9 @@ function createParseFrame(
     altMinLength: null,
     altMaxLength: null,
     branchPaths: [[]],
+    branchCaptureKeys: new Set(),
     alternativePaths: [],
+    alternativeCaptureKeys: [],
     branchSignatures: [],
     alternativeSignatures: [],
   };
@@ -117,6 +122,7 @@ function multiplyLength(length: number, factor: number): number {
 
 function recordAlternative(frame: ParseFrame): void {
   frame.alternativePaths.push(frame.branchPaths);
+  frame.alternativeCaptureKeys.push(new Set(frame.branchCaptureKeys));
   frame.alternativeSignatures.push(frame.branchSignatures);
   if (frame.altMinLength === null || frame.altMaxLength === null) {
     frame.altMinLength = frame.branchMinLength;
@@ -402,6 +408,9 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
       frame.branchPaths = null;
     }
     frame.branchSignatures.push(token.signature);
+    for (const captureKey of token.captureKeys) {
+      frame.branchCaptureKeys.add(captureKey);
+    }
   };
 
   const emitSimpleToken = (
@@ -411,6 +420,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     ambiguousWhenRepeated = false,
   ) => {
     emitToken({
+      captureKeys: [],
       containsRepetition: false,
       containsAlternation: false,
       hasAmbiguousAlternation: ambiguousWhenRepeated,
@@ -423,12 +433,24 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
 
   for (const token of tokens) {
     if (token.kind === "simple-token") {
-      const backreferencePaths = token.backreferenceKey
-        ? capturedPaths.get(token.backreferenceKey)
+      const backreferenceKey = token.backreferenceKey;
+      const backreferenceMayBeUnmatched = backreferenceKey
+        ? frames.some(
+            (frame) =>
+              frame.hasAlternation &&
+              frame.alternativeCaptureKeys.some((keys) => keys.has(backreferenceKey)) &&
+              !frame.branchCaptureKeys.has(backreferenceKey),
+          )
+        : false;
+      const backreferencePaths = backreferenceKey
+        ? backreferenceMayBeUnmatched
+          ? null
+          : capturedPaths.get(backreferenceKey)
         : undefined;
       if (backreferencePaths) {
         const lengths = backreferencePaths.map((path) => path.length);
         emitToken({
+          captureKeys: [],
           containsRepetition: false,
           containsAlternation: backreferencePaths.length > 1,
           hasAmbiguousAlternation: false,
@@ -472,6 +494,22 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
             ? alternativePaths
             : null
           : frame.branchPaths;
+        const descendantCaptureKeys = new Set<string>();
+        const captureKeySets = frame.hasAlternation
+          ? frame.alternativeCaptureKeys
+          : [frame.branchCaptureKeys];
+        for (const captureKeys of captureKeySets) {
+          for (const captureKey of captureKeys) {
+            descendantCaptureKeys.add(captureKey);
+          }
+        }
+        if (frame.hasAlternation) {
+          for (const captureKey of descendantCaptureKeys) {
+            if (!frame.alternativeCaptureKeys.every((keys) => keys.has(captureKey))) {
+              capturedPaths.set(captureKey, null);
+            }
+          }
+        }
         for (const captureKey of frame.captureKeys) {
           recordCapturedPaths(
             captureKey,
@@ -479,6 +517,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
           );
         }
         emitToken({
+          captureKeys: [...new Set([...descendantCaptureKeys, ...frame.captureKeys])],
           containsRepetition: frame.containsRepetition,
           containsAlternation: frame.containsAlternation,
           hasAmbiguousAlternation:
@@ -509,6 +548,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
       frame.branchMinLength = 0;
       frame.branchMaxLength = 0;
       frame.branchPaths = [[]];
+      frame.branchCaptureKeys = new Set();
       frame.branchSignatures = [];
       frame.lastToken = null;
       continue;
@@ -524,6 +564,11 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     }
     if (previousToken.hasAmbiguousAlternation && token.quantifier.maxRepeat === null) {
       return true;
+    }
+    if (token.quantifier.minRepeat === 0) {
+      for (const captureKey of previousToken.captureKeys) {
+        capturedPaths.set(captureKey, null);
+      }
     }
 
     const previousMinLength = previousToken.minLength;

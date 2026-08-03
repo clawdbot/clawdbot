@@ -33,6 +33,8 @@ const REGEX_CASES: Array<[pattern: string, expected: RegExpConstructor | null, f
   ["^(a)(\\1|a)*!$", null],
   ["^(?<letter>a)(\\k<letter>|a)*!$", null],
   ["^(?:(?<letter>a)|(?<letter>b))(\\k<letter>|a)*!$", null],
+  ["^(a)?(\\1b|b)+!$", null],
+  ["^(?:(a)|b)(\\1c|c)+!$", null],
   ["(?:(?=a)a|a(?=a))+!", null],
   ["(?:k|\\P{ASCII})+!", null, "iu"],
   ["(?:\\p{Lu}|\\p{Ll})+!", null, "iu"],
