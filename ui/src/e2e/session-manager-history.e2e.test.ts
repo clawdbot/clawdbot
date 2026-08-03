@@ -14,7 +14,7 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
-  name: "Control UI sessions and cron primary QA",
+  name: "Control UI session manager and history primary QA",
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
 });
@@ -23,7 +23,7 @@ const artifactDir = path.join(
   process.cwd(),
   ".artifacts",
   "control-ui-e2e",
-  "session-cron-primary",
+  "session-manager-history",
 );
 
 async function captureUiProof(page: Page, fileName: string) {
@@ -32,37 +32,6 @@ async function captureUiProof(page: Page, fileName: string) {
   }
   await mkdir(artifactDir, { recursive: true });
   await page.screenshot({ fullPage: true, path: path.join(artifactDir, fileName) });
-}
-
-function cronJob(
-  id: string,
-  name: string,
-  schedule: Record<string, unknown>,
-  state: Record<string, unknown> = {},
-) {
-  return {
-    id,
-    name,
-    enabled: true,
-    createdAtMs: Date.parse("2026-08-03T08:00:00.000Z"),
-    updatedAtMs: Date.parse("2026-08-03T08:05:00.000Z"),
-    schedule,
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: `${name} fired` },
-    state: { lastRunStatus: "ok", ...state },
-  };
-}
-
-function cronListResponse(jobs: unknown[]) {
-  return {
-    jobs,
-    total: jobs.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
 }
 
 suite.define(() => {
@@ -173,133 +142,6 @@ suite.define(() => {
       await toast.waitFor({ state: "visible", timeout: 10_000 });
       await toast.getByRole("button", { name: "Undo" }).waitFor({ state: "visible" });
       await captureUiProof(page, "03-session-archive-feedback.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("covers cron listing, filtering, schedule creation, and run feedback", async () => {
-    const intervalJob = cronJob("hourly-digest", "Hourly digest", {
-      kind: "every",
-      everyMs: 3_600_000,
-    });
-    const nightlyJob = cronJob("nightly-maintenance", "Nightly maintenance", {
-      kind: "cron",
-      expr: "0 1 * * *",
-      tz: "UTC",
-    });
-    const createdJob = cronJob(
-      "weekday-report",
-      "Weekday report",
-      { kind: "cron", expr: "0 9 * * 1-5", tz: "UTC" },
-      { runningAtMs: Date.parse("2026-08-03T09:05:00.000Z") },
-    );
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1_280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "cron.add": { id: createdJob.id },
-        "cron.list": {
-          cases: [
-            {
-              match: { lastRunStatus: "error" },
-              response: cronListResponse([]),
-            },
-            {
-              match: { scheduleKind: "cron" },
-              response: cronListResponse([nightlyJob]),
-            },
-            { response: cronListResponse([intervalJob, nightlyJob]) },
-          ],
-        },
-        "cron.run": { ok: true, ran: false, reason: "already-running" },
-        "cron.runs": {
-          entries: [],
-          total: 0,
-          offset: 0,
-          limit: 50,
-          hasMore: false,
-          nextOffset: null,
-        },
-        "cron.status": {
-          enabled: true,
-          jobs: 2,
-          nextWakeAtMs: Date.parse("2026-08-03T10:00:00.000Z"),
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}cron`);
-      const jobTitle = (name: string) =>
-        page.locator(".cron-table__name-text", { hasText: new RegExp(`^${name}$`, "u") });
-      await jobTitle(intervalJob.name).waitFor({ state: "visible", timeout: 10_000 });
-      await jobTitle(nightlyJob.name).waitFor({ state: "visible", timeout: 10_000 });
-
-      await page.locator(".cron-filter-popover__trigger").click();
-      await page.locator('[data-test-id="cron-jobs-schedule-filter"]').selectOption("cron");
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("cron.list")).some(
-            (request) => requireRecord(request.params).scheduleKind === "cron",
-          ),
-        )
-        .toBe(true);
-      await jobTitle(nightlyJob.name).waitFor({ state: "visible" });
-      await expect.poll(() => jobTitle(intervalJob.name).count()).toBe(0);
-      await captureUiProof(page, "04-cron-filter.png");
-
-      await page.locator('[data-test-id="cron-new-task"]').click();
-      await page.locator("#cron-name").fill(createdJob.name);
-      await page.locator("#cron-payload-text").fill("Prepare the weekday report");
-      await page.locator('[data-test-id="cron-schedule-kind-cron"]').click();
-      await page.locator("#cron-cron-expr").fill("0 9 * * 1-5");
-      await page.locator("#cron-cron-tz").fill("UTC");
-      await expect
-        .poll(() => page.locator(".cron-schedule-summary").textContent())
-        .toContain("0 9 * * 1-5");
-      await gateway.setMethodResponse("cron.list", {
-        cases: [
-          {
-            match: { lastRunStatus: "error" },
-            response: cronListResponse([]),
-          },
-          { response: cronListResponse([nightlyJob, createdJob]) },
-        ],
-      });
-      await page.locator('[data-test-id="cron-submit"]').click();
-
-      const addRequest = await gateway.waitForRequest("cron.add");
-      expect(requireRecord(addRequest.params)).toMatchObject({
-        name: createdJob.name,
-        payload: {
-          kind: "agentTurn",
-          message: "Prepare the weekday report",
-        },
-        schedule: {
-          kind: "cron",
-          expr: "0 9 * * 1-5",
-          tz: "UTC",
-        },
-      });
-      await jobTitle(createdJob.name).waitFor({ state: "visible", timeout: 10_000 });
-      await captureUiProof(page, "05-cron-created.png");
-
-      await jobTitle(createdJob.name).click();
-      await page.locator('[data-test-id="cron-run-now"]').click();
-      const runRequest = await gateway.waitForRequest("cron.run");
-      expect(requireRecord(runRequest.params)).toEqual({
-        id: createdJob.id,
-        mode: "force",
-      });
-      await expect
-        .poll(() => page.locator(".cron-error-banner").textContent())
-        .toContain("This automation is already running.");
-      await captureUiProof(page, "06-cron-run-feedback.png");
     } finally {
       await suite.closeBrowserContext(context);
     }
