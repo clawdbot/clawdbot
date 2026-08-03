@@ -392,6 +392,27 @@ exit 1
     }
   });
 
+  it("keeps POSIX provider secrets out of executable command lines", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.5",
+      updateTarget: "2026.7.2-beta.5",
+    };
+    const exportLine = `  export ${TEST_AUTH.apiKeyEnv}='${TEST_AUTH.apiKeyValue}'`;
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script.split("\n").filter((line) => line.includes(TEST_AUTH.apiKeyValue))).toEqual([
+        exportLine,
+      ]);
+      expect(script).toMatch(/with_provider_api_key [^\n]*gateway run/u);
+      expect(script).toMatch(/with_provider_api_key [^\n]*agent --local/u);
+      expect(script).toContain(`unset ${TEST_AUTH.apiKeyEnv}`);
+      expect(script.split("\n").find((line) => line.includes(" update --tag "))).not.toContain(
+        "with_provider_api_key",
+      );
+    }
+  });
+
   it("does not recreate retired workspace setup state in release smoke scripts", () => {
     const input = {
       auth: TEST_AUTH,
