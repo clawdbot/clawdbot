@@ -1,11 +1,11 @@
 /** Tests bootstrap context truncation accounting and user-facing warning metadata. */
 import { describe, expect, it } from "vitest";
+import { buildBootstrapPromptWarning } from "./bootstrap-budget-warning.js";
 import {
   appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
   buildBootstrapBudgetState,
   buildBootstrapInjectionStats,
-  buildBootstrapPromptWarning,
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
   resolveBootstrapWarningSignaturesSeen,
@@ -15,7 +15,7 @@ import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 describe("buildBootstrapBudgetState", () => {
   it("composes configured limits, ordered injection stats, and warning state", () => {
-    const bootstrapFiles = [
+    const bootstrapFiles: WorkspaceBootstrapFile[] = [
       {
         name: "AGENTS.md",
         path: "/tmp/AGENTS.md",
