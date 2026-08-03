@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildScriptEvidenceSummary, QA_EVIDENCE_FILENAME } from "../../extensions/qa-lab/api.js";
+import { createQaScriptEvidenceWriter } from "../../test/e2e/qa-lab/runtime/script-evidence.js";
 
 const args = process.argv.slice(2);
 const artifactBaseIndex = args.indexOf("--artifact-base");
@@ -38,6 +39,18 @@ const boundaries = [
     ],
   },
 ];
+const writer = createQaScriptEvidenceWriter({
+  artifactBase,
+  logFileName: "cli-onboarding.log",
+  primaryModel: "openai/gpt-5.6-luna",
+  providerMode: "mock-openai",
+  repoRoot: process.cwd(),
+  target: {
+    id: "cli-onboarding",
+    title: "CLI onboarding boundaries",
+    sourcePath: "scripts/e2e/qa-cli-onboarding.mjs",
+  },
+});
 
 const seenMarkers = new Set();
 let markerCarry = "";
@@ -64,10 +77,12 @@ const child = spawn("bash", ["scripts/e2e/onboard-docker.sh"], {
 });
 
 child.stdout.on("data", (chunk) => {
+  writer.appendLog(chunk);
   collectMarkers(chunk);
   process.stdout.write(chunk);
 });
 child.stderr.on("data", (chunk) => {
+  writer.appendLog(chunk);
   collectMarkers(chunk);
   process.stderr.write(chunk);
 });
@@ -91,8 +106,9 @@ const results = boundaries.map((boundary) => {
       : {}),
   };
 });
+const logArtifact = await writer.writeLog();
 const evidence = buildScriptEvidenceSummary({
-  artifactPaths: [],
+  artifactPaths: [logArtifact],
   env: process.env,
   generatedAt: new Date().toISOString(),
   primaryModel: "openai/gpt-5.6-luna",
