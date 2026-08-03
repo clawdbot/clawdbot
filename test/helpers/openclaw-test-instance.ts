@@ -214,34 +214,73 @@ const getFreePort = async () => {
 };
 
 async function waitForGatewayReady(
-  proc: Pick<OpenClawTestProcess, "exitCode" | "signalCode">,
+  proc: Pick<OpenClawTestProcess, "exitCode" | "signalCode" | "once" | "off">,
   chunksOut: string[],
   chunksErr: string[],
   port: number,
   timeoutMs: number,
   fetchImpl: typeof fetch = fetch,
 ) {
+  const exitedBeforeReadinessError = () =>
+    new Error(
+      `gateway exited before readiness (code=${String(proc.exitCode)} signal=${String(
+        proc.signalCode,
+      )})\n${formatLogs(chunksOut, chunksErr)}`,
+    );
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (hasChildExited(proc)) {
-      throw new Error(
-        `gateway exited before readiness (code=${String(proc.exitCode)} signal=${String(
-          proc.signalCode,
-        )})\n${formatLogs(chunksOut, chunksErr)}`,
-      );
+      throw exitedBeforeReadinessError();
     }
 
     const remainingMs = timeoutMs - (Date.now() - startedAt);
+    const attemptTimeoutMs = Math.min(1_000, Math.max(1, remainingMs));
+    const probeAbort = new AbortController();
+    let attemptTimeout: ReturnType<typeof setTimeout> | undefined;
+    let handleExit = () => {};
+    const exitPromise = new Promise<never>((_resolve, reject) => {
+      handleExit = () => {
+        const error = exitedBeforeReadinessError();
+        probeAbort.abort(error);
+        reject(error);
+      };
+      proc.once("exit", handleExit);
+    });
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      attemptTimeout = setTimeout(() => {
+        const error = new Error("gateway readiness probe timed out");
+        probeAbort.abort(error);
+        reject(error);
+      }, attemptTimeoutMs);
+      attemptTimeout.unref?.();
+    });
     try {
-      const response = await fetchImpl(`http://127.0.0.1:${port}/readyz`, {
-        signal: AbortSignal.timeout(Math.min(1_000, Math.max(1, remainingMs))),
-      });
-      const readiness: unknown = await response.json();
-      if (response.ok && isRecord(readiness) && readiness.ready === true) {
+      // A dead child cannot complete readiness. Race the owner lifecycle against
+      // both HTTP headers and body parsing so a stuck probe never hides its exit.
+      const ready = await Promise.race([
+        (async () => {
+          const response = await fetchImpl(`http://127.0.0.1:${port}/readyz`, {
+            signal: probeAbort.signal,
+          });
+          const readiness: unknown = await response.json();
+          return response.ok && isRecord(readiness) && readiness.ready === true;
+        })(),
+        exitPromise,
+        timeoutPromise,
+      ]);
+      if (ready) {
         return;
       }
     } catch {
+      if (hasChildExited(proc)) {
+        throw exitedBeforeReadinessError();
+      }
       // keep polling
+    } finally {
+      if (attemptTimeout) {
+        clearTimeout(attemptTimeout);
+      }
+      proc.off("exit", handleExit);
     }
 
     const delayMs = Math.min(10, timeoutMs - (Date.now() - startedAt));
