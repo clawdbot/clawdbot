@@ -170,6 +170,13 @@ async function seedSessionStore(
   );
 }
 
+// upsertSessionEntry canonicalizes a bare seed key ("main" -> "agent:main:main"),
+// so read entries back through the same accessor production writes with instead
+// of indexing the raw key on a listing.
+function readSessionEntry(storePath: string, sessionKey = "main"): SessionEntry | undefined {
+  return sessionAccessorModule.loadSessionEntry({ storePath, sessionKey });
+}
+
 function readSessionStore(storePath: string): Record<string, SessionEntry> {
   return Object.fromEntries(
     sessionAccessorModule
@@ -260,8 +267,9 @@ describe("post-compaction delivery: continuation depth follows accepted children
         expect.objectContaining({ flowId: "pc-flow-source", expectedRevision: 7 }),
         expect.objectContaining({ currentChainCount: 2 }),
       );
-      const stored = readSessionStore(storePath);
-      expect(expectDefined(stored.main, "main entry").continuationChainCount).toBe(2);
+      expect(expectDefined(readSessionEntry(storePath), "main entry").continuationChainCount).toBe(
+        2,
+      );
     });
   });
 
@@ -299,8 +307,7 @@ describe("post-compaction delivery: continuation depth follows accepted children
       );
 
       expect(spawnSubagentDirect).not.toHaveBeenCalled();
-      const stored = readSessionStore(storePath);
-      const main = expectDefined(stored.main, "main entry");
+      const main = expectDefined(readSessionEntry(storePath), "main entry");
       expect(main.continuationChainCount).toBe(2);
       expect(main.continuationChainId).toBe("chain-from-marker");
     });
@@ -335,7 +342,7 @@ describe("post-compaction delivery: continuation depth follows accepted children
         expect.objectContaining({ expectedRevision: 8 }),
         childSessionKey,
       );
-      expect(expectDefined(readSessionStore(storePath).main, "main").continuationChainCount).toBe(
+      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(
         2,
       );
     });
@@ -364,7 +371,7 @@ describe("post-compaction delivery: continuation depth follows accepted children
       // Under the old persist-then-spawn ordering the first failure would have
       // pushed the count to 4 and every later retry would have been rejected by
       // the cap without ever reaching a child.
-      expect(expectDefined(readSessionStore(storePath).main, "main").continuationChainCount).toBe(
+      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(
         3,
       );
 
@@ -377,7 +384,7 @@ describe("post-compaction delivery: continuation depth follows accepted children
         accepting.deps,
       );
       expect(accepting.spawnSubagentDirect).toHaveBeenCalledTimes(1);
-      expect(expectDefined(readSessionStore(storePath).main, "main").continuationChainCount).toBe(
+      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(
         4,
       );
     });
@@ -412,7 +419,7 @@ describe("post-compaction delivery: continuation depth follows accepted children
       expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
       // No durable marker exists for a source-less row, so the replay reclaims
       // the delivery without risking a second charge for the same accepted hop.
-      expect(readSessionStore(storePath).main?.continuationChainCount ?? 0).toBe(0);
+      expect(readSessionEntry(storePath)?.continuationChainCount ?? 0).toBe(0);
     });
   });
 });
@@ -461,7 +468,7 @@ describe("post-compaction delivery: RFC §4.4 stale work dies before materializa
       expect(emitted).toContain("[continuation:post-compaction-delivery-stale]");
       expect(harness.log.mock.calls.flat().join("\n")).not.toContain(SECRET_TASK);
       expect(harness.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(readSessionStore(storePath).main?.continuationChainCount ?? 0).toBe(0);
+      expect(readSessionEntry(storePath)?.continuationChainCount ?? 0).toBe(0);
     });
   });
 

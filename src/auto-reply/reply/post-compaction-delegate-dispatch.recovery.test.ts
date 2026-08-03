@@ -274,12 +274,11 @@ async function seedSessionStore(
   );
 }
 
-function readSessionStore(storePath: string): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    sessionAccessorModule
-      .listSessionEntries({ storePath })
-      .map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
+// upsertSessionEntry canonicalizes a bare seed key ("main" -> "agent:main:main"),
+// so read entries back through the same accessor production writes with instead
+// of indexing the raw key on a listing.
+function readSessionEntry(storePath: string, sessionKey = "main"): SessionEntry | undefined {
+  return sessionAccessorModule.loadSessionEntry({ storePath, sessionKey });
 }
 
 afterEach(() => {
@@ -473,7 +472,7 @@ describe("post-compaction delegate dispatch extraction", () => {
       await deliverQueuedPostCompactionDelegate({ entry }, deps);
       expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
       expect(markPendingDelegateSpawnAccepted).toHaveBeenCalledTimes(1);
-      expect(expectDefined(readSessionStore(storePath).main, "main").continuationChainCount).toBe(
+      expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(
         1,
       );
     });

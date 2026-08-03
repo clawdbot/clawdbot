@@ -278,12 +278,11 @@ async function seedSessionStore(
   );
 }
 
-function readSessionStore(storePath: string): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    sessionAccessorModule
-      .listSessionEntries({ storePath })
-      .map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
+// upsertSessionEntry canonicalizes a bare seed key ("main" -> "agent:main:main"),
+// so read entries back through the same accessor production writes with instead
+// of indexing the raw key on a listing.
+function readSessionEntry(storePath: string, sessionKey = "main"): SessionEntry | undefined {
+  return sessionAccessorModule.loadSessionEntry({ storePath, sessionKey });
 }
 
 afterEach(() => {
@@ -413,8 +412,10 @@ describe("post-compaction delegate dispatch extraction", () => {
       });
 
       expect(taken).toEqual([normalizePostCompactionDelegate(delegate("persisted"))]);
-      const stored = readSessionStore(storePath);
-      expect(stored.main?.pendingPostCompactionDelegates).toBeUndefined();
+      expect(
+        expectDefined(readSessionEntry(storePath), "durable session entry")
+          .pendingPostCompactionDelegates,
+      ).toBeUndefined();
     });
   });
 
@@ -457,7 +458,10 @@ describe("post-compaction delegate dispatch extraction", () => {
       expect(taken).toEqual(persisted);
       expect(sessionEntry.pendingPostCompactionDelegates).toBeUndefined();
       expect(sessionStore.main.pendingPostCompactionDelegates).toBeUndefined();
-      expect(readSessionStore(storePath).main?.pendingPostCompactionDelegates).toBeUndefined();
+      expect(
+        expectDefined(readSessionEntry(storePath), "durable session entry")
+          .pendingPostCompactionDelegates,
+      ).toBeUndefined();
     });
   });
 
