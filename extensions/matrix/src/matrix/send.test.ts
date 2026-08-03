@@ -597,7 +597,7 @@ describe("sendMessageMatrix media", () => {
 
   it("rejects encrypted-room media before upload when encryption is unavailable", async () => {
     const { client, sendMessage, uploadContent } = makeClient();
-    vi.mocked(client.getMessageWireEventType).mockResolvedValue("m.room.encrypted");
+    vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
 
     await expect(
       sendMessageMatrix("room:!room:example", "caption", {
