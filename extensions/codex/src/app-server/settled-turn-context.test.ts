@@ -1,7 +1,13 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
-import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
+import { attachCodexMirrorAttestation } from "./transcript-mirror-attestation.js";
+import {
+  attachCodexMirrorIdentity,
+  attachUpstreamUserText,
+  readMirrorIdentity,
+  readUpstreamUserText,
+} from "./upstream-prompt-provenance.js";
 
 const mocks = vi.hoisted(() => ({
   readHistory: vi.fn(),
@@ -35,6 +41,30 @@ function settledTurn() {
       "turn-2:tool:call-2:result",
     ),
   ];
+}
+
+function settledHostPromptTurn() {
+  const settledMessages = settledTurn();
+  settledMessages[0] = attachUpstreamUserText(
+    message(
+      { role: "user", content: "Send it.", idempotencyKey: "durable-user-turn" },
+      "turn-2:prompt",
+    ),
+    "Decorated upstream prompt: Send it.",
+  );
+  const persistedPrompt = {
+    role: "user",
+    content: "Send it.",
+    timestamp: 1,
+    idempotencyKey: "durable-user-turn",
+    __openclaw: { senderIsOwner: true, transport: { messageId: "transport-message" } },
+  } as AgentMessage;
+  return {
+    settledMessages,
+    persistedPrompt,
+    historyMessages: [persistedPrompt, ...settledMessages.slice(1)],
+    mirroredMessages: settledMessages.slice(1),
+  };
 }
 
 async function captureContext(params: {
@@ -77,6 +107,61 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
     });
     expect(Object.isFrozen(context?.messages)).toBe(true);
     expect(context?.messages).not.toBe(historyMessages);
+  });
+
+  it("adopts an exact host-persisted prompt without rewriting its canonical metadata", async () => {
+    const { persistedPrompt, ...turn } = settledHostPromptTurn();
+
+    const context = await captureContext(turn);
+
+    expect(context).toEqual({ source: "openclaw-transcript", messages: turn.historyMessages });
+    expect(Object.isFrozen(context?.messages)).toBe(true);
+    expect(context?.messages[0]).toEqual(persistedPrompt);
+    expect(readMirrorIdentity(context!.messages[0]!)).toBeUndefined();
+    expect(readUpstreamUserText(context!.messages[0]!)).toBeUndefined();
+    expect(context?.messages[0]).toMatchObject({
+      __openclaw: { senderIsOwner: true, transport: { messageId: "transport-message" } },
+    });
+  });
+
+  it.each([
+    {
+      name: "missing persisted key",
+      change: (prompt: AgentMessage) => ({ ...prompt, idempotencyKey: undefined }),
+    },
+    {
+      name: "different persisted key",
+      change: (prompt: AgentMessage) => ({ ...prompt, idempotencyKey: "different-user-turn" }),
+    },
+    {
+      name: "changed prompt content",
+      change: (prompt: AgentMessage) => ({ ...prompt, content: "Send something else." }),
+    },
+    {
+      name: "conflicting mirror identity",
+      change: (prompt: AgentMessage) => attachCodexMirrorIdentity(prompt, "foreign-turn:prompt"),
+    },
+    {
+      name: "stale Codex mirror attestation",
+      change: (prompt: AgentMessage) => attachCodexMirrorAttestation(prompt, "stale-fingerprint"),
+    },
+    {
+      name: "conflicting upstream prompt",
+      change: (prompt: AgentMessage) =>
+        attachUpstreamUserText(prompt, "Untrusted upstream prompt."),
+    },
+  ])("rejects host-persisted prompt adoption with $name", async ({ change }) => {
+    const turn = settledHostPromptTurn();
+    turn.historyMessages[0] = change(turn.persistedPrompt) as AgentMessage;
+
+    await expect(captureContext(turn)).resolves.toBeUndefined();
+  });
+
+  it("rejects duplicate host-persisted prompt idempotency keys", async () => {
+    const turn = settledHostPromptTurn();
+    turn.historyMessages.unshift({ ...turn.persistedPrompt });
+
+    await expect(captureContext(turn)).resolves.toBeUndefined();
   });
 
   it.each([

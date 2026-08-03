@@ -230,6 +230,10 @@ function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean):
   return false;
 }
 
+export function isTelegramAuthenticationError(err: unknown): boolean {
+  return hasTelegramErrorCode(err, (code) => code === 401 || code === 404);
+}
+
 /** Reads Telegram's flood-control retry_after hint (in ms) from any error nesting shape. */
 export function readTelegramRetryAfterMs(err: unknown): number | undefined {
   for (const candidate of collectTelegramErrorCandidates(err)) {

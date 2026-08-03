@@ -2,35 +2,34 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 
-type ReplyTimingSpan = {
-  name: string;
-  durationMs: number;
-  elapsedMs: number;
-};
-
 type ReplyTimingSummary = {
   totalMs: number;
-  spans: ReplyTimingSpan[];
+  spans: Array<{ name: string; durationMs: number; elapsedMs: number }>;
 };
 
-type ReplyTimingLogger = {
-  warn: (message: string, details?: Record<string, unknown>) => void;
+type ReplyTimingLogParams = {
+  message: string;
+  outcome?: string;
+  reason?: string;
+  error?: string;
+  details?: Record<string, unknown>;
 };
 
-type ReplyTimingTracker = {
+type ReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams> = {
   measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
   measureSync: <T>(name: string, run: () => T) => T;
-  logIfSlow: (params: {
-    message: string;
-    outcome?: string;
-    reason?: string;
-    error?: string;
-    details?: Record<string, unknown>;
-  }) => void;
+  logIfSlow: (params: TLogParams, options?: { repeat?: boolean }) => void;
 };
 
-const DEFAULT_TIMING_WARN_TOTAL_MS = 1_000;
-const DEFAULT_TIMING_WARN_STAGE_MS = 500;
+const disabledTimingTracker: ReplyTimingTracker<object> = {
+  async measure(_name, run) {
+    return await run();
+  },
+  measureSync(_name, run) {
+    return run();
+  },
+  logIfSlow() {},
+};
 
 /** Checks config/env diagnostic flags for reply profiling. */
 export function isReplyProfilerEnabled(params?: {
@@ -45,36 +44,33 @@ export function isReplyProfilerEnabled(params?: {
   );
 }
 
-/** Creates a lightweight timing tracker for slow reply-stage diagnostics. */
-export function createReplyTimingTracker(params: {
-  log: ReplyTimingLogger;
+/** Creates a no-timer pass-through unless reply profiling is enabled. */
+export function createReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams>(params: {
+  log: { warn: (message: string, details?: Record<string, unknown>) => void };
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   enabled?: boolean;
   totalWarnMs?: number;
   stageWarnMs?: number;
-}): ReplyTimingTracker {
+  formatMessage?: (
+    params: TLogParams,
+    summary: ReplyTimingSummary,
+    formattedSpans: string,
+  ) => string;
+  detailKeys?: (params: TLogParams) => readonly string[];
+}): ReplyTimingTracker<TLogParams> {
   const enabled =
     params.enabled ?? isReplyProfilerEnabled({ config: params.config, env: params.env });
   if (!enabled) {
-    // Normal production turns use pass-through wrappers so added profiling
-    // calls do not allocate spans or call Date.now on the hot reply path.
-    return {
-      async measure(_name, run) {
-        return await run();
-      },
-      measureSync(_name, run) {
-        return run();
-      },
-      logIfSlow() {},
-    };
+    // Normal turns share this pass-through, avoiding Date.now and span arrays.
+    return disabledTimingTracker as ReplyTimingTracker<TLogParams>;
   }
 
   const startedAt = Date.now();
-  const spans: ReplyTimingSpan[] = [];
+  const spans: ReplyTimingSummary["spans"] = [];
   let didLog = false;
-  const totalWarnMs = params.totalWarnMs ?? DEFAULT_TIMING_WARN_TOTAL_MS;
-  const stageWarnMs = params.stageWarnMs ?? DEFAULT_TIMING_WARN_STAGE_MS;
+  const totalWarnMs = params.totalWarnMs ?? 1_000;
+  const stageWarnMs = params.stageWarnMs ?? 500;
   const toMs = (value: number) => Math.max(0, Math.round(value));
   const record = (name: string, spanStartedAt: number) => {
     spans.push({
@@ -83,18 +79,6 @@ export function createReplyTimingTracker(params: {
       elapsedMs: toMs(Date.now() - startedAt),
     });
   };
-  const snapshot = (): ReplyTimingSummary => ({
-    totalMs: toMs(Date.now() - startedAt),
-    spans: spans.slice(),
-  });
-  const shouldLog = (summary: ReplyTimingSummary) =>
-    summary.totalMs >= totalWarnMs || summary.spans.some((span) => span.durationMs >= stageWarnMs);
-  const formatSpans = (summary: ReplyTimingSummary) =>
-    summary.spans.length > 0
-      ? summary.spans
-          .map((span) => `${span.name}:${span.durationMs}ms@${span.elapsedMs}ms`)
-          .join(",")
-      : "none";
 
   return {
     async measure(name, run) {
@@ -113,29 +97,53 @@ export function createReplyTimingTracker(params: {
         record(name, spanStartedAt);
       }
     },
-    logIfSlow(logParams) {
-      if (didLog) {
+    logIfSlow(logParams, options) {
+      if (didLog && !options?.repeat) {
         return;
       }
-      const summary = snapshot();
-      if (!shouldLog(summary)) {
+      const summary = { totalMs: toMs(Date.now() - startedAt), spans: spans.slice() };
+      if (
+        summary.totalMs < totalWarnMs &&
+        !summary.spans.some((span) => span.durationMs >= stageWarnMs)
+      ) {
         return;
       }
-      didLog = true;
+      if (!options?.repeat) {
+        didLog = true;
+      }
+      const formattedSpans =
+        summary.spans.length > 0
+          ? summary.spans
+              .map((span) => `${span.name}:${span.durationMs}ms@${span.elapsedMs}ms`)
+              .join(",")
+          : "none";
+      if (params.formatMessage) {
+        const detailParams = logParams as Record<string, unknown>;
+        const details = Object.fromEntries(
+          (params.detailKeys?.(logParams) ?? []).map((key) => [key, detailParams[key]]),
+        );
+        params.log.warn(params.formatMessage(logParams, summary, formattedSpans), {
+          ...details,
+          totalMs: summary.totalMs,
+          spans: summary.spans,
+        });
+        return;
+      }
+      const defaults = logParams as ReplyTimingLogParams;
       const suffix = [
         `totalMs=${summary.totalMs}`,
-        `stages=${formatSpans(summary)}`,
-        logParams.outcome ? `outcome=${logParams.outcome}` : undefined,
-        logParams.reason ? `reason=${logParams.reason}` : undefined,
-        logParams.error ? `error="${logParams.error}"` : undefined,
+        `stages=${formattedSpans}`,
+        defaults.outcome ? `outcome=${defaults.outcome}` : undefined,
+        defaults.reason ? `reason=${defaults.reason}` : undefined,
+        defaults.error ? `error="${defaults.error}"` : undefined,
       ]
         .filter(Boolean)
         .join(" ");
-      params.log.warn(`${logParams.message} ${suffix}`, {
-        ...logParams.details,
-        outcome: logParams.outcome,
-        reason: logParams.reason,
-        error: logParams.error,
+      params.log.warn(`${defaults.message} ${suffix}`, {
+        ...defaults.details,
+        outcome: defaults.outcome,
+        reason: defaults.reason,
+        error: defaults.error,
         totalMs: summary.totalMs,
         spans: summary.spans,
       });

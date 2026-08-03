@@ -1,5 +1,10 @@
 import type { MediaKind } from "@openclaw/media-core/constants";
-import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import {
+  getFileExtension,
+  kindFromMime,
+  mimeTypeFromFilePath,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PromptImageOrderEntry } from "./prompt-image-order.js";
 
@@ -274,37 +279,39 @@ export function readRuntimePromptImageOrder(message: object): PromptImageOrderEn
   return Array.isArray(imageOrder) ? (imageOrder as PromptImageOrderEntry[]) : undefined;
 }
 
+/** Returns whether a declared MIME only describes otherwise unclassified binary bytes. */
+export function isGenericBinaryMediaContentType(contentType?: string | null): boolean {
+  const normalizedContentType = normalizeMimeType(contentType);
+  return (
+    normalizedContentType === "application/octet-stream" ||
+    normalizedContentType === "binary/octet-stream"
+  );
+}
+
 /** Returns whether a fact can produce native image input. */
 export function isImageMediaFact(fact: MediaFactInput): boolean {
   if (fact.kind && fact.kind !== "unknown") {
     return fact.kind === "image" || fact.kind === "sticker";
   }
-  const contentType = normalizeOptionalString(fact.contentType);
-  const normalizedContentType = contentType?.split(";")[0]?.trim().toLowerCase();
-  if (
-    normalizedContentType &&
-    normalizedContentType !== "application/octet-stream" &&
-    normalizedContentType !== "binary/octet-stream"
-  ) {
+  const normalizedContentType = normalizeMimeType(fact.contentType);
+  if (normalizedContentType && !isGenericBinaryMediaContentType(normalizedContentType)) {
     const mimeKind = kindFromMime(normalizedContentType);
     if (mimeKind) {
       return mimeKind === "image";
     }
-    // Legacy channel-mode projections persist bare kinds as MediaType; honor
-    // them, and fall through to filename inference for other unknown strings.
-    if (normalizedContentType === "image" || normalizedContentType === "sticker") {
-      return true;
-    }
-    if (
-      normalizedContentType === "audio" ||
-      normalizedContentType === "video" ||
-      normalizedContentType === "document"
-    ) {
-      return false;
-    }
+    // Legacy channel-mode projections persist bare image or sticker kind as MediaType.
+    return normalizedContentType === "image" || normalizedContentType === "sticker";
   }
   const pathValue = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
-  return kindFromMime(mimeTypeFromFilePath(pathValue)) === "image";
+  const inferredMime = mimeTypeFromFilePath(pathValue);
+  if (inferredMime === "image/svg+xml") {
+    return false;
+  }
+  if (kindFromMime(inferredMime) === "image") {
+    return true;
+  }
+  const extension = getFileExtension(pathValue);
+  return extension === ".tif" || extension === ".tiff";
 }
 
 type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
@@ -355,7 +362,10 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
     path: normalizeOptionalString(media.path),
     url: normalizeOptionalString(media.url),
     contentType,
-    kind: media.kind ?? defaults.kind ?? kindFromMime(contentType),
+    kind:
+      media.kind ??
+      defaults.kind ??
+      (isGenericBinaryMediaContentType(contentType) ? undefined : kindFromMime(contentType)),
     fileName: normalizeOptionalString(media.fileName),
     sizeBytes: normalizeNonNegativeNumber(media.sizeBytes),
     ...(durationMs ? { durationMs } : {}),

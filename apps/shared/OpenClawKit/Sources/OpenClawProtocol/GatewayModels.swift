@@ -742,6 +742,28 @@ public struct BoardCanvasDocumentSource: Codable, Sendable {
     }
 }
 
+public struct BoardWidgetGeneratedIdentity: Codable, Sendable {
+    public let source: String
+    public let key: String
+    public let fallbackname: String
+
+    public init(
+        source: String,
+        key: String,
+        fallbackname: String)
+    {
+        self.source = source
+        self.key = key
+        self.fallbackname = fallbackname
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case key
+        case fallbackname = "fallbackName"
+    }
+}
+
 public struct BoardGetParams: Codable, Sendable {
     public let sessionkey: String
 
@@ -783,6 +805,7 @@ public struct BoardWidgetPutParams: Codable, Sendable {
     public let heightmode: AnyCodable?
     public let placement: [String: AnyCodable]?
     public let declared: BoardWidgetDeclared?
+    public let generatedidentity: BoardWidgetGeneratedIdentity?
 
     public init(
         sessionkey: String,
@@ -792,7 +815,8 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         presentation: AnyCodable? = nil,
         heightmode: AnyCodable? = nil,
         placement: [String: AnyCodable]? = nil,
-        declared: BoardWidgetDeclared? = nil)
+        declared: BoardWidgetDeclared? = nil,
+        generatedidentity: BoardWidgetGeneratedIdentity? = nil)
     {
         self.sessionkey = sessionkey
         self.name = name
@@ -802,6 +826,7 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         self.heightmode = heightmode
         self.placement = placement
         self.declared = declared
+        self.generatedidentity = generatedidentity
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -813,6 +838,37 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         case heightmode = "heightMode"
         case placement
         case declared
+        case generatedidentity = "generatedIdentity"
+    }
+}
+
+public struct BoardWidgetPutResult: Codable, Sendable {
+    public let sessionkey: String
+    public let revision: Int
+    public let tabs: [BoardTab]
+    public let widgets: [BoardWidget]
+    public let resolvedwidgetname: String
+
+    public init(
+        sessionkey: String,
+        revision: Int,
+        tabs: [BoardTab],
+        widgets: [BoardWidget],
+        resolvedwidgetname: String)
+    {
+        self.sessionkey = sessionkey
+        self.revision = revision
+        self.tabs = tabs
+        self.widgets = widgets
+        self.resolvedwidgetname = resolvedwidgetname
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case revision
+        case tabs
+        case widgets
+        case resolvedwidgetname = "resolvedWidgetName"
     }
 }
 
@@ -2619,6 +2675,7 @@ public struct AgentParams: Codable, Sendable {
     public let swarmcollector: Bool?
     public let swarmoutputschema: [String: AnyCodable]?
     public let forcerestartsafetools: Bool?
+    public let forcecodemodetools: Bool?
     public let voicewaketrigger: String?
     public let idempotencykey: String
     public let label: String?
@@ -2666,6 +2723,7 @@ public struct AgentParams: Codable, Sendable {
         swarmcollector: Bool? = nil,
         swarmoutputschema: [String: AnyCodable]? = nil,
         forcerestartsafetools: Bool? = nil,
+        forcecodemodetools: Bool? = nil,
         voicewaketrigger: String? = nil,
         idempotencykey: String,
         label: String? = nil)
@@ -2712,6 +2770,7 @@ public struct AgentParams: Codable, Sendable {
         self.swarmcollector = swarmcollector
         self.swarmoutputschema = swarmoutputschema
         self.forcerestartsafetools = forcerestartsafetools
+        self.forcecodemodetools = forcecodemodetools
         self.voicewaketrigger = voicewaketrigger
         self.idempotencykey = idempotencykey
         self.label = label
@@ -2760,6 +2819,7 @@ public struct AgentParams: Codable, Sendable {
         case swarmcollector = "swarmCollector"
         case swarmoutputschema = "swarmOutputSchema"
         case forcerestartsafetools = "forceRestartSafeTools"
+        case forcecodemodetools = "forceCodeModeTools"
         case voicewaketrigger = "voiceWakeTrigger"
         case idempotencykey = "idempotencyKey"
         case label
@@ -8824,6 +8884,9 @@ public struct TaskSummary: Codable, Sendable {
     public let progresssummary: String?
     public let terminalsummary: String?
     public let error: String?
+    public let deliverystatus: AnyCodable?
+    public let terminaloutcome: AnyCodable?
+    public let result: String?
     public let prompt: String?
 
     public init(
@@ -8850,6 +8913,9 @@ public struct TaskSummary: Codable, Sendable {
         progresssummary: String? = nil,
         terminalsummary: String? = nil,
         error: String? = nil,
+        deliverystatus: AnyCodable? = nil,
+        terminaloutcome: AnyCodable? = nil,
+        result: String? = nil,
         prompt: String? = nil)
     {
         self.id = id
@@ -8875,6 +8941,9 @@ public struct TaskSummary: Codable, Sendable {
         self.progresssummary = progresssummary
         self.terminalsummary = terminalsummary
         self.error = error
+        self.deliverystatus = deliverystatus
+        self.terminaloutcome = terminaloutcome
+        self.result = result
         self.prompt = prompt
     }
 
@@ -8902,6 +8971,9 @@ public struct TaskSummary: Codable, Sendable {
         case progresssummary = "progressSummary"
         case terminalsummary = "terminalSummary"
         case error
+        case deliverystatus = "deliveryStatus"
+        case terminaloutcome = "terminalOutcome"
+        case result
         case prompt
     }
 }
@@ -9023,6 +9095,34 @@ public struct TasksCancelResult: Codable, Sendable {
         case cancelled
         case reason
         case task
+    }
+}
+
+public struct TasksRecoveryParams: Codable, Sendable {
+    public let taskids: [String]
+
+    public init(
+        taskids: [String])
+    {
+        self.taskids = taskids
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskids = "taskIds"
+    }
+}
+
+public struct TasksRecoveryResult: Codable, Sendable {
+    public let results: [[String: AnyCodable]]
+
+    public init(
+        results: [[String: AnyCodable]])
+    {
+        self.results = results
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case results
     }
 }
 
@@ -9413,6 +9513,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
     public let unavailablecandidates: [[String: AnyCodable]]?
     public let manualproviders: [[String: AnyCodable]]
     public let authoptions: [[String: AnyCodable]]?
+    public let prepareoptions: [[String: AnyCodable]]?
     public let recommendedinstalls: [[String: AnyCodable]]?
     public let workspace: String
     public let codexappserverdetected: Bool?
@@ -9424,6 +9525,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         unavailablecandidates: [[String: AnyCodable]]? = nil,
         manualproviders: [[String: AnyCodable]],
         authoptions: [[String: AnyCodable]]? = nil,
+        prepareoptions: [[String: AnyCodable]]? = nil,
         recommendedinstalls: [[String: AnyCodable]]? = nil,
         workspace: String,
         codexappserverdetected: Bool? = nil,
@@ -9434,6 +9536,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         self.unavailablecandidates = unavailablecandidates
         self.manualproviders = manualproviders
         self.authoptions = authoptions
+        self.prepareoptions = prepareoptions
         self.recommendedinstalls = recommendedinstalls
         self.workspace = workspace
         self.codexappserverdetected = codexappserverdetected
@@ -9446,6 +9549,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         case unavailablecandidates = "unavailableCandidates"
         case manualproviders = "manualProviders"
         case authoptions = "authOptions"
+        case prepareoptions = "prepareOptions"
         case recommendedinstalls = "recommendedInstalls"
         case workspace
         case codexappserverdetected = "codexAppServerDetected"
@@ -11948,6 +12052,7 @@ public struct ModelChoice: Codable, Sendable {
     public let available: Bool?
     public let contextwindow: Int?
     public let reasoning: Bool?
+    public let supportstools: Bool?
     public let agentruntime: [String: AnyCodable]?
     public let apikeysupported: Bool?
     public let input: [AnyCodable]?
@@ -11960,6 +12065,7 @@ public struct ModelChoice: Codable, Sendable {
         available: Bool? = nil,
         contextwindow: Int? = nil,
         reasoning: Bool? = nil,
+        supportstools: Bool? = nil,
         agentruntime: [String: AnyCodable]? = nil,
         apikeysupported: Bool? = nil,
         input: [AnyCodable]? = nil)
@@ -11971,6 +12077,7 @@ public struct ModelChoice: Codable, Sendable {
         self.available = available
         self.contextwindow = contextwindow
         self.reasoning = reasoning
+        self.supportstools = supportstools
         self.agentruntime = agentruntime
         self.apikeysupported = apikeysupported
         self.input = input
@@ -11984,6 +12091,7 @@ public struct ModelChoice: Codable, Sendable {
         case available
         case contextwindow = "contextWindow"
         case reasoning
+        case supportstools = "supportsTools"
         case agentruntime = "agentRuntime"
         case apikeysupported = "apiKeySupported"
         case input
@@ -15843,6 +15951,8 @@ public struct QuestionListResult: Codable, Sendable {
         case questions
     }
 }
+
+public struct HooksStatusParams: Codable, Sendable {}
 
 public struct PluginApprovalRequestParams: Codable, Sendable {
     public let pluginid: String?

@@ -27,6 +27,7 @@ export * from "./types.provider-request.js";
 export * from "./types.queue.js";
 export * from "./types.sandbox.js";
 export * from "./types.secrets.js";
+export * from "./types.ssrf.js";
 export * from "./types.signal.js";
 export * from "./types.skills.js";
 export * from "./types.slack.js";

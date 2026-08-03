@@ -152,6 +152,9 @@
         "./packages/normalization-core/src/error-coercion.ts"
       ],
       "@openclaw/normalization-core/expect": ["./packages/normalization-core/src/expect.ts"],
+      "@openclaw/normalization-core/json-schema": [
+        "./packages/normalization-core/src/json-schema.ts"
+      ],
       "@openclaw/normalization-core/number-coercion": [
         "./packages/normalization-core/src/number-coercion.ts"
       ],
@@ -247,11 +250,6 @@
       "@openclaw/net-policy/url-protocol": ["./packages/net-policy/src/url-protocol.ts"],
       "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
       "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
-      "@openclaw/speech-core": ["./packages/speech-core/runtime-api.ts"],
-      "@openclaw/speech-core/runtime-api": ["./packages/speech-core/runtime-api.ts"],
-      "@openclaw/speech-core/speaker": ["./packages/speech-core/speaker.ts"],
-      "@openclaw/speech-core/voice-models": ["./packages/speech-core/voice-models.ts"],
-      "@openclaw/speech-core/*": ["./packages/speech-core/*"],
       "@openclaw/sdk": ["./packages/sdk/src/index.ts"],
       "@openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"],

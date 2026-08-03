@@ -165,6 +165,44 @@ describe("sendMessage", () => {
     expect(result).toBe(false);
   });
 
+  it.each([
+    { name: "Synology error envelope", body: { success: false, error: { code: 105 } } },
+    { name: "unrelated malformed response fields", body: { success: false, data: null } },
+  ])("retries an HTTP-successful webhook rejection ($name)", async ({ body }) => {
+    mockResponse(200, JSON.stringify(body));
+
+    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    { name: "missing success", body: "{}" },
+    { name: "null response", body: "null" },
+    { name: "empty response", body: "" },
+    { name: "malformed JSON", body: '{"success":false' },
+    { name: "plain text", body: "ok" },
+    { name: "JSON string", body: '"ok"' },
+    { name: "JSON number", body: "0" },
+    { name: "JSON boolean", body: "false" },
+    { name: "JSON array", body: "[]" },
+    { name: "null success", body: '{"success":null}' },
+    { name: "string success", body: '{"success":"false"}' },
+    { name: "numeric success", body: '{"success":0}' },
+    {
+      name: "oversized rejection envelope",
+      body: JSON.stringify({ success: false, padding: "x".repeat(1 * 1024 * 1024) }),
+    },
+  ])("preserves HTTP-successful webhook responses with $name", async ({ body }) => {
+    mockResponse(200, body);
+
+    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+
+    expect(result).toBe(true);
+    expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
+  });
+
   it("includes user_ids when userId is numeric", async () => {
     mockSuccessResponse();
     await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", 42));
@@ -236,6 +274,17 @@ describe("sendFileUrl", () => {
       sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
     );
     expect(result).toBe(false);
+  });
+
+  it("returns false without retrying an HTTP-successful webhook rejection", async () => {
+    mockResponse(200, JSON.stringify({ success: false, error: { code: 105 } }));
+
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+    );
+
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
   });
 
   it("respects the shared send interval before posting a file URL", async () => {

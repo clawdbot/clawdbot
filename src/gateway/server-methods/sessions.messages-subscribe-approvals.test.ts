@@ -22,7 +22,7 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
-import { sessionsHandlers } from "./sessions.js";
+import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 
 function createClient(params: {
   scopes: string[];
@@ -87,8 +87,8 @@ async function subscribe(params: {
 }) {
   const respond = vi.fn();
   await expectDefined(
-    sessionsHandlers["sessions.messages.subscribe"],
-    'sessionsHandlers["sessions.messages.subscribe"] test invariant',
+    sessionSubscriptionHandlers["sessions.messages.subscribe"],
+    'sessionSubscriptionHandlers["sessions.messages.subscribe"] test invariant',
   )({
     req: { id: "req-subscribe-approvals" } as never,
     params: params.body,

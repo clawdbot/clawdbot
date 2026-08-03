@@ -638,13 +638,15 @@ jobs:
       - name: Capture baseline metadata
         if: ${{ inputs.mode != 'fresh' }}
         id: baseline_metadata
+        working-directory: workflow
         env:
           BASELINE_PACK_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/pack.json
         run: |
-          node <<'NODE' >>"$GITHUB_OUTPUT"
-          const crypto = require("node:crypto");
-          const fs = require("node:fs");
-          const path = require("node:path");
+          node --input-type=module <<'NODE' >>"$GITHUB_OUTPUT"
+          import crypto from "node:crypto";
+          import fs from "node:fs";
+          import path from "node:path";
+          import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";
           function resolveTarballFileName(value, label) {
             const fileName = typeof value === "string" ? value.trim() : "";
             if (
@@ -658,7 +660,7 @@ jobs:
             return fileName;
           }
           const payload = JSON.parse(fs.readFileSync(process.env.BASELINE_PACK_JSON, "utf8"));
-          const entry = Array.isArray(payload) ? payload.at(-1) : null;
+          const entry = resolveNpmJsonEntries(payload).at(-1);
           const fileName = resolveTarballFileName(entry?.filename, "Baseline npm pack filename");
           const sha256 = crypto
             .createHash("sha256")

@@ -161,6 +161,8 @@ async function postGitHubDeviceFlowForm(params: {
   });
   try {
     if (!response.ok) {
+      // Release closes the dispatcher, so cancel its unread response body first.
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
     }
     return parseJsonResponse(

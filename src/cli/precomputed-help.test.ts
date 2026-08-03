@@ -26,4 +26,19 @@ describe("tryOutputPrecomputedCommandHelp", () => {
     ).resolves.toBe(false);
     expect(outputBrowserHelp).not.toHaveBeenCalled();
   });
+
+  it("leaves secrets apply --from --help for Commander to parse", async () => {
+    const outputSecretsHelp = vi.fn(() => true);
+
+    await expect(
+      tryOutputPrecomputedCommandHelp(
+        ["node", "openclaw", "secrets", "apply", "--from", "--help"],
+        {
+          outputPrecomputedSecretsHelpText: outputSecretsHelp,
+          env: {},
+        },
+      ),
+    ).resolves.toBe(false);
+    expect(outputSecretsHelp).not.toHaveBeenCalled();
+  });
 });

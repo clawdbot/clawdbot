@@ -6,8 +6,8 @@ export const discordProviderTestSupport = {
   reset(): void {
     Object.assign(discordProviderRuntime, defaultDiscordProviderRuntime);
   },
-  setFetchDiscordApplicationId(mock: typeof discordProviderRuntime.fetchDiscordApplicationId) {
-    discordProviderRuntime.fetchDiscordApplicationId = mock;
+  setProbeDiscordApplicationId(mock: typeof discordProviderRuntime.probeDiscordApplicationId) {
+    discordProviderRuntime.probeDiscordApplicationId = mock;
   },
   setCreateDiscordNativeCommand(mock: typeof discordProviderRuntime.createDiscordNativeCommand) {
     discordProviderRuntime.createDiscordNativeCommand = mock;

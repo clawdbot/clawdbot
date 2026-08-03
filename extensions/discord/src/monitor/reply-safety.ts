@@ -4,6 +4,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
+  findCodeRegions,
 } from "openclaw/plugin-sdk/text-chunking";
 import { stripPlainTextToolCallBlocks } from "openclaw/plugin-sdk/tool-payload";
 
@@ -58,9 +59,13 @@ function stripDiscordInternalChannelLines(text: string): string {
 }
 
 function sanitizeDiscordFrontChannelText(text: string): string {
-  const withoutToolCallBlocks = stripPlainTextToolCallBlocks(text);
+  const withoutToolCallBlocks = stripPlainTextToolCallBlocks(text, {
+    resolveProtectedRanges: findCodeRegions,
+  });
   const withoutAssistantScaffolding = sanitizeAssistantVisibleText(withoutToolCallBlocks);
-  const withoutResidualToolCallBlocks = stripPlainTextToolCallBlocks(withoutAssistantScaffolding);
+  const withoutResidualToolCallBlocks = stripPlainTextToolCallBlocks(withoutAssistantScaffolding, {
+    resolveProtectedRanges: findCodeRegions,
+  });
   const withoutChannelLines = stripDiscordInternalChannelLines(withoutResidualToolCallBlocks);
   return collapseExcessBlankLines(withoutChannelLines).trim();
 }

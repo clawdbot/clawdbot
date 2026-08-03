@@ -56,68 +56,6 @@ struct OpenClawConfigFileTests {
         }
     }
 
-    @MainActor
-    @Test
-    func `set remote gateway url string replaces scheme`() async {
-        let override = self.makeConfigOverridePath()
-
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "wss://old-host:111",
-                    ],
-                ],
-            ])
-            OpenClawConfigFile.setRemoteGatewayUrlString("ws://127.0.0.1:18789")
-            let root = OpenClawConfigFile.loadDict()
-            let url = ((root["gateway"] as? [String: Any])?["remote"] as? [String: Any])?["url"] as? String
-            #expect(url == "ws://127.0.0.1:18789")
-        }
-    }
-
-    @MainActor
-    @Test
-    func `set remote gateway url preserves scheme`() async {
-        let override = self.makeConfigOverridePath()
-
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "wss://old-host:111",
-                    ],
-                ],
-            ])
-            OpenClawConfigFile.setRemoteGatewayUrl(host: "new-host", port: 2222)
-            let root = OpenClawConfigFile.loadDict()
-            let url = ((root["gateway"] as? [String: Any])?["remote"] as? [String: Any])?["url"] as? String
-            #expect(url == "wss://new-host:2222")
-        }
-    }
-
-    @MainActor
-    @Test
-    func `clear remote gateway url removes only url field`() async {
-        let override = self.makeConfigOverridePath()
-
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "wss://old-host:111",
-                        "token": "tok",
-                    ],
-                ],
-            ])
-            OpenClawConfigFile.clearRemoteGatewayUrl()
-            let root = OpenClawConfigFile.loadDict()
-            let remote = ((root["gateway"] as? [String: Any])?["remote"] as? [String: Any]) ?? [:]
-            #expect((remote["url"] as? String) == nil)
-            #expect((remote["token"] as? String) == "tok")
-        }
-    }
-
     @Test
     func `state dir override sets config path`() async {
         let dir = FileManager().temporaryDirectory

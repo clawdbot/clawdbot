@@ -24,12 +24,20 @@ import {
   type MSTeamsActivityHandler,
 } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import {
+  publishMSTeamsBlocked,
+  publishMSTeamsReady,
+  publishMSTeamsRecovering,
+  publishMSTeamsStopped,
+  type MSTeamsStatusSink,
+} from "./monitor-status.js";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
 import {
   createMSTeamsPollStoreState,
   extractMSTeamsPollVote,
   type MSTeamsPollStore,
 } from "./polls.js";
+import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import {
   looksLikeMSTeamsConversationId,
   projectStableMSTeamsGroupAllowlist,
@@ -62,6 +70,7 @@ type MonitorMSTeamsOpts = {
   abortSignal?: AbortSignal;
   conversationStore?: MSTeamsConversationStore;
   pollStore?: MSTeamsPollStore;
+  statusSink?: MSTeamsStatusSink;
 };
 
 type MonitorMSTeamsResult = {
@@ -78,12 +87,14 @@ export async function monitorMSTeamsProvider(
   let msteamsCfg = cfg.channels?.msteams;
   if (!msteamsCfg?.enabled) {
     log.debug?.("msteams provider disabled");
+    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams provider is disabled");
     return { app: null, shutdown: async () => {} };
   }
 
   const creds = resolveMSTeamsCredentials(msteamsCfg);
   if (!creds) {
     log.error("msteams credentials not configured");
+    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
     return { app: null, shutdown: async () => {} };
   }
   const appId = creds.appId; // Extract for use in closures
@@ -576,18 +587,26 @@ export async function monitorMSTeamsProvider(
   ingress.start();
 
   // Start listening and fail fast if bind/listen fails.
+  // skipAuth is private-QA-only and must never expose an unauthenticated
+  // webhook beyond loopback. Production keeps Express' existing bind behavior.
+  const privateQaRuntime = resolveMSTeamsPrivateQaRuntime();
   const httpServer = await new Promise<Server>((resolve, reject) => {
-    const server = expressApp.listen(port, (err) => (err ? reject(err) : resolve(server)));
+    const onListen = (err?: Error) => (err ? reject(err) : resolve(server));
+    const server = privateQaRuntime
+      ? expressApp.listen(port, privateQaRuntime.listenHost, onListen)
+      : expressApp.listen(port, onListen);
   }).catch(async (err: unknown) => {
     log.error("msteams server error", { error: formatUnknownError(err) });
     await ingress.stop();
     throw err;
   });
   log.info(`msteams provider started on port ${port}`);
+  publishMSTeamsReady(opts.statusSink);
   applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
     log.error("msteams server error", { error: formatUnknownError(err) });
+    publishMSTeamsRecovering(opts.statusSink, formatUnknownError(err));
   });
 
   const shutdown = async () => {
@@ -601,6 +620,7 @@ export async function monitorMSTeamsProvider(
       });
     });
     await ingress.stop();
+    publishMSTeamsStopped(opts.statusSink);
   };
 
   // Keep this task alive until close so gateway runtime does not treat startup as exit.

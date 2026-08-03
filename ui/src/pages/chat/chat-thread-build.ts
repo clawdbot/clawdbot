@@ -1,4 +1,9 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isToolCallContentType,
+  isToolResultContentType,
+  resolveToolUseId,
+} from "../../../../src/chat/tool-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatItem, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
@@ -14,6 +19,7 @@ import {
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import {
   buildCompactionDividerItem,
   clearWorkingProgress,
@@ -52,6 +58,11 @@ import {
 } from "./chat-thread-items.ts";
 import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
+import {
+  extractToolMessageRefs,
+  resolveMatchingLiveToolIdentity,
+  type LiveToolStreamRef,
+} from "./tool-stream-identity.ts";
 import type { PlanStatus } from "./tool-stream.ts";
 
 export type BuildChatItemsProps = {
@@ -134,14 +145,58 @@ function resolveRunInsertionBounds(
   );
 }
 
+function liveRenderedToolRefs(toolMessages: unknown[]): LiveToolStreamRef[] {
+  const refs: LiveToolStreamRef[] = [];
+  const seen = new Set<string>();
+  for (const [index, message] of toolMessages.entries()) {
+    for (const ref of extractToolMessageRefs(message)) {
+      const key = JSON.stringify([ref.runId ?? null, ref.id]);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      refs.push({ ...ref, identity: `live:${index}:${key}` });
+    }
+  }
+  return refs;
+}
+
+function removeLiveToolBlocksFromHistory(
+  message: unknown,
+  liveToolRefs: LiveToolStreamRef[],
+): unknown {
+  const record = asRecord(message);
+  if (!record || !Array.isArray(record.content) || liveToolRefs.length === 0) {
+    return message;
+  }
+  const topLevelToolId = resolveToolUseId({ ...record, id: undefined });
+  const topLevelRunId = normalizeOptionalString(record.runId);
+  const content = record.content.filter((block) => {
+    const entry = asRecord(block);
+    if (!entry || (!isToolCallContentType(entry.type) && !isToolResultContentType(entry.type))) {
+      return true;
+    }
+    const id = resolveToolUseId(entry) ?? topLevelToolId;
+    if (!id) {
+      return true;
+    }
+    const runId = normalizeOptionalString(entry.runId) ?? topLevelRunId;
+    return !resolveMatchingLiveToolIdentity({ id, ...(runId ? { runId } : {}) }, liveToolRefs);
+  });
+  return content.length === record.content.length ? message : { ...record, content };
+}
+
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
-  const history = props.messages.filter(
-    (message) =>
-      !isAssistantHeartbeatAckForDisplay(message) &&
-      (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
-  );
   const tools = props.toolMessages.filter((message) => asRecord(message) !== null);
+  const liveToolRefs = liveRenderedToolRefs(tools);
+  const history = props.messages
+    .filter(
+      (message) =>
+        !isAssistantHeartbeatAckForDisplay(message) &&
+        (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
+    )
+    .map((message) => removeLiveToolBlocksFromHistory(message, liveToolRefs));
   const historyKeys = buildMessageKeys(history);
   const toolKeys = buildMessageKeys(tools, history.length);
   const liftedCanvasSources = tools.flatMap((message, index) => {

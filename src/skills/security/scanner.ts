@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../security/scan-paths.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
 
@@ -114,22 +115,12 @@ function getCachedFileScanResult(params: {
 }
 
 function setCachedFileScanResult(filePath: string, entry: FileScanCacheEntry): void {
-  if (FILE_SCAN_CACHE.size >= FILE_SCAN_CACHE_MAX) {
-    const oldest = FILE_SCAN_CACHE.keys().next();
-    if (!oldest.done) {
-      FILE_SCAN_CACHE.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(FILE_SCAN_CACHE, FILE_SCAN_CACHE_MAX - 1);
   FILE_SCAN_CACHE.set(filePath, entry);
 }
 
 function setCachedDirEntries(dirPath: string, entry: DirEntryCacheEntry): void {
-  if (DIR_ENTRY_CACHE.size >= DIR_ENTRY_CACHE_MAX) {
-    const oldest = DIR_ENTRY_CACHE.keys().next();
-    if (!oldest.done) {
-      DIR_ENTRY_CACHE.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(DIR_ENTRY_CACHE, DIR_ENTRY_CACHE_MAX - 1);
   DIR_ENTRY_CACHE.set(dirPath, entry);
 }
 
@@ -231,20 +222,20 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
     ruleId: "prompt-injection-ignore-instructions",
     severity: "critical",
     message: "Prompt-injection wording attempts to override higher-priority instructions",
-    pattern: /ignore (all|any|previous|above|prior) instructions/i,
+    pattern: /\bignore\s+(?:(?:all|any)\s+)?(?:previous|above|prior|all|any)\s+instructions\b/i,
   },
   {
     ruleId: "prompt-injection-system",
     severity: "critical",
     message: "Skill text references hidden prompt layers",
-    pattern: /\b(system prompt|developer message|hidden instructions)\b/i,
+    pattern: /\b(?:system\s+prompt|developer\s+message|hidden\s+instructions)\b/i,
   },
   {
     ruleId: "prompt-injection-tool",
     severity: "critical",
     message: "Skill text encourages bypassing tool approval",
     pattern:
-      /\b(run|execute|invoke|call)\b.{0,50}\btool\b.{0,50}\bwithout\b.{0,30}\b(permission|approval)/i,
+      /\b(run|execute|invoke|call)\b[\s\S]{0,50}\btool\b[\s\S]{0,50}\bwithout\b[\s\S]{0,30}\b(permission|approval)/i,
   },
   {
     ruleId: "shell-pipe-to-shell",
@@ -357,7 +348,8 @@ function findSourceRuleMatch(params: {
   source: string;
   lines: string[];
 }): { line: number; evidence: string } | null {
-  if (!params.rule.pattern.test(params.source)) {
+  const sourceMatch = params.rule.pattern.exec(params.source);
+  if (!sourceMatch) {
     return null;
   }
   if (params.rule.requiresContext && !params.rule.requiresContext.test(params.source)) {
@@ -385,7 +377,15 @@ function findSourceRuleMatch(params: {
     return null;
   }
 
-  return { line: 1, evidence: truncateUtf16Safe(params.source, 120) };
+  // Multiline rules cannot match any one line. Preserve the actual match start
+  // so stored findings point at the dangerous text instead of file metadata.
+  let line = 1;
+  for (let i = 0; i < sourceMatch.index; i++) {
+    if (params.source.charCodeAt(i) === 10) {
+      line += 1;
+    }
+  }
+  return { line, evidence: params.lines[line - 1] ?? truncateUtf16Safe(params.source, 120) };
 }
 
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {

@@ -15,10 +15,10 @@ import {
   directSessionReq,
   seedSessionTranscript,
   sessionStoreEntry,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 const LIST_PARAMS = {
   agentId: "main",
@@ -114,6 +114,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     sessionKey,
     storePath,
   });
+  const titleBatchSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptTitleProbeBatch");
   const titlePageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
   let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
   vi.useFakeTimers();
@@ -144,7 +145,9 @@ test("startup prewarm fills session snapshot and title caches before the first l
     await vi.advanceTimersToNextTimerAsync();
     await sessionPrewarm;
     sidecar.stop();
-    expect(titlePageSpy).toHaveBeenCalled();
+    expect(titleBatchSpy).toHaveBeenCalled();
+    expect(titlePageSpy).not.toHaveBeenCalled();
+    titleBatchSpy.mockClear();
     titlePageSpy.mockClear();
     vi.useRealTimers();
     const cachedEntries = sessionAccessor.listSessionEntriesReadOnly({
@@ -160,6 +163,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     });
 
     expect(result.ok).toBe(true);
+    expect(titleBatchSpy).not.toHaveBeenCalled();
     expect(titlePageSpy).not.toHaveBeenCalled();
     const afterListEntries = sessionAccessor.listSessionEntriesReadOnly({
       agentId: "main",
@@ -171,7 +175,64 @@ test("startup prewarm fills session snapshot and title caches before the first l
   } finally {
     sidecar?.stop();
     vi.useRealTimers();
+    titleBatchSpy.mockRestore();
     titlePageSpy.mockRestore();
+  }
+});
+
+test("startup skips a large session prewarm while request-time listing remains available", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: Object.fromEntries(
+      Array.from({ length: 2_001 }, (_, index) => [
+        `agent:main:large-${index}`,
+        sessionStoreEntry(`large-${index}`, { updatedAt: 1_781_000_000_000 - index }),
+      ]),
+    ),
+  });
+  const info = vi.fn();
+  const listSpy = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+  let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
+  vi.useFakeTimers();
+  try {
+    let resolveSessionPrewarm!: () => void;
+    const sessionPrewarm = new Promise<void>((resolve) => {
+      resolveSessionPrewarm = resolve;
+    });
+    sidecar = scheduleGatewayHandlerPrewarm({
+      cfgAtStart: {
+        agents: { list: [{ id: "main", default: true }] },
+        session: { store: storePath },
+      } as never,
+      log: { info, warn: vi.fn() },
+      startupTrace: {
+        measure: async (name, run) => {
+          try {
+            return await run();
+          } finally {
+            if (name === "post-ready.gateway-data.sessions.main") {
+              resolveSessionPrewarm();
+            }
+          }
+        },
+      },
+    });
+
+    await vi.advanceTimersToNextTimerAsync();
+    await sessionPrewarm;
+    sidecar.stop();
+    expect(info).toHaveBeenCalledWith(
+      "skipping optional dashboard session prewarm: combined stores exceed 2000 rows",
+    );
+    expect(listSpy).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    const result = await directSessionReq("sessions.list", LIST_PARAMS);
+    expect(result.ok).toBe(true);
+  } finally {
+    sidecar?.stop();
+    vi.useRealTimers();
+    listSpy.mockRestore();
   }
 });
 

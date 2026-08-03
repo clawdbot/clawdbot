@@ -31,10 +31,32 @@ type TestWebKitWindow = Window & {
 type MacosTitlebarControlsState = HTMLElement & {
   navCollapsed: boolean;
   historyOnly: boolean;
+  newSessionDisabledReason?: string;
   onOpenPalette?: () => void;
   onOpenNewSession?: () => void;
   updateComplete: Promise<boolean>;
 };
+
+function nativeSessionContext(
+  navigate: ReturnType<typeof vi.fn>,
+  selectedId: string,
+  options: { methods?: string[]; scopes?: string[] } = {},
+): ApplicationContext {
+  return {
+    navigate,
+    agentSelection: { state: { selectedId } },
+    gateway: {
+      snapshot: {
+        client: {},
+        phase: "connected",
+        hello: {
+          auth: { role: "operator", scopes: options.scopes ?? ["operator.write"] },
+          features: { methods: options.methods ?? ["sessions.create"] },
+        },
+      },
+    },
+  } as unknown as ApplicationContext;
+}
 
 afterEach(() => {
   resetAppHostTestGlobals();
@@ -114,10 +136,7 @@ describe("OpenClaw native shell", () => {
       value: { openPalette, togglePalette },
     });
     shell.runtime = {
-      context: {
-        navigate,
-        agentSelection: { state: { selectedId: "agent/a" } },
-      } as unknown as ApplicationContext,
+      context: nativeSessionContext(navigate, "agent/a"),
     };
     shell.handleNativeOpenSearch();
     const toggleEvent = new CustomEvent("openclaw:native-toggle-search", { cancelable: true });
@@ -156,6 +175,26 @@ describe("OpenClaw native shell", () => {
     controls.remove();
   });
 
+  it("disables the native titlebar new-session control with its access reason", async () => {
+    const onOpenNewSession = vi.fn();
+    const controls = document.createElement(
+      "openclaw-macos-titlebar-controls",
+    ) as unknown as MacosTitlebarControlsState;
+    controls.navCollapsed = true;
+    controls.newSessionDisabledReason = "Operator write access is required.";
+    controls.onOpenNewSession = onOpenNewSession;
+    document.body.append(controls);
+    await controls.updateComplete;
+
+    const button = controls.querySelector<HTMLButtonElement>(
+      ".macos-titlebar-controls__new-session",
+    );
+    expect(button?.disabled).toBe(true);
+    button?.click();
+    expect(onOpenNewSession).not.toHaveBeenCalled();
+    controls.remove();
+  });
+
   it("retains a native new-session request until a context exists", () => {
     const navigate = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
@@ -163,14 +202,28 @@ describe("OpenClaw native shell", () => {
     shell.handleNativeNewSession();
 
     shell.runtime = {
-      context: {
-        navigate,
-        agentSelection: { state: { selectedId: "main" } },
-      } as unknown as ApplicationContext,
+      context: nativeSessionContext(navigate, "main"),
     };
     shell.handleNativeNewSession();
 
     expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", { search: "?agent=main" });
+  });
+
+  it("does not start a native session without exact sessions.create access", () => {
+    for (const options of [
+      { methods: ["sessions.list"], scopes: ["operator.write"] },
+      { methods: ["sessions.create"], scopes: ["operator.read"] },
+    ]) {
+      const navigate = vi.fn();
+      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      shell.runtime = {
+        context: nativeSessionContext(navigate, "main", options),
+      };
+
+      shell.handleNativeNewSession();
+
+      expect(navigate).not.toHaveBeenCalled();
+    }
   });
 
   it("navigates valid native Dashboard paths and acknowledges them", () => {
@@ -191,6 +244,47 @@ describe("OpenClaw native shell", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledExactlyOnceWith("channels", undefined);
   });
+
+  it("carries a native same-app search into navigation", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    shell.runtime = {
+      context: {
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    const event = new CustomEvent("openclaw:native-navigate", {
+      cancelable: true,
+      detail: { path: "/custodian", search: "?onboarding=1" },
+    });
+
+    shell.handleNativeNavigate(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", { search: "?onboarding=1" });
+  });
+
+  it.each(["#frag-only", "onboarding=1", "?onboarding=1#x"])(
+    "ignores malformed native search %s and keeps the plain route",
+    (search) => {
+      const navigate = vi.fn();
+      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      shell.runtime = {
+        context: {
+          navigate,
+        } as unknown as ApplicationContext,
+      };
+      const event = new CustomEvent("openclaw:native-navigate", {
+        cancelable: true,
+        detail: { path: "/custodian", search },
+      });
+
+      shell.handleNativeNavigate(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", undefined);
+    },
+  );
 
   it.each(["https://example.com", "//example.com", "/https://example.com", "/unknown"])(
     "leaves invalid native Dashboard path %s unhandled",

@@ -1,3 +1,4 @@
+import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type {
   SubagentCompletionDeliveryState,
   SubagentCompletionState,
@@ -26,12 +27,17 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
   entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
   entry.terminalOwner =
     entry.terminalOwner === "interrupted-recovery" &&
-    Number.isFinite(entry.endedAt) &&
-    entry.outcome?.status === "error" &&
+    Number.isFinite(entry.execution.endedAt) &&
+    entry.execution.outcome?.status === "error" &&
     entry.endedReason === "subagent-error" &&
     entry.pauseReason !== "sessions_yield"
       ? "interrupted-recovery"
       : undefined;
+  if (entry.completion) {
+    entry.completion.terminalReply = normalizeAgentRunTerminalReplySnapshot(
+      entry.completion.terminalReply,
+    );
+  }
   const killReconciliation = entry.killReconciliation;
   if (
     !killReconciliation ||
@@ -46,6 +52,35 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
       supersededAt: Number.isFinite(killReconciliation.supersededAt)
         ? killReconciliation.supersededAt
         : undefined,
+    };
+  }
+  const killIntent = entry.killIntent;
+  if (
+    !killIntent ||
+    typeof killIntent !== "object" ||
+    !Number.isFinite(killIntent.requestedAt) ||
+    typeof killIntent.reason !== "string" ||
+    !killIntent.reason.trim()
+  ) {
+    delete entry.killIntent;
+  } else {
+    entry.killIntent = {
+      requestedAt: killIntent.requestedAt,
+      reason: killIntent.reason.trim(),
+      lifecycleGeneration:
+        typeof killIntent.lifecycleGeneration === "string" && killIntent.lifecycleGeneration.trim()
+          ? killIntent.lifecycleGeneration.trim()
+          : undefined,
+      sessionId:
+        typeof killIntent.sessionId === "string" && killIntent.sessionId.trim()
+          ? killIntent.sessionId.trim()
+          : undefined,
+      sessionLifecycleRevision:
+        typeof killIntent.sessionLifecycleRevision === "string" &&
+        killIntent.sessionLifecycleRevision.trim()
+          ? killIntent.sessionLifecycleRevision.trim()
+          : undefined,
+      suppressTaskDelivery: killIntent.suppressTaskDelivery === true ? true : undefined,
     };
   }
   // cleanupHandled is an in-process lock; after restart, unfinished cleanup must
@@ -84,18 +119,13 @@ export function clearDeliveryState(entry: SubagentRunRecord): void {
 }
 
 /** Returns true when delivery is suspended with a durable timestamp. */
-export function isDeliverySuspended(entry: SubagentRunRecord): boolean {
+export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
 }
 
 /** Reads the current delivery attempt count. */
 export function getDeliveryAttemptCount(entry: SubagentRunRecord): number {
   return entry.delivery?.attemptCount ?? 0;
-}
-
-/** Reads the timestamp of the last delivery attempt. */
-export function getDeliveryLastAttemptAt(entry: SubagentRunRecord): number | undefined {
-  return entry.delivery?.lastAttemptAt;
 }
 
 /** Reads the non-empty last delivery error. */

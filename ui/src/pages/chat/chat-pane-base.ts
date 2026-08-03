@@ -82,6 +82,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) active = false;
   @property({ attribute: false }) draft?: string;
+  @property({ attribute: false }) focusComposer = false;
   @property({ attribute: false }) routeFace: BoardFace = "chat";
   @property({ attribute: false }) onFaceChange?: (face: BoardFace) => void;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
@@ -142,6 +143,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionRailLoad: Promise<void> | null = null;
   protected sessionRailOpenRequest = 0;
   protected sessionRailOpenSessionKey = "";
+  // The rail can unmount while catalog or lazy state is shown. Keep the consumed
+  // generation on the pane so a retained request cannot replay after remount.
+  protected sessionRailConsumedOpenRequest = 0;
   protected deferredSessionHydrationRequestVersion = 0;
   protected sessionCompanionHydrationKey = "";
   protected readonly sessionCompanionThreads = new ChatSessionCompanionThreads(() => {
@@ -175,6 +179,21 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.ensureSessionRail();
     this.sessionRailOpenRequest += 1;
     this.requestUpdate();
+  }
+
+  protected readonly consumeSessionRailOpenRequest = (openRequest: number) => {
+    if (openRequest > this.sessionRailConsumedOpenRequest) {
+      this.sessionRailConsumedOpenRequest = openRequest;
+    }
+  };
+
+  protected sessionRailOpenRequestProps(sessionKey: string) {
+    return {
+      sessionRailOpenRequest:
+        this.sessionRailOpenSessionKey === sessionKey ? this.sessionRailOpenRequest : 0,
+      sessionRailConsumedOpenRequest: this.sessionRailConsumedOpenRequest,
+      onSessionRailOpenRequestConsumed: this.consumeSessionRailOpenRequest,
+    };
   }
 
   protected readonly submitSessionCompanionQuestion = async (question: string) => {
@@ -254,6 +273,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected headerRenameInitialValue = "";
   protected headerRenameSessionKey = "";
   protected headerCopiedTimer: number | null = null;
+  protected composerPrefillAttentionTimer: number | null = null;
+  protected composerPrefillAttentionTarget: HTMLElement | null = null;
 
   /** Checkout paths keyed by worktree id — stable for a worktree's lifetime,
    * so reused session keys can never inherit another checkout's path. */

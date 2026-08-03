@@ -151,6 +151,7 @@ const mocks = vi.hoisted(() => {
       models: { providers: {} },
       env: { shellEnv: { enabled: true } },
     }),
+    loadModelsConfigArgs: vi.fn(),
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
     resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
     resolveProviderSyntheticAuthWithPlugin: vi.fn().mockReturnValue(undefined),
@@ -268,7 +269,10 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   createConfigIO: mocks.createConfigIO,
 }));
 vi.mock("./load-config.js", () => ({
-  loadModelsConfig: vi.fn(async () => mocks.loadConfig()),
+  loadModelsConfig: vi.fn(async (...args: unknown[]) => {
+    mocks.loadModelsConfigArgs(...args);
+    return mocks.loadConfig();
+  }),
 }));
 vi.mock("../../infra/provider-usage.js", () => ({
   formatUsageWindowSummary: vi.fn().mockReturnValue("-"),
@@ -556,6 +560,17 @@ describe("modelsStatusCommand auth overview", () => {
   it("includes masked auth sources in JSON output", async () => {
     await modelsStatusCommand({ json: true }, runtime as never);
     const payload = parseFirstJsonLog(runtime);
+
+    expect(mocks.loadModelsConfigArgs.mock.calls.at(-1)?.[0]).toMatchObject({
+      commandName: "models status",
+      skipPluginValidation: true,
+    });
+    expect(mocks.loadModelCatalog.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        providerDiscoveryProviderIds: expect.arrayContaining(["anthropic", "openai"]),
+        readOnly: true,
+      }),
+    );
 
     expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();

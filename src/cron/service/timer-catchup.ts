@@ -15,7 +15,7 @@ import {
   runWithCronAdmission,
   updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
-import { type CronServiceState, emit } from "./state.js";
+import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
 import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryCreateCronTaskRun } from "./task-runs.js";
 import {
@@ -88,8 +88,12 @@ async function releaseStartupCatchupReservationsAfterFailure(
       if (pendingReleases.length === 0) {
         return;
       }
-      recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-      await persistOrRestore(state, rollbackSnapshot);
+      const postPersistNotifications: DeferredCronNotifications = [];
+      recomputeNextRunsForMaintenance(state, {
+        repairFutureCronNextRunAtMs: false,
+        deferredNotifications: postPersistNotifications,
+      });
+      await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
       for (const pending of pendingReleases) {
         releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
       }
@@ -309,8 +313,12 @@ async function executeStartupCatchupPlan(
           ) {
             const rollbackSnapshot = snapshotStoreForRollback(state);
             delete job.state.queuedAtMs;
-            recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-            await persistOrRestore(state, rollbackSnapshot);
+            const postPersistNotifications: DeferredCronNotifications = [];
+            recomputeNextRunsForMaintenance(state, {
+              repairFutureCronNextRunAtMs: false,
+              deferredNotifications: postPersistNotifications,
+            });
+            await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
             releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
             return undefined;
           }
@@ -437,8 +445,12 @@ async function applyStartupCatchupOutcomes(
       const rollbackSnapshot = snapshotStoreForRollback(state);
       const pendingReleases = clearUnstartedStartupCatchupReservationMarkers(state, plan, outcomes);
       if (pendingReleases.length > 0) {
-        recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-        await persistOrRestore(state, rollbackSnapshot);
+        const postPersistNotifications: DeferredCronNotifications = [];
+        recomputeNextRunsForMaintenance(state, {
+          repairFutureCronNextRunAtMs: false,
+          deferredNotifications: postPersistNotifications,
+        });
+        await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
         for (const pending of pendingReleases) {
           releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
         }
@@ -450,8 +462,12 @@ async function applyStartupCatchupOutcomes(
     const pendingReleases = clearUnstartedStartupCatchupReservationMarkers(state, plan, outcomes);
     if (outcomes.length === 0 && plan.deferredJobs.length === 0) {
       if (pendingReleases.length > 0) {
-        recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-        await persistOrRestore(state, rollbackSnapshot);
+        const postPersistNotifications: DeferredCronNotifications = [];
+        recomputeNextRunsForMaintenance(state, {
+          repairFutureCronNextRunAtMs: false,
+          deferredNotifications: postPersistNotifications,
+        });
+        await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
         for (const pending of pendingReleases) {
           releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
         }
@@ -484,8 +500,12 @@ async function applyStartupCatchupOutcomes(
 
     // Startup overflow owns these staggered wake times; repairing future
     // schedules here would silently move a deferred run to its natural slot.
-    recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-    await persistOrRestore(state, rollbackSnapshot);
+    const postPersistNotifications: DeferredCronNotifications = [];
+    recomputeNextRunsForMaintenance(state, {
+      repairFutureCronNextRunAtMs: false,
+      deferredNotifications: postPersistNotifications,
+    });
+    await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
     for (const pending of pendingReleases) {
       releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
     }

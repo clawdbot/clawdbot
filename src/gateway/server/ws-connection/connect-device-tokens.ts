@@ -18,7 +18,7 @@ export async function issueGatewayConnectDeviceTokens(params: {
     isBrowserOperatorUi,
     isWebchat,
     trustedProxyAuthOk,
-    usesSharedGatewayAuth,
+    sessionUsesSharedGatewayAuth,
     sessionSharedGatewaySessionGeneration,
     deviceTokenSharedGatewaySessionGeneration,
     handoffBootstrapProfile,
@@ -26,7 +26,7 @@ export async function issueGatewayConnectDeviceTokens(params: {
   const sharedGatewayAuthIssuer =
     sessionSharedGatewaySessionGeneration &&
     (deviceTokenSharedGatewaySessionGeneration !== undefined ||
-      (usesSharedGatewayAuth && (isBrowserOperatorUi || isWebchat)))
+      (sessionUsesSharedGatewayAuth && (isBrowserOperatorUi || isWebchat)))
       ? {
           kind: "shared-gateway-auth" as const,
           generation: sessionSharedGatewaySessionGeneration,

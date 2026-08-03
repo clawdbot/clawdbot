@@ -4,7 +4,7 @@ import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { cacheModelSetupDetection } from "./detect-cache.ts";
+import { cacheModelSetupDetection, type ModelSetupDetectionConnection } from "./detect-cache.ts";
 import { detectModelSetup } from "./rpc.ts";
 
 export function isDefaultChatLanding(
@@ -64,13 +64,12 @@ function startModelSetupFirstRunRedirect(params: {
   context: ApplicationContext<RouteId>;
   isStillDefaultLanding: () => boolean;
 }): () => void {
-  let attempted = false;
+  let attemptedConnection: ModelSetupDetectionConnection | null = null;
   let redirected = false;
   const handleSnapshot: Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0] = (
     snapshot,
   ) => {
     if (
-      attempted ||
       redirected ||
       snapshot.phase !== "connected" ||
       !snapshot.client ||
@@ -79,11 +78,25 @@ function startModelSetupFirstRunRedirect(params: {
     ) {
       return;
     }
-    attempted = true;
-    const client = snapshot.client;
-    void detectModelSetup(client)
+    const connection = { client: snapshot.client, hello: snapshot.hello };
+    if (
+      connection.client === attemptedConnection?.client &&
+      connection.hello === attemptedConnection?.hello
+    ) {
+      return;
+    }
+    attemptedConnection = connection;
+    void detectModelSetup(snapshot.client)
       .then((result) => {
-        cacheModelSetupDetection(client, result);
+        const current = params.context.gateway.snapshot;
+        if (
+          current.phase !== "connected" ||
+          current.client !== connection.client ||
+          current.hello !== connection.hello
+        ) {
+          return;
+        }
+        cacheModelSetupDetection(connection, result);
         if (!result.setupComplete && !redirected && params.isStillDefaultLanding()) {
           redirected = true;
           params.context.replace("model-setup", { search: "?firstRun=1" });

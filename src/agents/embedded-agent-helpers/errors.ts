@@ -332,6 +332,7 @@ const TIMEOUT_ERROR_CODES = new Set([
   "ENETRESET",
   "EPIPE",
   "EAI_AGAIN",
+  "ERR_STREAM_PREMATURE_CLOSE",
 ]);
 const AUTH_SCOPE_HINT_RE =
   /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;
@@ -927,6 +928,9 @@ function classifyFailoverClassificationFromMessage(
   if (isContextOverflowError(raw)) {
     return { kind: "context_overflow" };
   }
+  if (isReplayInvalidErrorMessage(raw)) {
+    return toReasonClassification("format");
+  }
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);
@@ -1448,6 +1452,13 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (providerRuntimeFailureKind === "replay_invalid") {
+    return (
+      "Session history or replay state is invalid. " +
+      "Use /new to start a fresh session and try again."
+    );
+  }
+
   const apiError = parseApiErrorInfo(raw);
   if (apiError?.type?.toLowerCase().includes("invalid_request") && apiError.message?.trim()) {
     return `LLM request rejected: ${apiError.message.trim()}`;
@@ -1493,13 +1504,6 @@ export function formatAssistantErrorText(
 
   if (providerRuntimeFailureKind === "schema") {
     return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
-  }
-
-  if (providerRuntimeFailureKind === "replay_invalid") {
-    return (
-      "Session history or replay state is invalid. " +
-      "Use /new to start a fresh session and try again."
-    );
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {

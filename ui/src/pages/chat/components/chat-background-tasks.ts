@@ -19,8 +19,8 @@ import {
   partitionTasks,
   sortTasks,
   taskTitle,
-  type TaskSummary,
 } from "../../../lib/tasks/data.ts";
+import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { renderTaskDetail, renderTaskRow } from "./chat-background-task-row.ts";
 import { newestTaskSnapshot } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";

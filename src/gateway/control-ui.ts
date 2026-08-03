@@ -14,10 +14,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
-import {
-  isPackageProvenControlUiRootSync,
-  resolveControlUiRootSync,
-} from "../infra/control-ui-assets.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
@@ -82,7 +78,11 @@ import {
   sendControlUiHtmlBody,
   serveControlUiAsset,
 } from "./control-ui-static.js";
-import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
+import {
+  createGatewayByteStream,
+  resolveByteResponse,
+  writeByteHeaders,
+} from "./http-byte-range.js";
 import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
   getBearerToken,
@@ -118,9 +118,12 @@ type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
-  | { kind: "bundled"; path: string }
-  | { kind: "resolved"; path: string }
+  | { kind: "bundled"; path: string; realPath?: string }
+  | { kind: "resolved"; path: string; realPath?: string }
   | { kind: "invalid"; path: string }
+  | { kind: "preparing" }
+  // The document route is unauthenticated; build diagnostics stay in Gateway logs.
+  | { kind: "failed" }
   | { kind: "missing" };
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
@@ -202,17 +205,31 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 
 function respondControlUiAssetsUnavailable(
   res: ServerResponse,
-  options?: { configuredRootPath?: string },
+  options?: {
+    configuredRootPath?: string;
+    failed?: boolean;
+    head?: boolean;
+    preparing?: boolean;
+  },
 ) {
-  if (options?.configuredRootPath) {
-    respondPlainText(
-      res,
-      503,
-      `Control UI assets not found at ${options.configuredRootPath}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`,
-    );
+  const message = options?.preparing
+    ? "Control UI assets are being prepared. Try again shortly."
+    : options?.failed
+      ? "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`."
+      : options?.configuredRootPath
+        ? `Control UI assets not found at ${options.configuredRootPath}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`
+        : CONTROL_UI_ASSETS_MISSING_MESSAGE;
+  if (options?.preparing) {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Retry-After", "1");
+  }
+  if (options?.head) {
+    res.statusCode = 503;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end();
     return;
   }
-  respondPlainText(res, 503, CONTROL_UI_ASSETS_MISSING_MESSAGE);
+  respondPlainText(res, 503, message);
 }
 
 function isValidAgentId(agentId: string): boolean {
@@ -677,21 +694,13 @@ export async function handleControlUiAssistantMediaRequest(
     return true;
   }
 
-  let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | null = null;
-  let localPath;
-  let handleClosed = false;
-  const closeOpenedHandle = async () => {
-    if (!opened || handleClosed) {
-      return;
-    }
-    handleClosed = true;
-    await opened.handle.close().catch(() => {});
-  };
+  let byteStream: ReturnType<typeof createGatewayByteStream> | undefined;
   try {
     const resolvedReference = await resolveMediaReferenceLocalPathInfo(source);
-    localPath = resolvedReference.path;
+    const localPath = resolvedReference.path;
     await assertLocalMediaAllowed(localPath, localRoots);
-    opened = await openLocalFileSafely({ filePath: localPath });
+    let opened = await openLocalFileSafely({ filePath: localPath });
+    byteStream = createGatewayByteStream(res, opened.handle, () => respondControlUiNotFound(res));
     const sniffLength = Math.min(opened.stat.size, 8192);
     const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
     const bytesRead =
@@ -719,16 +728,18 @@ export async function handleControlUiAssistantMediaRequest(
         kind: mediaKind,
       });
       if (playback.kind === "preparing") {
-        await closeOpenedHandle();
+        await byteStream.close();
         sendJson(res, 202, { status: "preparing" });
         return true;
       }
       if (playback.kind === "transcoded") {
         const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(() => null);
         if (transcoded) {
-          await closeOpenedHandle();
+          await byteStream.close();
           opened = transcoded;
-          handleClosed = false;
+          byteStream = createGatewayByteStream(res, opened.handle, () =>
+            respondControlUiNotFound(res),
+          );
           contentType = playback.contentType;
           filename = replacePlaybackFileExtension(filename, playback.extension);
         }
@@ -743,38 +754,13 @@ export async function handleControlUiAssistantMediaRequest(
     const byteResponse = resolveByteResponse({
       file: opened.stat,
       method: req.method,
-      rangeHeader: req.headers.range,
-      ifRangeHeader: req.headers["if-range"],
+      request: req,
     });
     writeByteHeaders(res, byteResponse);
-    if (req.method === "HEAD" || byteResponse.kind === "unsatisfiable" || opened.stat.size === 0) {
-      await closeOpenedHandle();
-      res.end();
-      return true;
-    }
-    const stream = opened.handle.createReadStream({
-      start: byteResponse.kind === "partial" ? byteResponse.range.start : 0,
-      end: byteResponse.kind === "partial" ? byteResponse.range.end : opened.stat.size - 1,
-      autoClose: false,
-    });
-    const finishClose = () => {
-      void closeOpenedHandle();
-    };
-    stream.once("end", finishClose);
-    stream.once("close", finishClose);
-    stream.once("error", () => {
-      void closeOpenedHandle();
-      if (!res.headersSent) {
-        respondControlUiNotFound(res);
-      } else {
-        res.destroy();
-      }
-    });
-    res.once("close", finishClose);
-    stream.pipe(res);
+    await byteStream.pipe(byteResponse, req.method);
     return true;
   } catch {
-    await closeOpenedHandle();
+    await byteStream?.close();
     respondControlUiNotFound(res);
     return true;
   }
@@ -866,6 +852,8 @@ export async function handleControlUiAvatarRequest(
     res.setHeader("Cache-Control", "no-cache");
     if (req.method === "HEAD") {
       res.statusCode = 200;
+      // The pinned descriptor exposes GET's exact byte count without reading the avatar.
+      res.setHeader("Content-Length", String(projection.openedFile.stat.size));
       res.end();
       return true;
     }
@@ -920,7 +908,7 @@ function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
   rejectHardlinks: boolean,
-): { path: string; fd: number } | null {
+): { path: string; fd: number; size: number } | null {
   const opened = openRootFileSync({
     absolutePath: filePath,
     rootPath: rootReal,
@@ -937,7 +925,7 @@ function resolveSafeControlUiFile(
       fallback: () => null,
     });
   }
-  return { path: opened.path, fd: opened.fd };
+  return { path: opened.path, fd: opened.fd, size: opened.stat.size };
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -1036,6 +1024,7 @@ export async function handleControlUiHttpRequest(
     pathname,
     search: url.search,
     method: req.method,
+    accept: req.headers?.accept,
   });
   if (route.kind === "not-control-ui") {
     return false;
@@ -1119,28 +1108,36 @@ export async function handleControlUiHttpRequest(
 
   const rootState = opts?.root;
   if (rootState?.kind === "invalid") {
-    respondControlUiAssetsUnavailable(res, { configuredRootPath: rootState.path });
+    respondControlUiAssetsUnavailable(res, {
+      configuredRootPath: rootState.path,
+      head: req.method === "HEAD",
+    });
     return true;
   }
-  if (rootState?.kind === "missing") {
-    respondControlUiAssetsUnavailable(res);
+  if (rootState?.kind === "preparing") {
+    respondControlUiAssetsUnavailable(res, {
+      head: req.method === "HEAD",
+      preparing: true,
+    });
+    return true;
+  }
+  if (rootState?.kind === "failed") {
+    respondControlUiAssetsUnavailable(res, {
+      failed: true,
+      head: req.method === "HEAD",
+    });
+    return true;
+  }
+  if (!rootState || rootState.kind === "missing") {
+    respondControlUiAssetsUnavailable(res, { head: req.method === "HEAD" });
     return true;
   }
 
-  const root =
-    rootState?.kind === "resolved" || rootState?.kind === "bundled"
-      ? rootState.path
-      : resolveControlUiRootSync({
-          moduleUrl: import.meta.url,
-          argv1: process.argv[1],
-          cwd: process.cwd(),
-        });
-  if (!root) {
-    respondControlUiAssetsUnavailable(res);
-    return true;
-  }
-
+  const root = rootState.path;
   const rootReal = (() => {
+    if (rootState.realPath) {
+      return rootState.realPath;
+    }
     try {
       return fs.realpathSync(root);
     } catch (error) {
@@ -1151,7 +1148,7 @@ export async function handleControlUiHttpRequest(
     }
   })();
   if (!rootReal) {
-    respondControlUiAssetsUnavailable(res);
+    respondControlUiAssetsUnavailable(res, { head: req.method === "HEAD" });
     return true;
   }
 
@@ -1190,14 +1187,7 @@ export async function handleControlUiHttpRequest(
     return true;
   }
 
-  const isBundledRoot =
-    rootState?.kind === "bundled" ||
-    (rootState === undefined &&
-      isPackageProvenControlUiRootSync(root, {
-        moduleUrl: import.meta.url,
-        argv1: process.argv[1],
-        cwd: process.cwd(),
-      }));
+  const isBundledRoot = rootState.kind === "bundled";
   // Bundled sidecars are implementation artifacts selected through
   // Accept-Encoding. Configured roots retain ordinary .br/.gz resources.
   if (
@@ -1249,6 +1239,7 @@ export async function handleControlUiHttpRequest(
         respondHeadForControlUiFile(res, representation.contentPath, {
           immutable: immutableAsset,
           encoding: representation.encoding,
+          contentLength: representation.bodyFile.size,
         });
         return true;
       } finally {
@@ -1271,6 +1262,10 @@ export async function handleControlUiHttpRequest(
   if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
     respondControlUiNotFound(res);
     return true;
+  }
+
+  if (!route.spaFallback) {
+    return false;
   }
 
   // SPA fallback (client-side router): serve index.html for unknown paths.

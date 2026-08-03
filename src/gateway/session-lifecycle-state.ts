@@ -3,7 +3,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
-  buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
@@ -69,37 +70,18 @@ function resolveLifecyclePhase(event: Pick<LifecycleEventLike, "data">): Lifecyc
   return phase === "start" || phase === "end" || phase === "error" ? phase : null;
 }
 
-function mapAgentRunTerminalOutcomeToSessionStatus(
-  outcome: AgentRunTerminalOutcome,
-): SessionRunStatus {
-  switch (outcome.reason) {
-    case "completed":
-      return "done";
-    case "hard_timeout":
-    case "timed_out":
-      return "timeout";
-    case "cancelled":
-    case "aborted":
-      return "killed";
-    case "blocked":
-    case "abandoned":
-    case "failed":
-      return "failed";
-    default:
-      return outcome.reason satisfies never;
-  }
-}
+const SESSION_STATUS_BY_TERMINAL_CLASSIFICATION = {
+  success: "done",
+  timeout: "timeout",
+  cancellation: "killed",
+  failure: "failed",
+} as const satisfies Record<ReturnType<typeof classifyAgentRunTerminalOutcome>, SessionRunStatus>;
 
 function resolveTerminalOutcome(event: LifecycleEventLike): AgentRunTerminalOutcome {
   const phase = resolveLifecyclePhase(event);
-  return buildAgentRunTerminalOutcome({
-    status: phase === "error" ? "error" : event.data?.aborted === true ? "timeout" : "ok",
-    error: event.data?.error,
-    stopReason: event.data?.stopReason,
-    livenessState: event.data?.livenessState,
-    timeoutPhase: event.data?.timeoutPhase,
-    providerStarted: event.data?.providerStarted,
-    startedAt: event.data?.startedAt,
+  return buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: phase === "error" ? "error" : "end",
+    data: event.data,
     endedAt: event.data?.endedAt ?? event.ts,
   });
 }
@@ -196,7 +178,9 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
     error: params.event.data?.error,
   });
   const terminal = yieldedWaiting ? undefined : resolveTerminalOutcome(params.event);
-  const status = terminal ? mapAgentRunTerminalOutcomeToSessionStatus(terminal) : "running";
+  const status = terminal
+    ? SESSION_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminal)]
+    : "running";
   return {
     updatedAt,
     status,
@@ -250,18 +234,24 @@ export function isRestartRecoveryLifecycleEvent(params: {
 }
 
 /**
- * A pre-`sessions.reset` run's lifecycle event must not mutate a session row
- * whose sessionId was rotated by the reset. True only when both the owning
- * run's sessionId and the current row's sessionId are known and differ.
+ * Reject pre-reset runs and explicitly older runs sharing one session so late
+ * lifecycle events cannot overwrite a newer run's authoritative state.
  */
 export function isStaleLifecycleEventForSession(params: {
   owningSessionId?: string;
   currentSessionId?: string;
+  eventStartedAt?: unknown;
+  currentStartedAt?: number;
 }): boolean {
-  return Boolean(
-    params.owningSessionId &&
-    params.currentSessionId &&
-    params.owningSessionId !== params.currentSessionId,
+  return (
+    Boolean(
+      params.owningSessionId &&
+      params.currentSessionId &&
+      params.owningSessionId !== params.currentSessionId,
+    ) ||
+    (isFiniteTimestamp(params.eventStartedAt) &&
+      isFiniteTimestamp(params.currentStartedAt) &&
+      params.eventStartedAt < params.currentStartedAt)
   );
 }
 
@@ -314,10 +304,14 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         // one claimed continuation. Ready or replaced claims reject late events.
         return null;
       }
-      // Reject a pre-reset run's lifecycle event: sessions.reset rotates the row
-      // to a new sessionId under the same sessionKey, so an old in-flight run's
-      // late start/end/error must not overwrite the fresh row's status (#88538).
-      if (isStaleLifecycleEventForSession({ owningSessionId, currentSessionId: entry.sessionId })) {
+      if (
+        isStaleLifecycleEventForSession({
+          owningSessionId,
+          currentSessionId: entry.sessionId,
+          eventStartedAt: params.event.data?.startedAt,
+          currentStartedAt: entry.startedAt,
+        })
+      ) {
         return null;
       }
       const patch = derivePersistedSessionLifecyclePatch({

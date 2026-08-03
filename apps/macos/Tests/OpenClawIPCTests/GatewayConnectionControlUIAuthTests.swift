@@ -3,27 +3,6 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
-private final class ControlUIEndpointSource: @unchecked Sendable {
-    private let lock = NSLock()
-    private var endpoint: GatewayConnection.EndpointSnapshot
-
-    init(_ endpoint: GatewayConnection.EndpointSnapshot) {
-        self.endpoint = endpoint
-    }
-
-    func set(_ endpoint: GatewayConnection.EndpointSnapshot) {
-        self.lock.lock()
-        self.endpoint = endpoint
-        self.lock.unlock()
-    }
-
-    func snapshot() -> GatewayConnection.EndpointSnapshot {
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        return self.endpoint
-    }
-}
-
 private func makeControlUIAuthSession(
     issuedDeviceToken: String? = nil) -> GatewayTestWebSocketSession
 {
@@ -47,14 +26,18 @@ private func makeControlUIAuthSession(
     })
 }
 
+private func controlUIRoute(_ rawURL: String, token: String? = nil) throws -> GatewayConnection.Config {
+    (
+        url: try #require(URL(string: rawURL)),
+        token: token,
+        password: nil)
+}
+
 @Suite(.serialized)
 struct GatewayConnectionControlUIAuthTests {
     @Test func `shared token requires the current live route and socket`() async throws {
-        let routeA: GatewayConnection.Config = (
-            url: try #require(URL(string: "ws://route-a.invalid")),
-            token: " shared-token ",
-            password: nil)
-        let source = ControlUIEndpointSource(.init(
+        let routeA = try controlUIRoute("ws://route-a.invalid", token: " shared-token ")
+        let source = GatewayConnectionEndpointSource(endpoint: .init(
             config: routeA,
             routeAuthority: 1,
             deviceAuthGatewayID: "route-a"))
@@ -69,11 +52,8 @@ struct GatewayConnectionControlUIAuthTests {
             retryTransportFailures: false)
         #expect(await connection.controlUiAutoAuthToken(config: routeA) == "shared-token")
 
-        let routeB: GatewayConnection.Config = (
-            url: try #require(URL(string: "ws://route-b.invalid")),
-            token: routeA.token,
-            password: nil)
-        source.set(.init(
+        let routeB = try controlUIRoute("ws://route-b.invalid", token: routeA.token)
+        source.setEndpoint(.init(
             config: routeB,
             routeAuthority: 2,
             deviceAuthGatewayID: "route-b"))
@@ -103,10 +83,7 @@ struct GatewayConnectionControlUIAuthTests {
                 token: "route-a-device-token",
                 gatewayID: "route-a")
 
-            let routeA: GatewayConnection.Config = (
-                url: try #require(URL(string: "ws://route-a.invalid")),
-                token: nil,
-                password: nil)
+            let routeA = try controlUIRoute("ws://route-a.invalid")
             let routeAConnection = GatewayConnection(
                 endpointProvider: {
                     .init(
@@ -124,10 +101,7 @@ struct GatewayConnectionControlUIAuthTests {
                     "route-a-device-token")
             await routeAConnection.shutdown()
 
-            let routeB: GatewayConnection.Config = (
-                url: try #require(URL(string: "ws://route-b.invalid")),
-                token: nil,
-                password: nil)
+            let routeB = try controlUIRoute("ws://route-b.invalid")
             let routeBConnection = GatewayConnection(
                 endpointProvider: {
                     .init(
@@ -158,11 +132,8 @@ struct GatewayConnectionControlUIAuthTests {
                 role: "operator",
                 token: "route-a-device-token",
                 gatewayID: "route-a")
-            let routeA: GatewayConnection.Config = (
-                url: try #require(URL(string: "ws://route-a.invalid")),
-                token: nil,
-                password: nil)
-            let source = ControlUIEndpointSource(.init(
+            let routeA = try controlUIRoute("ws://route-a.invalid")
+            let source = GatewayConnectionEndpointSource(endpoint: .init(
                 config: routeA,
                 routeAuthority: 1,
                 deviceAuthGatewayID: "route-a"))
@@ -179,17 +150,14 @@ struct GatewayConnectionControlUIAuthTests {
                 await connection.controlUiAutoAuthToken(config: routeA) ==
                     "route-a-issued-token")
 
-            source.set(.init(
+            source.setEndpoint(.init(
                 config: routeA,
                 routeAuthority: 1,
                 deviceAuthGatewayID: "route-b"))
             #expect(await connection.controlUiAutoAuthToken(config: routeA) == nil)
 
-            let routeB: GatewayConnection.Config = (
-                url: try #require(URL(string: "ws://route-b.invalid")),
-                token: nil,
-                password: nil)
-            source.set(.init(
+            let routeB = try controlUIRoute("ws://route-b.invalid")
+            source.setEndpoint(.init(
                 config: routeB,
                 routeAuthority: 2,
                 deviceAuthGatewayID: "route-b"))

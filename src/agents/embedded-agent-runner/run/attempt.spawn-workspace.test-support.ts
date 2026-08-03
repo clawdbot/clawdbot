@@ -466,6 +466,8 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
 
 vi.mock("../../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: () => undefined,
+  resolveModelOverridePolicy: () => undefined,
+  setTtsMachinePrefsPathResolver: () => undefined,
 }));
 
 vi.mock("../../bootstrap-files.js", async () => {
@@ -744,7 +746,8 @@ vi.mock("../../model-auth.js", () => ({
   resolveModelAuthMode: () => undefined,
 }));
 
-vi.mock("../../model-tool-support.js", () => ({
+vi.mock("../../model-tool-support.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../model-tool-support.js")>()),
   supportsModelTools: (...args: unknown[]) => hoisted.supportsModelToolsMock(...args),
 }));
 

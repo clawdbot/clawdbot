@@ -6,6 +6,7 @@ type SendModule = typeof import("./send.js");
 
 let sendSmsTextChunks: SendModule["sendSmsTextChunks"];
 let toSmsPlainText: SendModule["toSmsPlainText"];
+let resolveSmsAccount: (typeof import("./accounts.js"))["resolveSmsAccount"];
 
 const sendSmsViaTwilio = vi.hoisted(() => vi.fn(async ({ to }) => ({ sid: `SM-${to}`, to })));
 
@@ -16,10 +17,15 @@ beforeEach(async () => {
     sendSmsViaTwilio,
   }));
   ({ sendSmsTextChunks, toSmsPlainText } = await import("./send.js"));
+  ({ resolveSmsAccount } = await import("./accounts.js"));
 });
 
 afterEach(() => {
   vi.doUnmock("./twilio.js");
+  delete process.env.TWILIO_ACCOUNT_SID;
+  delete process.env.TWILIO_AUTH_TOKEN;
+  delete process.env.TWILIO_PHONE_NUMBER;
+  delete process.env.SMS_TEXT_CHUNK_LIMIT;
 });
 
 function createAccount(textChunkLimit: number): ResolvedSmsAccount {
@@ -52,6 +58,22 @@ describe("sendSmsTextChunks", () => {
     const texts = sendSmsViaTwilio.mock.calls.map(([call]) => call.text);
     expect(texts).toEqual(["alpha", " beta"]);
     expect(texts.join("")).toBe("alpha beta");
+  });
+
+  it("sends one message when an invalid zero SMS_TEXT_CHUNK_LIMIT falls back to the default limit", async () => {
+    process.env.TWILIO_ACCOUNT_SID = "AC-env";
+    process.env.TWILIO_AUTH_TOKEN = "env-token";
+    process.env.TWILIO_PHONE_NUMBER = "+15557654321";
+    process.env.SMS_TEXT_CHUNK_LIMIT = "0";
+
+    await sendSmsTextChunks({
+      account: resolveSmsAccount({}),
+      to: "+15551234567",
+      text: "alpha beta gamma",
+    });
+
+    expect(sendSmsViaTwilio).toHaveBeenCalledOnce();
+    expect(sendSmsViaTwilio.mock.calls[0]?.[0].text).toBe("alpha beta gamma");
   });
 
   it("labels transcript-role headers promoted to an SMS chunk boundary", async () => {

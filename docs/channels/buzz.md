@@ -18,8 +18,12 @@ in a hosted or self-hosted Buzz workspace.
 - Shows typing while an accepted agent turn is running
 - Preserves Markdown in replies and sends text through OpenClaw's built-in
   `message` tool
+- Sends native Buzz mentions to current room members from replies and proactive
+  messages
 - Supports mention requirements and sender allowlists
 - Discovers rooms after the bot has been approved
+- Resolves current Buzz profile names, avatars, room names, and room membership
+  through OpenClaw's directory commands
 - Reconnects and avoids processing the same message twice
 
 The current plugin supports group rooms, Markdown text, and inbound structured
@@ -159,6 +163,7 @@ Agents can:
 - Receive Buzz kind `9` normal messages, kind `40002` rich-content messages,
   and kind `40008` structured diffs
 - Send Markdown text to an approved Buzz room as a normal kind `9` message
+- Send native room-member mentions from normal replies and proactive messages
 - Use the configured default room when a workflow does not specify a target
 - Use the routed agent's normal skills, memory, and allowed tools
 
@@ -182,6 +187,82 @@ openclaw message send \
   --target buzz:<ROOM_UUID> \
   --message "Hello from OpenClaw"
 ```
+
+### Native mentions
+
+Write a unique current room member's profile name as `@Display Name`. OpenClaw
+keeps the visible text unchanged and adds the native Buzz `p` tag, including on
+threaded replies. Names are resolved only against the target room's current
+relay-signed membership and bounded profile snapshot.
+
+For an explicit identity, include its NIP-27 reference in the message:
+
+```bash
+openclaw message send \
+  --channel buzz \
+  --target engineering \
+  --message "Please review this, nostr:npub1..."
+```
+
+The referenced public key must be a current member of the target room. Without
+an explicit identity, unknown names and duplicate profile names fail visibly
+instead of sending text that looks like a mention without notifying anyone.
+When the message contains an explicit identity, unresolved or ambiguous labels
+remain presentation text; include every intended identity explicitly. Ambiguous
+errors list candidate public keys so the sender can retry with the intended
+`nostr:npub...` identity. Out-of-room public keys always fail. Mention-like text
+inside inline or fenced Markdown code is ignored, and one message can carry at
+most 50 native mentions.
+
+Connected Gateways resolve names from their existing in-memory directory
+snapshot and do not query the relay per message. Profiles beyond the bounded
+snapshot require an explicit `nostr:npub...` identity. A standalone mention send
+loads membership and profiles through one bounded authenticated relay session,
+publishes, and closes it; standalone messages without mention syntax keep the
+existing direct publish path.
+
+### Directory and sender labels
+
+OpenClaw keeps a bounded snapshot of the configured rooms, their current
+relay-signed member lists, room metadata, and kind `0` member profiles. Incoming
+agent context uses the current profile and room names when available, while the
+sender public key remains the stable authorization, routing, and session
+identity.
+
+Inspect the same data from the CLI:
+
+```bash
+openclaw directory self --channel buzz
+openclaw directory peers list --channel buzz --query "alice"
+openclaw directory groups list --channel buzz --query "engineering"
+openclaw directory groups members \
+  --channel buzz \
+  --group-id buzz:<ROOM_UUID>
+```
+
+When the Gateway is connected, directory reads reuse its authenticated Buzz
+connection and in-memory snapshot. A standalone directory command opens one
+bounded authenticated connection, loads the current snapshot, and closes it.
+Ordinary directory errors are logged without reconnecting. If a directory or
+profile subscription does not reach EOSE within 10 seconds, OpenClaw treats the
+Buzz relay session as stalled and recycles only that Buzz account connection;
+the Gateway keeps running.
+
+Archived rooms are omitted from directory results and live room subscriptions.
+If a configured room is archived or restored while OpenClaw is connected, the
+plugin recycles only its Buzz connection so the subscription set matches the
+relay's current metadata. The Gateway keeps running.
+
+Each configured room uses one room-scoped relay subscription. OpenClaw reserves
+four of Buzz's 1,024 connection subscriptions for membership notifications and
+concurrent profile, membership, and metadata queries, so one account can
+configure up to 1,020 rooms. Near that limit, optional member profile
+subscriptions are reduced first; directory entries continue to work with stable
+public keys and deterministic fallback labels.
+
+Unique current room names can resolve as outbound targets through OpenClaw's
+shared directory lookup. The canonical `buzz:<ROOM_UUID>` target remains the
+safest choice for automation and for rooms with duplicate names.
 
 ### Route rooms to different agents
 
@@ -279,8 +360,9 @@ For a narrower sender policy:
 }
 ```
 
-Room targets are UUIDs. Use the room UUID shown during discovery or ask a room
-admin for it; a display name such as `general` is not a valid target.
+Room UUIDs are the canonical targets. Use the UUID shown during discovery or ask
+a room admin for it. A unique current room name can resolve through the live
+directory, but automation should use `buzz:<ROOM_UUID>` to avoid ambiguity.
 
 For manual configuration, `groupAllowFrom` entries must use the 64-character
 hexadecimal form.
@@ -337,6 +419,32 @@ openclaw message send \
 
 For a full round trip, have an allowed Buzz user mention the bot and confirm that
 OpenClaw replies in the room.
+
+### QA Lab round trip
+
+Source checkouts can exercise the production Buzz channel path with two
+dedicated test identities:
+
+```bash
+pnpm openclaw qa buzz \
+  --credential-file /secure/path/buzz-qa-credentials.json \
+  --provider-mode mock-openai
+```
+
+The command runs a real relay canary and mention-gating check while using the
+deterministic mock model. The private JSON credential
+file contains `relayUrl`, `roomId`, `driverPrivateKey`, and `sutPrivateKey`, plus
+optional `driverAuthTag` and `sutAuthTag` values for closed relays. Both test
+public keys must be room members, and the SUT public key must have the **Bot**
+role. A closed relay may require both public keys to be enrolled separately.
+Use `--credential-source convex` for pooled QA credentials.
+
+Use `wss://` for hosted relays. Plaintext `ws://` credential URLs are accepted
+only for loopback development relays.
+
+Never use a human owner or admin private key. Private keys and optional
+authorization values are parent-harness secrets and must not appear in logs,
+artifacts, screenshots, shell history, or source control.
 
 ## Rotate the bot identity
 

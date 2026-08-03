@@ -1,3 +1,5 @@
+import type { Usage } from "../types.js";
+
 type AnthropicUsagePayload = {
   input_tokens?: unknown;
   output_tokens?: unknown;
@@ -101,4 +103,106 @@ export function readLastAnthropicIterationUsage(
       totalTokens: contextPromptTokens + outputTokens,
     },
   };
+}
+
+/** Record independent billing buckets without treating zero placeholders as context proof. */
+export function applyAnthropicMessageStartUsage(
+  target: Usage,
+  payload: AnthropicUsagePayload,
+): AnthropicPromptUsageSnapshot | undefined {
+  const promptUsage = readAnthropicPromptUsageSnapshot(payload);
+  const promptTokens = promptUsage
+    ? promptUsage.input + promptUsage.cacheRead + promptUsage.cacheWrite
+    : 0;
+  const inputTokens = readAnthropicUsageTokenCount(payload.input_tokens);
+  if (inputTokens !== undefined) {
+    target.input = inputTokens;
+  }
+  const outputTokens = readAnthropicUsageTokenCount(payload.output_tokens);
+  if (outputTokens !== undefined) {
+    target.output = outputTokens;
+  }
+  const cacheReadTokens =
+    payload.cache_read_input_tokens == null
+      ? 0
+      : readAnthropicUsageTokenCount(payload.cache_read_input_tokens);
+  if (cacheReadTokens !== undefined) {
+    target.cacheRead = cacheReadTokens;
+  }
+  const cacheWriteTokens =
+    payload.cache_creation_input_tokens == null
+      ? 0
+      : readAnthropicUsageTokenCount(payload.cache_creation_input_tokens);
+  if (cacheWriteTokens !== undefined) {
+    target.cacheWrite = cacheWriteTokens;
+  }
+  const { cacheWrite1h } = readAnthropicCacheWriteUsage(payload);
+  if (cacheWrite1h !== undefined) {
+    target.cacheWrite1h = cacheWrite1h;
+  }
+  target.totalTokens = target.input + target.output + target.cacheRead + target.cacheWrite;
+  if (promptTokens > 0 && outputTokens !== undefined) {
+    target.contextUsage = {
+      state: "available",
+      promptTokens,
+      totalTokens: promptTokens + target.output,
+    };
+  }
+  return promptTokens > 0 ? promptUsage : undefined;
+}
+
+/** Keep cumulative billing separate from the final server-side iteration context. */
+export function applyAnthropicMessageDeltaUsage(
+  target: Usage,
+  payload: AnthropicUsagePayload | undefined,
+  messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined,
+): void {
+  const usage = payload ?? {};
+  const inputTokens = readAnthropicUsageTokenCount(usage.input_tokens);
+  if (inputTokens !== undefined) {
+    target.input = inputTokens;
+  }
+  const outputTokens = readAnthropicUsageTokenCount(usage.output_tokens);
+  if (outputTokens !== undefined) {
+    target.output = outputTokens;
+  }
+  // Match the SDK accumulator: absent or null cache counters preserve prior values.
+  const cacheReadTokens = readAnthropicUsageTokenCount(usage.cache_read_input_tokens);
+  if (cacheReadTokens !== undefined) {
+    target.cacheRead = cacheReadTokens;
+  }
+  const cacheWriteTokens = readAnthropicUsageTokenCount(usage.cache_creation_input_tokens);
+  if (cacheWriteTokens !== undefined) {
+    target.cacheWrite = cacheWriteTokens;
+  }
+  const { cacheWrite1h } = readAnthropicCacheWriteUsage(usage);
+  if (cacheWrite1h !== undefined) {
+    target.cacheWrite1h = cacheWrite1h;
+  }
+  target.totalTokens = target.input + target.output + target.cacheRead + target.cacheWrite;
+  const iterationUsage = readLastAnthropicIterationUsage(usage);
+  if (iterationUsage.state === "valid") {
+    target.contextUsage = {
+      state: "available",
+      promptTokens: iterationUsage.usage.contextPromptTokens,
+      totalTokens: iterationUsage.usage.totalTokens,
+    };
+  } else if (iterationUsage.state === "invalid") {
+    target.contextUsage = { state: "unavailable" };
+  } else if (
+    outputTokens !== undefined &&
+    (messageStartPromptUsage !== undefined ||
+      (inputTokens !== undefined &&
+        cacheReadTokens !== undefined &&
+        cacheWriteTokens !== undefined))
+  ) {
+    const promptTokens = target.input + target.cacheRead + target.cacheWrite;
+    target.contextUsage = {
+      state: "available",
+      promptTokens,
+      totalTokens: promptTokens + target.output,
+    };
+  } else {
+    target.contextUsage = { state: "unavailable" };
+  }
 }

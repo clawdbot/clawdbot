@@ -4,7 +4,6 @@ import {
   isRastermillUnavailableError,
   RastermillUnavailableError,
   readImageProbeFromHeader as readRastermillImageProbeFromHeader,
-  readImageMetadataFromHeader as readRastermillImageMetadataFromHeader,
   type ImageProbe,
   type ImageMetadata,
 } from "rastermill";
@@ -75,9 +74,20 @@ export function buildImageResizeSideGrid(maxSide: number, sideStart: number): nu
     .toSorted((a, b) => b - a);
 }
 
-/** Reads dimensions from image header bytes without invoking a full image decode. */
+function resolveDisplayImageMetadata(probe: ImageProbe | null): ImageMetadata | null {
+  if (!probe) {
+    return null;
+  }
+  // Rastermill reports encoded axes; orientations 5-8 swap the displayed axes.
+  if (probe.orientation && probe.orientation >= 5 && probe.orientation <= 8) {
+    return { width: probe.height, height: probe.width };
+  }
+  return { width: probe.width, height: probe.height };
+}
+
+/** Reads display dimensions from image header bytes without invoking a full image decode. */
 export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
-  return readRastermillImageMetadataFromHeader(buffer);
+  return resolveDisplayImageMetadata(readRastermillImageProbeFromHeader(buffer));
 }
 
 /** Reads image probe data from header bytes without invoking a full image decode. */
@@ -92,10 +102,9 @@ function wrapRastermillUnavailable(operation: string, error: unknown): never {
   throw error;
 }
 
-/** Fully probes image dimensions through Rastermill when header-only metadata is insufficient. */
+/** Fully probes display dimensions through Rastermill when header-only metadata is insufficient. */
 export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
-  const info = await createImageProcessor().probe(buffer);
-  return info ? { width: info.width, height: info.height } : null;
+  return resolveDisplayImageMetadata(await createImageProcessor().probe(buffer));
 }
 
 /** Resizes or encodes image bytes as JPEG through the shared image processor. */

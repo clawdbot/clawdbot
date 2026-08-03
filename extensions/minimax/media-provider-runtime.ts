@@ -37,6 +37,14 @@ export function assertMinimaxBaseResp(
   }
 }
 
+export function normalizeMinimaxHexAudio(data: string, label: string): string {
+  const normalized = data.trim();
+  if (!/^[0-9a-f]+$/iu.test(normalized) || normalized.length % 2 !== 0) {
+    throw new Error(`${label} returned malformed hex audio`);
+  }
+  return normalized;
+}
+
 export function resolveMinimaxGuardedRequestOptions(
   policy: MinimaxRequestPolicy,
 ): Parameters<typeof fetchWithTimeoutGuarded>[4] | undefined {

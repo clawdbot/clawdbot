@@ -23,7 +23,7 @@ import {
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
-import { readSessionTitleFieldsFromTranscriptAsync as readScopedSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscriptBatch as readScopedSessionTitleFieldsFromTranscriptBatch } from "./session-transcript-title-reader.js";
 import type {
   SessionActorProfileIdentity,
   SessionListRowContext,
@@ -32,6 +32,7 @@ import type {
 import {
   deriveSessionTitle,
   isFinitePositiveTimestamp,
+  isCurrentSessionChildOwner,
   shouldKeepStoreOnlyChildLink,
 } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
@@ -69,6 +70,7 @@ type ListSessionsFromStoreParams = {
   storePath: string;
   store: Record<string, SessionEntry>;
   modelCatalog?: ModelCatalogEntry[];
+  lightweightListRows?: boolean;
   opts: SessionsListParams;
 };
 
@@ -81,6 +83,16 @@ type SessionEntrySelection = {
   nextOffset: number | null;
   hasMore: boolean;
 };
+
+function preferredCreatorIdentityValue(
+  current: string | undefined,
+  candidate: string | undefined,
+): string | undefined {
+  if (!current || !candidate) {
+    return current ?? candidate;
+  }
+  return candidate < current ? candidate : current;
+}
 
 function addSessionCreatorIdentity(
   creators: Map<string, { id: string; label?: string; avatarUrl?: string }>,
@@ -95,15 +107,13 @@ function addSessionCreatorIdentity(
   const label = normalizeOptionalString(actor?.label);
   const avatarUrl = normalizeOptionalString(actor?.avatarUrl);
   const existing = creators.get(id);
-  if (
-    !existing ||
-    (label && (!existing.label || label.localeCompare(existing.label) < 0)) ||
-    (avatarUrl && !existing.avatarUrl)
-  ) {
+  const preferredLabel = preferredCreatorIdentityValue(existing?.label, label);
+  const preferredAvatarUrl = preferredCreatorIdentityValue(existing?.avatarUrl, avatarUrl);
+  if (!existing || preferredLabel !== existing.label || preferredAvatarUrl !== existing.avatarUrl) {
     creators.set(id, {
       id,
-      ...(label ? { label } : existing?.label ? { label: existing.label } : {}),
-      ...(avatarUrl ? { avatarUrl } : existing?.avatarUrl ? { avatarUrl: existing.avatarUrl } : {}),
+      ...(preferredLabel ? { label: preferredLabel } : {}),
+      ...(preferredAvatarUrl ? { avatarUrl: preferredAvatarUrl } : {}),
     });
   }
 }
@@ -233,8 +243,13 @@ function filterSessionEntries(params: {
         ? filterRowContext.subagentRuns.getDisplaySubagentRun(key)
         : getSessionDisplaySubagentRunByChildSessionKey(key);
       const keepSpawned = latest
-        ? (normalizeOptionalString(latest.controllerSessionKey) ||
-            normalizeOptionalString(latest.requesterSessionKey)) === spawnedBy &&
+        ? isCurrentSessionChildOwner({
+            entry,
+            ownerSessionKey: spawnedBy,
+            controllerSessionKey:
+              normalizeOptionalString(latest.controllerSessionKey) ||
+              normalizeOptionalString(latest.requesterSessionKey),
+          }) &&
           shouldKeepSubagentRunChildLink(latest, {
             activeDescendants: filterRowContext
               ? filterRowContext.subagentRuns.countActiveDescendantRuns(key)
@@ -478,6 +493,8 @@ export function listSessionsFromStore(params: ListSessionsFromStoreParams): Sess
       transcriptUsageMaxBytes: SESSIONS_LIST_TRANSCRIPT_USAGE_MAX_BYTES,
       storeChildSessionsByKey,
       rowContext: list.rowContext,
+      skipTranscriptUsageFallback: params.lightweightListRows === true,
+      lightweightListRow: params.lightweightListRows === true,
     });
   });
   return buildSessionsListResult({ cfg, list, modelCatalog: params.modelCatalog, sessions });
@@ -505,6 +522,31 @@ export async function listSessionsFromStoreAsync(
     const { cfg, store, opts } = params;
     const list = prepareSessionList(params);
     const sessions: GatewaySessionRow[] = [];
+    const transcriptScopes = list.entries
+      .slice(0, SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS)
+      .flatMap(([key, entry]) => {
+        if (!entry.sessionId || (!list.includeDerivedTitles && !list.includeLastMessage)) {
+          return [];
+        }
+        const parsed = parseAgentSessionKey(key);
+        const agentId =
+          key === "global" && typeof opts.agentId === "string"
+            ? normalizeAgentId(opts.agentId)
+            : parsed?.agentId
+              ? normalizeAgentId(parsed.agentId)
+              : resolveDefaultAgentId(cfg);
+        return [
+          {
+            agentId,
+            sessionEntry: entry,
+            sessionId: entry.sessionId,
+            sessionKey: key,
+            storePath: list.storePath,
+          },
+        ];
+      });
+    const transcriptFields = readScopedSessionTitleFieldsFromTranscriptBatch(transcriptScopes);
+    let transcriptFieldIndex = 0;
     for (let i = 0; i < list.entries.length; i++) {
       const [key, entry] = expectDefined(list.entries[i], "entries entry at i");
       const includeTranscriptFields = i < SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS;
@@ -542,17 +584,11 @@ export async function listSessionsFromStoreAsync(
         includeTranscriptFields &&
         (list.includeDerivedTitles || list.includeLastMessage)
       ) {
-        const parsed = parseAgentSessionKey(key);
-        const sessionAgentId =
-          rowAgentId ??
-          (parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg));
-        const fields = await readScopedSessionTitleFieldsFromTranscriptAsync({
-          agentId: sessionAgentId,
-          sessionEntry: entry,
-          sessionId: entry.sessionId,
-          sessionKey: key,
-          storePath: list.storePath,
-        });
+        const fields = expectDefined(
+          transcriptFields[transcriptFieldIndex],
+          "batched transcript fields at transcriptFieldIndex",
+        );
+        transcriptFieldIndex += 1;
         if (list.includeDerivedTitles) {
           row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, row.displayName);
         }

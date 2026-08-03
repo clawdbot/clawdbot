@@ -11,7 +11,12 @@ import {
   type MessagePresentationInteractiveBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { buildTelegramPresentationButtons, resolveTelegramInlineButtons } from "./button-types.js";
+import {
+  buildTelegramPresentationButtons,
+  resolveTelegramInlineButtons,
+  resolveTelegramQuestionOptionIndices,
+  type TelegramButtonBuildOptions,
+} from "./button-types.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 
 const TELEGRAM_CONTROL_ONLY_FALLBACK = "Choose an option.";
@@ -42,7 +47,7 @@ export const TELEGRAM_PRESENTATION_CAPABILITIES = {
 
 function canEncodeTelegramPresentationControl(
   block: MessagePresentationInteractiveBlock,
-  options?: { allowWebAppButtons?: boolean },
+  options?: TelegramButtonBuildOptions,
 ): boolean {
   return Boolean(buildTelegramPresentationButtons({ blocks: [block] }, options)?.length);
 }
@@ -50,7 +55,7 @@ function canEncodeTelegramPresentationControl(
 function partitionTelegramPresentationBlocks(params: {
   presentation: MessagePresentation;
   presentationControlsSelected: boolean;
-  allowWebAppButtons: boolean;
+  buttonOptions: TelegramButtonBuildOptions;
 }): {
   fallbackBlocks: MessagePresentation["blocks"];
   nativeControlBlocks: MessagePresentationInteractiveBlock[];
@@ -72,7 +77,7 @@ function partitionTelegramPresentationBlocks(params: {
       for (const button of block.buttons) {
         const target = canEncodeTelegramPresentationControl(
           { type: "buttons", buttons: [button] },
-          { allowWebAppButtons: params.allowWebAppButtons },
+          params.buttonOptions,
         )
           ? nativeButtons
           : fallbackButtons;
@@ -90,7 +95,10 @@ function partitionTelegramPresentationBlocks(params: {
     const nativeOptions: typeof block.options = [];
     const fallbackOptions: typeof block.options = [];
     for (const option of block.options) {
-      const target = canEncodeTelegramPresentationControl({ type: "select", options: [option] })
+      const target = canEncodeTelegramPresentationControl(
+        { type: "select", options: [option] },
+        params.buttonOptions,
+      )
         ? nativeOptions
         : fallbackOptions;
       target.push(option);
@@ -133,21 +141,28 @@ export function canonicalizeTelegramPresentationPayload(
   });
 
   const interactive = normalizeLegacyInteractiveReply(payload.interactive);
-  const existingButtons = resolveTelegramInlineButtons({
-    buttons: telegramData?.buttons,
-    interactive,
-  });
+  const buttonOptions: TelegramButtonBuildOptions = {
+    allowWebAppButtons: options?.allowWebAppButtons === true,
+    questionOptionIndices: resolveTelegramQuestionOptionIndices(payload),
+  };
+  const existingButtons = resolveTelegramInlineButtons(
+    {
+      buttons: telegramData?.buttons,
+      interactive,
+    },
+    buttonOptions,
+  );
   const presentationControlsSelected = existingButtons === undefined;
   const { fallbackBlocks, nativeControlBlocks } = partitionTelegramPresentationBlocks({
     presentation,
     presentationControlsSelected,
-    allowWebAppButtons: options?.allowWebAppButtons === true,
+    buttonOptions,
   });
   const presentationButtons = buildTelegramPresentationButtons(
     {
       blocks: nativeControlBlocks,
     },
-    options,
+    buttonOptions,
   );
   const buttons = existingButtons ?? presentationButtons;
 

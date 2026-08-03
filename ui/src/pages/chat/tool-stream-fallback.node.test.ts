@@ -114,7 +114,8 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
   it("auto-clears fallback status after toast duration", () => {
     useToolStreamFakeTimers();
-    const host = createHost();
+    const requestUpdate = vi.fn();
+    const host = createHost({ requestUpdate });
 
     handleAgentEvent(host, {
       runId: "run-1",
@@ -140,8 +141,10 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(fallbackStatus.phase).toBe("active");
     expect(fallbackStatus.selected).toBe("fireworks/accounts/fireworks/routers/kimi-k2p5-turbo");
     expect(fallbackStatus.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
+    expect(requestUpdate).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(host.fallbackStatus).toBeNull();
+    expect(requestUpdate).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
 

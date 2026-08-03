@@ -10,6 +10,7 @@ export type QaMockResponsesDispatchResult = {
     type: string;
     message: string;
   };
+  onResponseSent?: () => void;
   previewPauseMs?: number;
 };
 
@@ -232,6 +233,7 @@ export function attachQaMockResponsesWebSocketServer(params: {
             }
             sendEvent(event);
           }
+          dispatched.onResponseSent?.();
         })
         .catch(() => {
           cachedResponse = undefined;

@@ -139,12 +139,24 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
-  it("renders block-mode tables as code in legacy Telegram HTML", () => {
+  it.each([
+    { name: "a table-only reply", before: "", after: "" },
+    { name: "a table between surrounding prose", before: "Before\n\n", after: "\n\nAfter" },
+  ])("keeps $name visible in one-shot and chunked legacy Telegram HTML", ({ before, after }) => {
     const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    const markdown = `${before}${table}${after}`;
+    const html = markdownToTelegramHtml(markdown, { tableMode: "block" });
+    const chunks = markdownToTelegramChunks(markdown, 4096, { tableMode: "block" });
 
-    expect(markdownToTelegramHtml(table, { tableMode: "block" })).toBe(
-      "<pre><code>| A | B |\n| --- | --- |\n| 1 | 2 |\n</code></pre>",
-    );
+    expect(html).toContain(`<pre><code>${table}\n</code></pre>`);
+    expect(chunks.map((chunk) => chunk.html)).toEqual([html]);
+    expect(chunks[0]?.text).toContain("| 1 | 2 |");
+    if (before) {
+      expect(html).toContain("Before");
+    }
+    if (after) {
+      expect(html).toContain("After");
+    }
   });
 
   it("normalizes raw code language HTML without leaking tags", () => {

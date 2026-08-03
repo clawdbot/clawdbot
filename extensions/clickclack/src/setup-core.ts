@@ -214,7 +214,7 @@ export function applyClickClackCredentialConfig(params: {
   });
 }
 
-export const clickClackSetupAdapter: ChannelSetupAdapter = {
+const clickClackSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   prepareAccountConfigInput: async ({ cfg, accountId, input }) => {
     const setupInput = input as ClickClackSetupInput;

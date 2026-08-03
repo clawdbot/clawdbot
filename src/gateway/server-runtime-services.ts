@@ -14,7 +14,6 @@ import {
 } from "../infra/session-delivery-queue-runtime.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
-import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
@@ -22,6 +21,7 @@ import {
   createNoopHeartbeatRunner,
   type GatewayRuntimeServiceLogger,
 } from "./server-runtime-service-shared.js";
+export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 export {
   startGatewayChannelHealthMonitor,
   startGatewayRuntimeServices,
@@ -30,9 +30,6 @@ export {
 
 type GatewayPostReadyLogger = {
   warn: (message: string) => void;
-};
-export type GatewayIdleTaskHandle = {
-  stop: () => void;
 };
 export type GatewayMaintenanceHandles = NonNullable<
   Awaited<ReturnType<typeof startGatewayMaintenanceTimers>>
@@ -181,58 +178,6 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   return timer;
 }
 
-/** Schedules one low-priority task, retrying until the gateway has no active request roots. */
-export function scheduleGatewayIdleTask(params: {
-  delayMs: number;
-  retryDelayMs: number;
-  isClosing: () => boolean;
-  isBusy: () => boolean;
-  run: () => Promise<void>;
-  log: GatewayPostReadyLogger;
-  errorMessage: string;
-}): GatewayIdleTaskHandle {
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const schedule = (delayMs: number) => {
-    if (stopped || params.isClosing()) {
-      return;
-    }
-    timer = setTimeout(() => {
-      timer = null;
-      if (stopped || params.isClosing()) {
-        return;
-      }
-      if (params.isBusy()) {
-        schedule(params.retryDelayMs);
-        return;
-      }
-      void runWithGatewayIndependentRootWorkAdmission(async () => {
-        if (stopped || params.isClosing()) {
-          return;
-        }
-        // Recheck inside admission so work that arrived while this task was
-        // joining the root set gets priority over non-urgent maintenance.
-        if (params.isBusy()) {
-          schedule(params.retryDelayMs);
-          return;
-        }
-        await params.run();
-      }).catch((error: unknown) => params.log.warn(`${params.errorMessage}: ${String(error)}`));
-    }, delayMs);
-    timer.unref?.();
-  };
-  schedule(params.delayMs);
-  return {
-    stop: () => {
-      stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-    },
-  };
-}
-
 function recoverPendingOutboundDeliveries(params: {
   cfg: OpenClawConfig;
   log: GatewayRuntimeServiceLogger;
@@ -262,8 +207,11 @@ function startPendingSessionDeliveryRuntime(params: {
   // request routing before replaying restart-sentinel deliveries.
   const timer = setTimeout(() => {
     void runWithGatewayIndependentRootWorkAdmission(async () => {
-      const { deliverQueuedSessionDelivery, recoverPendingRestartContinuationDeliveries } =
-        await import("./server-restart-sentinel.js");
+      const {
+        deliverQueuedSessionDelivery,
+        recoverPendingRestartContinuationDeliveries,
+        settleQueuedSessionDelivery,
+      } = await import("./server-restart-sentinel.js");
       if (stopped) {
         return;
       }
@@ -276,7 +224,7 @@ function startPendingSessionDeliveryRuntime(params: {
             ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
           }),
         log: logRecovery,
-        onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
+        onSettled: settleQueuedSessionDelivery,
       });
       try {
         await recoverPendingRestartContinuationDeliveries({

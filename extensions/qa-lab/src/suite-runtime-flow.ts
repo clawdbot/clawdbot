@@ -71,11 +71,9 @@ import {
   formatTransportTranscript,
   readTransportTranscript,
   recentOutboundSummary,
-  waitForChannelOutboundMessage,
   waitForNoOutbound,
   waitForNoTransportOutbound,
   waitForOutboundMessage,
-  waitForTransportOutboundMessage,
 } from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import {
@@ -201,15 +199,23 @@ type QaSuiteScenarioFlowApiParams = QaSuiteScenarioDepsParams & {
 };
 
 function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
+  const waitForAccountOutboundMessage: typeof waitForOutboundMessage = (
+    state,
+    predicate,
+    timeoutMs,
+    options,
+  ) =>
+    waitForOutboundMessage(state, predicate, timeoutMs, {
+      ...options,
+      accountId: params.env.transport.accountId,
+    });
   return {
     fs,
     path,
     sleep,
     randomUUID,
     runScenario: params.runScenario,
-    waitForOutboundMessage,
-    waitForTransportOutboundMessage,
-    waitForChannelOutboundMessage,
+    waitForOutboundMessage: waitForAccountOutboundMessage,
     waitForNoOutbound,
     waitForNoTransportOutbound,
     recentOutboundSummary,

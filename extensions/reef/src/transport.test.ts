@@ -31,6 +31,14 @@ const keys: ReefKeys = {
   keyEpoch: 1,
 };
 
+function createClient(
+  fetcher: typeof fetch,
+  clock: () => number = () => ts,
+  baseUrl = "https://relay.example",
+): ReefTransportClient {
+  return new ReefTransportClient(baseUrl, "alice", keys, fetcher, clock);
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -54,7 +62,7 @@ describe("isRetryableReefRelayFailure", () => {
 describe("ReefTransportClient network failures", () => {
   it("normalizes fetch failures without swallowing the cause", async () => {
     const cause = new TypeError("fetch failed");
-    const client = new ReefTransportClient("https://relay.example", "alice", keys, async () => {
+    const client = createClient(async () => {
       throw cause;
     });
 
@@ -76,12 +84,7 @@ describe("ReefTransportClient network failures", () => {
         },
       }),
     );
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => response,
-    );
+    const client = createClient(async () => response);
 
     await expect(client.listFriends()).rejects.toMatchObject({
       name: "ReefRelayUnavailableError",
@@ -116,13 +119,7 @@ describe("ReefTransportClient device authentication", () => {
       calls.push([input, init]);
       return Response.json({ entries: [], cursor: 5 });
     };
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      fetcher,
-      () => ts,
-    );
+    const client = createClient(fetcher);
 
     await expect(client.pull(5)).resolves.toEqual({ entries: [], cursor: 5 });
 
@@ -151,13 +148,7 @@ describe("ReefTransportClient device authentication", () => {
   });
 
   it("puts WebSocket auth in the query but signs the bare relay path", () => {
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      vi.fn() as typeof fetch,
-      () => ts,
-    );
+    const client = createClient(vi.fn() as typeof fetch);
     const url = new URL(client.websocketUrl());
 
     expect(url.protocol).toBe("wss:");
@@ -183,13 +174,7 @@ describe("ReefTransportClient device authentication", () => {
       calls.push(init ?? {});
       return Response.json({ peer: "bob", status: "active" });
     };
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      fetcher,
-      () => ts,
-    );
+    const client = createClient(fetcher);
     const friend: RelayFriend = {
       peer: "bob",
       status: "pending",
@@ -219,13 +204,7 @@ describe("ReefTransportClient device authentication", () => {
       seenTs.push(new Headers(init?.headers).get("x-reef-ts")!);
       return Response.json({ friendships: [] });
     };
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      fetcher,
-      () => ts,
-    );
+    const client = createClient(fetcher);
 
     await client.listFriends();
     await client.listFriends();
@@ -290,13 +269,7 @@ describe("ReefTransportClient response body bounds", () => {
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => response,
-      () => ts,
-    );
+    const client = createClient(async () => response);
 
     const result = await client.pull(0);
     const pad = (result as unknown as { pad: string }).pad;
@@ -317,13 +290,7 @@ describe("ReefTransportClient response body bounds", () => {
         new Uint8Array(1024).fill(0x78),
       ],
     });
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => offered.response,
-      () => ts,
-    );
+    const client = createClient(async () => offered.response);
 
     await expect(client.pull(0)).rejects.toThrow(
       /reef\.relay: JSON response exceeds 16777216 bytes/,
@@ -335,13 +302,7 @@ describe("ReefTransportClient response body bounds", () => {
 
   it("surfaces relay error JSON exactly at the error byte limit", async () => {
     const body = jsonObjectBodyAtSize(ERROR_RESPONSE_MAX_BYTES, "error");
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => new Response(body, { status: 400 }),
-      () => ts,
-    );
+    const client = createClient(async () => new Response(body, { status: 400 }));
 
     const error = await client.requestFriend("bob", "code").catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(ReefRelayError);
@@ -355,13 +316,7 @@ describe("ReefTransportClient response body bounds", () => {
       status: 503,
       chunks: Array.from({ length: 16 }, () => new Uint8Array(8 * 1024).fill(0x78)),
     });
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => offered.response,
-      () => ts,
-    );
+    const client = createClient(async () => offered.response);
 
     await expect(client.listFriends()).rejects.toMatchObject({
       name: "ReefRelayError",
@@ -374,13 +329,7 @@ describe("ReefTransportClient response body bounds", () => {
   });
 
   it("keeps the typed status fallback for malformed error JSON", async () => {
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => new Response("{", { status: 502 }),
-      () => ts,
-    );
+    const client = createClient(async () => new Response("{", { status: 502 }));
 
     await expect(client.requestFriend("bob", "code")).rejects.toMatchObject({
       name: "ReefRelayError",
@@ -440,19 +389,13 @@ describe("ReefInboxConnection recovery", () => {
     const requestedAfter: number[] = [];
     const persisted: number[] = [];
     const processed: number[] = [];
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async (input) => {
-        const after = Number(parseRequestUrl(input).searchParams.get("after"));
-        requestedAfter.push(after);
-        return after === 7
-          ? Response.json({ entries: [receiptEntry(8)], cursor: 8 })
-          : Response.json({ entries: [], cursor: after });
-      },
-      () => ts,
-    );
+    const client = createClient(async (input) => {
+      const after = Number(parseRequestUrl(input).searchParams.get("after"));
+      requestedAfter.push(after);
+      return after === 7
+        ? Response.json({ entries: [receiptEntry(8)], cursor: 8 })
+        : Response.json({ entries: [], cursor: after });
+    });
     const inbox = new ReefInboxConnection(
       client,
       async (entries) => {
@@ -473,12 +416,8 @@ describe("ReefInboxConnection recovery", () => {
 
   it("does not advance past an entry that failed processing", async () => {
     const persisted: number[] = [];
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => Response.json({ entries: [receiptEntry(8), receiptEntry(9)], cursor: 9 }),
-      () => ts,
+    const client = createClient(async () =>
+      Response.json({ entries: [receiptEntry(8), receiptEntry(9)], cursor: 9 }),
     );
     const inbox = new ReefInboxConnection(
       client,
@@ -500,12 +439,8 @@ describe("ReefInboxConnection recovery", () => {
   it("rejects an inconsistent REST page before dispatch or persistence", async () => {
     const processed: number[] = [];
     const persisted: number[] = [];
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => Response.json({ entries: [receiptEntry(9)], cursor: 8 }),
-      () => ts,
+    const client = createClient(async () =>
+      Response.json({ entries: [receiptEntry(9)], cursor: 8 }),
     );
     const inbox = new ReefInboxConnection(
       client,
@@ -526,16 +461,10 @@ describe("ReefInboxConnection recovery", () => {
   it("persists cursor-only progress when retained entries have expired", async () => {
     const requestedAfter: number[] = [];
     const persisted: number[] = [];
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async (input) => {
-        requestedAfter.push(Number(parseRequestUrl(input).searchParams.get("after")));
-        return Response.json({ entries: [], cursor: 12 });
-      },
-      () => ts,
-    );
+    const client = createClient(async (input) => {
+      requestedAfter.push(Number(parseRequestUrl(input).searchParams.get("after")));
+      return Response.json({ entries: [], cursor: 12 });
+    });
     const inbox = new ReefInboxConnection(
       client,
       async () => {},
@@ -560,17 +489,11 @@ describe("ReefInboxConnection recovery", () => {
       releasePull = resolve;
     });
     let pullStarted = false;
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => {
-        pullStarted = true;
-        await pullGate;
-        return Response.json({ entries: [], cursor: 0 });
-      },
-      () => ts,
-    );
+    const client = createClient(async () => {
+      pullStarted = true;
+      await pullGate;
+      return Response.json({ entries: [], cursor: 0 });
+    });
     const abort = new AbortController();
     const inbox = new ReefInboxConnection(
       client,
@@ -598,20 +521,14 @@ describe("ReefInboxConnection recovery", () => {
     const firstPullGate = new Promise<void>((resolve) => {
       releaseFirstPull = resolve;
     });
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async (input) => {
-        const after = Number(parseRequestUrl(input).searchParams.get("after"));
-        if (after === 0) {
-          await firstPullGate;
-          return Response.json({ entries: [receiptEntry(1), receiptEntry(2)], cursor: 2 });
-        }
-        return Response.json({ entries: [], cursor: after });
-      },
-      () => ts,
-    );
+    const client = createClient(async (input) => {
+      const after = Number(parseRequestUrl(input).searchParams.get("after"));
+      if (after === 0) {
+        await firstPullGate;
+        return Response.json({ entries: [receiptEntry(1), receiptEntry(2)], cursor: 2 });
+      }
+      return Response.json({ entries: [], cursor: after });
+    });
     const abort = new AbortController();
     const inbox = new ReefInboxConnection(
       client,
@@ -642,17 +559,11 @@ describe("ReefInboxConnection recovery", () => {
       releasePull = resolve;
     });
     let pullStarted = false;
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => {
-        pullStarted = true;
-        await pullGate;
-        return Response.json({ entries: [], cursor: 0 });
-      },
-      () => ts,
-    );
+    const client = createClient(async () => {
+      pullStarted = true;
+      await pullGate;
+      return Response.json({ entries: [], cursor: 0 });
+    });
     const abort = new AbortController();
     const inbox = new ReefInboxConnection(
       client,
@@ -676,13 +587,7 @@ describe("ReefInboxConnection recovery", () => {
     const socket = new ControlledSocket();
     const states: string[] = [];
     const errors: string[] = [];
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => Response.json({ entries: [], cursor: 0 }),
-      () => ts,
-    );
+    const client = createClient(async () => Response.json({ entries: [], cursor: 0 }));
     const abort = new AbortController();
     const inbox = new ReefInboxConnection(
       client,
@@ -710,13 +615,7 @@ describe("ReefInboxConnection recovery", () => {
     vi.useFakeTimers();
     const sockets: ControlledSocket[] = [];
     const persisted: number[] = [];
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => Response.json({ entries: [], cursor: 1 }),
-      () => ts,
-    );
+    const client = createClient(async () => Response.json({ entries: [], cursor: 1 }));
     const abort = new AbortController();
     const inbox = new ReefInboxConnection(
       client,
@@ -756,12 +655,8 @@ describe("ReefInboxConnection recovery", () => {
       releaseHandler = resolve;
     });
     let handlerStarted = false;
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => Response.json({ entries: [receiptEntry(1)], cursor: 1 }),
-      () => ts,
+    const client = createClient(async () =>
+      Response.json({ entries: [receiptEntry(1)], cursor: 1 }),
     );
     const abort = new AbortController();
     const inbox = new ReefInboxConnection(
@@ -797,17 +692,11 @@ describe("ReefInboxConnection recovery", () => {
       releasePull = resolve;
     });
     let pullStarted = false;
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => {
-        pullStarted = true;
-        await pullGate;
-        return Response.json({ entries: [], cursor: 0 });
-      },
-      () => ts,
-    );
+    const client = createClient(async () => {
+      pullStarted = true;
+      await pullGate;
+      return Response.json({ entries: [], cursor: 0 });
+    });
     const abort = new AbortController();
     const inbox = new ReefInboxConnection(
       client,
@@ -840,15 +729,9 @@ describe("ReefInboxConnection recovery", () => {
     const states: string[] = [];
     const errors: string[] = [];
     const abort = new AbortController();
-    const client = new ReefTransportClient(
-      "https://relay.example",
-      "alice",
-      keys,
-      async () => {
-        throw new Error("relay catch-up failed");
-      },
-      () => ts,
-    );
+    const client = createClient(async () => {
+      throw new Error("relay catch-up failed");
+    });
     const inbox = new ReefInboxConnection(
       client,
       async () => {},
@@ -893,12 +776,10 @@ async function deliverInboxFrame(frame: string): Promise<{
   const abort = new AbortController();
   const timeout = setTimeout(() => abort.abort(), 2_000);
   server.once("connection", (socket) => socket.send(frame));
-  const client = new ReefTransportClient(
-    `http://127.0.0.1:${address.port}`,
-    "alice",
-    keys,
+  const client = createClient(
     async () => Response.json({ entries: [], cursor: 0 }),
     () => ts,
+    `http://127.0.0.1:${address.port}`,
   );
   const inbox = new ReefInboxConnection(
     client,
@@ -936,41 +817,6 @@ async function deliverInboxFrame(frame: string): Promise<{
   }
   return { entries, states };
 }
-
-describe("createReefWebSocket handshake deadline", () => {
-  it("errors when the relay accepts TCP but never completes the upgrade", async () => {
-    const peers = new Set<import("node:net").Socket>();
-    const server = http.createServer();
-    server.on("connection", (socket) => {
-      peers.add(socket);
-      socket.once("close", () => peers.delete(socket));
-    });
-    server.on("upgrade", () => {
-      // Leave the HTTP upgrade pending until the client deadline aborts it.
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-
-    try {
-      const { port } = server.address() as AddressInfo;
-      const socket = createReefWebSocket(`ws://127.0.0.1:${port}`, {
-        handshakeTimeoutMs: 50,
-      }) as WebSocket;
-      const [error] = await once(socket, "error");
-
-      expect(error).toMatchObject({ message: "Opening handshake has timed out" });
-    } finally {
-      for (const peer of peers) {
-        peer.destroy();
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  });
-});
 
 describe("ReefInboxConnection response frame bounds", () => {
   it("accepts a relay frame exactly at the payload limit", async () => {

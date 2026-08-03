@@ -48,12 +48,9 @@ function cachedLifecycleDiffersFromRuntime(params: {
   cachedAccount: ChannelHealthSummary | undefined;
   runtimeSnapshot: ChannelAccountSnapshot;
 }): boolean {
-  for (const key of ["running", "connected"] as const) {
+  for (const key of ["running", "connected", "lifecycle"] as const) {
     const runtimeValue = params.runtimeSnapshot[key];
-    if (typeof runtimeValue !== "boolean") {
-      continue;
-    }
-    if (params.cachedAccount?.[key] !== runtimeValue) {
+    if (runtimeValue !== undefined && params.cachedAccount?.[key] !== runtimeValue) {
       return true;
     }
   }

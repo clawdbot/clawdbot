@@ -4,11 +4,8 @@ import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-co
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
 import { getRuntimeConfig } from "../config/io.js";
-import {
-  clearAgentRunContext,
-  onAgentAuditEvent,
-  onAgentRuntimeEvent,
-} from "../infra/agent-events.js";
+import { onAgentAuditEvent, onAgentRuntimeEvent } from "../infra/agent-events.js";
+import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";

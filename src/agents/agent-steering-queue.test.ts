@@ -20,15 +20,28 @@ function payload(runId: string, overrides: Partial<PendingFinalDeliveryPayload> 
     endedAt: 2_000,
     outcome: { status: "ok" },
     expectsCompletionMessage: true,
-    frozenResultText: `result for ${runId}`,
     ...overrides,
   } satisfies PendingFinalDeliveryPayload;
 }
 
-function makeRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+type RunOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunRecord["execution"]["outcome"];
+  execution?: SubagentRunRecord["execution"];
+};
+
+function makeRun(overrides: RunOverrides = {}): SubagentRunRecord {
   const runId = overrides.runId ?? "run-1";
   const childSessionKey = overrides.childSessionKey ?? `agent:main:subagent:${runId}`;
-  const endedAt = overrides.endedAt ?? 2_000;
+  const {
+    startedAt,
+    endedAt: overrideEndedAt,
+    outcome = { status: "ok" },
+    execution,
+    ...recordOverrides
+  } = overrides;
+  const endedAt = overrideEndedAt ?? 2_000;
   return {
     runId,
     childSessionKey,
@@ -37,8 +50,7 @@ function makeRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord 
     task: "inspect the failing flow",
     cleanup: "delete",
     createdAt: overrides.createdAt ?? 1_000,
-    endedAt,
-    outcome: { status: "ok" },
+    execution: execution ?? { status: "terminal", startedAt, endedAt, outcome },
     expectsCompletionMessage: true,
     completion: { required: true, resultText: `result for ${runId}` },
     delivery: {
@@ -46,7 +58,7 @@ function makeRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord 
       createdAt: endedAt + 1,
       payload: payload(runId, { childSessionKey, endedAt }),
     },
-    ...overrides,
+    ...recordOverrides,
   };
 }
 
@@ -229,9 +241,10 @@ describe("agent steering queue", () => {
         delivery: {
           status: "suspended",
           suspendedAt: 2_500,
-          suspendedReason: "retry-limit",
-          payload: payload("run-1", { frozenResultText: "kept result" }),
+          suspendedReason: "expiry",
+          payload: payload("run-1"),
         },
+        completion: { required: true, resultText: "kept result" },
       }),
     ]);
 
@@ -275,10 +288,12 @@ describe("agent steering queue", () => {
         runId: "run-1",
         delivery: {
           status: "suspended",
-          payload: payload("run-1", {
-            frozenResultText: "NO_REPLY",
-            fallbackFrozenResultText: "findings captured before the wake",
-          }),
+          payload: payload("run-1"),
+        },
+        completion: {
+          required: true,
+          resultText: "NO_REPLY",
+          fallbackResultText: "findings captured before the wake",
         },
       }),
     ]);
@@ -304,9 +319,9 @@ describe("agent steering queue", () => {
             status: "pending",
             payload: payload(`run-${index + 1}`, {
               task: `task ${index + 1}`,
-              frozenResultText: "x".repeat(6_000),
             }),
           },
+          completion: { required: true, resultText: "x".repeat(6_000) },
         }),
       ),
     );
@@ -389,7 +404,6 @@ describe("agent steering queue", () => {
         payload: payload("emoji-run", {
           label: emojiLabel,
           task: emojiLabel,
-          frozenResultText: "done",
         }),
       },
     });

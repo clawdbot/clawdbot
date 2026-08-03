@@ -169,7 +169,7 @@ export function createDirFetchTool(): AnyAgentTool {
         throw new Error("dir.fetch sha256 mismatch (integrity failure)");
       }
 
-      // Save tarball under the file-transfer subdir (no 2-min TTL).
+      // Keep the tarball and extracted paths under the same managed tool namespace.
       const savedTar = await saveMediaBuffer(
         tarBuffer,
         "application/gzip",

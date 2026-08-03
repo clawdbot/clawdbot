@@ -5,6 +5,10 @@ import type {
   SessionEntryStatus,
   SessionEntrySummary,
 } from "./session-accessor.sqlite-contract.js";
+import {
+  hasValidSqliteSessionEntryIdentity,
+  parseSqliteSessionEntryRecord,
+} from "./session-entry-json.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
@@ -20,17 +24,15 @@ export function normalizeSqliteStatus(value: unknown): SessionEntryStatus | null
     : null;
 }
 
-export function parseSqliteSessionEntryJson(row: { entry_json: string }): SessionEntry | null {
-  try {
-    const parsed = JSON.parse(row.entry_json) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const entry = projectCanonicalSessionEntryShape(parsed as Record<string, unknown>);
-    return typeof entry.sessionId === "string" ? entry : null;
-  } catch {
-    return null;
-  }
+export { hasValidSqliteSessionEntryIdentity };
+
+export function parseSqliteSessionEntryJson(row: {
+  current_session_id?: string;
+  entry_json: string;
+  updated_at?: number;
+}): SessionEntry | null {
+  const record = parseSqliteSessionEntryRecord(row);
+  return record ? projectCanonicalSessionEntryShape(record) : null;
 }
 
 export function readSqliteSessionEntriesByStatus(

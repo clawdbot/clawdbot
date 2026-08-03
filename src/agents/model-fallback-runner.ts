@@ -29,7 +29,11 @@ import {
   isFallbackCandidateSkipped,
   markFallbackCandidateSkipped,
 } from "./fallback-skip-cache.js";
-import { isAgentHarnessPreflightError, isMissingAgentHarnessError } from "./harness/errors.js";
+import {
+  isAgentHarnessPreflightError,
+  isMissingAgentHarnessError,
+  resolveAgentHarnessPreflightOwner,
+} from "./harness/errors.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   appendFailedCandidateAttempt,
@@ -47,6 +51,7 @@ import {
   type ModelFallbackStepHandler,
   recordFailedCandidateAttempt,
   resolveFallbackSoonestCooldownExpiry,
+  resolveModelFallbackCandidateAgentRuntime,
   resolveModelFallbackCandidateHarnessAuthPrecheck,
   resolveNextFallbackCandidateIndex,
   runFallbackAttempt,
@@ -440,6 +445,7 @@ async function runWithModelFallbackInternal<T>(
       run: params.run,
       ...candidate,
       attempts,
+      captureHarnessPreflight: true,
       options: {
         ...runOptions,
         isFinalFallbackAttempt: !hasRemainingCandidate,
@@ -476,6 +482,54 @@ async function runWithModelFallbackInternal<T>(
     // candidate fallback so the user can verify effects before any replay.
     if (findCliMaxTurnsError(err)) {
       throw err;
+    }
+    if (isAgentHarnessPreflightError(err)) {
+      const failedHarnessId = resolveAgentHarnessPreflightOwner(err);
+      if (!failedHarnessId) {
+        // Pre-scope callers established that their preflight is global to the
+        // fallback chain. Keep that public contract until they declare an owner.
+        throw err;
+      }
+      let nextEligibleIndex = candidates.length;
+      for (let index = i + 1; index < candidates.length; index += 1) {
+        const next = candidates[index];
+        if (!next || tlsFailedProviders.has(next.provider)) {
+          continue;
+        }
+        const nextRuntime = resolveModelFallbackCandidateAgentRuntime({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
+          ...next,
+        }).runtime;
+        // An unresolved runtime remains eligible: only suppress candidates
+        // proven to repeat the exact harness-local failure.
+        if (nextRuntime !== failedHarnessId) {
+          nextEligibleIndex = index;
+          break;
+        }
+      }
+      const nextEligibleCandidate = candidates[nextEligibleIndex];
+      if (!nextEligibleCandidate) {
+        throw err;
+      }
+      lastError = err;
+      await observeFailedCandidate({
+        attempts,
+        ...candObs,
+        error: err,
+        nextCandidate: nextEligibleCandidate,
+      });
+      await params.onError?.({
+        ...candidateRef,
+        error: err,
+        ...attemptContext,
+      });
+      // Scoping changes candidate selection only. The next candidate still enters
+      // its canonical runtime path, which owns its normal execution authority.
+      i = nextEligibleIndex - 1;
+      continue;
     }
     if (
       !attemptRun.classifiedResult &&
@@ -523,11 +577,6 @@ async function runWithModelFallbackInternal<T>(
       throw err;
     }
     if (isMissingAgentHarnessError(err)) {
-      throw err;
-    }
-    // Harness preflight depends on the selected runtime and its local state,
-    // not the model candidate. Retrying it would only amplify the same stall.
-    if (isAgentHarnessPreflightError(err)) {
       throw err;
     }
     const normalized =

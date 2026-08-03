@@ -90,43 +90,6 @@ function groupReplacementsByLine(
   return { lines, groups };
 }
 
-/**
- * Rewrite only lines touched by fuzzy replacements. Untouched lines retain
- * their original bytes even though matching used normalized content.
- */
-export function applyReplacementsPreservingUnchangedLines(
-  originalContent: string,
-  baseContent: string,
-  replacements: TextReplacement[],
-): string {
-  const originalLines = splitLinesWithEndings(originalContent);
-  const { lines: baseLines, groups } = groupReplacementsByLine(baseContent, replacements);
-  if (originalLines.length !== baseLines.length) {
-    throw new Error(
-      "Cannot preserve unchanged lines because the base content has a different line count.",
-    );
-  }
-
-  let originalLineIndex = 0;
-  let result = "";
-  for (const group of groups) {
-    result += originalLines.slice(originalLineIndex, group.startLine).join("");
-    const firstLine = baseLines.at(group.startLine);
-    const lastLine = baseLines.at(group.endLine - 1);
-    if (!firstLine || !lastLine) {
-      throw new Error("Replacement group is outside the base content.");
-    }
-    const groupStartOffset = firstLine.start;
-    result += applyReplacements(
-      baseContent.slice(groupStartOffset, lastLine.end),
-      group.replacements,
-      groupStartOffset,
-    );
-    originalLineIndex = group.endLine;
-  }
-  return result + originalLines.slice(originalLineIndex).join("");
-}
-
 function splitLinesWithTerminators(content: string): string[] {
   return content.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+/g) ?? [];
 }

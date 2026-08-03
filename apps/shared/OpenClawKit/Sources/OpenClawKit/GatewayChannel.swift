@@ -510,8 +510,9 @@ public actor GatewayChannelActor {
             deviceId: identity?.deviceId,
             connectionGeneration: connectionGeneration,
             to: &params)
-        let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let connectNonce = try await self.waitForConnectChallenge(task: task, attemptID: attemptID)
+        let connectChallenge = try await self.waitForConnectChallenge(task: task, attemptID: attemptID)
+        let signedAtMs = connectChallenge.issuedAtMs
+        let connectNonce = connectChallenge.nonce
         try self.ensureCurrentConnectAttempt(attemptID, task: task)
         try self.requireCurrentConnection(connectionGeneration)
         if includeDeviceIdentity, let identity {
@@ -1146,7 +1147,10 @@ extension GatewayChannelActor {
         }
     }
 
-    private func waitForConnectChallenge(task: WebSocketTaskBox, attemptID: UUID) async throws -> String {
+    private func waitForConnectChallenge(
+        task: WebSocketTaskBox,
+        attemptID: UUID) async throws -> GatewayConnectChallenge
+    {
         try await AsyncTimeout.withTimeout(
             seconds: self.connectChallengeTimeoutSeconds,
             onTimeout: { ConnectChallengeError.timeout },
@@ -1157,11 +1161,13 @@ extension GatewayChannelActor {
                     try await self.ensureCurrentConnectAttempt(attemptID, task: task)
                     guard let data = self.decodeMessageData(msg) else { continue }
                     guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
-                    if case let .event(evt) = frame, evt.event == "connect.challenge",
-                       let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                       let nonce = GatewayConnectChallengeSupport.nonce(from: payload)
-                    {
-                        return nonce
+                    if case let .event(evt) = frame, evt.event == "connect.challenge" {
+                        guard let payload = evt.payload?.value as? [String: ProtoAnyCodable],
+                              let challenge = GatewayConnectChallengeSupport.challenge(from: payload)
+                        else {
+                            throw ConnectChallengeError.invalid
+                        }
+                        return challenge
                     }
                 }
             })

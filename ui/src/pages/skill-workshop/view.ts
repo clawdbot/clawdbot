@@ -7,6 +7,7 @@ import "../../components/file-preview-modal-registration.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
 import {
@@ -1110,23 +1111,6 @@ function queueEmptyText(props: SkillWorkshopProps): string {
 }
 
 function formatRelative(ms: number): string {
-  const diff = Math.max(0, Date.now() - ms);
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) {
-    return t("skillWorkshop.relative.secondsAgo", { count: String(sec) });
-  }
-  const min = Math.floor(sec / 60);
-  if (min < 60) {
-    return t("skillWorkshop.relative.minutesAgo", { count: String(min) });
-  }
-  const hr = Math.floor(min / 60);
-  if (hr < 24) {
-    return t("skillWorkshop.relative.hoursAgo", { count: String(hr) });
-  }
-  const day = Math.floor(hr / 24);
-  if (day < 7) {
-    return t("skillWorkshop.relative.daysAgo", { count: String(day) });
-  }
-  return new Date(ms).toLocaleDateString();
+  return formatRelativeTimestamp(ms, { dateFallback: true });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

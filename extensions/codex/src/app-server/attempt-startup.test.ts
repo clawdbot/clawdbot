@@ -290,6 +290,29 @@ describe("startCodexAttemptThread", () => {
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 
+  it("carries the session agent id into the startup client factory", async () => {
+    const clientFactory = vi.fn(
+      async (options: Parameters<CodexAppServerClientFactory>[0]) =>
+        await getLeasedSharedCodexAppServerClient(options),
+    );
+    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      attemptClientFactory: () => clientFactory,
+    });
+    await answerInitialize(harness);
+    const threadStart = await waitForThreadStart(harness);
+    harness.send({
+      id: threadStart.id,
+      error: { code: -32000, message: "stop after startup" },
+    });
+
+    await expect(run).rejects.toThrow("stop after startup");
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "agent-1",
+      }),
+    );
+  });
+
   it("rejects an expected artifact mismatch before any native thread request", async () => {
     const paths = createAttemptPaths();
     await fs.mkdir(paths.workspaceDir, { recursive: true });
@@ -824,6 +847,7 @@ describe("startCodexAttemptThread", () => {
 
     const error = await runError;
     expect(error).toBeInstanceOf(AgentHarnessPreflightError);
+    expect(error).toMatchObject({ scope: "harness" });
     const cause = (error as Error).cause;
     expect(isCodexAppServerRequestTimeoutError(cause)).toBe(true);
     expect((cause as Error).message).toBe("plugin/list timed out");

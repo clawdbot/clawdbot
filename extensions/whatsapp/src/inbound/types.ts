@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
+import type { WhatsAppQuotedMessageKey } from "../quoted-message.js";
 import type { DeprecatedWebInboundAdmissionTopLevelFields } from "./admission-types.js";
 import type { WhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppSendResult } from "./send-result.js";
@@ -20,14 +21,7 @@ export type WebListenerCloseReason = {
 };
 
 export type ActiveWebSendOptions = {
-  quotedMessageKey?: {
-    id: string;
-    remoteJid: string;
-    fromMe: boolean;
-    participant?: string;
-    messageText?: string;
-    media?: MediaPlaceholderTextFact;
-  };
+  quotedMessageKey?: WhatsAppQuotedMessageKey;
   gifPlayback?: boolean;
   accountId?: string;
   fileName?: string;

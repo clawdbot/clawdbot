@@ -78,8 +78,10 @@ import {
   buildDefaultOllamaCloudModelDefinition,
   capLocalOllamaModelContext,
   capLocalOllamaProviderContext,
+  fetchLoadedOllamaModelNames,
   isOllamaCloudModel,
 } from "./src/provider-models.js";
+import { findAvailableOllamaModelName } from "./src/setup-model-selection.js";
 import {
   OLLAMA_INCOMPLETE_STREAM_ERROR,
   createConfiguredOllamaCompatStreamWrapper,
@@ -239,12 +241,23 @@ async function discoverAppGuidedOllamaModel(ctx: ProviderAppGuidedSetupContext) 
   });
   const accessValue = await resolveAppGuidedOllamaApiKey(ctx, existing);
   const discoveryAccess = accessValue ? { apiKey: accessValue } : {};
-  const provider = await buildOllamaProvider(readProviderBaseUrl(existing), {
+  const baseUrl = resolveOllamaApiBase(readProviderBaseUrl(existing));
+  // App-guided setup must not turn an installed-but-idle model into a surprise
+  // memory allocation. Only /api/ps owns the currently resident model set.
+  const loaded = await fetchLoadedOllamaModelNames(baseUrl, discoveryAccess);
+  if (!loaded.reachable || loaded.models.length === 0) {
+    return null;
+  }
+  const provider = await buildOllamaProvider(baseUrl, {
     quiet: true,
     ...discoveryAccess,
   });
   const toolModels =
-    provider.models?.filter((candidate) => candidate.compat?.supportsTools === true) ?? [];
+    provider.models?.filter(
+      (candidate) =>
+        candidate.compat?.supportsTools === true &&
+        findAvailableOllamaModelName(candidate.id, loaded.models) !== undefined,
+    ) ?? [];
   // Automatic setup needs measured /api/show facts. The catalog fallback is
   // intentionally optimistic for manual use and must not qualify a weak route.
   let model: ModelDefinitionConfig | undefined;
@@ -863,7 +876,7 @@ export default definePluginEntry({
         {
           id: "local",
           label: "Ollama",
-          hint: "Cloud and local open models",
+          hint: "Connect to an Ollama server and select a cloud or local model",
           kind: "custom",
           appGuidedSetup: {
             detect: async (ctx) => {
@@ -966,7 +979,7 @@ export default definePluginEntry({
         setup: {
           choiceId: "ollama",
           choiceLabel: "Ollama",
-          choiceHint: "Cloud and local open models",
+          choiceHint: "Connect to an Ollama server and select a cloud or local model",
           groupId: "ollama",
           groupLabel: "Ollama",
           groupHint: "Cloud and local open models",

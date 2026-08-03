@@ -8,9 +8,11 @@ import {
   WORKTREE_GC_INTERVAL_MS,
 } from "../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sweepStaleRunContexts } from "../infra/agent-events.js";
+import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { cleanOldMedia } from "../media/store.js";
+import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { startSkillCuratorMaintenance } from "../skills/workshop/curator.js";
 import {
   abortTrackedChatRunById,
@@ -135,24 +137,21 @@ export function startGatewayMaintenanceTimers(params: {
   // the general media TTL sweep is disabled.
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ?? (() => pruneOrphanedDeliveryQueueMedia());
-  let deliveryQueueMediaGcInFlight: Promise<void> | null = null;
   let deliveryQueueMediaGcStartedAtMs = 0;
-  const performDeliveryQueueMediaGc = () => {
-    if (deliveryQueueMediaGcInFlight) {
-      return deliveryQueueMediaGcInFlight;
+  const deliveryQueueMediaGcLoader = createLazyPromiseLoader(async () => {
+    try {
+      await runDeliveryQueueMediaGc();
+    } catch (error) {
+      params.logHealth.error(`delivery queue media cleanup failed: ${formatError(error)}`);
+    } finally {
+      deliveryQueueMediaGcLoader.clear();
     }
-    deliveryQueueMediaGcStartedAtMs = Date.now();
-    deliveryQueueMediaGcInFlight = Promise.resolve()
-      .then(async () => {
-        await runDeliveryQueueMediaGc();
-      })
-      .catch((err: unknown) => {
-        params.logHealth.error(`delivery queue media cleanup failed: ${formatError(err)}`);
-      })
-      .finally(() => {
-        deliveryQueueMediaGcInFlight = null;
-      });
-    return deliveryQueueMediaGcInFlight;
+  });
+  const performDeliveryQueueMediaGc = () => {
+    if (!deliveryQueueMediaGcLoader.peek()) {
+      deliveryQueueMediaGcStartedAtMs = Date.now();
+    }
+    return deliveryQueueMediaGcLoader.load();
   };
   void performDeliveryQueueMediaGc();
 
@@ -241,17 +240,7 @@ export function startGatewayMaintenanceTimers(params: {
       }
     }
 
-    if (params.agentRunSeq.size > AGENT_RUN_SEQ_MAX) {
-      const excess = params.agentRunSeq.size - AGENT_RUN_SEQ_MAX;
-      let removed = 0;
-      for (const runId of params.agentRunSeq.keys()) {
-        params.agentRunSeq.delete(runId);
-        removed += 1;
-        if (removed >= excess) {
-          break;
-        }
-      }
-    }
+    pruneMapToMaxSize(params.agentRunSeq, AGENT_RUN_SEQ_MAX);
 
     for (const [runId, entry] of params.chatAbortControllers) {
       if (entry.projectSessionTerminalPending === true) {

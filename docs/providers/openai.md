@@ -569,6 +569,16 @@ account-based. OpenClaw selects auth in this order:
 3. For local stdio app-server launches only, and only when the app-server
    reports no account: `CODEX_API_KEY`, then `OPENAI_API_KEY`.
 
+The default per-agent `codex-home/auth.json` is not a runtime auth store. If
+you copied or mounted Codex CLI credentials there, import them into the agent's
+OpenClaw auth store before starting a native Codex turn. Replace `<agent-id>`
+with the configured agent that owns this Codex home:
+
+```bash
+openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai
+openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai --yes
+```
+
 A local ChatGPT/Codex subscription sign-in is not replaced just because the
 gateway process also has `OPENAI_API_KEY` for direct OpenAI models or
 embeddings. The env API-key fallback applies only to the local stdio no-account
@@ -796,15 +806,16 @@ compatibility fallback when the shared
     | Model        | `tts.providers.openai.model`                  | `gpt-4o-mini-tts`                |
     | Voice        | `tts.providers.openai.speakerVoice`           | `coral`                          |
     | Speed        | `tts.providers.openai.speed`                  | (unset)                          |
-    | Instructions | `tts.providers.openai.instructions`           | (unset, `gpt-4o-mini-tts` only)  |
+    | Instructions | `tts.providers.openai.instructions`           | (unset, `gpt-4o-mini-tts` family only)  |
     | Format       | `tts.providers.openai.responseFormat`         | `opus` for voice notes, `mp3` for files |
     | API key      | `tts.providers.openai.apiKey`                 | Falls back to `OPENAI_API_KEY`   |
     | Base URL     | `tts.providers.openai.baseUrl`                | `https://api.openai.com/v1`      |
     | Extra body   | `tts.providers.openai.extraBody` / `extra_body` | (unset)                        |
 
-    Available models: `gpt-4o-mini-tts`, `tts-1`, `tts-1-hd`. Available voices:
-    `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `fable`, `juniper`,
-    `marin`, `onyx`, `nova`, `sage`, `shimmer`, `verse`.
+    Available models: `gpt-4o-mini-tts`, `gpt-4o-mini-tts-2025-12-15`, `tts-1`,
+    `tts-1-hd`. Available voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`,
+    `echo`, `fable`, `juniper`, `marin`, `onyx`, `nova`, `sage`, `shimmer`,
+    `verse`.
 
     `extraBody` is merged into `/audio/speech` request JSON after OpenClaw's
     generated fields, so use it for OpenAI-compatible endpoints that require

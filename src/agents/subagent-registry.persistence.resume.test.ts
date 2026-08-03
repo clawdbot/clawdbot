@@ -11,7 +11,10 @@ import {
   createSubagentRegistryTestDeps,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const { announceSpy } = vi.hoisted(() => ({
@@ -20,10 +23,6 @@ const { announceSpy } = vi.hoisted(() => ({
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
-vi.mock("./subagent-orphan-recovery.js", () => ({
-  scheduleOrphanRecovery: vi.fn(),
-}));
-
 let mod: typeof import("./subagent-registry.test-helpers.js");
 let callGatewayModule: typeof import("../gateway/call.js");
 let agentEventsModule: typeof import("../infra/agent-events.js");
@@ -135,11 +134,13 @@ describe("subagent registry persistence resume", () => {
         task: "deliver before waking requester",
         cleanup: "keep",
         createdAt: 100,
-        startedAt: 110,
-        endedAt: 200,
         endedReason: "subagent-complete",
-        outcome: { status: "ok" },
-        execution: { status: "terminal", startedAt: 110, endedAt: 200 },
+        execution: {
+          status: "terminal",
+          startedAt: 110,
+          endedAt: 200,
+          outcome: { status: "ok" },
+        },
         expectsCompletionMessage: true,
         completion: { required: true, resultText: "done", capturedAt: 200 },
         delivery: {
@@ -178,4 +179,77 @@ describe("subagent registry persistence resume", () => {
       );
     });
   });
+
+  it.each([false, true])(
+    "settles a restored steered requester turn (yielded: %s)",
+    async (requesterYielded) => {
+      tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+      const stateDir = tempStateDir;
+      const wakeRequester = vi.fn(async () => false);
+      mod.testing.setDepsForTest({
+        ...createSubagentRegistryTestDeps({
+          callGateway: vi.mocked(callGatewayModule.callGateway),
+          maybeWakeRequesterAfterAllChildrenSettled: wakeRequester,
+        }),
+      });
+
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const endedAt = Date.now();
+        const run: SubagentRunRecord = {
+          runId: "run-steered",
+          taskRunId: "run-original",
+          requesterTurnRunId: "run-requester",
+          ...(requesterYielded ? { requesterTurnYielded: true } : {}),
+          childSessionKey: "agent:main:subagent:steered",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "deliver the steered result",
+          cleanup: "keep",
+          createdAt: endedAt - 1_000,
+          endedReason: "subagent-complete",
+          execution: {
+            status: "terminal",
+            startedAt: endedAt - 500,
+            endedAt,
+            outcome: { status: "ok" },
+          },
+          expectsCompletionMessage: true,
+          completion: { required: true, resultText: "done", capturedAt: endedAt },
+          delivery: { status: "delivered", deliveredAt: endedAt },
+          cleanupHandled: true,
+          cleanupCompletedAt: endedAt,
+        };
+        saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+        await writeSubagentSessionEntry({
+          stateDir,
+          agentId: "main",
+          sessionKey: run.childSessionKey,
+          sessionId: "sess-steered",
+          defaultSessionId: "sess-steered",
+        });
+
+        mod.initSubagentRegistry();
+
+        const restored = mod.getSubagentRunByRunId(run.runId);
+        expect(restored).toMatchObject({ runId: run.runId, taskRunId: run.taskRunId });
+        expect(restored?.requesterTurnRunId).toBeUndefined();
+        expect(loadSubagentRegistryFromSqlite().get(run.runId)?.requesterTurnRunId).toBeUndefined();
+
+        if (requesterYielded) {
+          expect(restored?.requesterSettleWake).toMatchObject({
+            batchRunIds: [run.runId],
+            requesterYieldBatch: true,
+            afterRequesterYield: true,
+          });
+          await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
+            timeout: 1_000,
+            interval: 10,
+          });
+        } else {
+          expect(restored?.requesterSettleWake).toBeUndefined();
+          expect(wakeRequester).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
 });

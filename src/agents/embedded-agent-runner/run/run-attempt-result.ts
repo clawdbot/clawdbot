@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import type { ToolSummaryTrace } from "../types.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
-import { resolveAttemptReplayMetadata } from "./incomplete-turn.js";
 
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
@@ -42,7 +41,7 @@ export function normalizeEmbeddedRunAttemptResult(
       completedCount: 0,
       activeCount: 0,
     },
-    replayMetadata: resolveAttemptReplayMetadata(raw),
+    replayMetadata: raw.replayMetadata ?? { hadPotentialSideEffects: true, replaySafe: false },
     currentAttemptReplayMetadata: raw.currentAttemptReplayMetadata ?? undefined,
   };
 }

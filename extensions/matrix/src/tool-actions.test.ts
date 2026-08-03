@@ -373,6 +373,31 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
+  it.each(["sendMessage", "editMessage"] as const)(
+    "preserves indented Markdown when handling %s",
+    async (action) => {
+      const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+      const markdown = "    @room";
+
+      await handleMatrixAction(
+        {
+          action,
+          to: "room:!room:example",
+          roomId: "!room:example",
+          messageId: "$original",
+          content: markdown,
+        },
+        cfg,
+      );
+
+      const providerCall =
+        action === "sendMessage"
+          ? mocks.sendMatrixMessage.mock.lastCall?.[1]
+          : mocks.editMatrixMessage.mock.lastCall?.[2];
+      expect(providerCall).toBe(markdown);
+    },
+  );
+
   it("returns the authorized room and thread with message reads", async () => {
     const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
     const result = await handleMatrixAction(
@@ -444,25 +469,32 @@ describe("handleMatrixAction pollVote", () => {
 
   it("accepts media-only message sends", async () => {
     const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw-matrix-test"],
+      readFile: async () => Buffer.from("chart"),
+      workspaceDir: "/tmp/openclaw-matrix-test",
+    };
     await handleMatrixAction(
       {
         action: "sendMessage",
         accountId: "ops",
         to: "room:!room:example",
-        mediaUrl: "file:///tmp/photo.png",
+        mediaUrl: "chart.png",
       },
       cfg,
-      { mediaLocalRoots: ["/tmp/openclaw-matrix-test"] },
+      { mediaAccess, mediaLocalRoots: mediaAccess.localRoots },
     );
 
     expect(mocks.sendMatrixMessage).toHaveBeenCalledWith("room:!room:example", undefined, {
       cfg,
       accountId: "ops",
-      mediaUrl: "file:///tmp/photo.png",
+      mediaUrl: "chart.png",
+      mediaAccess,
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
       replyToId: undefined,
       threadId: undefined,
     });
+    expect(mocks.sendMatrixMessage.mock.lastCall?.[2]?.mediaAccess).toBe(mediaAccess);
   });
 
   it("accepts shared media aliases and voice-send flags", async () => {

@@ -49,6 +49,11 @@ function resolveEmbeddedCliBackendDispatch(
   if (params.cliBackendDispatch !== "subscription-auth") {
     return undefined;
   }
+  // The one-shot bridge cannot carry authenticated source-channel delivery
+  // context; private source replies must stay with their embedded owner.
+  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+    return undefined;
+  }
   // The CLI runner needs the caller-owned transcript path; runs without one
   // stay on the passthrough where session targets are resolved internally.
   const sessionFile = params.sessionFile?.trim();

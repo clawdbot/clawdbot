@@ -24,6 +24,83 @@ let PortInUseError: typeof import("./ports.js").PortInUseError;
 
 const describeUnix = process.platform === "win32" ? describe.skip : describe;
 
+type CommandResult = { stdout: string; stderr: string; code: number };
+type CommandReply = CommandResult | Error;
+
+const failedCommand = (): CommandResult => ({ stdout: "", stderr: "", code: 1 });
+const commandOutput = (stdout: string, code = 0, stderr = ""): CommandResult => ({
+  stdout,
+  stderr,
+  code,
+});
+
+async function resolveCommandReply(reply: CommandReply | undefined): Promise<CommandResult> {
+  if (reply instanceof Error) {
+    throw reply;
+  }
+  return reply ?? failedCommand();
+}
+
+function mockUnixCommands(params: {
+  lsof?: CommandReply;
+  ss?: CommandReply;
+  commandLine?: string | ((pid: string | undefined) => string);
+  user?: string;
+  parentPid?: string;
+}): void {
+  runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+    const command = argv[0];
+    if (typeof command !== "string") {
+      return failedCommand();
+    }
+    if (command.includes("lsof")) {
+      return resolveCommandReply(params.lsof);
+    }
+    if (command === "ss") {
+      return resolveCommandReply(params.ss);
+    }
+    if (command === "ps") {
+      if (argv.includes("command=") && params.commandLine !== undefined) {
+        const value =
+          typeof params.commandLine === "function"
+            ? params.commandLine(argv[2])
+            : params.commandLine;
+        return commandOutput(`${value}\n`);
+      }
+      if (argv.includes("user=") && params.user !== undefined) {
+        return commandOutput(`${params.user}\n`);
+      }
+      if (argv.includes("ppid=") && params.parentPid !== undefined) {
+        return commandOutput(`${params.parentPid}\n`);
+      }
+    }
+    return failedCommand();
+  });
+}
+
+function mockWindowsCommands(params: {
+  netstat: CommandReply;
+  tasklist?: CommandReply;
+  powershell?: CommandReply;
+  wmic?: CommandReply;
+}): void {
+  setPlatform("win32");
+  runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+    const command = argv[0];
+    const reply =
+      command === getWindowsSystem32ExePath("netstat.exe")
+        ? params.netstat
+        : command === getWindowsSystem32ExePath("tasklist.exe")
+          ? params.tasklist
+          : command === getWindowsPowerShellExePath()
+            ? params.powershell
+            : command === getWindowsWmicExePath()
+              ? params.wmic
+              : undefined;
+    return resolveCommandReply(reply);
+  });
+}
+
 function setPlatform(platform: NodeJS.Platform): void {
   mockProcessPlatform(platform);
 }
@@ -44,7 +121,7 @@ async function listenServer(
     });
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EPERM" || code === "EACCES") {
+    if (code === "EPERM" || code === "EACCES" || code === "EADDRNOTAVAIL") {
       return null;
     }
     throw err;
@@ -55,6 +132,12 @@ async function listenServer(
     throw new Error("expected tcp address");
   }
   return address;
+}
+
+async function closeServer(server: net.Server): Promise<void> {
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
 }
 
 beforeAll(async () => {
@@ -80,9 +163,7 @@ describe("ports helpers", () => {
     }
     const port = address.port;
     await expect(ensurePortAvailable(port)).rejects.toBeInstanceOf(PortInUseError);
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await closeServer(server);
   });
 
   it("ensurePortAvailable rejects when an explicitly scoped IPv4 loopback is busy", async () => {
@@ -93,9 +174,7 @@ describe("ports helpers", () => {
     }
     const port = address.port;
     await expect(ensurePortAvailable(port, "127.0.0.1")).rejects.toBeInstanceOf(PortInUseError);
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await closeServer(server);
   });
 
   it("handlePortError exits nicely on EADDRINUSE", async () => {
@@ -134,6 +213,92 @@ describe("ports helpers", () => {
 });
 
 describeUnix("inspectPortUsage", () => {
+  it("keeps only listener rows that can block a scoped bind", async () => {
+    const server = net.createServer();
+    const address = await listenServer(server, 0, "127.0.0.1");
+    if (!address) {
+      return;
+    }
+    const port = address.port;
+
+    mockUnixCommands({
+      lsof: commandOutput(
+        `p111\ncgateway\nnTCP 127.0.0.1:${port} (LISTEN)\n` +
+          `p222\ncother\nnTCP 127.0.0.2:${port} (LISTEN)\n`,
+      ),
+    });
+
+    try {
+      const result = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
+
+      expect(result.status).toBe("busy");
+      expect(result.listeners).toHaveLength(1);
+      expect(result.listeners[0]).toMatchObject({
+        pid: 111,
+        address: `TCP 127.0.0.1:${port} (LISTEN)`,
+      });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it.each([
+    { probeHost: "127.0.0.1", unrelatedWildcard: "[::]" },
+    { probeHost: "::1", unrelatedWildcard: "0.0.0.0" },
+  ])(
+    "does not attribute an opposite-family wildcard listener to $probeHost",
+    async ({ probeHost, unrelatedWildcard }) => {
+      const server = net.createServer();
+      const address = await listenServer(server, 0, probeHost);
+      if (!address) {
+        return;
+      }
+      const port = address.port;
+
+      mockUnixCommands({
+        lsof: commandOutput(`p222\ncother\nnTCP ${unrelatedWildcard}:${port} (LISTEN)\n`),
+      });
+
+      try {
+        const result = await inspectPortUsage(port, { probeHosts: [probeHost] });
+
+        expect(result.status).toBe("busy");
+        expect(result.listeners).toEqual([]);
+      } finally {
+        await closeServer(server);
+      }
+    },
+  );
+
+  it("ignores another interface when inspection is scoped to the gateway loopback", async () => {
+    const server = net.createServer();
+    const address = await listenServer(server, 0, "127.0.0.2");
+    if (!address) {
+      return;
+    }
+    const port = address.port;
+
+    mockUnixCommands({
+      lsof: commandOutput(`p${process.pid}\ncnode\nnTCP 127.0.0.2:${port} (LISTEN)\n`),
+    });
+
+    try {
+      const allInterfaces = await inspectPortUsage(port);
+      const gatewayLoopback = await inspectPortUsage(port, {
+        probeHosts: ["127.0.0.1"],
+      });
+
+      expect(allInterfaces.status).toBe("busy");
+      expect(gatewayLoopback).toMatchObject({
+        status: "free",
+        listeners: [],
+        hints: [],
+      });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("reports busy when lsof is missing but loopback listener exists", async () => {
     const server = net.createServer();
     const address = await listenServer(server, 0, "127.0.0.1");
@@ -152,9 +317,7 @@ describeUnix("inspectPortUsage", () => {
       const enoentErrors = (result.errors ?? []).filter((err) => err.includes("ENOENT"));
       expect(enoentErrors.length).toBeGreaterThan(0);
     } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeServer(server);
     }
   });
 
@@ -166,45 +329,14 @@ describeUnix("inspectPortUsage", () => {
     }
     const port = address.port;
 
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const command = argv[0];
-      if (typeof command !== "string") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (command.includes("lsof")) {
-        throw Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
-      }
-      if (command === "ss") {
-        return {
-          stdout: `LISTEN 0 511 127.0.0.1:${port} 0.0.0.0:* users:(("node",pid=${process.pid},fd=23))`,
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === "ps") {
-        if (argv.includes("command=")) {
-          return {
-            stdout: "node /tmp/openclaw/dist/index.js gateway --port 18789\n",
-            stderr: "",
-            code: 0,
-          };
-        }
-        if (argv.includes("user=")) {
-          return {
-            stdout: "debian\n",
-            stderr: "",
-            code: 0,
-          };
-        }
-        if (argv.includes("ppid=")) {
-          return {
-            stdout: "1\n",
-            stderr: "",
-            code: 0,
-          };
-        }
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockUnixCommands({
+      lsof: Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
+      ss: commandOutput(
+        `LISTEN 0 511 127.0.0.1:${port} 0.0.0.0:* users:(("node",pid=${process.pid},fd=23))`,
+      ),
+      commandLine: "node /tmp/openclaw/dist/index.js gateway --port 18789",
+      user: "debian",
+      parentPid: "1",
     });
 
     try {
@@ -215,9 +347,7 @@ describeUnix("inspectPortUsage", () => {
       expect(result.listeners[0]?.commandLine).toContain("openclaw");
       expect(result.errors).toBeUndefined();
     } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeServer(server);
     }
   });
 
@@ -263,22 +393,11 @@ describeUnix("inspectPortUsage", () => {
   });
 
   it("does not match ss listener ports by substring", async () => {
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const command = argv[0];
-      if (typeof command !== "string") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (command.includes("lsof")) {
-        throw Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
-      }
-      if (command === "ss") {
-        return {
-          stdout: 'LISTEN 0 4096 127.0.0.1:18789 0.0.0.0:* users:(("openclaw",pid=123,fd=12))',
-          stderr: "",
-          code: 0,
-        };
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockUnixCommands({
+      lsof: Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
+      ss: commandOutput(
+        'LISTEN 0 4096 127.0.0.1:18789 0.0.0.0:* users:(("openclaw",pid=123,fd=12))',
+      ),
     });
 
     const result = await inspectPortUsage(1878);
@@ -287,26 +406,15 @@ describeUnix("inspectPortUsage", () => {
   });
 
   it("matches ss listener on exact port within multi-listener output", async () => {
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const command = argv[0];
-      if (typeof command !== "string") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (command.includes("lsof")) {
-        throw Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
-      }
-      if (command === "ss") {
-        return {
-          stdout: [
-            'LISTEN 0 4096 127.0.0.1:8080 0.0.0.0:* users:(("app",pid=100,fd=3))',
-            'LISTEN 0 4096 127.0.0.1:18789 0.0.0.0:* users:(("openclaw",pid=123,fd=12))',
-            'LISTEN 0 4096 127.0.0.1:18790 0.0.0.0:* users:(("other",pid=456,fd=7))',
-          ].join("\n"),
-          stderr: "",
-          code: 0,
-        };
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockUnixCommands({
+      lsof: Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
+      ss: commandOutput(
+        [
+          'LISTEN 0 4096 127.0.0.1:8080 0.0.0.0:* users:(("app",pid=100,fd=3))',
+          'LISTEN 0 4096 127.0.0.1:18789 0.0.0.0:* users:(("openclaw",pid=123,fd=12))',
+          'LISTEN 0 4096 127.0.0.1:18790 0.0.0.0:* users:(("other",pid=456,fd=7))',
+        ].join("\n"),
+      ),
     });
 
     const result = await inspectPortUsage(18789);
@@ -319,46 +427,23 @@ describeUnix("inspectPortUsage", () => {
   });
 
   it("reports established gateway client connections from lsof", async () => {
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const command = argv[0];
-      if (typeof command !== "string") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (command.includes("lsof")) {
-        return {
-          stdout:
-            "p111\ncnode\nnTCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)\n" +
-            "p222\ncnode\nnTCP 127.0.0.1:18789->127.0.0.1:50123 (ESTABLISHED)\n" +
-            "p444\ncnode\nnTCP 127.0.0.1:50125->[::ffff:127.0.0.1]:18789 (ESTABLISHED)\n" +
-            "p555\ncnode\nnTCP 127.0.0.1:50126->127.0.0.1:18789abc (ESTABLISHED)\n" +
-            "p666\ncnode\nnTCP 127.0.0.1:50127->127.0.0.1:99999 (ESTABLISHED)\n" +
-            "p333\ncBrowser\nnTCP 127.0.0.1:50124->198.51.100.7:18789 (ESTABLISHED)\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === "ps") {
-        const pid = argv[2];
-        if (argv.includes("command=")) {
-          return {
-            stdout:
-              pid === "111"
-                ? "node /tmp/newer-openclaw/dist/index.js logs --follow\n"
-                : pid === "222"
-                  ? "node /tmp/older-openclaw/dist/index.js gateway run\n"
-                  : "browser https://example.invalid/\n",
-            stderr: "",
-            code: 0,
-          };
-        }
-        if (argv.includes("user=")) {
-          return { stdout: "tester\n", stderr: "", code: 0 };
-        }
-        if (argv.includes("ppid=")) {
-          return { stdout: "1\n", stderr: "", code: 0 };
-        }
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockUnixCommands({
+      lsof: commandOutput(
+        "p111\ncnode\nnTCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)\n" +
+          "p222\ncnode\nnTCP 127.0.0.1:18789->127.0.0.1:50123 (ESTABLISHED)\n" +
+          "p444\ncnode\nnTCP 127.0.0.1:50125->[::ffff:127.0.0.1]:18789 (ESTABLISHED)\n" +
+          "p555\ncnode\nnTCP 127.0.0.1:50126->127.0.0.1:18789abc (ESTABLISHED)\n" +
+          "p666\ncnode\nnTCP 127.0.0.1:50127->127.0.0.1:99999 (ESTABLISHED)\n" +
+          "p333\ncBrowser\nnTCP 127.0.0.1:50124->198.51.100.7:18789 (ESTABLISHED)\n",
+      ),
+      commandLine: (pid) =>
+        pid === "111"
+          ? "node /tmp/newer-openclaw/dist/index.js logs --follow"
+          : pid === "222"
+            ? "node /tmp/older-openclaw/dist/index.js gateway run"
+            : "browser https://example.invalid/",
+      user: "tester",
+      parentPid: "1",
     });
 
     const result = await inspectPortConnections(18789);
@@ -380,34 +465,11 @@ describeUnix("inspectPortUsage", () => {
   });
 
   it("deduplicates repeated lsof listener records for one process address", async () => {
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const command = argv[0];
-      if (typeof command !== "string") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (command.includes("lsof")) {
-        return {
-          stdout: "p111\ncnode\nnTCP *:18789 (LISTEN)\nnTCP *:18789 (LISTEN)\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === "ps") {
-        if (argv.includes("command=")) {
-          return {
-            stdout: "node /tmp/openclaw/dist/index.js gateway run\n",
-            stderr: "",
-            code: 0,
-          };
-        }
-        if (argv.includes("user=")) {
-          return { stdout: "tester\n", stderr: "", code: 0 };
-        }
-        if (argv.includes("ppid=")) {
-          return { stdout: "1\n", stderr: "", code: 0 };
-        }
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockUnixCommands({
+      lsof: commandOutput("p111\ncnode\nnTCP *:18789 (LISTEN)\nnTCP *:18789 (LISTEN)\n"),
+      commandLine: "node /tmp/openclaw/dist/index.js gateway run",
+      user: "tester",
+      parentPid: "1",
     });
 
     const result = await inspectPortUsage(18789);
@@ -420,34 +482,11 @@ describeUnix("inspectPortUsage", () => {
   });
 
   it("keeps single-port lsof listener inspection scoped to the requested port", async () => {
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const command = argv[0];
-      if (typeof command !== "string") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (command.includes("lsof")) {
-        return {
-          stdout: "p111\ncnode\nnTCP *:18789 (LISTEN)\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === "ps") {
-        if (argv.includes("command=")) {
-          return {
-            stdout: "node /tmp/openclaw/dist/index.js gateway run\n",
-            stderr: "",
-            code: 0,
-          };
-        }
-        if (argv.includes("user=")) {
-          return { stdout: "tester\n", stderr: "", code: 0 };
-        }
-        if (argv.includes("ppid=")) {
-          return { stdout: "1\n", stderr: "", code: 0 };
-        }
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockUnixCommands({
+      lsof: commandOutput("p111\ncnode\nnTCP *:18789 (LISTEN)\n"),
+      commandLine: "node /tmp/openclaw/dist/index.js gateway run",
+      user: "tester",
+      parentPid: "1",
     });
 
     await inspectPortUsage(18789);
@@ -463,40 +502,18 @@ describeUnix("inspectPortUsage", () => {
   });
 
   it("batches Unix listener lsof inspection across same-cycle port checks", async () => {
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const command = argv[0];
-      if (typeof command !== "string") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (command.includes("lsof")) {
-        return {
-          stdout:
-            "p111\ncnode\nnTCP *:18789 (LISTEN)\n" +
-            "p222\ncdeno\nnTCP 127.0.0.1:19001 (LISTEN)\n" +
-            "p333\ncnginx\nnTCP *:3000 (LISTEN)\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === "ps") {
-        if (argv.includes("command=")) {
-          return {
-            stdout:
-              argv[2] === "111"
-                ? "node /tmp/openclaw/dist/index.js gateway run\n"
-                : "deno run /tmp/openclaw/cli.ts\n",
-            stderr: "",
-            code: 0,
-          };
-        }
-        if (argv.includes("user=")) {
-          return { stdout: "tester\n", stderr: "", code: 0 };
-        }
-        if (argv.includes("ppid=")) {
-          return { stdout: "1\n", stderr: "", code: 0 };
-        }
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockUnixCommands({
+      lsof: commandOutput(
+        "p111\ncnode\nnTCP *:18789 (LISTEN)\n" +
+          "p222\ncdeno\nnTCP 127.0.0.1:19001 (LISTEN)\n" +
+          "p333\ncnginx\nnTCP *:3000 (LISTEN)\n",
+      ),
+      commandLine: (pid) =>
+        pid === "111"
+          ? "node /tmp/openclaw/dist/index.js gateway run"
+          : "deno run /tmp/openclaw/cli.ts",
+      user: "tester",
+      parentPid: "1",
     });
 
     const results = await inspectPortUsages([18789, 19001]);
@@ -538,34 +555,13 @@ describeUnix("inspectPortUsage", () => {
   });
 
   it("preserves malformed lsof pid records as unknown-pid listener diagnostics", async () => {
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const command = argv[0];
-      if (typeof command !== "string") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (command.includes("lsof")) {
-        return {
-          stdout: "p\ncnode\nnTCP *:18789 (LISTEN)\np111\ncbun\nnTCP 127.0.0.1:18789 (LISTEN)\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === "ps") {
-        if (argv.includes("command=")) {
-          return {
-            stdout: "bun /tmp/openclaw/dist/index.js gateway run\n",
-            stderr: "",
-            code: 0,
-          };
-        }
-        if (argv.includes("user=")) {
-          return { stdout: "tester\n", stderr: "", code: 0 };
-        }
-        if (argv.includes("ppid=")) {
-          return { stdout: "1\n", stderr: "", code: 0 };
-        }
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockUnixCommands({
+      lsof: commandOutput(
+        "p\ncnode\nnTCP *:18789 (LISTEN)\np111\ncbun\nnTCP 127.0.0.1:18789 (LISTEN)\n",
+      ),
+      commandLine: "bun /tmp/openclaw/dist/index.js gateway run",
+      user: "tester",
+      parentPid: "1",
     });
 
     const result = await inspectPortUsage(18789);
@@ -587,19 +583,8 @@ describeUnix("inspectPortUsage", () => {
   it("rejects lsof pid tokens with trailing garbage instead of truncating them", async () => {
     // Number.parseInt("111abc", 10) === 111, which would silently accept a
     // corrupted pid field. Keep the socket evidence without fabricating pid 111.
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const command = argv[0];
-      if (typeof command !== "string") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (command.includes("lsof")) {
-        return {
-          stdout: "p111abc\ncnode\nnTCP *:18789 (LISTEN)\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockUnixCommands({
+      lsof: commandOutput("p111abc\ncnode\nnTCP *:18789 (LISTEN)\n"),
     });
 
     const result = await inspectPortUsage(18789);
@@ -615,37 +600,15 @@ describeUnix("inspectPortUsage", () => {
   });
 
   it("reports multiple lsof socket records for one process", async () => {
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const command = argv[0];
-      if (typeof command !== "string") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (command.includes("lsof")) {
-        return {
-          stdout:
-            "p111\ncnode\n" +
-            "nTCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)\n" +
-            "nTCP 127.0.0.1:50124->127.0.0.1:18789 (ESTABLISHED)\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === "ps") {
-        if (argv.includes("command=")) {
-          return {
-            stdout: "node /tmp/newer-openclaw/dist/index.js logs --follow\n",
-            stderr: "",
-            code: 0,
-          };
-        }
-        if (argv.includes("user=")) {
-          return { stdout: "tester\n", stderr: "", code: 0 };
-        }
-        if (argv.includes("ppid=")) {
-          return { stdout: "1\n", stderr: "", code: 0 };
-        }
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockUnixCommands({
+      lsof: commandOutput(
+        "p111\ncnode\n" +
+          "nTCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)\n" +
+          "nTCP 127.0.0.1:50124->127.0.0.1:18789 (ESTABLISHED)\n",
+      ),
+      commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
+      user: "tester",
+      parentPid: "1",
     });
 
     const result = await inspectPortConnections(18789);
@@ -666,43 +629,18 @@ describeUnix("inspectPortUsage", () => {
   });
 
   it("falls back to ss for established gateway client connections", async () => {
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const command = argv[0];
-      if (typeof command !== "string") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (command.includes("lsof")) {
-        return { stdout: "", stderr: "lsof: not found\n", code: 1 };
-      }
-      if (command === "ss") {
-        return {
-          stdout:
-            '0 0 127.0.0.1:50123 127.0.0.1:18789 users:(("node",pid=111,fd=12))\n' +
-            '0 0 127.0.0.1:50124 198.51.100.7:18789 users:(("browser",pid=333,fd=9))\n',
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === "ps") {
-        const pid = argv[2];
-        if (argv.includes("command=")) {
-          return {
-            stdout:
-              pid === "111"
-                ? "node /tmp/newer-openclaw/dist/index.js logs --follow\n"
-                : "browser https://example.invalid/\n",
-            stderr: "",
-            code: 0,
-          };
-        }
-        if (argv.includes("user=")) {
-          return { stdout: "tester\n", stderr: "", code: 0 };
-        }
-        if (argv.includes("ppid=")) {
-          return { stdout: "1\n", stderr: "", code: 0 };
-        }
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockUnixCommands({
+      lsof: commandOutput("", 1, "lsof: not found\n"),
+      ss: commandOutput(
+        '0 0 127.0.0.1:50123 127.0.0.1:18789 users:(("node",pid=111,fd=12))\n' +
+          '0 0 127.0.0.1:50124 198.51.100.7:18789 users:(("browser",pid=333,fd=9))\n',
+      ),
+      commandLine: (pid) =>
+        pid === "111"
+          ? "node /tmp/newer-openclaw/dist/index.js logs --follow"
+          : "browser https://example.invalid/",
+      user: "tester",
+      parentPid: "1",
     });
 
     const result = await inspectPortConnections(18789);
@@ -718,30 +656,15 @@ describeUnix("inspectPortUsage", () => {
 
 describe("inspectPortUsage on Windows", () => {
   it("reports established gateway client connections from netstat", async () => {
-    setPlatform("win32");
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const [command] = argv;
-      if (command === getWindowsSystem32ExePath("netstat.exe")) {
-        return {
-          stdout:
-            "  TCP    127.0.0.1:50123    127.0.0.1:18789    ESTABLISHED    4242\r\n" +
-            "  TCP    127.0.0.1:50124    198.51.100.7:18789  ESTABLISHED    5000\r\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
-        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
-      }
-      if (command === getWindowsPowerShellExePath()) {
-        return {
-          stdout:
-            '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js logs --follow\r\n',
-          stderr: "",
-          code: 0,
-        };
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockWindowsCommands({
+      netstat: commandOutput(
+        "  TCP    127.0.0.1:50123    127.0.0.1:18789    ESTABLISHED    4242\r\n" +
+          "  TCP    127.0.0.1:50124    198.51.100.7:18789  ESTABLISHED    5000\r\n",
+      ),
+      tasklist: commandOutput("Image Name: node.exe\r\n"),
+      powershell: commandOutput(
+        '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js logs --follow\r\n',
+      ),
     });
 
     const result = await inspectPortConnections(18789);
@@ -756,28 +679,12 @@ describe("inspectPortUsage on Windows", () => {
   });
 
   it("uses PowerShell process command lines to classify OpenClaw listeners", async () => {
-    setPlatform("win32");
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const [command] = argv;
-      if (command === getWindowsSystem32ExePath("netstat.exe")) {
-        return {
-          stdout: "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
-        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
-      }
-      if (command === getWindowsPowerShellExePath()) {
-        return {
-          stdout:
-            '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway run\r\n',
-          stderr: "",
-          code: 0,
-        };
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockWindowsCommands({
+      netstat: commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"),
+      tasklist: commandOutput("Image Name: node.exe\r\n"),
+      powershell: commandOutput(
+        '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway run\r\n',
+      ),
     });
 
     const result = await inspectPortUsage(18789);
@@ -792,31 +699,15 @@ describe("inspectPortUsage on Windows", () => {
   });
 
   it("reports localized Windows listener rows without requiring English state text", async () => {
-    setPlatform("win32");
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const [command] = argv;
-      if (command === getWindowsSystem32ExePath("netstat.exe")) {
-        return {
-          stdout:
-            "  TCP    127.0.0.1:18789    0.0.0.0:0        ABHOEREN       4242\r\n" +
-            "  TCP    [::1]:18789        [::]:0           ABHOEREN       4243\r\n" +
-            "  TCP    127.0.0.1:18789    127.0.0.1:0      ABHOEREN       8999\r\n" +
-            "  TCP    127.0.0.1:18789    127.0.0.1:50123  HERGESTELLT    9000\r\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
-        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
-      }
-      if (command === getWindowsPowerShellExePath()) {
-        return {
-          stdout: "node.exe C:\\openclaw\\dist\\index.js gateway run\r\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockWindowsCommands({
+      netstat: commandOutput(
+        "  TCP    127.0.0.1:18789    0.0.0.0:0        ABHOEREN       4242\r\n" +
+          "  TCP    [::1]:18789        [::]:0           ABHOEREN       4243\r\n" +
+          "  TCP    127.0.0.1:18789    127.0.0.1:0      ABHOEREN       8999\r\n" +
+          "  TCP    127.0.0.1:18789    127.0.0.1:50123  HERGESTELLT    9000\r\n",
+      ),
+      tasklist: commandOutput("Image Name: node.exe\r\n"),
+      powershell: commandOutput("node.exe C:\\openclaw\\dist\\index.js gateway run\r\n"),
     });
 
     const result = await inspectPortUsage(18789);
@@ -830,19 +721,11 @@ describe("inspectPortUsage on Windows", () => {
   });
 
   it("does not match Windows listener ports by substring", async () => {
-    setPlatform("win32");
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const [command] = argv;
-      if (command === getWindowsSystem32ExePath("netstat.exe")) {
-        return {
-          stdout:
-            "  TCP    127.0.0.1:187890    0.0.0.0:0    LISTENING    9000\r\n" +
-            "  TCP    [::1]:187890        [::]:0         LISTENING    9001\r\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockWindowsCommands({
+      netstat: commandOutput(
+        "  TCP    127.0.0.1:187890    0.0.0.0:0    LISTENING    9000\r\n" +
+          "  TCP    [::1]:187890        [::]:0         LISTENING    9001\r\n",
+      ),
     });
 
     const result = await inspectPortUsage(18789);
@@ -851,30 +734,11 @@ describe("inspectPortUsage on Windows", () => {
   });
 
   it("falls back to wmic when PowerShell cannot read the command line", async () => {
-    setPlatform("win32");
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      const [command] = argv;
-      if (command === getWindowsSystem32ExePath("netstat.exe")) {
-        return {
-          stdout: "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
-        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
-      }
-      if (command === getWindowsPowerShellExePath()) {
-        return { stdout: "", stderr: "access denied", code: 1 };
-      }
-      if (command === getWindowsWmicExePath()) {
-        return {
-          stdout: "CommandLine=node.exe C:\\openclaw\\dist\\index.js gateway run\r\n",
-          stderr: "",
-          code: 0,
-        };
-      }
-      return { stdout: "", stderr: "", code: 1 };
+    mockWindowsCommands({
+      netstat: commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"),
+      tasklist: commandOutput("Image Name: node.exe\r\n"),
+      powershell: commandOutput("", 1, "access denied"),
+      wmic: commandOutput("CommandLine=node.exe C:\\openclaw\\dist\\index.js gateway run\r\n"),
     });
 
     const result = await inspectPortUsage(18789);

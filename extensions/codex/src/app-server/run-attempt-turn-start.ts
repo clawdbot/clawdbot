@@ -8,6 +8,7 @@ import {
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
@@ -241,11 +242,21 @@ export async function startCodexAttemptTurn(
             threadId: resourceState.thread.threadId,
           })
         : true;
-      if (!state.timedOut && bindingReleased) {
-        await unsubscribeCodexThreadBestEffort(resourceState.client, {
+      if (!state.timedOut && bindingReleased && !resourceState.startupClientUnsafe) {
+        const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
           threadId: resourceState.thread.threadId,
           timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
         });
+        if (!released) {
+          // Detach the unsafe client before releasing this lease, but let sibling leases finish.
+          await runAgentCleanupStep({
+            runId: params.runId,
+            sessionId: params.sessionId,
+            step: "codex-retire-unsafe-startup-client",
+            log: embeddedAgentLog,
+            cleanup: async () => closeCodexStartupClientBestEffort(resourceState.client),
+          });
+        }
       }
       releaseCurrentRoute();
       activateNativePreToolUseFailureFallback();
