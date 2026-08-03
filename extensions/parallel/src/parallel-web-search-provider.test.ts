@@ -1,7 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
-type EndpointCall = { url: string; timeoutSeconds: number; init: RequestInit };
+type EndpointCall = {
+  url: string;
+  timeoutSeconds: number;
+  init: RequestInit;
+  signal?: AbortSignal;
+};
 type JsonRecord = Record<string, unknown>;
 type ToolParameters = {
   properties: Record<
@@ -306,6 +311,30 @@ describe("parallel web search provider", () => {
     expect(body).toMatchObject({ search_queries: ["openclaw"] });
     expect(result).not.toHaveProperty("objective");
     expect(result).toMatchObject({ provider: "parallel" });
+  });
+  it("forwards paid-search cancellation to the guarded endpoint", async () => {
+    enqueueJson();
+    const controller = new AbortController();
+
+    await paidTool().execute(
+      { search_queries: ["parallel active cancellation"] },
+      { signal: controller.signal },
+    );
+
+    expect(endpointCall(0).signal).toBe(controller.signal);
+  });
+  it("does not bill an already canceled paid search", async () => {
+    enqueueJson();
+    const controller = new AbortController();
+    controller.abort(new Error("Parallel caller canceled"));
+
+    await expect(
+      paidTool().execute(
+        { search_queries: ["parallel pre-canceled"] },
+        { signal: controller.signal },
+      ),
+    ).rejects.toThrow("Parallel caller canceled");
+    expect(endpointMockState.calls).toHaveLength(0);
   });
   it("returns an error payload when search_queries is missing or empty", async () => {
     const tool = paidTool();
@@ -669,6 +698,19 @@ describe("runParallelMcpSearch", () => {
   });
 });
 describe("parallel-free web search provider", () => {
+  it("keeps caller cancellation attached to every free MCP handshake step", async () => {
+    pushMcpHandshake({ search_id: "free-cancellation", results: [] });
+    const controller = new AbortController();
+
+    await freeTool().execute(
+      { search_queries: ["parallel free cancellation control"] },
+      { signal: controller.signal },
+    );
+
+    expect(endpointMockState.calls).toHaveLength(3);
+    expect(endpointMockState.calls.every((call) => call.signal === controller.signal)).toBe(true);
+  });
+
   it("exposes keyless metadata without claiming auto-detect fallback", () => {
     const provider = createParallelFreeWebSearchProvider();
     expect(provider.id).toBe("parallel-free");

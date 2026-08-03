@@ -379,7 +379,7 @@ export const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "gateway.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
   "browser.profiles.*.driver": ['"openclaw"', '"clawd"', '"existing-session"'],
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
-  "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
+  "diagnostics.otel.protocol": ['"http/protobuf"'],
   "diagnostics.otel.logsExporter": ['"otlp"', '"stdout"', '"both"'],
   "logging.level": ['"silent"', '"fatal"', '"error"', '"warn"', '"info"', '"debug"', '"trace"'],
   "logging.consoleLevel": [

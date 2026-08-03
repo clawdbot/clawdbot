@@ -637,6 +637,7 @@ export function isComfyCapabilityConfigured(params: {
   }
   return isProviderApiKeyConfigured({
     provider: "comfy",
+    cfg: params.cfg,
     agentDir: params.agentDir,
   });
 }

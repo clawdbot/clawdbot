@@ -238,6 +238,65 @@ describe("registerPluginHttpRoute", () => {
     });
   });
 
+  it("reuses an exact same-owner route without replacing its handler", () => {
+    const { registry, logs, register } = createLoggedRouteHarness();
+    const firstHandler = vi.fn();
+    const secondHandler = vi.fn();
+    const unregisterFirst = register({
+      path: "/plugins/shared",
+      auth: "plugin",
+      handler: firstHandler,
+      pluginId: "demo",
+      source: "shared-route",
+    });
+
+    const unregisterSecond = register({
+      path: "/PLUGINS//SHARED/",
+      auth: "plugin",
+      handler: secondHandler,
+      pluginId: "demo",
+      source: "shared-route",
+      reuseExistingSameOwner: true,
+      throwOnFailure: true,
+    });
+
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes[0]?.handler).toBe(firstHandler);
+    expect(logs.at(-1)).toContain("reusing existing webhook path");
+    unregisterSecond();
+    expect(registry.httpRoutes).toHaveLength(1);
+    unregisterFirst();
+    expect(registry.httpRoutes).toHaveLength(0);
+  });
+
+  it.each([
+    { pluginId: "other", source: "shared-route" },
+    { pluginId: "demo", source: "other-route" },
+  ])("rejects route reuse by $pluginId/$source", ({ pluginId, source }) => {
+    const { registry, register } = createLoggedRouteHarness();
+    const firstHandler = vi.fn();
+    register({
+      path: "/plugins/shared",
+      auth: "plugin",
+      handler: firstHandler,
+      pluginId: "demo",
+      source: "shared-route",
+    });
+
+    expect(() =>
+      register({
+        path: "/plugins/shared",
+        auth: "plugin",
+        pluginId,
+        source,
+        reuseExistingSameOwner: true,
+        throwOnFailure: true,
+      }),
+    ).toThrow("plugin: route reuse denied");
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes[0]?.handler).toBe(firstHandler);
+  });
+
   it("finds a canonical exact alias behind an earlier prefix overlap", () => {
     const { registry, register } = createLoggedRouteHarness();
     register({

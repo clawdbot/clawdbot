@@ -123,6 +123,24 @@ describe("openai video generation provider", () => {
     });
   });
 
+  it("advertises OpenAI video for an actual config-only API key", () => {
+    expect(
+      buildOpenAIVideoGenerationProvider().isConfigured?.({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                apiKey: "openai-video-config-key",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("does not advertise video generation for OAuth-only OpenAI profiles", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-openai-video-auth-"));
     const previousOpenAIKey = process.env.OPENAI_API_KEY;
