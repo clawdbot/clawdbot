@@ -2323,12 +2323,6 @@ importers:
 
   packages/session-url-contract: {}
 
-  packages/speech-core:
-    dependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
-
   packages/terminal-core:
     dependencies:
       '@clack/prompts':

@@ -388,6 +388,9 @@ export async function runDoctorConfigPreflight(
               autoMigrateLegacyPluginDoctorState({
                 config: pluginDoctorOnlyConfig,
                 env: process.env,
+                ...(options.doctorOnlyStateMigrations === true
+                  ? { doctorOnlyStateMigrations: true }
+                  : {}),
               }),
             ),
           );
@@ -432,6 +435,9 @@ export async function runDoctorConfigPreflight(
               autoMigrateLegacyPluginDoctorState({
                 config: pluginDoctorConfig,
                 env: process.env,
+                ...(options.doctorOnlyStateMigrations === true
+                  ? { doctorOnlyStateMigrations: true }
+                  : {}),
               }),
             ),
           );

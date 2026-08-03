@@ -4,10 +4,10 @@
 import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   getPropertyNameText,
-  resolveRepoRoot,
   runAsScript,
   toLine,
   unwrapExpression,

@@ -848,9 +848,6 @@
       ],
       "@openclaw/ollama/runtime-api.js": [
         "./.boundary-stubs/ollama-runtime-api.d.ts"
-      ],
-      "@openclaw/speech-core/runtime-api.js": [
-        "./.boundary-stubs/speech-core-runtime-api.d.ts"
       ]
     }
   }

@@ -731,7 +731,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
   });
 
-  it("retains the prepared core-state fact after runtime files appear", async () => {
+  it("retains the prepared core-state fact and explicit Doctor repair authority", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
 
     await runDoctorConfigPreflight({
@@ -739,10 +739,15 @@ describe("runDoctorConfigPreflight state migration", () => {
       invalidConfigNote: false,
       requireStartupMigrationCheckpoint: true,
       skipPristineCoreStateMigrations: true,
+      doctorOnlyStateMigrations: true,
     });
 
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledOnce();
+    expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledWith({
+      config: { gateway: { mode: "local", port: 19091 } },
+      env: process.env,
+      doctorOnlyStateMigrations: true,
+    });
   });
 
   it("blocks gateway readiness when startup migrations leave warnings", async () => {
@@ -1003,7 +1008,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
   });
 
-  it("keeps plugin state migrations for partially valid legacy config repairs", async () => {
+  it("keeps explicit Doctor repair authority for partially valid legacy config", async () => {
     const resolvedConfig = {
       gateway: { mode: "local", port: "not-a-port" },
       memory: {
@@ -1040,6 +1045,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     await runDoctorConfigPreflight({
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      doctorOnlyStateMigrations: true,
     });
 
     expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
@@ -1047,6 +1053,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledWith({
       config: resolvedConfig,
       env: process.env,
+      doctorOnlyStateMigrations: true,
     });
     expect(autoMigrateLegacyTaskStateSidecars).toHaveBeenCalledWith({ env: process.env });
     expect(note).toHaveBeenCalledWith("- plugin-imported", "Doctor changes");

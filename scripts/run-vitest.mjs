@@ -4,13 +4,13 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { embeddedAgentVitestProjectOwners } from "../test/vitest/vitest.agents-paths.mjs";
 import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { runWithFailedTrailer, writeFailedTrailer } from "./lib/failed-trailer.mjs";
 import { signalExitCode } from "./lib/managed-child-process.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
@@ -127,7 +127,7 @@ const VITEST_DOTTED_OPTIONS_WITH_VALUE_PREFIXES = [
   "--typecheck.",
 ];
 const require = createRequire(import.meta.url);
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const testProjectsRunnerPath = path.join(repoRoot, "scripts", "test-projects.mjs");
 
 function isTruthyEnvValue(value) {

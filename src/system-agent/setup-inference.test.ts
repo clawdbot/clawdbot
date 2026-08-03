@@ -133,11 +133,16 @@ const suiteTempRootTracker = createSuiteTempRootTracker({
   prefix: "setup-inference-test-",
 });
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+let preparedPluginMetadataSnapshot: ReturnType<typeof resolvePluginMetadataSnapshot> | undefined;
 
 beforeAll(async () => {
   pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
     materializedMainRuntimeConfig,
   );
+  preparedPluginMetadataSnapshot = resolvePluginMetadataSnapshot({
+    config: materializedMainRuntimeConfig,
+    env: process.env,
+  });
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
     resolvePluginSetupRegistry: () => ({ cliBackends: [] }) as never,
@@ -461,6 +466,13 @@ function mockCodexRuntimeInstall(installRecord?: PluginInstallRecord) {
   })) as never;
 }
 
+function requirePreparedPluginMetadataSnapshot() {
+  if (!preparedPluginMetadataSnapshot) {
+    throw new Error("setup inference plugin metadata fixture was not initialized");
+  }
+  return preparedPluginMetadataSnapshot;
+}
+
 function activateCodexSetup(params: Omit<TestSetupInferenceActivationParams, "kind">) {
   return activateSetupInference({
     kind: "codex-cli",
@@ -469,6 +481,7 @@ function activateCodexSetup(params: Omit<TestSetupInferenceActivationParams, "ki
       ensureCodexRuntimePlugin: mockCodexRuntimeInstall(),
       runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
       refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+      resolvePluginMetadataSnapshot: requirePreparedPluginMetadataSnapshot,
       ...params.deps,
     },
   });
