@@ -84,6 +84,8 @@ export function setQueuedEntryState(
     enqueuedAt?: number;
     platformSendStartedAt?: number;
     recoveryState?: "send_attempt_started" | "unknown_after_send";
+    producerClaimId?: string;
+    availableAt?: number;
   },
 ): void {
   const entry = readQueuedEntry(tmpDir, id);
@@ -106,6 +108,12 @@ export function setQueuedEntryState(
   }
   if (state.recoveryState !== undefined) {
     entry.recoveryState = state.recoveryState;
+  }
+  if (state.producerClaimId !== undefined) {
+    entry.producerClaimId = state.producerClaimId;
+  }
+  if (state.availableAt !== undefined) {
+    entry.availableAt = state.availableAt;
   }
   const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } });
   db.prepare(
