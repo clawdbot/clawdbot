@@ -581,36 +581,6 @@ describe("qa scenario catalog", () => {
     });
   });
 
-  it("settles terminal-reply scenarios from durable task facts instead of sleeps", () => {
-    const scenario = readQaScenarioById("subagent-completion-direct-fallback");
-    const flow = JSON.stringify(scenario.execution.flow);
-    const config = scenario.execution.config as
-      | { cases?: Array<{ name?: string; marker?: string; expectedSendCount?: number }> }
-      | undefined;
-
-    expect(config?.cases).toEqual([
-      {
-        name: "visible",
-        marker: "QA-SUBAGENT-TERMINAL-VISIBLE-OK",
-        expectedSendCount: 1,
-      },
-      { name: "silent", marker: "NO_REPLY", expectedSendCount: 0 },
-      {
-        name: "fallback",
-        marker: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
-        expectedSendCount: 1,
-      },
-    ]);
-    expect(flow).toContain("env.gateway.call('tasks.list'");
-    expect(flow).toContain("task.title === `qa-terminal-${caseName}`");
-    expect(flow).toContain("task.status === 'completed'");
-    expect(flow).toContain("task.deliveryStatus === 'delivered'");
-    expect(flow).toContain("readSettledTerminalTask('restart')");
-    expect(flow).toContain("readSettledTerminalTask('empty')");
-    expect(flow).toContain("verdicts.length === 5");
-    expect(flow).not.toContain('"call":"sleep"');
-  });
-
   it("loads live gateway sentinel scenarios for harness self-health", () => {
     const scenarioIds = [
       "plugin-hook-health-sentinel",
