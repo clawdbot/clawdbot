@@ -5191,7 +5191,7 @@ extension NodeAppModel {
         return storedOperatorScopes.contains("operator.admin")
     }
 
-    func makeOperatorConnectOptions(
+    private func makeOperatorConnectOptions(
         clientId: String,
         displayName: String?,
         deviceAuthGatewayID: String? = nil,
@@ -10454,6 +10454,21 @@ extension NodeAppModel {
                 enqueuedAtMs: nil)
         }
         await self.applyPendingForegroundNodeActions(mapped, trigger: "test")
+    }
+
+    func _test_makeOperatorConnectOptions(
+        clientId: String,
+        displayName: String?,
+        includeAdminScope: Bool = false,
+        includeApprovalScope: Bool,
+        forceExplicitScopes: Bool = false) -> GatewayConnectOptions
+    {
+        self.makeOperatorConnectOptions(
+            clientId: clientId,
+            displayName: displayName,
+            includeAdminScope: includeAdminScope,
+            includeApprovalScope: includeApprovalScope,
+            forceExplicitScopes: forceExplicitScopes)
     }
 
     func _test_presentExecApprovalPrompt(_ prompt: ExecApprovalPrompt) {

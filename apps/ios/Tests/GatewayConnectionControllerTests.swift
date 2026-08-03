@@ -373,15 +373,15 @@ private func waitUntil(
 
     @Test @MainActor func `operator connect options only request approval scope when enabled`() {
         let appModel = NodeAppModel()
-        let withoutApprovalScope = appModel.makeOperatorConnectOptions(
+        let withoutApprovalScope = appModel._test_makeOperatorConnectOptions(
             clientId: "openclaw-ios",
             displayName: "OpenClaw iOS",
             includeApprovalScope: false)
-        let withApprovalScope = appModel.makeOperatorConnectOptions(
+        let withApprovalScope = appModel._test_makeOperatorConnectOptions(
             clientId: "openclaw-ios",
             displayName: "OpenClaw iOS",
             includeApprovalScope: true)
-        let withAdminScope = appModel.makeOperatorConnectOptions(
+        let withAdminScope = appModel._test_makeOperatorConnectOptions(
             clientId: "openclaw-ios",
             displayName: "OpenClaw iOS",
             includeAdminScope: true,
@@ -407,7 +407,7 @@ private func waitUntil(
 
     @Test @MainActor func `operator talk permission upgrade uses explicit least privilege scopes`() {
         let appModel = NodeAppModel()
-        let options = appModel.makeOperatorConnectOptions(
+        let options = appModel._test_makeOperatorConnectOptions(
             clientId: "openclaw-ios",
             displayName: "OpenClaw iOS",
             includeApprovalScope: false,
