@@ -1,7 +1,9 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   adoptCurrentPluginMetadataSnapshotIfAbsent,
+  getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
@@ -11,6 +13,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   completePluginMetadataSnapshot,
+  installCommandPluginMetadataSnapshot,
   loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
   restorePluginMetadataSnapshot,
@@ -716,4 +719,68 @@ describe("plugin metadata snapshot", () => {
       }).toThrow();
     },
   );
+
+  describe("installCommandPluginMetadataSnapshot", () => {
+    function buildCompleteSnapshot(config: OpenClawConfig) {
+      const index = makeIndex();
+      index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+        source: "provided",
+        snapshot: index,
+        diagnostics: [],
+      });
+      return loadPluginMetadataSnapshot({ config, env: {}, index });
+    }
+
+    it("serves a command's installed snapshot to same-config readers, then restores the slot", () => {
+      const config = {};
+      const snapshot = buildCompleteSnapshot(config);
+
+      const cleanup = installCommandPluginMetadataSnapshot({
+        snapshot,
+        config,
+        env: process.env,
+      });
+
+      // The install is what turns a downstream cold `loadPluginMetadataSnapshot`
+      // into a slot read; `resolvePluginMetadataSnapshot` consults the slot first.
+      expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+      expect(resolvePluginMetadataSnapshot({ config, env: process.env })).toBe(snapshot);
+
+      cleanup();
+
+      expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+    });
+
+    it("leaves an outer owner's installed snapshot in place", () => {
+      const config = {};
+      const outer = buildCompleteSnapshot(config);
+      const inner = buildCompleteSnapshot(config);
+      setCurrentPluginMetadataSnapshot(outer, { config });
+
+      const cleanup = installCommandPluginMetadataSnapshot({
+        snapshot: inner,
+        config,
+        env: process.env,
+      });
+      cleanup();
+
+      // A nested install that replaced the slot would publish `inner` when the
+      // outer owner later restored its own captured state.
+      expect(getCurrentPluginMetadataSnapshot({ config })).toBe(outer);
+    });
+
+    it("does not install an incomplete snapshot", () => {
+      const config = {};
+
+      const cleanup = installCommandPluginMetadataSnapshot({
+        snapshot: { policyHash: "hash" } as unknown as ReturnType<typeof buildCompleteSnapshot>,
+        config,
+        env: process.env,
+      });
+      cleanup();
+
+      expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+    });
+  });
 });

@@ -73,12 +73,8 @@ import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  installTemporaryCurrentPluginMetadataSnapshot,
-} from "../../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { installCommandPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
@@ -237,43 +233,6 @@ function parseOptionalPositiveIntegerOption(raw: unknown, label: string, fallbac
     throw new Error(`${label} must be a positive integer.`);
   }
   return parsed;
-}
-
-function isCompletePluginMetadataSnapshot(value: unknown): value is PluginMetadataSnapshot {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const snapshot = value as Partial<PluginMetadataSnapshot>;
-  return (
-    typeof snapshot.policyHash === "string" &&
-    snapshot.index !== undefined &&
-    snapshot.manifestRegistry !== undefined
-  );
-}
-
-function installCommandPluginMetadataSnapshot(params: {
-  snapshot: PluginMetadataSnapshot;
-  config: Awaited<ReturnType<typeof loadModelsConfig>>;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-}): () => void {
-  if (!isCompletePluginMetadataSnapshot(params.snapshot)) {
-    return () => {};
-  }
-  const current = getCurrentPluginMetadataSnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  if (current) {
-    return () => {};
-  }
-  const lease = installTemporaryCurrentPluginMetadataSnapshot(params.snapshot, {
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  return lease.release;
 }
 
 function syntheticAuthCredential(

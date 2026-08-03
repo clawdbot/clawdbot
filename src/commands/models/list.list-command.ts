@@ -11,6 +11,7 @@ import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import { installCommandPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
@@ -90,199 +91,212 @@ export async function modelsListCommand(
     workspaceDir,
     env: process.env,
   });
-  const providerAliasCanonicalizer = createModelCatalogProviderAliasCanonicalizer({
-    cfg,
-    metadataSnapshot,
-  });
-  const providerFilter = parsedProviderFilter
-    ? providerAliasCanonicalizer.provider(parsedProviderFilter)
-    : undefined;
-  const { entries } = resolveConfiguredModelEntries({
-    cfg,
-    agentId,
-    ...DISPLAY_MODEL_PARSE_OPTIONS,
-    canonicalizeRef: providerAliasCanonicalizer.ref,
-  });
-  if (providerFilter) {
-    const knownProviderIds = new Set(
-      [
-        ...metadataSnapshot.owners.providers.keys(),
-        ...metadataSnapshot.owners.modelCatalogProviders.keys(),
-        ...Object.keys(cfg.models?.providers ?? {}),
-        ...entries.map((entry) => entry.ref.provider),
-      ].map((providerId) => providerAliasCanonicalizer.provider(providerId)),
-    );
-    if (!knownProviderIds.has(providerFilter)) {
-      const message = `Unknown provider filter "${sanitizeTerminalText(rawProviderFilter ?? providerFilter)}" for this installation. Run ${formatCliCommand("openclaw plugins list --json")} to see installed providers, or configure it under models.providers.`;
-      throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-    }
-  }
-  const inheritedAuthDir = resolveLegacyInheritedAuthDir(cfg);
-  const authStore = inheritedAuthDir
-    ? loadAuthProfileStoreWithoutExternalProfiles(agentDir, { inheritedAuthDir })
-    : loadAuthProfileStoreWithoutExternalProfiles(agentDir);
-  const authIndex = createModelListAuthIndex({
-    cfg,
-    authStore,
-    agentDir,
+  // Publish the prepared snapshot for this invocation: downstream provider-alias
+  // and manifest-suppression lookups consult the process-current slot and would
+  // otherwise each repeat a full discovery scan.
+  const cleanupPluginMetadataSnapshot = installCommandPluginMetadataSnapshot({
+    snapshot: metadataSnapshot,
+    config: cfg,
     workspaceDir,
-    metadataSnapshot,
-    // Default output can append authenticated catalog rows beyond the configured
-    // default, so keep the nonprompting OpenAI CLI overlay available in every view.
-    externalCliProviderIds: ["openai"],
+    env: process.env,
   });
-
-  let modelRegistry: ModelRegistry | undefined;
-  let registryModels: Model[] = [];
-  let discoveredKeys = new Set<string>();
-  let availableKeys: Set<string> | undefined;
-  let availabilityErrorMessage: string | undefined;
-  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
-  // The default configured view remains lazy; full and filtered views share
-  // the registry and the same committed model generation as the Gateway.
-  const includePreparedCatalog = Boolean(opts.all || providerFilter);
-  const providerDiscoveryProviderIds = (() => {
-    if (opts.all && !providerFilter) {
-      return undefined;
-    }
+  try {
+    const providerAliasCanonicalizer = createModelCatalogProviderAliasCanonicalizer({
+      cfg,
+      metadataSnapshot,
+    });
+    const providerFilter = parsedProviderFilter
+      ? providerAliasCanonicalizer.provider(parsedProviderFilter)
+      : undefined;
+    const { entries } = resolveConfiguredModelEntries({
+      cfg,
+      agentId,
+      ...DISPLAY_MODEL_PARSE_OPTIONS,
+      canonicalizeRef: providerAliasCanonicalizer.ref,
+    });
     if (providerFilter) {
-      return [providerFilter];
-    }
-    return [
-      ...new Set([
-        ...(authIndex.providerDiscoveryProviderIds ?? []),
-        ...entries.map((entry) => entry.ref.provider),
-        ...Object.keys(cfg.models?.providers ?? {}),
-      ]),
-    ].toSorted((left, right) => left.localeCompare(right));
-  })();
-  const providerRuntimeDiscoveryProviderIds = providerFilter
-    ? [providerFilter]
-    : opts.all
-      ? undefined
-      : [];
-  // Default lists use authenticated providers' authored fallback rows. Live
-  // account discovery remains explicit because it imports full provider runtimes.
-  const providerManifestFallbackProviderIds =
-    !providerFilter && !opts.all ? authIndex.providerDiscoveryProviderIds : undefined;
-  try {
-    if (includePreparedCatalog) {
-      const { loadModelRegistry } = await registryModuleLoader.load();
-      const loaded = await loadModelRegistry(cfg, {
-        agentId,
-        agentDir,
-        providerFilter,
-        normalizeModels: Boolean(providerFilter),
-        workspaceDir,
-      });
-      modelRegistry = loaded.registry;
-      registryModels = loaded.models;
-      discoveredKeys = loaded.discoveredKeys;
-      availableKeys = loaded.availableKeys;
-      availabilityErrorMessage = loaded.availabilityErrorMessage;
-    } else if (!opts.all && opts.local) {
-      const { loadConfiguredListModelRegistry } = await registryModuleLoader.load();
-      const loaded = await loadConfiguredListModelRegistry(cfg, entries, {
-        agentId,
-        agentDir,
-        providerFilter,
-        workspaceDir,
-      });
-      modelRegistry = loaded.registry;
-      discoveredKeys = loaded.discoveredKeys;
-      availableKeys = loaded.availableKeys;
-    }
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    const message = `Model registry unavailable: ${detail}`;
-    throw new ExpectedCliError({
-      message,
-      humanOutput: `Model registry unavailable:\n${formatErrorWithStack(err)}`,
-      machineOutput: message,
-    });
-  }
-  const promotionsModulePromise = humanReadable ? promotionsModuleLoader.load() : undefined;
-  const promotionsRefreshPromise = promotionsModulePromise
-    ?.then((promotionsModule) => promotionsModule.startPromotionsFeedRefresh())
-    .catch(() => undefined);
-  const rowContext = {
-    cfg,
-    agentId,
-    agentDir,
-    ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
-    authIndex,
-    canonicalizeProvider: providerAliasCanonicalizer.provider,
-    providerDiscoveryProviderIds,
-    providerRuntimeDiscoveryProviderIds,
-    providerManifestFallbackProviderIds,
-    availableKeys,
-    configuredByKey,
-    discoveredKeys,
-    filter: {
-      provider: providerFilter,
-      local: opts.local,
-    },
-    metadataSnapshot,
-    workspaceDir,
-  };
-  const rows: ModelRow[] = [];
-
-  if (includePreparedCatalog) {
-    const { appendAllModelRowSources } = await rowSourcesModuleLoader.load();
-    await appendAllModelRowSources({
-      rows,
-      entries,
-      context: rowContext,
-      modelRegistry,
-      registryModels,
-    });
-  } else {
-    const { appendConfiguredModelRowSources } = await rowSourcesModuleLoader.load();
-    await appendConfiguredModelRowSources({
-      rows,
-      entries,
-      modelRegistry,
-      context: rowContext,
-    });
-  }
-
-  if (availabilityErrorMessage !== undefined) {
-    runtime.error(
-      `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
-    );
-  }
-
-  // Promotion decorations are best-effort: claim tags come from local
-  // provenance, and the discovery section reads a cadence-gated feed cache.
-  // Neither may break the core listing; stale refreshes have a short timeout.
-  const promotionsModule = await (promotionsModulePromise ?? promotionsModuleLoader.load());
-  try {
-    promotionsModule.applyPromotionClaimTags(rows);
-  } catch {
-    // Tags are annotation-only.
-  }
-  if (rows.length === 0 && !opts.json && !opts.plain) {
-    runtime.log("No models found.");
-  } else {
-    printModelTable(rows, runtime, opts);
-  }
-  if (promotionsRefreshPromise) {
-    // Runs on the empty listing too: a fresh install with zero configured
-    // models is exactly the user passive discovery is for. Compares against
-    // the configured entries, not the rendered rows — filtered and --all
-    // listings show a different set.
-    try {
-      const refresh = await promotionsRefreshPromise;
-      if (refresh) {
-        await promotionsModule.printAvailablePromotionsSection({
-          configuredKeys: new Set(entries.map((entry) => entry.key)),
-          refresh,
-          runtime,
-        });
+      const knownProviderIds = new Set(
+        [
+          ...metadataSnapshot.owners.providers.keys(),
+          ...metadataSnapshot.owners.modelCatalogProviders.keys(),
+          ...Object.keys(cfg.models?.providers ?? {}),
+          ...entries.map((entry) => entry.ref.provider),
+        ].map((providerId) => providerAliasCanonicalizer.provider(providerId)),
+      );
+      if (!knownProviderIds.has(providerFilter)) {
+        const message = `Unknown provider filter "${sanitizeTerminalText(rawProviderFilter ?? providerFilter)}" for this installation. Run ${formatCliCommand("openclaw plugins list --json")} to see installed providers, or configure it under models.providers.`;
+        throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
       }
-    } catch {
-      // Passive discovery must never fail the listing.
     }
+    const inheritedAuthDir = resolveLegacyInheritedAuthDir(cfg);
+    const authStore = inheritedAuthDir
+      ? loadAuthProfileStoreWithoutExternalProfiles(agentDir, { inheritedAuthDir })
+      : loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+    const authIndex = createModelListAuthIndex({
+      cfg,
+      authStore,
+      agentDir,
+      workspaceDir,
+      metadataSnapshot,
+      // Default output can append authenticated catalog rows beyond the configured
+      // default, so keep the nonprompting OpenAI CLI overlay available in every view.
+      externalCliProviderIds: ["openai"],
+    });
+
+    let modelRegistry: ModelRegistry | undefined;
+    let registryModels: Model[] = [];
+    let discoveredKeys = new Set<string>();
+    let availableKeys: Set<string> | undefined;
+    let availabilityErrorMessage: string | undefined;
+    const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
+    // The default configured view remains lazy; full and filtered views share
+    // the registry and the same committed model generation as the Gateway.
+    const includePreparedCatalog = Boolean(opts.all || providerFilter);
+    const providerDiscoveryProviderIds = (() => {
+      if (opts.all && !providerFilter) {
+        return undefined;
+      }
+      if (providerFilter) {
+        return [providerFilter];
+      }
+      return [
+        ...new Set([
+          ...(authIndex.providerDiscoveryProviderIds ?? []),
+          ...entries.map((entry) => entry.ref.provider),
+          ...Object.keys(cfg.models?.providers ?? {}),
+        ]),
+      ].toSorted((left, right) => left.localeCompare(right));
+    })();
+    const providerRuntimeDiscoveryProviderIds = providerFilter
+      ? [providerFilter]
+      : opts.all
+        ? undefined
+        : [];
+    // Default lists use authenticated providers' authored fallback rows. Live
+    // account discovery remains explicit because it imports full provider runtimes.
+    const providerManifestFallbackProviderIds =
+      !providerFilter && !opts.all ? authIndex.providerDiscoveryProviderIds : undefined;
+    try {
+      if (includePreparedCatalog) {
+        const { loadModelRegistry } = await registryModuleLoader.load();
+        const loaded = await loadModelRegistry(cfg, {
+          agentId,
+          agentDir,
+          providerFilter,
+          normalizeModels: Boolean(providerFilter),
+          workspaceDir,
+        });
+        modelRegistry = loaded.registry;
+        registryModels = loaded.models;
+        discoveredKeys = loaded.discoveredKeys;
+        availableKeys = loaded.availableKeys;
+        availabilityErrorMessage = loaded.availabilityErrorMessage;
+      } else if (!opts.all && opts.local) {
+        const { loadConfiguredListModelRegistry } = await registryModuleLoader.load();
+        const loaded = await loadConfiguredListModelRegistry(cfg, entries, {
+          agentId,
+          agentDir,
+          providerFilter,
+          workspaceDir,
+        });
+        modelRegistry = loaded.registry;
+        discoveredKeys = loaded.discoveredKeys;
+        availableKeys = loaded.availableKeys;
+      }
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      const message = `Model registry unavailable: ${detail}`;
+      throw new ExpectedCliError({
+        message,
+        humanOutput: `Model registry unavailable:\n${formatErrorWithStack(err)}`,
+        machineOutput: message,
+      });
+    }
+    const promotionsModulePromise = humanReadable ? promotionsModuleLoader.load() : undefined;
+    const promotionsRefreshPromise = promotionsModulePromise
+      ?.then((promotionsModule) => promotionsModule.startPromotionsFeedRefresh())
+      .catch(() => undefined);
+    const rowContext = {
+      cfg,
+      agentId,
+      agentDir,
+      ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
+      authIndex,
+      canonicalizeProvider: providerAliasCanonicalizer.provider,
+      providerDiscoveryProviderIds,
+      providerRuntimeDiscoveryProviderIds,
+      providerManifestFallbackProviderIds,
+      availableKeys,
+      configuredByKey,
+      discoveredKeys,
+      filter: {
+        provider: providerFilter,
+        local: opts.local,
+      },
+      metadataSnapshot,
+      workspaceDir,
+    };
+    const rows: ModelRow[] = [];
+
+    if (includePreparedCatalog) {
+      const { appendAllModelRowSources } = await rowSourcesModuleLoader.load();
+      await appendAllModelRowSources({
+        rows,
+        entries,
+        context: rowContext,
+        modelRegistry,
+        registryModels,
+      });
+    } else {
+      const { appendConfiguredModelRowSources } = await rowSourcesModuleLoader.load();
+      await appendConfiguredModelRowSources({
+        rows,
+        entries,
+        modelRegistry,
+        context: rowContext,
+      });
+    }
+
+    if (availabilityErrorMessage !== undefined) {
+      runtime.error(
+        `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
+      );
+    }
+
+    // Promotion decorations are best-effort: claim tags come from local
+    // provenance, and the discovery section reads a cadence-gated feed cache.
+    // Neither may break the core listing; stale refreshes have a short timeout.
+    const promotionsModule = await (promotionsModulePromise ?? promotionsModuleLoader.load());
+    try {
+      promotionsModule.applyPromotionClaimTags(rows);
+    } catch {
+      // Tags are annotation-only.
+    }
+    if (rows.length === 0 && !opts.json && !opts.plain) {
+      runtime.log("No models found.");
+    } else {
+      printModelTable(rows, runtime, opts);
+    }
+    if (promotionsRefreshPromise) {
+      // Runs on the empty listing too: a fresh install with zero configured
+      // models is exactly the user passive discovery is for. Compares against
+      // the configured entries, not the rendered rows — filtered and --all
+      // listings show a different set.
+      try {
+        const refresh = await promotionsRefreshPromise;
+        if (refresh) {
+          await promotionsModule.printAvailablePromotionsSection({
+            configuredKeys: new Set(entries.map((entry) => entry.key)),
+            refresh,
+            runtime,
+          });
+        }
+      } catch {
+        // Passive discovery must never fail the listing.
+      }
+    }
+    requestExitAfterOneShotOutput(runtime);
+  } finally {
+    cleanupPluginMetadataSnapshot();
   }
-  requestExitAfterOneShotOutput(runtime);
 }

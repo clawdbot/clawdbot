@@ -6,6 +6,7 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import {
   getCurrentPluginMetadataSnapshot,
+  installTemporaryCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
 } from "./current-plugin-metadata-snapshot.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
@@ -425,6 +426,53 @@ export function resolvePluginMetadataSnapshot(
     }
   }
   return loadPluginMetadataSnapshot(params);
+}
+
+function isCompletePluginMetadataSnapshot(value: unknown): value is PluginMetadataSnapshot {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const snapshot = value as Partial<PluginMetadataSnapshot>;
+  return (
+    typeof snapshot.policyHash === "string" &&
+    snapshot.index !== undefined &&
+    snapshot.manifestRegistry !== undefined
+  );
+}
+
+/** Publishes a command's prepared snapshot into the process-current slot for its own run.
+ *
+ * Routed cold commands build one snapshot and then call helpers that consult the
+ * slot before falling back to a full `loadPluginMetadataSnapshot` scan (see
+ * `resolvePluginMetadataSnapshot` above). Without an install each of those helpers
+ * repeats discovery. The returned closure must run in the command's `finally`: the
+ * lease keeps a revision-tracked previous state so it never clobbers a snapshot
+ * some other owner (a wrapping command, a concurrent reload) published later. */
+export function installCommandPluginMetadataSnapshot(params: {
+  snapshot: PluginMetadataSnapshot;
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): () => void {
+  if (!isCompletePluginMetadataSnapshot(params.snapshot)) {
+    return () => {};
+  }
+  // An existing install belongs to an outer owner (gateway startup, a wrapping
+  // command); never replace it, or that owner's release would restore ours.
+  const current = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  if (current) {
+    return () => {};
+  }
+  const lease = installTemporaryCurrentPluginMetadataSnapshot(params.snapshot, {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return lease.release;
 }
 
 function loadPluginMetadataSnapshotImpl(
