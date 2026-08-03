@@ -807,6 +807,29 @@ describe("usage-format", () => {
     expect(total).toBeCloseTo(0.003);
   });
 
+  it("returns undefined for pricing marked pricingUnavailable", () => {
+    const marked = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      pricingUnavailable: true as const,
+    };
+    expect(
+      estimateUsageCost({ usage: { input: 1000, output: 500, cacheRead: 2000 }, cost: marked }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a numeric zero estimate for unmarked all-zero pricing", () => {
+    const confirmedFree = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    expect(
+      estimateUsageCost({
+        usage: { input: 1000, output: 500, cacheRead: 2000 },
+        cost: confirmedFree,
+      }),
+    ).toBe(0);
+  });
+
   it("estimates cost with single-tier tiered pricing (equivalent to flat)", () => {
     const tiers: PricingTier[] = [
       { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0, range: [0, 1_000_000] },

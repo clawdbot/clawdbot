@@ -685,7 +685,9 @@ export function estimateUsageCost(params: {
 }): number | undefined {
   const usage = params.usage;
   const cost = params.cost;
-  if (!usage || !cost) {
+  if (!usage || !cost || cost.pricingUnavailable === true) {
+    // pricingUnavailable marks placeholder zeros (provider exposes no price):
+    // unknown spend must stay absent, not surface as a confident $0.
     return undefined;
   }
   const input = toNumber(usage.input);

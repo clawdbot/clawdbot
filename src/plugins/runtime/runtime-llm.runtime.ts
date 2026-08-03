@@ -245,8 +245,9 @@ function readExplicitCostUsd(raw: unknown): number | undefined {
 // omit costUsd: reporting a confident $0 would silently blind budget/spike
 // safeguards. All-zero rates WITHOUT the marker (e.g. Ollama's explicit free
 // pricing, or user-configured zeros) are a known $0 and keep the established
-// costUsd: 0 signal. Mirror session-cost-usage's isModelPricingKnown, which
-// additionally treats unmarked all-zero as unknown for its own surface.
+// costUsd: 0 signal. Session cost aggregation shares the same contract, and
+// the shared estimateUsageCost estimator independently honors the marker for
+// direct consumers.
 function isModelPricingKnown(cost: ReturnType<typeof resolveModelCostConfig>): boolean {
   return cost !== undefined && cost !== null && cost.pricingUnavailable !== true;
 }
