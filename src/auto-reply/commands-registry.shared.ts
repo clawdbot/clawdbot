@@ -564,22 +564,19 @@ export function buildBuiltinChatCommands(
         }),
       ],
     }),
-    defineChatCommand({
-      key: "close",
-      nativeName: "close",
-      description: "Close the current session (archives unless incognito; not for main).",
-      textAlias: "/close",
-      category: "session",
-      tier: "standard",
-    }),
-    defineChatCommand({
-      key: "delete-session",
-      nativeName: "delete",
-      description: "Delete the current session (archives unless incognito; not for main).",
-      textAlias: "/delete",
-      category: "session",
-      tier: "standard",
-    }),
+    defineBuiltinCommand(
+      "close",
+      "Close the current session (archives unless incognito; not for main).",
+      "session",
+      "standard",
+    ),
+    defineBuiltinCommand(
+      "delete-session",
+      "Delete the current session (archives unless incognito; not for main).",
+      "session",
+      "standard",
+      { nativeName: "delete", textAliases: ["/delete"] },
+    ),
     defineBuiltinCommand("compact", "Compact the session context.", "session", "essential", {
       args: [
         defineCommandArgument("instructions", "Extra compaction instructions", {

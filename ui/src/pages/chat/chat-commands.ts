@@ -27,6 +27,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
 import { clearChatHistory } from "./chat-history.ts";
+import type { ChatNewSessionResult } from "./chat-pane-shared.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
@@ -72,7 +73,7 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     chatModelCatalog: ModelCatalogEntry[];
     sessionsResult?: SessionsListResult | null;
     sessionsResultAgentId?: string | null;
-    createChatSession?: (options?: { label?: string }) => Promise<boolean>;
+    createChatSession?: (options?: { label?: string }) => Promise<ChatNewSessionResult | boolean>;
     confirmConversationReset?: () => Promise<boolean>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
@@ -367,9 +368,14 @@ export async function dispatchChatSlashCommand(
         return "failed";
       }
       const label = parseNamedNewCommandTitle(args);
-      return (await host.createChatSession(label ? { label } : undefined))
-        ? "completed"
-        : "cancelled";
+      const outcome = await host.createChatSession(label ? { label } : undefined);
+      if (outcome === true || outcome === "completed") {
+        return "completed";
+      }
+      if (outcome === "consumed-error") {
+        return "uncertain";
+      }
+      return "cancelled";
     }
     case "reset": {
       const target = captureChatCommandTarget(host);
