@@ -46,7 +46,6 @@ import {
   adoptRelayProviderToolCallId,
   broadcastToOwner,
   ensureRelayTurn,
-  relayEventDeliveryOptions,
   relaySessions,
   type CreateTalkRealtimeRelaySessionParams,
   type RelaySession,
@@ -101,15 +100,10 @@ export function createTalkRealtimeRelaySession(
     captureBridgeEvents: false,
   });
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
-    broadcastToOwner(
-      params.context,
-      params.connId,
-      {
-        ...event,
-        ...(talkEvent ? { talkEvent: harness.emit(talkEvent) } : {}),
-      },
-      relayEventDeliveryOptions(event),
-    );
+    broadcastToOwner(params.context, params.connId, {
+      ...event,
+      ...(talkEvent ? { talkEvent: harness.emit(talkEvent) } : {}),
+    });
   let currentOutputItemId: string | undefined;
   let currentOutputResponseId: string | undefined;
   let ready = false;
@@ -279,12 +273,10 @@ export function createTalkRealtimeRelaySession(
           return;
         }
         const clearEvent = { relaySessionId, type: "clear" as const };
-        broadcastToOwner(
-          params.context,
-          params.connId,
-          { ...clearEvent, ...(talkEvent ? { talkEvent } : {}) },
-          relayEventDeliveryOptions(clearEvent),
-        );
+        broadcastToOwner(params.context, params.connId, {
+          ...clearEvent,
+          ...(talkEvent ? { talkEvent } : {}),
+        });
         return;
       }
       if (event.direction !== "server") {
@@ -301,12 +293,7 @@ export function createTalkRealtimeRelaySession(
             type: "toolCallCancelled" as const,
             callId: relayCallId,
           };
-          broadcastToOwner(
-            params.context,
-            params.connId,
-            cancelledEvent,
-            relayEventDeliveryOptions(cancelledEvent),
-          );
+          broadcastToOwner(params.context, params.connId, cancelledEvent);
         }
         return;
       }
