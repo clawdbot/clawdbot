@@ -1,5 +1,6 @@
 // Googlechat plugin module implements monitor behavior.
 import {
+  formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
   resolveChannelInboundRouteEnvelope,
   toInboundMediaFactsWithMetadata,
@@ -7,6 +8,7 @@ import {
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -226,7 +228,7 @@ async function processMessageWithPipeline(params: {
 
   const messageText = (message.argumentText ?? message.text ?? "").trim();
   const attachments = message.attachment ?? [];
-  const rawBody = messageText;
+  let rawBody = messageText;
   if (!rawBody && attachments.length === 0) {
     return;
   }
@@ -283,13 +285,26 @@ async function processMessageWithPipeline(params: {
   }));
   const first = attachments.at(0);
   if (first) {
-    const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
-    if (attachmentData) {
-      mediaInputs[0] = {
-        path: attachmentData.path,
-        url: attachmentData.path,
-        contentType: attachmentData.contentType ?? first.contentType,
-      };
+    try {
+      const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
+      if (attachmentData) {
+        mediaInputs[0] = {
+          path: attachmentData.path,
+          url: attachmentData.path,
+          contentType: attachmentData.contentType ?? first.contentType,
+        };
+      }
+    } catch (error) {
+      if (!(error instanceof MediaFetchError) || error.code !== "max_bytes") {
+        throw error;
+      }
+      // Adopt permanent size failures after authorizing the original text; retrying
+      // them would block every later durable message in the same conversation.
+      const notice = `[Google Chat attachment too large; maximum ${mediaMaxMb} MB]`;
+      rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
+      runtime.error?.(
+        `[${account.accountId}] ${notice} Increase channels.googlechat.mediaMaxMb to process larger attachments.`,
+      );
     }
   }
   const media = await toInboundMediaFactsWithMetadata(mediaInputs);
