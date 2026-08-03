@@ -9,7 +9,7 @@ import {
   mockDeletedAgentSession,
   resetDeletedAgentSessionMocks,
 } from "./deleted-agent-guard.test-helpers.js";
-import { sessionsHandlers } from "./sessions.js";
+import { sessionMessagingHandlers } from "./sessions-messaging.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 describe("sessions.send / sessions.steer deleted-agent guard", () => {
@@ -30,8 +30,8 @@ describe("sessions.send / sessions.steer deleted-agent guard", () => {
       } as unknown as GatewayRequestContext;
 
       await expectDefined(
-        sessionsHandlers[method],
-        "sessionsHandlers[method] test invariant",
+        sessionMessagingHandlers[method],
+        "sessionMessagingHandlers[method] test invariant",
       )({
         req: { id: "req-1" } as never,
         params: { key: orphanKey, message: "hi" },

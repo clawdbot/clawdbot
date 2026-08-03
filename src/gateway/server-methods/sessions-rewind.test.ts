@@ -68,7 +68,7 @@ import {
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
-import { sessionsHandlers } from "./sessions.js";
+import { sessionRewindHandlers } from "./sessions-rewind.js";
 import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -184,7 +184,7 @@ async function invoke(
 ) {
   const respond = vi.fn();
   await expectDefined(
-    sessionsHandlers[method],
+    sessionRewindHandlers[method],
     `${method} handler`,
   )({
     req: { id: `${method}-request` } as never,
@@ -208,7 +208,7 @@ describe("session message-cut methods", () => {
   it("returns an empty branch list for a not-yet-materialized session", async () => {
     const respond = vi.fn() as unknown as RespondFn;
     await expectDefined(
-      sessionsHandlers["sessions.branches.list"],
+      sessionRewindHandlers["sessions.branches.list"],
       "sessions.branches.list handler",
     )({
       req: { id: "fresh-branches-list" } as never,
