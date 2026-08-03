@@ -21,6 +21,7 @@ import {
   testApi,
   transcodeAudioBufferMock,
   type OpenClawConfig,
+  type ReplyPayload,
 } from "./tts-runtime.test-support.js";
 
 describe("TTS runtime provider fallback and delivery behavior", () => {
@@ -256,6 +257,118 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
 
     expect(result).toBe(payload);
   });
+
+  it.each([
+    { failure: "speech provider fails", failProvider: true },
+    { failure: "audio persistence fails", failProvider: false },
+  ])("delivers audio-only TTS text when the $failure", async ({ failProvider }) => {
+    const answer = "Your important answer is ready.";
+    if (failProvider) {
+      synthesizeMock.mockRejectedValueOnce(new Error("Speech provider unavailable"));
+    }
+
+    const result = await maybeApplyTtsToPayloadCore(
+      {
+        payload: {
+          text: `[[tts:text]]  ${answer}  [[/tts:text]]`,
+          audioAsVoice: true,
+        },
+        cfg: createTtsConfig(`openclaw-speech-core-hidden-tts-failure-${failProvider}`),
+        channel: "telegram",
+        kind: "final",
+      },
+      async () => {
+        throw new Error("Media exceeds configured limit");
+      },
+    );
+
+    expect(result).toEqual({ text: answer, audioAsVoice: true });
+    expect((await import("./runtime-api.js")).getLastTtsAttempt()).toMatchObject({
+      success: false,
+      attemptedProviders: ["mock"],
+    });
+  });
+
+  it("keeps existing visible text when hidden TTS synthesis fails", async () => {
+    synthesizeMock.mockRejectedValueOnce(new Error("Speech provider unavailable"));
+
+    const result = await maybeApplyTtsToPayloadCore(
+      {
+        payload: {
+          text: "Visible answer [[tts:text]]Hidden expressive answer[[/tts:text]]",
+        },
+        cfg: createTtsConfig("openclaw-speech-core-visible-hidden-tts-provider-failure"),
+        channel: "telegram",
+        kind: "final",
+      },
+      async () => "/unused.ogg",
+    );
+
+    expect(result).toEqual({ text: "Visible answer" });
+  });
+
+  it("keeps hidden TTS text private when the reply already contains an attachment", async () => {
+    const result = await maybeApplyTtsToPayloadCore(
+      {
+        payload: {
+          text: "[[tts:text]]This must remain audio-only.[[/tts:text]]",
+          mediaUrl: "https://example.invalid/already-attached.png",
+        },
+        cfg: createTtsConfig("openclaw-speech-core-hidden-tts-existing-attachment"),
+        channel: "telegram",
+        kind: "final",
+      },
+      async () => {
+        throw new Error("Media storage must not be called");
+      },
+    );
+
+    expect(result).toEqual({
+      text: undefined,
+      mediaUrl: "https://example.invalid/already-attached.png",
+    });
+    expect(synthesizeMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      surface: "a presentation",
+      content: { presentation: { blocks: [{ type: "text", text: "Visible presentation" }] } },
+    },
+    {
+      surface: "an interactive reply",
+      content: { interactive: { blocks: [{ type: "text", text: "Visible interactive reply" }] } },
+    },
+    {
+      surface: "a location",
+      content: { location: { latitude: 48.858844, longitude: 2.294351 } },
+    },
+    {
+      surface: "channel data",
+      content: { channelData: { visibleAction: { label: "Approve" } } },
+    },
+  ] satisfies Array<{ surface: string; content: Partial<ReplyPayload> }>)(
+    "keeps hidden TTS text private when $surface is already deliverable",
+    async ({ content }) => {
+      synthesizeMock.mockRejectedValueOnce(new Error("Speech provider unavailable"));
+
+      const result = await maybeApplyTtsToPayloadCore(
+        {
+          payload: {
+            text: "[[tts:text]]This detail must remain audio-only.[[/tts:text]]",
+            ...content,
+          },
+          cfg: createTtsConfig("openclaw-speech-core-hidden-tts-existing-rich-content"),
+          channel: "telegram",
+          kind: "final",
+        },
+        async () => "/unused.ogg",
+      );
+
+      expect(result).toEqual({ text: undefined, ...content });
+      expect(synthesizeMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("normalizes voice-note Markdown once before synthesis", async () => {
     const text =

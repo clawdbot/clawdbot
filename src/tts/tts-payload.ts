@@ -2,6 +2,7 @@ import { markReplyPayloadAsTtsSupplement, type ReplyPayload } from "../auto-repl
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose, logVerbose } from "../globals.js";
 import { resolveSendableOutboundReplyParts } from "../infra/outbound/reply-payload-parts.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { parseTtsDirectives } from "./directives.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
@@ -266,5 +267,8 @@ export async function maybeApplyTtsToPayload(
 
   const latency = Date.now() - ttsStart;
   logVerbose(`TTS: conversion failed after ${latency}ms (${result.error ?? "unknown"}).`);
-  return nextPayload;
+  // Keep audio-only answers deliverable after synthesis or media persistence fails.
+  return explicitTtsText && !hasReplyPayloadContent(nextPayload)
+    ? { ...nextPayload, text: explicitTtsText }
+    : nextPayload;
 }
