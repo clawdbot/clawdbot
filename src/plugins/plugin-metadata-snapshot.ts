@@ -23,7 +23,7 @@ import type {
   ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
+import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 
 const PLUGIN_METADATA_ENV_KEYS = [
@@ -41,14 +41,8 @@ const PLUGIN_METADATA_ENV_KEYS = [
   "XDG_CONFIG_HOME",
 ] as const;
 export type {
-  LoadPluginMetadataSnapshotParams,
-  PluginMetadataManifestView,
-  PluginMetadataRegistryView,
   PluginMetadataSnapshot,
-  PluginMetadataSnapshotMetrics,
   PluginMetadataSnapshotOwnerMaps,
-  PluginMetadataSnapshotRegistryDiagnostic,
-  ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
 
 function pickPluginMetadataEnv(env: NodeJS.ProcessEnv): Record<string, string> {

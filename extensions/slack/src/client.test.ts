@@ -5,6 +5,14 @@ import path from "node:path";
 import type { WebClientOptions } from "@slack/web-api";
 import { afterEach, beforeAll, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
+const { isDebugProxyGlobalFetchPatchInstalledMock } = vi.hoisted(() => ({
+  isDebugProxyGlobalFetchPatchInstalledMock: vi.fn(() => false),
+}));
+
+vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+  isDebugProxyGlobalFetchPatchInstalled: isDebugProxyGlobalFetchPatchInstalledMock,
+}));
+
 vi.mock("@slack/web-api", () => {
   const WebClient = vi.fn(function WebClientMock(
     this: Record<string, unknown>,
@@ -119,6 +127,7 @@ beforeEach(() => {
   WebClient.mockClear();
   clearSlackWriteClientCacheForTest();
   clearSlackApiUrlEnvForTest();
+  isDebugProxyGlobalFetchPatchInstalledMock.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -404,6 +413,23 @@ describe("slack proxy dispatcher", () => {
     expect(dispatcher?.constructor.name).toBe("EnvHttpProxyAgent");
     expect(requireFetch(options)).toBeTypeOf("function");
     await dispatcher?.close();
+  });
+
+  it("keeps the capture-patched global fetch with ambient proxy env", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
+    isDebugProxyGlobalFetchPatchInstalledMock.mockReturnValue(true);
+    const globalFetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    const dispatcher = resolveSlackProxyDispatcher();
+    try {
+      const options = resolveSlackWebClientOptions({}, dispatcher);
+      await requireFetch(options)("https://slack.com/api/auth.test");
+      expect(globalFetch).toHaveBeenCalledOnce();
+    } finally {
+      globalFetch.mockRestore();
+      await dispatcher?.close();
+    }
   });
 
   it("creates the dispatcher while managed proxy CA trust is active", async () => {

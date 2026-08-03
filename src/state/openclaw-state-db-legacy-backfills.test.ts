@@ -1,0 +1,183 @@
+import { DatabaseSync } from "node:sqlite";
+import { describe, expect, it } from "vitest";
+import { repairLegacySubagentExecutionPayloads } from "./openclaw-state-db-legacy-backfills.js";
+
+type StoredRun = {
+  run_id: string;
+  started_at: number | null;
+  ended_at: number | null;
+  outcome_json: string | null;
+  payload_json: string;
+};
+
+function createDatabase() {
+  const db = new DatabaseSync(":memory:");
+  db.exec(`
+    CREATE TABLE subagent_runs (
+      run_id TEXT PRIMARY KEY,
+      started_at INTEGER,
+      ended_at INTEGER,
+      outcome_json TEXT,
+      payload_json TEXT NOT NULL
+    ) STRICT;
+  `);
+  const insert = db.prepare(`
+    INSERT INTO subagent_runs (run_id, started_at, ended_at, outcome_json, payload_json)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  return {
+    db,
+    insert: (row: StoredRun) =>
+      insert.run(row.run_id, row.started_at, row.ended_at, row.outcome_json, row.payload_json),
+    read: (runId: string) =>
+      db.prepare("SELECT * FROM subagent_runs WHERE run_id = ?").get(runId) as StoredRun,
+  };
+}
+
+// Mirrors the timing/outcome overlay in v2026.7.2-beta.6's SQLite reader.
+function readWithShippedBeta6Projection(row: StoredRun) {
+  const payload = JSON.parse(row.payload_json);
+  const outcome = row.outcome_json ? JSON.parse(row.outcome_json) : payload.outcome;
+  return {
+    ...payload,
+    ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
+    ...(row.ended_at !== null ? { endedAt: row.ended_at } : {}),
+    ...(outcome ? { outcome } : {}),
+    execution: {
+      ...payload.execution,
+      ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
+      ...(row.ended_at !== null ? { status: "terminal", endedAt: row.ended_at, outcome } : {}),
+    },
+  };
+}
+
+describe("repairLegacySubagentExecutionPayloads", () => {
+  it("moves shipped paused and killed terminal facts into execution once", () => {
+    const store = createDatabase();
+    const killedOutcome = { status: "error", error: "manual kill" };
+    store.insert({
+      run_id: "paused",
+      started_at: 100,
+      ended_at: 200,
+      outcome_json: null,
+      payload_json: JSON.stringify({
+        startedAt: 100,
+        endedAt: 200,
+        pauseReason: "sessions_yield",
+        execution: { status: "running", startedAt: 100 },
+      }),
+    });
+    store.insert({
+      run_id: "killed",
+      started_at: 300,
+      ended_at: 400,
+      outcome_json: JSON.stringify(killedOutcome),
+      payload_json: JSON.stringify({
+        startedAt: 300,
+        endedAt: 400,
+        outcome: killedOutcome,
+        endedReason: "subagent-killed",
+        killReconciliation: { killedAt: 400 },
+        execution: { status: "running", startedAt: 300 },
+      }),
+    });
+
+    repairLegacySubagentExecutionPayloads(store.db);
+    const firstPass = [store.read("paused"), store.read("killed")];
+    repairLegacySubagentExecutionPayloads(store.db);
+    const secondPass = [store.read("paused"), store.read("killed")];
+
+    expect(secondPass).toEqual(firstPass);
+    const paused = JSON.parse(firstPass[0]!.payload_json);
+    const killed = JSON.parse(firstPass[1]!.payload_json);
+    expect(paused.execution).toEqual({ status: "terminal", startedAt: 100, endedAt: 200 });
+    expect(killed.execution).toEqual({
+      status: "terminal",
+      startedAt: 300,
+      endedAt: 400,
+      outcome: killedOutcome,
+    });
+    for (const payload of [paused, killed]) {
+      expect(payload).not.toHaveProperty("startedAt");
+      expect(payload).not.toHaveProperty("endedAt");
+      expect(payload).not.toHaveProperty("outcome");
+    }
+    expect(
+      firstPass.map(({ started_at, ended_at, outcome_json }) => ({
+        started_at,
+        ended_at,
+        outcome_json,
+      })),
+    ).toEqual([
+      { started_at: 100, ended_at: 200, outcome_json: null },
+      { started_at: 300, ended_at: 400, outcome_json: JSON.stringify(killedOutcome) },
+    ]);
+    expect(readWithShippedBeta6Projection(firstPass[1]!)).toMatchObject({
+      startedAt: 300,
+      endedAt: 400,
+      outcome: killedOutcome,
+      execution: {
+        status: "terminal",
+        startedAt: 300,
+        endedAt: 400,
+        outcome: killedOutcome,
+      },
+    });
+  });
+
+  it("preserves newer canonical terminal state and optional start timing", () => {
+    const store = createDatabase();
+    store.insert({
+      run_id: "newer-terminal",
+      started_at: 100,
+      ended_at: 200,
+      outcome_json: JSON.stringify({ status: "error", error: "manual kill" }),
+      payload_json: JSON.stringify({
+        startedAt: 100,
+        endedAt: 200,
+        outcome: { status: "error", error: "manual kill" },
+        endedReason: "subagent-killed",
+        execution: { status: "terminal", endedAt: 250, outcome: { status: "ok" } },
+      }),
+    });
+    store.insert({
+      run_id: "paused-without-start",
+      started_at: null,
+      ended_at: 500,
+      outcome_json: null,
+      payload_json: JSON.stringify({
+        endedAt: 500,
+        pauseReason: "sessions_yield",
+        execution: { status: "running" },
+      }),
+    });
+
+    repairLegacySubagentExecutionPayloads(store.db);
+
+    const payload = JSON.parse(store.read("newer-terminal").payload_json);
+    expect(payload.execution).toEqual({
+      status: "terminal",
+      endedAt: 250,
+      outcome: { status: "ok" },
+    });
+    expect(payload.execution).not.toHaveProperty("startedAt");
+    const paused = JSON.parse(store.read("paused-without-start").payload_json);
+    expect(paused.execution).toEqual({ status: "terminal", endedAt: 500 });
+    expect(paused.execution).not.toHaveProperty("startedAt");
+  });
+
+  it("leaves malformed payload JSON untouched", () => {
+    const store = createDatabase();
+    store.insert({
+      run_id: "malformed",
+      started_at: null,
+      ended_at: null,
+      outcome_json: null,
+      payload_json: "{not-json",
+    });
+
+    repairLegacySubagentExecutionPayloads(store.db);
+
+    expect(store.read("malformed").payload_json).toBe("{not-json");
+  });
+});

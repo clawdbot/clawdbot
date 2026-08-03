@@ -6459,6 +6459,11 @@
       "translated": "محدد"
     },
     {
+      "id": "native.android.30aa827f48f2d6d0",
+      "source": "Pinned",
+      "translated": "مثبّت"
+    },
+    {
       "id": "native.android.4e2f2b168d8402e5",
       "source": "Home",
       "translated": "الرئيسية"
@@ -18869,6 +18874,11 @@
       "translated": "مسح"
     },
     {
+      "id": "native.apple.3b776a593deeab22",
+      "source": "These settings changed outside the app while you were editing: \\(fieldList). Choose which version to keep.",
+      "translated": "تغيّرت هذه الإعدادات خارج التطبيق أثناء تحريرك لها: \\(fieldList). اختر النسخة التي تريد الاحتفاظ بها."
+    },
+    {
       "id": "native.apple.9cd2ced909f0952d",
       "source": "\\(user)@\\(host)",
       "translated": "\\(user)@\\(host)"
@@ -20594,6 +20604,51 @@
       "translated": "missing:\\(hash)"
     },
     {
+      "id": "native.apple.52b517452a108b59",
+      "source": "Gateway location",
+      "translated": "موقع Gateway"
+    },
+    {
+      "id": "native.apple.2961fe211d71d35a",
+      "source": "Transport",
+      "translated": "النقل"
+    },
+    {
+      "id": "native.apple.3dfb5eefb5f66202",
+      "source": "Gateway URL",
+      "translated": "عنوان URL لـ Gateway"
+    },
+    {
+      "id": "native.apple.d771ae993a61fdf7",
+      "source": "SSH target",
+      "translated": "هدف SSH"
+    },
+    {
+      "id": "native.apple.e817b77dd5751910",
+      "source": "Identity file",
+      "translated": "ملف الهوية"
+    },
+    {
+      "id": "native.apple.1d7afbe829a31e8d",
+      "source": "SSH host key policy",
+      "translated": "سياسة مفتاح مضيف SSH"
+    },
+    {
+      "id": "native.apple.ba3cf88d2dadb205",
+      "source": "Gateway token",
+      "translated": "رمز Gateway"
+    },
+    {
+      "id": "native.apple.83779c40a38ec48e",
+      "source": "Use file version",
+      "translated": "استخدام نسخة الملف"
+    },
+    {
+      "id": "native.apple.eab4dbc3ca4a9352",
+      "source": "Keep my edits",
+      "translated": "الاحتفاظ بتعديلاتي"
+    },
+    {
       "id": "native.apple.db0fa6b60bd859f8",
       "source": ":\\(endpoint.port)",
       "translated": ":\\(endpoint.port)"
@@ -21949,6 +22004,11 @@
       "translated": "نسخ تفاصيل الإعداد"
     },
     {
+      "id": "native.apple.c90ec3f0f60d21bc",
+      "source": "Choose a different AI…",
+      "translated": "اختر ذكاءً اصطناعيًا مختلفًا…"
+    },
+    {
       "id": "native.apple.e0458fcb8c0536ea",
       "source": "No usable AI access found on this Gateway",
       "translated": "لم يُعثر على وصول صالح للاستخدام إلى الذكاء الاصطناعي على Gateway هذا"
@@ -22179,26 +22239,6 @@
       "translated": "نسخ الخطأ"
     },
     {
-      "id": "native.apple.7dee24e5bf088dd5",
-      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
-      "translated": "تعذّر استيراد \\(incomplete) من \\(Self.memoryNoun(incomplete))."
-    },
-    {
-      "id": "native.apple.84189c39ea5803c6",
-      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
-      "translated": "أعاد Gateway خطة موفّر غير متسقة. حاول التخطيط مجددًا."
-    },
-    {
-      "id": "native.apple.4c9e75d64cbc5cc2",
-      "source": "The Gateway did not return a usable import plan. Try planning again.",
-      "translated": "لم يُعِد Gateway خطة استيراد قابلة للاستخدام. حاول التخطيط مجددًا."
-    },
-    {
-      "id": "native.apple.2070bf43a67680ee",
-      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
-      "translated": "تعذّر على Gateway التخطيط لـ \\(plan.summary.errors) من \\(Self.memoryNoun(plan.summary.errors)). حاول مرة أخرى."
-    },
-    {
       "id": "native.apple.ba758aa97c24ffe6",
       "source": "Wake up, my friend!",
       "translated": "استيقظ يا صديقي!"
@@ -22249,114 +22289,19 @@
       "translated": "موصى به"
     },
     {
-      "id": "native.apple.78d1ad73762a7ce8",
+      "id": "native.apple.6ed12b86d399b69d",
+      "source": "Authenticate with your Gateway",
+      "translated": "المصادقة باستخدام Gateway الخاص بك"
+    },
+    {
+      "id": "native.apple.e319780979ae71d1",
       "source": "Connect your AI",
-      "translated": "وصّل الذكاء الاصطناعي الخاص بك"
+      "translated": "اربط الذكاء الاصطناعي الخاص بك"
     },
     {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "رجوع"
-    },
-    {
-      "id": "native.apple.7ca0977d5f73356d",
-      "source": "Bring your memories along",
-      "translated": "اصطحب ذكرياتك معك"
-    },
-    {
-      "id": "native.apple.b57ee4f83cff23f3",
-      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
-      "translated": "يمكن لـ OpenClaw نقل سياق مفيد من أدوات الذكاء الاصطناعي التي تستخدمها بالفعل إلى مساعدك الجديد."
-    },
-    {
-      "id": "native.apple.46cab71d748860b8",
-      "source": "Looking for memories…",
-      "translated": "جارٍ البحث عن ذكريات…"
-    },
-    {
-      "id": "native.apple.c9e5f1aebe85e201",
-      "source": "Checking supported AI tools on this Mac.",
-      "translated": "جارٍ التحقق من أدوات الذكاء الاصطناعي المدعومة على جهاز Mac هذا."
-    },
-    {
-      "id": "native.apple.77290f36f36f00e5",
-      "source": "No memories to import",
-      "translated": "لا توجد ذكريات لاستيرادها"
-    },
-    {
-      "id": "native.apple.e5cca7b9f082ace9",
-      "source": "You can import memories later from the dashboard.",
-      "translated": "يمكنك استيراد الذكريات لاحقًا من لوحة المعلومات."
-    },
-    {
-      "id": "native.apple.963add2f12fd18cb",
-      "source": "Import memories",
-      "translated": "استيراد الذكريات"
-    },
-    {
-      "id": "native.apple.9db369e036a38a29",
-      "source": "Importing memories…",
-      "translated": "جارٍ استيراد الذكريات…"
-    },
-    {
-      "id": "native.apple.71b8e38a5e7040ef",
-      "source": "Refresh plan",
-      "translated": "تحديث الخطة"
-    },
-    {
-      "id": "native.apple.e87bec72cb9c9dbf",
-      "source": "Retry pending imports before refreshing the plan.",
-      "translated": "أعِد محاولة عمليات الاستيراد المعلّقة قبل تحديث الخطة."
-    },
-    {
-      "id": "native.apple.f678888102fded6e",
-      "source": "You can skip this and import later from the dashboard’s Memory import page.",
-      "translated": "يمكنك تخطي هذه الخطوة والاستيراد لاحقًا من صفحة استيراد الذكريات في لوحة المعلومات."
-    },
-    {
-      "id": "native.apple.36108528c6acc448",
-      "source": "\\(provider.alreadyImportedCount) already imported",
-      "translated": "تم استيراد \\(provider.alreadyImportedCount) بالفعل"
-    },
-    {
-      "id": "native.apple.9b3444de8c9b2acc",
-      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
-      "translated": "تم استيراد \\(result.migrated) من \\(self.memoryLabel(result.migrated))."
-    },
-    {
-      "id": "native.apple.3252fea4dac8669a",
-      "source": "Couldn’t check for memories",
-      "translated": "تعذّر التحقق من وجود ذكريات"
-    },
-    {
-      "id": "native.apple.d371deb696de9e6b",
-      "source": "Retry",
-      "translated": "إعادة المحاولة"
-    },
-    {
-      "id": "native.apple.406ae454540725d0",
-      "source": "You can do this later from the dashboard’s Memory import page.",
-      "translated": "يمكنك إجراء ذلك لاحقًا من صفحة استيراد الذكريات في لوحة المعلومات."
-    },
-    {
-      "id": "native.apple.d1b5d99f67dae42e",
-      "source": "Your memories are ready",
-      "translated": "ذكرياتك جاهزة"
-    },
-    {
-      "id": "native.apple.6dbe5b174271b62a",
-      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
-      "translated": "تم استيراد \\(imported) \\(self.memoryLabel(imported)) إلى OpenClaw."
-    },
-    {
-      "id": "native.apple.d47b887f98e13e24",
-      "source": "\\(result.migrated) imported",
-      "translated": "تم استيراد \\(result.migrated)"
-    },
-    {
-      "id": "native.apple.6ac3d513f0ec5da7",
-      "source": "You can manage imported memories anytime from the dashboard.",
-      "translated": "يمكنك إدارة الذكريات المستوردة في أي وقت من لوحة المعلومات."
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
@@ -23584,14 +23529,14 @@
       "translated": "يحتاج هذا الجهاز إلى موافقة الاقتران"
     },
     {
-      "id": "native.apple.b52cb4aae7ca6573",
-      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`.",
-      "translated": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+      "id": "native.apple.90b00f3f5418b439",
+      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then paste its output.",
+      "translated": "الصق الرمز المُهيأ على مضيف Gateway. على مضيف Gateway، شغّل `openclaw gateway auth-token --show` في طرفية تفاعلية، ثم الصق مخرجاته."
     },
     {
-      "id": "native.apple.bbb87d21ce8a291e",
-      "source": "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again.",
-      "translated": "تحقق من `gateway.auth.token` أو `OPENCLAW_GATEWAY_TOKEN` على مضيف Gateway ثم حاول مرة أخرى."
+      "id": "native.apple.b79d3c42bd5438d5",
+      "source": "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then replace the token and try again.",
+      "translated": "على مضيف Gateway، شغّل `openclaw gateway auth-token --show` في طرفية تفاعلية، ثم استبدل الرمز وأعد المحاولة."
     },
     {
       "id": "native.apple.c26f61d639591f81",
@@ -23614,14 +23559,14 @@
       "translated": "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
     },
     {
-      "id": "native.apple.e73170e4ab1dbe8f",
-      "source": "This gateway requires an auth token from the gateway host.",
-      "translated": "يتطلب هذا Gateway رمز مصادقة من مضيف Gateway."
+      "id": "native.apple.a1cb5542806f0ec9",
+      "source": "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "يتطلب Gateway هذا رمز مصادقة. شغّل openclaw gateway auth-token --show على مضيف Gateway."
     },
     {
-      "id": "native.apple.e3f983b8c517da29",
-      "source": "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host.",
-      "translated": "عدم تطابق رمز Gateway. تحقق من gateway.auth.token أو OPENCLAW_GATEWAY_TOKEN على مضيف Gateway."
+      "id": "native.apple.e12c96574b97ed4a",
+      "source": "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "عدم تطابق رمز Gateway. شغّل openclaw gateway auth-token --show على مضيف Gateway."
     },
     {
       "id": "native.apple.cd96754a96e5aa35",

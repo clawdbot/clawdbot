@@ -16,6 +16,17 @@ const webFetchProviderDiscovery = vi.hoisted(() => ({
   }),
 }));
 
+// This boundary proves that credential-free web fetch config reaches the HTTP
+// listener. Model publication and orphan recovery have dedicated startup owners.
+vi.mock("../agents/prepared-model-runtime.js", () => ({
+  publishPreparedModelRuntimeSnapshot: vi.fn(async () => ({})),
+  refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
+}));
+
+vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
+  markStartupOrphanedMainSessionsForRecovery: vi.fn(async () => ({ marked: 0, skipped: 0 })),
+}));
+
 vi.mock("../secrets/runtime-web-tools-fallback.runtime.js", async () => {
   const actual = await vi.importActual<
     typeof import("../secrets/runtime-web-tools-fallback.runtime.js")

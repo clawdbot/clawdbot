@@ -6459,6 +6459,11 @@
       "translated": "Выбрано"
     },
     {
+      "id": "native.android.30aa827f48f2d6d0",
+      "source": "Pinned",
+      "translated": "Закреплено"
+    },
+    {
       "id": "native.android.4e2f2b168d8402e5",
       "source": "Home",
       "translated": "Главная"
@@ -18869,6 +18874,11 @@
       "translated": "Очистить"
     },
     {
+      "id": "native.apple.3b776a593deeab22",
+      "source": "These settings changed outside the app while you were editing: \\(fieldList). Choose which version to keep.",
+      "translated": "Эти настройки изменились вне приложения, пока вы редактировали: \\(fieldList). Выберите, какую версию сохранить."
+    },
+    {
       "id": "native.apple.9cd2ced909f0952d",
       "source": "\\(user)@\\(host)",
       "translated": "\\(user)@\\(host)"
@@ -20594,6 +20604,51 @@
       "translated": "missing:\\(hash)"
     },
     {
+      "id": "native.apple.52b517452a108b59",
+      "source": "Gateway location",
+      "translated": "Расположение Gateway"
+    },
+    {
+      "id": "native.apple.2961fe211d71d35a",
+      "source": "Transport",
+      "translated": "Транспорт"
+    },
+    {
+      "id": "native.apple.3dfb5eefb5f66202",
+      "source": "Gateway URL",
+      "translated": "URL-адрес Gateway"
+    },
+    {
+      "id": "native.apple.d771ae993a61fdf7",
+      "source": "SSH target",
+      "translated": "Цель SSH"
+    },
+    {
+      "id": "native.apple.e817b77dd5751910",
+      "source": "Identity file",
+      "translated": "Файл идентификации"
+    },
+    {
+      "id": "native.apple.1d7afbe829a31e8d",
+      "source": "SSH host key policy",
+      "translated": "Политика ключей хоста SSH"
+    },
+    {
+      "id": "native.apple.ba3cf88d2dadb205",
+      "source": "Gateway token",
+      "translated": "Токен Gateway"
+    },
+    {
+      "id": "native.apple.83779c40a38ec48e",
+      "source": "Use file version",
+      "translated": "Использовать версию из файла"
+    },
+    {
+      "id": "native.apple.eab4dbc3ca4a9352",
+      "source": "Keep my edits",
+      "translated": "Сохранить мои изменения"
+    },
+    {
       "id": "native.apple.db0fa6b60bd859f8",
       "source": ":\\(endpoint.port)",
       "translated": ":\\(endpoint.port)"
@@ -21949,6 +22004,11 @@
       "translated": "Скопировать параметры настройки"
     },
     {
+      "id": "native.apple.c90ec3f0f60d21bc",
+      "source": "Choose a different AI…",
+      "translated": "Выбрать другой ИИ…"
+    },
+    {
       "id": "native.apple.e0458fcb8c0536ea",
       "source": "No usable AI access found on this Gateway",
       "translated": "На этом Gateway не найден пригодный доступ к ИИ"
@@ -22179,26 +22239,6 @@
       "translated": "Скопировать ошибку"
     },
     {
-      "id": "native.apple.7dee24e5bf088dd5",
-      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
-      "translated": "Не удалось импортировать \\(incomplete) \\(Self.memoryNoun(incomplete))."
-    },
-    {
-      "id": "native.apple.84189c39ea5803c6",
-      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
-      "translated": "Gateway вернул несогласованный план провайдера. Попробуйте составить план ещё раз."
-    },
-    {
-      "id": "native.apple.4c9e75d64cbc5cc2",
-      "source": "The Gateway did not return a usable import plan. Try planning again.",
-      "translated": "Gateway не вернул пригодный план импорта. Попробуйте составить план ещё раз."
-    },
-    {
-      "id": "native.apple.2070bf43a67680ee",
-      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
-      "translated": "Gateway не удалось спланировать \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Повторите попытку."
-    },
-    {
       "id": "native.apple.ba758aa97c24ffe6",
       "source": "Wake up, my friend!",
       "translated": "Проснись, мой друг!"
@@ -22249,7 +22289,12 @@
       "translated": "Рекомендуется"
     },
     {
-      "id": "native.apple.78d1ad73762a7ce8",
+      "id": "native.apple.6ed12b86d399b69d",
+      "source": "Authenticate with your Gateway",
+      "translated": "Аутентификация через Gateway"
+    },
+    {
+      "id": "native.apple.e319780979ae71d1",
       "source": "Connect your AI",
       "translated": "Подключите свой ИИ"
     },
@@ -22257,106 +22302,6 @@
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "Назад"
-    },
-    {
-      "id": "native.apple.7ca0977d5f73356d",
-      "source": "Bring your memories along",
-      "translated": "Перенесите свои воспоминания"
-    },
-    {
-      "id": "native.apple.b57ee4f83cff23f3",
-      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
-      "translated": "OpenClaw может перенести полезный контекст из уже используемых вами инструментов ИИ в нового помощника."
-    },
-    {
-      "id": "native.apple.46cab71d748860b8",
-      "source": "Looking for memories…",
-      "translated": "Поиск воспоминаний…"
-    },
-    {
-      "id": "native.apple.c9e5f1aebe85e201",
-      "source": "Checking supported AI tools on this Mac.",
-      "translated": "Проверка поддерживаемых инструментов ИИ на этом Mac."
-    },
-    {
-      "id": "native.apple.77290f36f36f00e5",
-      "source": "No memories to import",
-      "translated": "Нет воспоминаний для импорта"
-    },
-    {
-      "id": "native.apple.e5cca7b9f082ace9",
-      "source": "You can import memories later from the dashboard.",
-      "translated": "Воспоминания можно импортировать позже с панели управления."
-    },
-    {
-      "id": "native.apple.963add2f12fd18cb",
-      "source": "Import memories",
-      "translated": "Импортировать воспоминания"
-    },
-    {
-      "id": "native.apple.9db369e036a38a29",
-      "source": "Importing memories…",
-      "translated": "Импорт воспоминаний…"
-    },
-    {
-      "id": "native.apple.71b8e38a5e7040ef",
-      "source": "Refresh plan",
-      "translated": "Обновить план"
-    },
-    {
-      "id": "native.apple.e87bec72cb9c9dbf",
-      "source": "Retry pending imports before refreshing the plan.",
-      "translated": "Перед обновлением плана повторите попытку незавершённого импорта."
-    },
-    {
-      "id": "native.apple.f678888102fded6e",
-      "source": "You can skip this and import later from the dashboard’s Memory import page.",
-      "translated": "Этот шаг можно пропустить и выполнить импорт позже на странице «Импорт воспоминаний» панели управления."
-    },
-    {
-      "id": "native.apple.36108528c6acc448",
-      "source": "\\(provider.alreadyImportedCount) already imported",
-      "translated": "Уже импортировано: \\(provider.alreadyImportedCount)"
-    },
-    {
-      "id": "native.apple.9b3444de8c9b2acc",
-      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
-      "translated": "Импортировано: \\(result.migrated) \\(self.memoryLabel(result.migrated))."
-    },
-    {
-      "id": "native.apple.3252fea4dac8669a",
-      "source": "Couldn’t check for memories",
-      "translated": "Не удалось проверить наличие воспоминаний"
-    },
-    {
-      "id": "native.apple.d371deb696de9e6b",
-      "source": "Retry",
-      "translated": "Повторить"
-    },
-    {
-      "id": "native.apple.406ae454540725d0",
-      "source": "You can do this later from the dashboard’s Memory import page.",
-      "translated": "Это можно сделать позже на странице «Импорт воспоминаний» панели управления."
-    },
-    {
-      "id": "native.apple.d1b5d99f67dae42e",
-      "source": "Your memories are ready",
-      "translated": "Ваши воспоминания готовы"
-    },
-    {
-      "id": "native.apple.6dbe5b174271b62a",
-      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
-      "translated": "Импортировано \\(imported) \\(self.memoryLabel(imported)) в OpenClaw."
-    },
-    {
-      "id": "native.apple.d47b887f98e13e24",
-      "source": "\\(result.migrated) imported",
-      "translated": "Импортировано: \\(result.migrated)"
-    },
-    {
-      "id": "native.apple.6ac3d513f0ec5da7",
-      "source": "You can manage imported memories anytime from the dashboard.",
-      "translated": "Импортированными воспоминаниями можно управлять в любое время на панели управления."
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
@@ -23584,14 +23529,14 @@
       "translated": "Для этого устройства требуется подтверждение сопряжения"
     },
     {
-      "id": "native.apple.b52cb4aae7ca6573",
-      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`.",
-      "translated": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+      "id": "native.apple.90b00f3f5418b439",
+      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then paste its output.",
+      "translated": "Вставьте токен, настроенный на хосте Gateway. На хосте Gateway выполните `openclaw gateway auth-token --show` в интерактивном терминале, затем вставьте вывод."
     },
     {
-      "id": "native.apple.bbb87d21ce8a291e",
-      "source": "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again.",
-      "translated": "Проверьте `gateway.auth.token` или `OPENCLAW_GATEWAY_TOKEN` на хосте gateway и повторите попытку."
+      "id": "native.apple.b79d3c42bd5438d5",
+      "source": "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then replace the token and try again.",
+      "translated": "На хосте Gateway выполните `openclaw gateway auth-token --show` в интерактивном терминале, затем замените токен и повторите попытку."
     },
     {
       "id": "native.apple.c26f61d639591f81",
@@ -23614,14 +23559,14 @@
       "translated": "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
     },
     {
-      "id": "native.apple.e73170e4ab1dbe8f",
-      "source": "This gateway requires an auth token from the gateway host.",
-      "translated": "Для этого gateway требуется токен аутентификации с хоста gateway."
+      "id": "native.apple.a1cb5542806f0ec9",
+      "source": "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "Для этого Gateway требуется токен аутентификации. Выполните openclaw gateway auth-token --show на хосте Gateway."
     },
     {
-      "id": "native.apple.e3f983b8c517da29",
-      "source": "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host.",
-      "translated": "Несоответствие токена gateway. Проверьте gateway.auth.token или OPENCLAW_GATEWAY_TOKEN на хосте gateway."
+      "id": "native.apple.e12c96574b97ed4a",
+      "source": "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "Несоответствие токена Gateway. Выполните openclaw gateway auth-token --show на хосте Gateway."
     },
     {
       "id": "native.apple.cd96754a96e5aa35",

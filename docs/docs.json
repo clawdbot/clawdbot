@@ -1110,6 +1110,7 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/daytona",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
                   "install/exe-dev",
@@ -1725,6 +1726,7 @@
                 "pages": [
                   "gateway/remote",
                   "gateway/remote-gateway-readme",
+                  "gateway/stable-https-url",
                   "gateway/tailscale"
                 ]
               },

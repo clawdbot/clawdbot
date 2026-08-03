@@ -10,10 +10,12 @@ import {
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
+  getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
   persistedMessageEntryId,
   resetChatThreadState,
+  setExpansionState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
@@ -2584,6 +2586,48 @@ describe("buildCachedChatItems", () => {
     expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
   });
 
+  it("renders one live card when active history contains the same tool call block", () => {
+    const groups = messageGroups({
+      runId: "run-live",
+      messages: [
+        { role: "user", content: "Read the file.", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "I will read it." },
+            {
+              type: "toolCall",
+              id: "call-read",
+              name: "read",
+              arguments: { path: "README.md" },
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      toolMessages: [
+        {
+          role: "assistant",
+          runId: "run-live",
+          toolCallId: "call-read",
+          content: [{ type: "toolcall", name: "read", arguments: { path: "README.md" } }],
+          timestamp: 3,
+        },
+      ],
+    });
+
+    const cards = groups.flatMap((group, index) =>
+      group.messages.flatMap((entry) => extractToolCards(entry.message, `restored-${index}`)),
+    );
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ callId: "call-read", name: "read" });
+    expect(
+      groups.some((group) =>
+        firstMessageContent(group).some((block) => requireRecord(block).text === "I will read it."),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps same-millisecond stream segments interleaved with their matching tool cards", () => {
     const items = buildCachedChatItems(
       createProps({
@@ -3582,6 +3626,448 @@ describe("tool expansion state", () => {
     syncToolCardExpansionState("tool-name-session", [group], true);
 
     expect(getExpandedToolCards("tool-name-session").get("toolmsg:tool-name-result")).toBe(true);
+  });
+});
+
+describe("expansion-state render dependencies", () => {
+  it("reads unchanged tool and user expansion maps without locale sorting", () => {
+    resetChatThreadState();
+    const tools = getExpandedToolCards("fast-session");
+    const users = getExpandedUserMessages("fast-session");
+    for (let index = 0; index < 128; index += 1) {
+      setExpansionState(tools, `tool-${127 - index}`, index % 2 === 0);
+      setExpansionState(users, `user-${127 - index}`, index % 2 === 0);
+    }
+    const compare = vi.spyOn(String.prototype, "localeCompare");
+    try {
+      for (let render = 0; render < 3; render += 1) {
+        expect(getExpansionStateVersion(tools)).toBe(tools.size);
+        expect(getExpansionStateVersion(users)).toBe(users.size);
+      }
+      expect(compare.mock.calls.length).toBe(0);
+    } finally {
+      compare.mockRestore();
+    }
+  });
+
+  it("invalidates same-size toggles but keeps no-op updates stable", () => {
+    resetChatThreadState();
+    const cards = getExpandedToolCards("version-session");
+    expect(getExpansionStateVersion(cards)).toBe(0);
+
+    setExpansionState(cards, "card", false);
+    const initializedVersion = getExpansionStateVersion(cards);
+    expect(initializedVersion).toBe(1);
+
+    setExpansionState(cards, "card", false);
+    expect(getExpansionStateVersion(cards)).toBe(initializedVersion);
+
+    setExpansionState(cards, "card", true);
+    expect(getExpansionStateVersion(cards)).toBe(initializedVersion + 1);
+    expect(getExpandedToolCards("version-session").size).toBe(1);
+  });
+
+  it("shares user-message render versions across equivalent session aliases", () => {
+    resetChatThreadState();
+    setExpansionState(getExpandedUserMessages("main"), "user-message", true);
+
+    expect(getExpansionStateVersion(getExpandedUserMessages("main"))).toBe(1);
+    expect(getExpansionStateVersion(getExpandedUserMessages("agent:main:main"))).toBe(1);
+
+    setExpansionState(getExpandedUserMessages("agent:main:main"), "user-message", false);
+    expect(getExpansionStateVersion(getExpandedUserMessages("main"))).toBe(2);
+    expect(getExpandedUserMessages("main").get("user-message")).toBe(false);
+  });
+
+  it("keeps expanded disclosures while transcript search temporarily hides them", () => {
+    resetChatThreadState();
+    const sessionKey = "search-preserves-disclosures";
+    const messages = [
+      { role: "user", content: "hidden user prompt" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "hidden assistant reply" },
+          { type: "toolcall", id: "search-hidden-call", name: "browser.open" },
+        ],
+      },
+      { role: "user", content: "needle" },
+    ];
+    const unfiltered = buildCachedChatItems(createProps({ sessionKey, messages }));
+    syncToolCardExpansionState(sessionKey, unfiltered, false);
+    const tools = getExpandedToolCards(sessionKey);
+    const cardId = expectDefined(
+      [...tools.keys()].find((key) => key.includes(":toolcard:")),
+      "unfiltered transcript tool card",
+    );
+    setExpansionState(tools, cardId, true);
+    const users = getExpandedUserMessages(sessionKey);
+    const hiddenUserGroup = expectDefined(
+      unfiltered.find(
+        (item): item is MessageGroup => item.kind === "group" && item.role === "user",
+      ),
+      "unfiltered transcript user group",
+    );
+    const hiddenUserId = expectDefined(hiddenUserGroup.messages[0]?.key, "hidden user message");
+    setExpansionState(users, hiddenUserId, true);
+
+    const filtered = buildCachedChatItems(
+      createProps({ sessionKey, messages, searchOpen: true, searchQuery: "needle" }),
+    );
+    expect(filtered).not.toBe(unfiltered);
+    expect(filtered.every((item) => item.kind !== "group" || item.role !== "assistant")).toBe(true);
+    syncToolCardExpansionState(sessionKey, filtered, false, true);
+
+    expect(tools.get(cardId)).toBe(true);
+    expect(users.get(hiddenUserId)).toBe(true);
+
+    const restored = buildCachedChatItems(createProps({ sessionKey, messages }));
+    syncToolCardExpansionState(sessionKey, restored, false);
+
+    expect(tools.get(cardId)).toBe(true);
+    expect(users.get(hiddenUserId)).toBe(true);
+  });
+
+  it("prunes cards removed during search when the same visible projection becomes complete", () => {
+    resetChatThreadState();
+    const sessionKey = "search-removes-hidden-card";
+    const group = (key: string): MessageGroup => ({
+      kind: "group",
+      key,
+      role: "assistant",
+      messages: [
+        {
+          key,
+          message: {
+            role: "assistant",
+            content: [{ type: "toolcall", id: `call-${key}`, name: "browser.open" }],
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    });
+    const hidden = group("hidden-card");
+    const visible = group("visible-card");
+    const visibleProjection = [visible];
+    syncToolCardExpansionState(sessionKey, [hidden, visible], false);
+    const expanded = getExpandedToolCards(sessionKey);
+    const hiddenCardId = "hidden-card:toolcard:0";
+    setExpansionState(expanded, hiddenCardId, true);
+
+    syncToolCardExpansionState(sessionKey, visibleProjection, false, true);
+    expect(expanded.get(hiddenCardId)).toBe(true);
+    const filteredVersion = getExpansionStateVersion(expanded);
+
+    syncToolCardExpansionState(sessionKey, visibleProjection, false);
+
+    expect(expanded.has(hiddenCardId)).toBe(false);
+    expect(expanded.has("visible-card:toolcard:0")).toBe(true);
+    expect(getExpansionStateVersion(expanded)).toBe(filteredVersion + 1);
+  });
+
+  it("auto-expands retained cards hidden while transcript search is active", () => {
+    resetChatThreadState();
+    const sessionKey = "search-auto-expands-hidden-cards";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "hidden assistant reply" },
+          { type: "toolcall", id: "hidden-call", name: "browser.open" },
+        ],
+      },
+      { role: "user", content: "another turn" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "needle visible reply" },
+          { type: "toolcall", id: "visible-call", name: "browser.open" },
+        ],
+      },
+    ];
+    const complete = buildCachedChatItems(createProps({ sessionKey, messages }));
+    syncToolCardExpansionState(sessionKey, complete, false);
+    const expanded = getExpandedToolCards(sessionKey);
+    const cardIds = [...expanded.keys()];
+    const hiddenCardId = expectDefined(cardIds[0], "hidden retained card");
+    const visibleCardId = expectDefined(cardIds[1], "visible retained card");
+
+    const filtered = buildCachedChatItems(
+      createProps({ sessionKey, messages, searchOpen: true, searchQuery: "needle" }),
+    );
+    syncToolCardExpansionState(sessionKey, filtered, false, true);
+    expect(expanded.get(hiddenCardId)).toBe(false);
+    expect(expanded.get(visibleCardId)).toBe(false);
+
+    syncToolCardExpansionState(sessionKey, filtered, true, true);
+
+    expect(expanded.get(hiddenCardId)).toBe(true);
+    expect(expanded.get(visibleCardId)).toBe(true);
+    syncToolCardExpansionState(
+      sessionKey,
+      buildCachedChatItems(createProps({ sessionKey, messages })),
+      true,
+    );
+    expect(expanded.get(hiddenCardId)).toBe(true);
+    expect(expanded.get(visibleCardId)).toBe(true);
+  });
+
+  it("prunes expansion state when a tool card leaves the transcript", () => {
+    resetChatThreadState();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "assistant-pruned",
+      role: "assistant",
+      messages: [
+        {
+          key: "assistant-pruned",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolcall", id: "call-pruned", name: "browser.open" }],
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    syncToolCardExpansionState("prune-session", [group], false);
+    const expanded = getExpandedToolCards("prune-session");
+    expect(expanded.has("assistant-pruned:toolcard:0")).toBe(true);
+    const populatedVersion = getExpansionStateVersion(expanded);
+
+    syncToolCardExpansionState("prune-session", [], false);
+
+    expect(expanded.has("assistant-pruned:toolcard:0")).toBe(false);
+    expect(getExpansionStateVersion(expanded)).toBe(populatedVersion + 1);
+  });
+
+  it("drops render versions with evicted and reset session maps", () => {
+    resetChatThreadState();
+    const evicted = getExpandedToolCards("evicted-session");
+    setExpansionState(evicted, "card", true);
+    for (let index = 0; index < 20; index += 1) {
+      getExpandedToolCards(`other-session-${index}`);
+    }
+
+    expect(getExpandedToolCards("evicted-session")).not.toBe(evicted);
+    expect(getExpansionStateVersion(getExpandedToolCards("evicted-session"))).toBe(0);
+
+    setExpansionState(getExpandedUserMessages("reset-session"), "message", true);
+    resetChatThreadState();
+    expect(getExpansionStateVersion(getExpandedUserMessages("reset-session"))).toBe(0);
+  });
+
+  it("keeps mounted disclosure handlers attached to recreated session expansion maps", async () => {
+    resetChatThreadState();
+    const { builtinEnvironments } = await import("vitest/runtime");
+    const fixtureGlobals = ["Request", "URL", "jsdom"] as const;
+    const originalFixtureGlobals = fixtureGlobals.map(
+      (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
+    );
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    let environment: Awaited<ReturnType<typeof builtinEnvironments.jsdom.setup>> | undefined;
+
+    try {
+      environment = await builtinEnvironments.jsdom.setup(globalThis, {
+        jsdom: { url: "http://localhost/", pretendToBeVisual: true },
+      });
+      const [{ render }, { ChatTranscriptController, resetChatThreadPresentationState }] =
+        await Promise.all([import("lit"), import("./components/chat-thread.ts")]);
+      const host = {
+        addController() {},
+        removeController() {},
+        requestUpdate() {},
+        updateComplete: Promise.resolve(true),
+      };
+      const sessionKey = "retained-session";
+      const props = {
+        paneId: "retained-pane",
+        sessionKey,
+        loading: false,
+        messages: [
+          { role: "user", content: "long user message ".repeat(100), timestamp: 1 },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "assistant reply" },
+              { type: "toolcall", id: "retained-call", name: "browser.open" },
+            ],
+            timestamp: 2,
+          },
+        ],
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+        streamStartedAt: null,
+        queue: [],
+        showThinking: false,
+        showToolCalls: true,
+        sessions: null,
+        assistantName: "Molty",
+        assistantAvatar: null,
+        onDraftChange() {},
+        onSend() {},
+      };
+      const controller = new ChatTranscriptController(host);
+      const retainedPane = document.createElement("div");
+      document.body.append(retainedPane);
+      render(controller.render(props), retainedPane);
+      const staleTools = getExpandedToolCards(sessionKey);
+      const staleUsers = getExpandedUserMessages(sessionKey);
+      const previousToolVersion = getExpansionStateVersion(staleTools);
+      const previousUserVersion = getExpansionStateVersion(staleUsers);
+
+      for (let index = 0; index < 20; index += 1) {
+        const alternatePane = document.createElement("div");
+        document.body.append(alternatePane);
+        render(
+          new ChatTranscriptController(host).render({
+            ...props,
+            paneId: `alternate-pane-${index}`,
+            sessionKey: `alternate-session-${index}`,
+          }),
+          alternatePane,
+        );
+      }
+
+      render(controller.render(props), retainedPane);
+      const currentTools = getExpandedToolCards(sessionKey);
+      const currentUsers = getExpandedUserMessages(sessionKey);
+      expect(currentTools).not.toBe(staleTools);
+      expect(currentUsers).not.toBe(staleUsers);
+      expect(getExpansionStateVersion(currentTools)).toBe(previousToolVersion);
+      expect(getExpansionStateVersion(currentUsers)).toBe(previousUserVersion);
+      const toolCardId = expectDefined(currentTools.keys().next().value, "retained tool card");
+      expectDefined(
+        retainedPane.querySelector<HTMLButtonElement>(
+          ".chat-group.user .chat-message-disclosure__toggle",
+        ),
+        "mounted user disclosure",
+      ).click();
+      expectDefined(
+        retainedPane.querySelector<HTMLButtonElement>(".chat-tool-msg-summary"),
+        "mounted tool disclosure",
+      ).click();
+
+      expect(currentTools.get(toolCardId)).toBe(true);
+      expect(staleTools.get(toolCardId)).toBe(false);
+      expect(currentUsers.size).toBe(1);
+      expect(staleUsers.size).toBe(0);
+
+      const toolVisibilitySession = "tool-visibility-session";
+      const toolVisibilityProps = {
+        ...props,
+        paneId: "tool-visibility-pane",
+        sessionKey: toolVisibilitySession,
+        messages: [
+          { role: "user", content: "tool visibility prompt", timestamp: 1 },
+          {
+            role: "toolResult",
+            toolCallId: "expanded-tool",
+            toolName: "browser.open",
+            content: "Expanded tool result",
+            timestamp: 2,
+          },
+          { role: "assistant", content: "The first tool completed.", timestamp: 3 },
+          { role: "user", content: "Show the next tool result.", timestamp: 4 },
+          {
+            role: "toolResult",
+            toolCallId: "collapsed-tool",
+            toolName: "browser.open",
+            content: "Collapsed tool result",
+            timestamp: 5,
+          },
+        ],
+      };
+      const toolVisibilityController = new ChatTranscriptController(host);
+      const toolVisibilityPane = document.createElement("div");
+      document.body.append(toolVisibilityPane);
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      const visibilityState = getExpandedToolCards(toolVisibilitySession);
+      const visibilityIds = [...visibilityState.keys()].filter((key) => key.startsWith("toolmsg:"));
+      const expandedToolId = expectDefined(visibilityIds[0], "expanded standalone tool disclosure");
+      const collapsedToolId = expectDefined(
+        visibilityIds[1],
+        "collapsed standalone tool disclosure",
+      );
+      const disclosureButtons = () =>
+        Array.from(
+          toolVisibilityPane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary"),
+        ).filter((button) => !button.closest(".chat-tool-msg-body"));
+      expect(disclosureButtons()).toHaveLength(2);
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "false",
+        "false",
+      ]);
+      expectDefined(disclosureButtons()[0], "first mounted tool disclosure").click();
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "false",
+      ]);
+
+      render(
+        toolVisibilityController.render({ ...toolVisibilityProps, showToolCalls: false }),
+        toolVisibilityPane,
+      );
+      expect(disclosureButtons()).toHaveLength(0);
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+
+      expect(disclosureButtons()).toHaveLength(2);
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "false",
+      ]);
+      expect(visibilityState.get(expandedToolId)).toBe(true);
+      expect(visibilityState.get(collapsedToolId)).toBe(false);
+      render(
+        toolVisibilityController.render({
+          ...toolVisibilityProps,
+          messages: toolVisibilityProps.messages.filter(
+            (message) => !("toolCallId" in message && message.toolCallId === "expanded-tool"),
+          ),
+        }),
+        toolVisibilityPane,
+      );
+      expect(visibilityState.has(expandedToolId)).toBe(false);
+      expect(visibilityState.get(collapsedToolId)).toBe(false);
+      resetChatThreadPresentationState();
+    } finally {
+      try {
+        if (environment) {
+          try {
+            document.body.replaceChildren();
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, 0);
+            });
+          } finally {
+            await environment.teardown(globalThis);
+          }
+        }
+      } finally {
+        // Vitest assigns these compatibility globals after its own restore snapshot.
+        for (const [name, descriptor] of originalFixtureGlobals) {
+          if (descriptor) {
+            Object.defineProperty(globalThis, name, descriptor);
+          } else {
+            Reflect.deleteProperty(globalThis, name);
+          }
+        }
+        resetChatThreadState();
+      }
+    }
+
+    for (const [name, descriptor] of originalFixtureGlobals) {
+      expect(Object.getOwnPropertyDescriptor(globalThis, name)).toEqual(descriptor);
+    }
+    expect(Object.getOwnPropertyDescriptor(globalThis, "document")).toEqual(originalDocument);
+    expect(Object.getOwnPropertyDescriptor(globalThis, "window")).toEqual(originalWindow);
   });
 });
 

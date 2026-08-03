@@ -87,6 +87,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
           sessionEntry: targetSessionEntry,
           sessionStore: params.sessionStore,
           sessionKey: params.sessionKey,
+          allowGatewaySubagentBinding: true,
           ...(params.ctx.RuntimePolicySessionKey
             ? { sandboxSessionKey: params.ctx.RuntimePolicySessionKey }
             : {}),

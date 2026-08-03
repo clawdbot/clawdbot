@@ -154,6 +154,8 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       {
         channel: "chromium",
         headless: true,
+        // Playwright disables extensions by default, which overrides the unpacked fixture below.
+        ignoreDefaultArgs: ["--disable-extensions"],
         args: [
           "--enable-unsafe-extension-debugging",
           `--disable-extensions-except=${unpackedExtension}`,

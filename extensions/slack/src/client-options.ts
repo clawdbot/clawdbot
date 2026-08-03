@@ -6,6 +6,7 @@ import {
   resolveFetch,
   resolveEnvHttpProxyAgentOptions,
 } from "openclaw/plugin-sdk/fetch-runtime";
+import { isDebugProxyGlobalFetchPatchInstalled } from "openclaw/plugin-sdk/proxy-capture";
 import type { EnvHttpProxyAgent } from "undici";
 
 type SlackUndiciRuntime = Pick<typeof import("undici"), "EnvHttpProxyAgent" | "fetch">;
@@ -57,7 +58,9 @@ export function resolveSlackProxyDispatcher(): SlackProxyDispatcher | undefined 
 function buildSlackFetch(
   dispatcher?: SlackProxyDispatcher,
 ): NonNullable<WebClientOptions["fetch"]> | undefined {
-  if (!dispatcher) {
+  if (!dispatcher || isDebugProxyGlobalFetchPatchInstalled()) {
+    // Debug capture patches global fetch after installing its proxy-aware dispatcher.
+    // A package-owned fetch would bypass capture whenever ambient proxy env is present.
     return resolveFetch() as NonNullable<WebClientOptions["fetch"]> | undefined;
   }
   const { fetch: slackFetch } = loadSlackUndiciRuntime();

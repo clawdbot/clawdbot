@@ -17,6 +17,12 @@ import {
 } from "./accounts.js";
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
+import {
+  mergeWhatsAppAcceptedSendError,
+  requireWhatsAppAcceptedSendResult,
+  withWhatsAppLogicalDeliveryActivity,
+  type WhatsAppSendResult,
+} from "./inbound/send-result.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
 import { isWhatsAppNewsletterJid } from "./normalize.js";
 import {
@@ -24,6 +30,7 @@ import {
   prepareWhatsAppOutboundMedia,
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
+import type { WhatsAppQuotedMessageKey } from "./quoted-message.js";
 import { markdownToWhatsAppChunks, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
@@ -141,18 +148,21 @@ export async function sendMessageWhatsApp(
     audioAsVoice?: boolean;
     forceDocument?: boolean;
     accountId?: string;
-    quotedMessageKey?: {
-      id: string;
-      remoteJid: string;
-      fromMe: boolean;
-      participant?: string;
-      messageText?: string;
-      media?: import("openclaw/plugin-sdk/channel-inbound").MediaPlaceholderTextFact;
-    };
+    quotedMessageKey?: WhatsAppQuotedMessageKey;
     preserveLeadingWhitespace?: boolean;
     /** Report each accepted internal platform send before the next fallible send. */
     onDeliveryResult?: (result: { messageId: string; toJid: string }) => Promise<void> | void;
   },
+): Promise<{ messageId: string; toJid: string }> {
+  return await withWhatsAppLogicalDeliveryActivity(() =>
+    sendMessageWhatsAppInActivityScope(to, body, options),
+  );
+}
+
+async function sendMessageWhatsAppInActivityScope(
+  to: string,
+  body: string,
+  options: Parameters<typeof sendMessageWhatsApp>[2],
 ): Promise<{ messageId: string; toJid: string }> {
   let text = options.preserveLeadingWhitespace ? body : normalizeWhatsAppPayloadText(body);
   const jid = toWhatsappJid(to);
@@ -200,6 +210,7 @@ export async function sendMessageWhatsApp(
     correlationId,
     to: redactedTo,
   });
+  const acceptedResults: WhatsAppSendResult[] = [];
   try {
     const redactedJid = redactIdentifier(jid);
     let mediaBuffer: Buffer | undefined;
@@ -267,10 +278,13 @@ export async function sendMessageWhatsApp(
             accountId,
           }
         : undefined;
-    const result = sendOptions
-      ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
-      : await active.sendMessage(to, text, mediaBuffer, mediaType);
-    const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
+    const result = requireWhatsAppAcceptedSendResult(
+      sendOptions
+        ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
+        : await active.sendMessage(to, text, mediaBuffer, mediaType),
+    );
+    acceptedResults.push(result);
+    const messageId = result.messageId;
     const sentRemoteJid = resolveActualSentRemoteJid(result, jid);
     const trailingTextChunks = [visibleTextAfterVoice, ...textChunks].filter(
       (chunk): chunk is string => Boolean(chunk),
@@ -280,11 +294,14 @@ export async function sendMessageWhatsApp(
       // cannot replay already-delivered media or text chunks.
       await options.onDeliveryResult?.({ messageId, toJid: sentRemoteJid });
       for (const trailingText of trailingTextChunks) {
-        const trailingResult = sendOptions
-          ? await active.sendMessage(to, trailingText, undefined, undefined, sendOptions)
-          : await active.sendMessage(to, trailingText, undefined, undefined);
+        const trailingResult = requireWhatsAppAcceptedSendResult(
+          sendOptions
+            ? await active.sendMessage(to, trailingText, undefined, undefined, sendOptions)
+            : await active.sendMessage(to, trailingText, undefined, undefined),
+        );
+        acceptedResults.push(trailingResult);
         await options.onDeliveryResult?.({
-          messageId: (trailingResult as { messageId?: string })?.messageId ?? "unknown",
+          messageId: trailingResult.messageId,
           toJid: resolveActualSentRemoteJid(trailingResult, jid),
         });
       }
@@ -297,7 +314,12 @@ export async function sendMessageWhatsApp(
     return { messageId, toJid: sentRemoteJid };
   } catch (err) {
     logger.error({ err: String(err), to: redactedTo, hasMedia }, "failed to send via web session");
-    throw err;
+    const firstAccepted = acceptedResults[0];
+    throw mergeWhatsAppAcceptedSendError({
+      error: err,
+      kind: firstAccepted?.kind ?? (hasMedia ? "media" : "text"),
+      results: acceptedResults,
+    });
   }
 }
 
@@ -401,8 +423,8 @@ export async function sendPollWhatsApp(
     if (!isWhatsAppNewsletterJid(jid)) {
       await active.assertSendReady?.(to);
     }
-    const result = await active.sendPoll(to, normalized);
-    const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
+    const result = requireWhatsAppAcceptedSendResult(await active.sendPoll(to, normalized));
+    const messageId = result.messageId;
     const durationMs = Date.now() - startedAt;
     outboundLog.info(`Sent poll ${messageId} -> ${redactedJid} (${durationMs}ms)`);
     logger.info({ jid: redactedJid, messageId }, "sent poll");

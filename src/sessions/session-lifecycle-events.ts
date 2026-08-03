@@ -1,4 +1,5 @@
 /** Session lifecycle event broadcast to observers when a session is created or linked. */
+import { resolveGlobalSet } from "../shared/global-singleton.js";
 export type SessionLifecycleEvent = {
   sessionKey: string;
   reason: string;
@@ -27,8 +28,14 @@ export type SessionIdentityMutationListener = (mutation: SessionIdentityMutation
 
 type SessionLifecycleListener = (event: SessionLifecycleEvent) => void;
 
-const SESSION_LIFECYCLE_LISTENERS = new Set<SessionLifecycleListener>();
-const SESSION_IDENTITY_MUTATION_LISTENERS = new Set<SessionIdentityMutationListener>();
+const SESSION_LIFECYCLE_LISTENERS = resolveGlobalSet<SessionLifecycleListener>(
+  Symbol.for("openclaw.sessionLifecycleEventListeners"),
+  "close-and-restart",
+);
+const SESSION_IDENTITY_MUTATION_LISTENERS = resolveGlobalSet<SessionIdentityMutationListener>(
+  Symbol.for("openclaw.sessionIdentityMutationListeners"),
+  "close-and-restart",
+);
 
 /** Registers a session lifecycle listener. */
 export function onSessionLifecycleEvent(listener: SessionLifecycleListener): () => void {

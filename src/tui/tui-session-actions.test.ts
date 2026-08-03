@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
+import { createEventHandlers } from "./tui-event-handlers.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
@@ -13,7 +14,7 @@ import {
   getPendingSubmitDraft,
   type TuiPendingSubmit,
 } from "./tui-submit-state.js";
-import type { TuiStateAccess } from "./tui-types.js";
+import type { TuiHistoryLoadResult, TuiStateAccess } from "./tui-types.js";
 
 describe("tui session actions", () => {
   const sendingSubmit = (runId: string, draftText = "pending"): TuiPendingSubmit => ({
@@ -1201,6 +1202,110 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
   });
 
+  it("retires the previous session run before adopting and finalizing a restored run", async () => {
+    vi.useFakeTimers();
+    try {
+      const previousSessionKey = "agent:main:previous";
+      const nextSessionKey = "agent:main:next";
+      const previousRunId = "run-previous";
+      const nextRunId = "run-next";
+      const state = createBaseState({
+        currentSessionKey: previousSessionKey,
+        currentSessionId: "session-previous",
+        historyLoaded: true,
+      });
+      const chatLog = new ChatLog();
+      const addPendingSystem = vi.spyOn(chatLog, "addPendingSystem");
+      const tui = { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI;
+      const setActivityStatus = vi.fn((status: string) => {
+        state.activityStatus = status;
+      });
+      let loadSelectedHistory: () => Promise<TuiHistoryLoadResult> = async () => ({
+        loaded: false,
+      });
+      const handlers = createEventHandlers({
+        chatLog,
+        btw: createBtwPresenter(),
+        tui,
+        state,
+        setActivityStatus,
+        loadHistory: () => loadSelectedHistory(),
+        streamingWatchdogMs: 100,
+      });
+      handlers.handleChatEvent({
+        runId: previousRunId,
+        sessionKey: previousSessionKey,
+        seq: 1,
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: "old partial" }] },
+      });
+      expect(state.activeChatRunId).toBe(previousRunId);
+
+      const actions = createTestSessionActions({
+        client: {
+          listSessions: vi.fn(),
+          loadHistory: vi.fn().mockResolvedValue({
+            sessionId: "session-next",
+            sessionInfo: {
+              key: nextSessionKey,
+              sessionId: "session-next",
+              updatedAt: 1,
+            },
+            messages: [],
+            inFlightRun: { runId: nextRunId, text: "new partial" },
+          }),
+        } as unknown as TuiBackend,
+        chatLog,
+        state,
+        tui,
+        setActivityStatus,
+        invalidateRunOwnership: handlers.dispose,
+      });
+      loadSelectedHistory = actions.loadHistory;
+
+      await actions.setSession(nextSessionKey);
+      expect(state.activeChatRunId).toBe(nextRunId);
+
+      handlers.handleChatEvent({
+        runId: nextRunId,
+        sessionKey: nextSessionKey,
+        seq: 2,
+        state: "final",
+        message: { role: "assistant", content: [{ type: "text", text: "new final" }] },
+      });
+
+      expect(state.activeChatRunId).toBeNull();
+      expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+      vi.advanceTimersByTime(101);
+      expect(addPendingSystem).not.toHaveBeenCalled();
+      handlers.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves run ownership when reloading the same session selection", async () => {
+    const sessionKey = "agent:main:main";
+    const invalidateRunOwnership = vi.fn();
+    const state = createBaseState({ currentSessionKey: sessionKey });
+    const { setSession } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory: vi.fn().mockResolvedValue({
+          sessionId: "session-main",
+          sessionInfo: { key: sessionKey, sessionId: "session-main" },
+          messages: [],
+        }),
+      } as unknown as TuiBackend,
+      state,
+      invalidateRunOwnership,
+    });
+
+    await setSession(sessionKey);
+
+    expect(invalidateRunOwnership).not.toHaveBeenCalled();
+  });
+
   it("adopts an in-flight run with no buffered text (Codex) and shows streaming", async () => {
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-bg",
@@ -1262,6 +1367,64 @@ describe("tui session actions", () => {
     expect(updateAssistant).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBeNull();
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+  });
+
+  it("replaces session-scoped modes when switching to a session without overrides", async () => {
+    const state = createBaseState({
+      currentSessionKey: "agent:main:source",
+      sessionInfo: {
+        fastMode: true,
+        verboseLevel: "full",
+        traceLevel: "raw",
+        reasoningLevel: "stream",
+      },
+    });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionInfo: {
+        key: "agent:main:target",
+        sessionId: "session-target",
+      },
+      messages: [],
+    });
+    const { setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      state,
+    });
+
+    await setSession("agent:main:target");
+
+    expect(state.sessionInfo).toMatchObject({
+      fastMode: undefined,
+      verboseLevel: undefined,
+      traceLevel: undefined,
+      reasoningLevel: undefined,
+    });
+  });
+
+  it("merges a same-session mode patch without clearing untouched modes", () => {
+    const state = createBaseState({
+      sessionInfo: {
+        fastMode: true,
+        verboseLevel: "full",
+        traceLevel: "off",
+        reasoningLevel: "stream",
+      },
+    });
+    const { applySessionInfoFromPatch } = createTestSessionActions({ state });
+
+    applySessionInfoFromPatch({
+      ok: true,
+      path: "/sessions/patch",
+      key: "agent:main:main",
+      entry: { traceLevel: "raw" },
+    });
+
+    expect(state.sessionInfo).toMatchObject({
+      fastMode: true,
+      verboseLevel: "full",
+      traceLevel: "raw",
+      reasoningLevel: "stream",
+    });
   });
 
   it("keeps the newer session when an earlier switch's history resolves last", async () => {
@@ -2298,6 +2461,40 @@ describe("tui session actions", () => {
     expect(chatLog.addPendingUser).toHaveBeenCalledWith("optimistic-run", "optimistic prompt");
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("reply");
     expect(result).toEqual({ loaded: true, inFlightRunId: null });
+  });
+
+  it("restores attachment-only assistant rows from history without exposing references", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [
+        { role: "assistant", content: [{ type: "image", data: "secret-image" }] },
+        {
+          role: "assistant",
+          content: [{ type: "audio", source: { type: "url", url: "file:///private/audio.mp3" } }],
+        },
+        { role: "assistant", content: [{ type: "video", url: "file:///private/video.mp4" }] },
+        { role: "assistant", content: [{ type: "file", url: "file:///etc/passwd" }] },
+      ],
+    });
+    const chatLog = {
+      addSystem: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      clearAll: vi.fn(),
+    };
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    await runLoadHistory();
+
+    expect(chatLog.finalizeAssistant.mock.calls.map(([text]) => text)).toEqual([
+      "Attached image",
+      "Attached audio",
+      "Attached video",
+      "Attached file",
+    ]);
   });
 
   it("releases a pending submit when reconnect history proves it was accepted", async () => {

@@ -173,6 +173,33 @@ describe("gateway startup benchmark script", () => {
     expect(testing.classifyGatewayReadyLog("[gateway] starting HTTP server...")).toBeNull();
   });
 
+  it("preserves ready and trace records split across output chunks", () => {
+    const chunks = [
+      "[gateway] rea",
+      "dy (0 plugins, 0.8s)\nstartup trace: side",
+      "cars.ready 2.0ms total=7.5ms heapUsedMb=12.0\n",
+    ];
+    let carry = "";
+    const lines: string[] = [];
+    for (const chunk of chunks) {
+      const parsed = testing.collectOutputLines(carry, chunk);
+      carry = parsed.carry;
+      lines.push(...parsed.lines);
+    }
+    const trace: Record<string, number> = {};
+    for (const line of lines) {
+      testing.collectStartupTrace(line, trace);
+    }
+
+    expect(carry).toBe("");
+    expect(lines.map(testing.classifyGatewayReadyLog)).toContain("gateway-ready");
+    expect(trace).toMatchObject({
+      "sidecars.ready": 2,
+      "sidecars.ready.heapUsedMb": 12,
+      "sidecars.ready.total": 7.5,
+    });
+  });
+
   it("summarizes split ready log timings without the ambiguous readyLogMs field", () => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {

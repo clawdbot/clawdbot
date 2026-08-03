@@ -55,7 +55,6 @@ describe("browser client fetch attachOnly diagnostics", () => {
               hung: {
                 cdpUrl: `http://127.0.0.1:${port}`,
                 attachOnly: true,
-                color: "#00AA00",
               },
             },
           },

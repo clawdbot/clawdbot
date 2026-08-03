@@ -44,7 +44,9 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             ifCurrentRoute: route)
         else { return .unavailable(reason: nil) }
         guard supportsRoutingContract else {
-            return .unavailable(reason: OpenClawChatTransportUpgradeMessage.routingContract)
+            return .unavailable(
+                reason: OpenClawChatTransportUpgradeMessage.routingContract,
+                allowsLiveSend: true)
         }
         let transport = self
         guard let routingContract = try? await transport.sessionRoutingContract(ifCurrentRoute: route)

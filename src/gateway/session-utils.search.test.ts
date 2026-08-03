@@ -16,7 +16,8 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { registerAgentRunContext, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {

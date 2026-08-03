@@ -141,14 +141,14 @@ describe("qa scenario catalog", () => {
     expect((discoveryConfig?.requiredFiles as string[] | undefined)?.[0]).toBe(
       "repo/qa/scenarios/index.yaml",
     );
-    expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
-      "will not reveal",
-    );
+    expect(fallbackConfig).not.toHaveProperty("gracefulFallbackAny");
     const fallbackFlow = JSON.stringify(
       readQaScenarioById("memory-failure-fallback").execution.flow,
     );
     expect(fallbackFlow).toContain("liveTurnTimeoutMs(env, 180000)");
     expect(fallbackFlow).toContain('"replacePaths":["tools.deny"]');
+    expect(fallbackFlow).toContain("!tools.has('memory_search')");
+    expect(fallbackFlow).toContain("outbound.text.trim().length > 0");
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
     expect(bundledSkillConfig?.pluginId).toBe("open-prose");
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
@@ -233,9 +233,11 @@ describe("qa scenario catalog", () => {
   it("loads scenario-declared gateway runtime options from YAML", () => {
     const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
     const otelStdout = readQaScenarioById("otel-stdout-log-smoke");
+    const blockedSlack = readQaScenarioById("slack-blocked-lifecycle-no-restart");
 
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
     expect(otelStdout.gatewayRuntime?.preserveDebugArtifacts).toBe(true);
+    expect(blockedSlack.gatewayRuntime?.allowUnhealthyStartup).toBe(true);
   });
 
   it.each([
@@ -687,7 +689,7 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.flow).toBeUndefined();
   });
 
-  it("accepts the update.run producer's blocked evidence without destructive opt-in", async () => {
+  it("keeps the update.run producer blocked without destructive opt-in", async () => {
     const outputDir = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "openclaw-update-run-blocked-"),
     );
@@ -705,7 +707,7 @@ describe("qa scenario catalog", () => {
       });
 
       expect(result.results[0]).toMatchObject({
-        status: "pass",
+        status: "blocked",
         producerEvidence: {
           entries: [
             {

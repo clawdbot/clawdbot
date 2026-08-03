@@ -25,10 +25,24 @@ function payload(runId: string, overrides: Partial<PendingFinalDeliveryPayload> 
   } satisfies PendingFinalDeliveryPayload;
 }
 
-function makeRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+type RunOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunRecord["execution"]["outcome"];
+  execution?: SubagentRunRecord["execution"];
+};
+
+function makeRun(overrides: RunOverrides = {}): SubagentRunRecord {
   const runId = overrides.runId ?? "run-1";
   const childSessionKey = overrides.childSessionKey ?? `agent:main:subagent:${runId}`;
-  const endedAt = overrides.endedAt ?? 2_000;
+  const {
+    startedAt,
+    endedAt: overrideEndedAt,
+    outcome = { status: "ok" },
+    execution,
+    ...recordOverrides
+  } = overrides;
+  const endedAt = overrideEndedAt ?? 2_000;
   return {
     runId,
     childSessionKey,
@@ -37,8 +51,7 @@ function makeRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord 
     task: "inspect the failing flow",
     cleanup: "delete",
     createdAt: overrides.createdAt ?? 1_000,
-    endedAt,
-    outcome: { status: "ok" },
+    execution: execution ?? { status: "terminal", startedAt, endedAt, outcome },
     expectsCompletionMessage: true,
     completion: { required: true, resultText: `result for ${runId}` },
     delivery: {
@@ -46,7 +59,7 @@ function makeRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord 
       createdAt: endedAt + 1,
       payload: payload(runId, { childSessionKey, endedAt }),
     },
-    ...overrides,
+    ...recordOverrides,
   };
 }
 

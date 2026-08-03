@@ -3,7 +3,7 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./session-menu.ts";
-import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
+import type { SessionMenuAction, SessionMenuActionKind, SessionMenuWork } from "./session-menu.ts";
 
 type SessionMenuData = {
   label: string;
@@ -43,6 +43,7 @@ async function mountMenu(
     trigger?: HTMLElement | null;
     onAction?: (action: SessionMenuAction) => void;
     onClose?: () => void;
+    actionDisabledReasons?: Partial<Record<SessionMenuActionKind, string>>;
   } = {},
 ): Promise<SessionMenuElement> {
   const container = document.createElement("div");
@@ -64,6 +65,7 @@ async function mountMenu(
       .anchor=${{ x: 100, y: 100 }}
       .trigger=${options.trigger ?? null}
       .disabled=${false}
+      .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${false}
       .archiveAllowed=${options.archiveAllowed ?? true}
       .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
@@ -115,6 +117,33 @@ async function openIconPicker(menu: SessionMenuElement) {
 }
 
 describe("session menu", () => {
+  it("disables only denied mutation actions and ignores forced selection", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({
+      onAction,
+      actionDisabledReasons: {
+        delete: "This action requires operator.admin access.",
+        "toggle-pin": "This action requires operator.write access.",
+      },
+    });
+    const openChat = menuItem(menu, "Open chat");
+    const pin = menuItem(menu, "Pin thread");
+    const deleteItem = menuItem(menu, "Delete…");
+
+    expect(openChat.disabled).toBe(false);
+    expect(pin.disabled).toBe(true);
+    expect(pin.getAttribute("title")).toBe("This action requires operator.write access.");
+    expect(deleteItem.disabled).toBe(true);
+    deleteItem.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        composed: true,
+        detail: { item: { value: "delete" } },
+      }),
+    );
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
   it("shows when the session was last active", async () => {
     const menu = await mountMenu({ lastActive: "57d" });
 

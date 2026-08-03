@@ -1,6 +1,7 @@
 /** Implementation of `openclaw models list`. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { parseModelRef } from "../../agents/model-selection.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { parseModelRef } from "../../agents/model-selection-normalize.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
@@ -10,11 +11,11 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
+import { ensureFlagCompatibility } from "./list.options.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
-import { DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
@@ -70,6 +71,7 @@ export async function modelsListCommand(
   if (parsedProviderFilter === null) {
     return;
   }
+  const humanReadable = !opts.json && !opts.plain;
   const [
     { loadAuthProfileStoreWithoutExternalProfiles },
     { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
@@ -119,6 +121,30 @@ export async function modelsListCommand(
   // The default configured view remains lazy; full and filtered views share
   // the registry and the same committed model generation as the Gateway.
   const includePreparedCatalog = Boolean(opts.all || providerFilter);
+  const providerDiscoveryProviderIds = (() => {
+    if (opts.all && !providerFilter) {
+      return undefined;
+    }
+    if (providerFilter) {
+      return [providerFilter];
+    }
+    return [
+      ...new Set([
+        ...(authIndex.providerDiscoveryProviderIds ?? []),
+        ...entries.map((entry) => entry.ref.provider),
+        ...Object.keys(cfg.models?.providers ?? {}),
+      ]),
+    ].toSorted((left, right) => left.localeCompare(right));
+  })();
+  const providerRuntimeDiscoveryProviderIds = providerFilter
+    ? [providerFilter]
+    : opts.all
+      ? undefined
+      : [];
+  // Default lists use authenticated providers' authored fallback rows. Live
+  // account discovery remains explicit because it imports full provider runtimes.
+  const providerManifestFallbackProviderIds =
+    !providerFilter && !opts.all ? authIndex.providerDiscoveryProviderIds : undefined;
   const loadRegistryState = async (optsLocal?: {
     normalizeModels?: boolean;
     loadAvailability?: boolean;
@@ -158,11 +184,19 @@ export async function modelsListCommand(
     process.exitCode = 1;
     return;
   }
+  const promotionsModulePromise = humanReadable ? promotionsModuleLoader.load() : undefined;
+  const promotionsRefreshPromise = promotionsModulePromise
+    ?.then((promotionsModule) => promotionsModule.startPromotionsFeedRefresh())
+    .catch(() => undefined);
   const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
     cfg,
     agentId,
     agentDir,
+    inheritedAuthDir: agentDir,
     authIndex,
+    providerDiscoveryProviderIds,
+    providerRuntimeDiscoveryProviderIds,
+    providerManifestFallbackProviderIds,
     availableKeys,
     configuredByKey,
     discoveredKeys,
@@ -204,7 +238,7 @@ export async function modelsListCommand(
   // Promotion decorations are best-effort: claim tags come from local
   // provenance, and the discovery section reads a cadence-gated feed cache.
   // Neither may break the core listing; stale refreshes have a short timeout.
-  const promotionsModule = await promotionsModuleLoader.load();
+  const promotionsModule = await (promotionsModulePromise ?? promotionsModuleLoader.load());
   try {
     promotionsModule.applyPromotionClaimTags(rows);
   } catch {
@@ -215,16 +249,20 @@ export async function modelsListCommand(
   } else {
     printModelTable(rows, runtime, opts);
   }
-  if (!opts.json && !opts.plain) {
+  if (promotionsRefreshPromise) {
     // Runs on the empty listing too: a fresh install with zero configured
     // models is exactly the user passive discovery is for. Compares against
     // the configured entries, not the rendered rows — filtered and --all
     // listings show a different set.
     try {
-      await promotionsModule.printAvailablePromotionsSection({
-        configuredKeys: new Set(entries.map((entry) => entry.key)),
-        runtime,
-      });
+      const refresh = await promotionsRefreshPromise;
+      if (refresh) {
+        await promotionsModule.printAvailablePromotionsSection({
+          configuredKeys: new Set(entries.map((entry) => entry.key)),
+          refresh,
+          runtime,
+        });
+      }
     } catch {
       // Passive discovery must never fail the listing.
     }

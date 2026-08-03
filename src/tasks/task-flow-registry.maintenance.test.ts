@@ -9,6 +9,7 @@ import {
   getTaskFlowById,
   listTaskFlowRecords,
   requestFlowCancel,
+  setFlowWaiting,
 } from "./task-flow-registry.js";
 import {
   getInspectableTaskFlowAuditSummary,
@@ -140,6 +141,115 @@ describe("task-flow-registry maintenance", () => {
         pruned: 1,
       });
       expect(getTaskFlowById(oldFlow.flowId)).toBeUndefined();
+    });
+  });
+
+  it.each(["preview", "apply"] as const)(
+    "preserves old blocked managed flows without an end timestamp during %s maintenance",
+    async (mode) => {
+      await withTaskFlowMaintenanceStateDir(async () => {
+        const blockedAt = Date.now() - 8 * 24 * 60 * 60_000;
+        const flow = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/task-flow-maintenance",
+          goal: "Wait for an external approval",
+          status: "running",
+          createdAt: blockedAt,
+          updatedAt: blockedAt,
+        });
+        const blocked = setFlowWaiting({
+          flowId: flow.flowId,
+          expectedRevision: flow.revision,
+          blockedSummary: "Waiting for an external approval",
+          updatedAt: blockedAt,
+        });
+        expect(blocked.applied).toBe(true);
+        expect(getInspectableTaskFlowAuditSummary().byCode.stale_blocked).toBe(1);
+
+        const maintenance =
+          mode === "preview"
+            ? previewTaskFlowRegistryMaintenance()
+            : await runTaskFlowRegistryMaintenance();
+
+        expect(getTaskFlowById(flow.flowId)).toMatchObject({
+          status: "blocked",
+          blockedSummary: "Waiting for an external approval",
+          updatedAt: blockedAt,
+        });
+        expect(getTaskFlowById(flow.flowId)?.endedAt).toBeUndefined();
+        expect(maintenance).toEqual({ reconciled: 0, pruned: 0 });
+        expect(getInspectableTaskFlowAuditSummary().byCode.stale_blocked).toBe(1);
+      });
+    },
+  );
+
+  it("prunes ended blocked flows without removing resumable managed flows", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const endedAt = Date.now() - 8 * 24 * 60 * 60_000;
+      const endedManaged = createManagedTaskFlow({
+        ownerKey: "agent:main:ended-managed",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Completed managed flow",
+        status: "blocked",
+        blockedSummary: "Completed with a blocked result",
+        createdAt: endedAt,
+        updatedAt: endedAt,
+        endedAt,
+      });
+      const endedMirrored = createFlowRecord({
+        syncMode: "task_mirrored",
+        ownerKey: "agent:main:ended-mirrored",
+        goal: "Completed mirrored flow",
+        status: "blocked",
+        blockedSummary: "Completed with a blocked result",
+        createdAt: endedAt,
+        updatedAt: endedAt,
+        endedAt,
+      });
+      const activeManaged = createManagedTaskFlow({
+        ownerKey: "agent:main:active-managed",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Resume after approval",
+        status: "blocked",
+        blockedSummary: "Waiting for an external approval",
+        createdAt: endedAt,
+        updatedAt: endedAt,
+      });
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 2 });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 2 });
+      expect(getTaskFlowById(endedManaged.flowId)).toBeUndefined();
+      expect(getTaskFlowById(endedMirrored.flowId)).toBeUndefined();
+      expect(getTaskFlowById(activeManaged.flowId)).toMatchObject({ status: "blocked" });
+    });
+  });
+
+  it("finalizes cancel-requested blocked managed flows without active child tasks", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Cancel blocked work",
+        status: "running",
+      });
+      const blocked = setFlowWaiting({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        blockedSummary: "Waiting for an external approval",
+      });
+      if (!blocked.applied) {
+        throw new Error("Expected managed flow to enter its resumable blocked state");
+      }
+      const cancelled = requestFlowCancel({
+        flowId: flow.flowId,
+        expectedRevision: blocked.flow.revision,
+      });
+      expect(cancelled.applied).toBe(true);
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({ reconciled: 1, pruned: 0 });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 1, pruned: 0 });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({ status: "cancelled" });
+      expect(getTaskFlowById(flow.flowId)?.endedAt).toBeTypeOf("number");
     });
   });
 

@@ -34,6 +34,124 @@ describe("CLI startup benchmark script spawners", () => {
     );
   });
 
+  it("reuses warmed state for gateway health while isolating first-device samples", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-state-scope-test-"));
+    try {
+      const fixturePath = path.join(tmpDir, "record-home.mjs");
+      const homeLogPath = path.join(tmpDir, "homes.log");
+      fs.writeFileSync(
+        fixturePath,
+        [
+          'import { appendFileSync } from "node:fs";',
+          "appendFileSync(process.env.OPENCLAW_BENCH_HOME_LOG, `${process.env.HOME}\\n`);",
+          "console.log('{\"ok\":true}');",
+          "",
+        ].join("\n"),
+      );
+
+      const runCase = (caseId: string) => {
+        fs.rmSync(homeLogPath, { force: true });
+        const reportPath = path.join(tmpDir, `${caseId}.json`);
+        execFileSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/bench-cli-startup.ts",
+            "--entry",
+            fixturePath,
+            "--case",
+            caseId,
+            "--runs",
+            "2",
+            "--warmup",
+            "1",
+            "--output",
+            reportPath,
+          ],
+          {
+            cwd: process.cwd(),
+            env: {
+              ...process.env,
+              OPENCLAW_BENCH_HOME_LOG: homeLogPath,
+            },
+            stdio: "pipe",
+          },
+        );
+        return {
+          homes: fs.readFileSync(homeLogPath, "utf8").trim().split("\n"),
+          report: JSON.parse(fs.readFileSync(reportPath, "utf8")),
+        };
+      };
+
+      const warmed = runCase("gatewayHealthJsonConnected");
+      const warmedHomes = warmed.homes;
+      expect(warmedHomes).toHaveLength(3);
+      expect(new Set(warmedHomes).size).toBe(1);
+      expect(warmedHomes.every((home) => !fs.existsSync(home))).toBe(true);
+      const warmedCase = warmed.report.primary.cases[0];
+      expect(warmedCase.warmupSamples).toHaveLength(1);
+      expect(warmedCase.samples).toHaveLength(2);
+      for (const sample of [...warmedCase.warmupSamples, ...warmedCase.samples]) {
+        expect(new Date(sample.startedAt).toISOString()).toBe(sample.startedAt);
+        expect(new Date(sample.endedAt).toISOString()).toBe(sample.endedAt);
+        expect(Date.parse(sample.endedAt)).toBeGreaterThanOrEqual(Date.parse(sample.startedAt));
+      }
+
+      for (const caseId of ["gatewayHealthJson", "gatewayHealthJsonFirstDevice"]) {
+        const sampleHomes = runCase(caseId).homes;
+        expect(sampleHomes).toHaveLength(3);
+        expect(new Set(sampleHomes).size).toBe(3);
+        expect(sampleHomes.every((home) => !fs.existsSync(home))).toBe(true);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires connected gateway health probes to exit successfully", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-connected-test-"));
+    try {
+      const fixturePath = path.join(tmpDir, "transport-error.mjs");
+      fs.writeFileSync(
+        fixturePath,
+        [
+          'console.log(\'{"ok":false,"gateway_transport_error":"closed"}\');',
+          "process.exitCode = 1;",
+          "",
+        ].join("\n"),
+      );
+
+      const runCase = (caseId: string) =>
+        spawnSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/bench-cli-startup.ts",
+            "--entry",
+            fixturePath,
+            "--case",
+            caseId,
+            "--runs",
+            "1",
+            "--warmup",
+            "0",
+          ],
+          { cwd: process.cwd(), encoding: "utf8" },
+        );
+
+      expect(runCase("gatewayHealthJson").status).toBe(0);
+      for (const caseId of ["gatewayHealthJsonConnected", "gatewayHealthJsonFirstDevice"]) {
+        const result = runCase(caseId);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(`${caseId} sample 1: exited with code 1`);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not require unrelated fixture cases for a narrowed preset", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-budget-test-"));
     try {

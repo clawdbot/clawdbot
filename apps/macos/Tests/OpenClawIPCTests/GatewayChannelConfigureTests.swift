@@ -44,25 +44,11 @@ struct GatewayConnectionTests {
                             try await Task.sleep(nanoseconds: UInt64(helloDelayMs) * 1_000_000)
                         }
                         let id = task.snapshotConnectRequestID() ?? "connect"
-                        return .data(Self.connectOkData(id: id, capabilities: serverCapabilities))
+                        return .data(GatewayWebSocketTestSupport.connectOkData(
+                            id: id,
+                            capabilities: serverCapabilities))
                     })
             })
-    }
-
-    private static func connectOkData(id: String, capabilities: [String]) -> Data {
-        let encodedCapabilities = capabilities.map { "\"\($0)\"" }.joined(separator: ",")
-        return Data(
-            """
-            {
-              "type":"res","id":"\(id)","ok":true,"payload":{
-                "type":"hello-ok","protocol":4,
-                "server":{"version":"test","connId":"test"},
-                "features":{"methods":[],"events":[],"capabilities":[\(encodedCapabilities)]},
-                "snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},
-                "auth":{},"policy":{}
-              }
-            }
-            """.utf8)
     }
 
     private final class ConfigSource: @unchecked Sendable {
@@ -162,7 +148,7 @@ struct GatewayConnectionTests {
                             return .data(GatewayWebSocketTestSupport.connectChallengeData())
                         }
                         let id = task.snapshotConnectRequestID() ?? "connect"
-                        return .data(Self.connectOkData(
+                        return .data(GatewayWebSocketTestSupport.connectOkData(
                             id: id,
                             capabilities: ["openclaw-setup-model-ref"]))
                     })

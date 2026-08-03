@@ -14,6 +14,18 @@ export function deriveTabSessionKey(mainSessionKey, sessionId) {
   return `${base}:thread:browser-copilot-${sessionId.toLowerCase()}`;
 }
 
+/** Keep the human label unique while preserving the session UUID across retries. */
+export function deriveCopilotSessionLabel(sessionKey) {
+  const match =
+    typeof sessionKey === "string"
+      ? sessionKey.match(/:thread:browser-copilot-([0-9a-f-]{36})$/i)
+      : null;
+  if (!match) {
+    throw new Error("Browser copilot session key is invalid.");
+  }
+  return `Browser copilot ${match[1].toLowerCase()}`;
+}
+
 /** Derive the direct Gateway endpoint embedded by the pairing command. */
 export function gatewayUrlFromPairing(relayUrl, explicitGatewayUrl) {
   if (typeof explicitGatewayUrl === "string" && explicitGatewayUrl.trim()) {

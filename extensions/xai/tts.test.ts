@@ -644,4 +644,29 @@ describe("xai tts", () => {
       ).rejects.toThrow("xAI TTS API error (503): temporary upstream outage");
     });
   });
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty audio", contentType: "audio/mpeg", body: "" },
+  ])("rejects a successful $name response as synthesized audio", async ({ contentType, body }) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(body, { status: 200, headers: { "content-type": contentType } }),
+      );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      xaiTTS({
+        text: "hello",
+        apiKey: "ok-key",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        language: "en",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("xAI TTS API error: malformed audio response");
+  });
 });

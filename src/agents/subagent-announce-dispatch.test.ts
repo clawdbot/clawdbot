@@ -45,6 +45,25 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
+  it("does not direct-fallback when steering loses source ownership", async () => {
+    const steer = vi.fn(async () => ({ status: "source_owner_changed" }) as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: false,
+      steer,
+      direct,
+    });
+
+    expect(direct).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "none",
+      reason: "source_owner_changed",
+      terminal: true,
+    });
+  });
+
   it.each([true, false])(
     "never steers when direct delivery is required and direct delivery succeeds: %s",
     async (delivered) => {
@@ -172,6 +191,28 @@ describe("runSubagentAnnounceDispatch", () => {
       { phase: "direct-primary", delivered: false, path: "direct", error: "failed" },
       { phase: "steer-fallback", delivered: false, path: "none", error: undefined },
     ]);
+  });
+
+  it("returns terminal source ownership loss from completion fallback steering", async () => {
+    const steer = vi.fn(async () => ({ status: "source_owner_changed" }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      error: "network",
+    }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "none",
+      reason: "source_owner_changed",
+      terminal: true,
+    });
   });
 
   it("does not fall through to direct delivery when non-completion steering drops the new item", async () => {

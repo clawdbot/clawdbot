@@ -12,11 +12,8 @@ import {
   type ExecApprovalContinuationPromptRange,
 } from "../../agents/bash-tools.exec-approval-output.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
-import {
-  restoreAdmittedRecoveryWithRetries,
-  scheduleAdmittedRecoveryRestore,
-} from "../../agents/main-session-recovery-restore.js";
 import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryPendingTarget,
@@ -444,6 +441,7 @@ export function startAgentRunExecution(params: {
             resolvedSessionKey: params.resolvedSessionKey,
             lifecycleStorePath: prepared.lifecycleStorePath,
             activeSessionAgentId: params.activeSessionAgentId,
+            trustedInternalHandoff: prepared.trustedInternalHandoff,
           }),
           onSessionIdChanged: (sessionId) => {
             if (prepared.activeRunAbort.entry) {
@@ -510,17 +508,16 @@ export function startAgentRunExecution(params: {
           claimId: execApprovalFollowupHandoffClaimId,
         });
         try {
-          if (prepared.restoreAdmittedRestartRecoveryInterrupted) {
-            try {
-              pendingRecovery ??= await restoreAdmittedRecoveryWithRetries(
-                prepared.restoreAdmittedRestartRecoveryInterrupted,
-              );
-            } catch (err) {
-              params.context.logGateway.warn(
-                `failed to restore undispatched restart recovery: ${formatForLog(err)}`,
-              );
-              scheduleAdmittedRecoveryRestore(prepared.restoreAdmittedRestartRecoveryInterrupted);
-            }
+          const restoreAdmittedRecovery = prepared.restoreAdmittedRestartRecoveryInterrupted;
+          if (restoreAdmittedRecovery) {
+            pendingRecovery ??= await repairMainSessionRecoveryMutation({
+              mutation: restoreAdmittedRecovery,
+              onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
+              onError: (err) =>
+                params.context.logGateway.warn(
+                  `failed to restore undispatched restart recovery: ${formatForLog(err)}`,
+                ),
+            });
           }
         } finally {
           try {

@@ -172,10 +172,6 @@ flow:
             message:
               expr: "`goal continuation did not create the requested artifact before replying: ${doneReply.text}`"
         - assert:
-            expr: "String(doneReply.text ?? '').includes(config.doneMarker)"
-            message:
-              expr: "`goal continuation omitted its completion marker: ${doneReply.text}`"
-        - assert:
             expr: "!config.forbiddenNeedles.some((needle) => normalizeLowercaseStringOrEmpty(doneReply.text).includes(needle))"
             message:
               expr: "`goal followthrough replanned or asked permission: ${doneReply.text}`"

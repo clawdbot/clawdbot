@@ -76,6 +76,27 @@ and export only when `diagnostics.otel.logs` is explicitly `true`. Log export
 defaults to OTLP; set `diagnostics.otel.logsExporter` to `stdout` for JSONL on
 stdout, or `both` for both.
 
+## Which processes export
+
+- **Gateway** starts the exporter at startup and exports from the Gateway
+  process for every run it executes, including `openclaw agent` turns
+  dispatched to it.
+- **One-shot local runs** (`openclaw agent --local`) execute in the CLI
+  process. When OTel export is configured and
+  the plugin is enabled, that same CLI process starts one exporter instance for
+  the run and flushes buffered spans, metrics, and logs before the process exits.
+  The CLI waits at most 5 seconds for the diagnostic-event queue to drain and 10
+  more for the flush, so an unreachable collector cannot hold the command open.
+  A collector that accepts the connection but never answers can still delay exit
+  until the exporter's own request timeout (`OTEL_EXPORTER_OTLP_TIMEOUT`).
+  In JSON output mode, these one-shot runs suppress only the stdout JSONL log
+  sink so command stdout stays reserved for the JSON response; OTLP traces,
+  metrics, and logs continue when configured.
+- `openclaw agent exec` also runs the agent embedded in the CLI process, but
+  does not yet start this exporter, so its runs export no telemetry. Dispatch
+  through the Gateway, or use `openclaw agent --local`, when you need traces
+  from a headless run.
+
 ## Configuration reference
 
 ```json5
@@ -90,6 +111,7 @@ stdout, or `both` for both.
       logsEndpoint: "http://otel-collector:4318/v1/logs",
       protocol: "http/protobuf", // grpc disables OTLP export
       serviceName: "openclaw-gateway", // unset falls back to OTEL_SERVICE_NAME, then "openclaw"
+      metricNamePrefix: "acme.", // optional; include the separator
       headers: { "x-collector-token": "..." },
       traces: true,
       metrics: true,
@@ -102,6 +124,18 @@ stdout, or `both` for both.
   },
 }
 ```
+
+`metricNamePrefix` replaces the default `openclaw.` prefix only on
+OpenClaw-owned metrics. For example, `"acme."` exports `openclaw.tokens` as
+`acme.tokens`; set it to `""` to export `tokens` with no prefix. Non-empty
+values must start with an ASCII letter, use only letters, digits, underscores,
+dots, hyphens, and slashes, and contain at most 128 characters. Set it to
+`"acme.openclaw."` if you want `acme.openclaw.tokens`. Standard
+semantic-convention metrics such as
+`gen_ai.client.token.usage` and `gen_ai.client.operation.duration` keep their
+original names. Leave the option unset to preserve every current metric name.
+Enabling or changing this option renames the affected metric series, so update
+dashboards, alerts, and recording rules that query the old names.
 
 ### Environment variables
 

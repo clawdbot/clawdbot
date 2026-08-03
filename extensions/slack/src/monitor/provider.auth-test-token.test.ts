@@ -573,7 +573,7 @@ describe("connected identity health", () => {
         is_enterprise_install: false,
       },
       config: undefined,
-      expected: { healthState: "healthy", lastError: null },
+      expected: { lifecycle: "ready", lastError: null },
     },
     {
       name: "user-token identity",
@@ -584,7 +584,7 @@ describe("connected identity health", () => {
       },
       config: undefined,
       expected: {
-        healthState: "degraded",
+        lifecycle: "blocked",
         lastError: expect.stringContaining("without bot_id"),
       },
     },
@@ -603,7 +603,7 @@ describe("connected identity health", () => {
           },
         },
       },
-      expected: { healthState: "healthy", lastError: null },
+      expected: { lifecycle: "ready", lastError: null },
     },
   ])("publishes $name through the provider status callback", async ({ auth, config, expected }) => {
     if (config) {
@@ -618,6 +618,7 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
+      terminalDisconnect: undefined,
       ...expected,
     });
   });
@@ -632,7 +633,8 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
-      healthState: "healthy",
+      terminalDisconnect: undefined,
+      lifecycle: "ready",
       lastError: null,
     });
     expect(getSlackClient().auth.test).toHaveBeenCalledTimes(2);
@@ -663,7 +665,8 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
-      healthState: "degraded",
+      terminalDisconnect: undefined,
+      lifecycle: "blocked",
       lastError: "request_timeout",
     });
     expect(setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ connected: false }));
@@ -688,7 +691,8 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
-      healthState: "healthy",
+      terminalDisconnect: undefined,
+      lifecycle: "ready",
       lastError: null,
     });
     await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,12 +11,24 @@ import {
   resolveRuntimePackEnvironment,
   resolveRuntimePackPlan,
   resolveWorkspaceInstallPlan,
+  restoreRuntimePack,
   rewriteWorkspaceDependencyVersions,
+  runPreparedRuntimePack,
 } from "../../scripts/ocm-npm-workspace-deps.mjs";
+import { restorePrepackArtifacts } from "../../scripts/openclaw-postpack.mjs";
+import { preparePackageChangelog } from "../../scripts/package-changelog.mjs";
+import { preparePackageDocsMap } from "../../scripts/package-docs-map.mjs";
 
 const adapterPath = fileURLToPath(
   new URL("../../scripts/ocm-npm-workspace-deps.mjs", import.meta.url),
 );
+const packageDocsMapPath = fileURLToPath(
+  new URL("../../scripts/package-docs-map.mjs", import.meta.url),
+);
+const packageChangelogPath = fileURLToPath(
+  new URL("../../scripts/package-changelog.mjs", import.meta.url),
+);
+const postpackPath = fileURLToPath(new URL("../../scripts/openclaw-postpack.mjs", import.meta.url));
 
 describe("OCM npm workspace dependency adapter", () => {
   it("allows Unreleased notes only for non-publishing pack commands", () => {
@@ -79,6 +91,106 @@ describe("OCM npm workspace dependency adapter", () => {
         () => null,
       ),
     ).toThrow("runtime pack commit must be a full 40-character hexadecimal SHA");
+  });
+
+  it("does not let a failed concurrent owner restore the active pack lifecycle", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ocm-pack-owner-"));
+    const docsDir = join(root, "docs");
+    const mapPath = join(docsDir, "docs_map.md");
+    const receiptPath = join(root, ".artifacts", "package-docs-map", "receipt.json");
+    const changelogBackupPath = join(
+      root,
+      ".artifacts",
+      "package-changelog",
+      "CHANGELOG.md.prepack-backup",
+    );
+    const sourceMap = "# Docs map source\n";
+    const sourceChangelog = `# Changelog
+
+## 2026.8.1
+- Current release notes with enough detail for package validation.
+
+## 2026.7.1
+- Previous release notes with enough detail for package validation.
+`;
+    mkdirSync(docsDir, { recursive: true });
+    writeFileSync(join(docsDir, "page.md"), "# Package docs\n");
+    writeFileSync(mapPath, sourceMap);
+    writeFileSync(join(root, "package.json"), '{"name":"openclaw","version":"2026.8.1"}\n');
+    writeFileSync(join(root, "CHANGELOG.md"), sourceChangelog);
+
+    try {
+      await preparePackageDocsMap(root);
+      await preparePackageChangelog(root);
+      const activeMap = readFileSync(mapPath, "utf8");
+      const activeChangelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
+      let packCalled = false;
+
+      expect(() =>
+        runPreparedRuntimePack(
+          () =>
+            execFileSync(process.execPath, [packageDocsMapPath, "prepare"], {
+              cwd: root,
+              stdio: "pipe",
+            }),
+          () => {
+            packCalled = true;
+            return 0;
+          },
+          () => execFileSync(process.execPath, [postpackPath], { cwd: root, stdio: "pipe" }),
+        ),
+      ).toThrow();
+
+      expect(packCalled).toBe(false);
+      expect(existsSync(receiptPath)).toBe(true);
+      expect(existsSync(changelogBackupPath)).toBe(true);
+      expect(readFileSync(mapPath, "utf8")).toBe(activeMap);
+      expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(activeChangelog);
+
+      await restorePrepackArtifacts(root);
+      expect(readFileSync(mapPath, "utf8")).toBe(sourceMap);
+      expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("restores a prepared legacy source fixture through its changelog owner", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ocm-historical-pack-"));
+    const scriptsDir = join(root, "scripts");
+    const sourceChangelog = `# Changelog
+
+## 2026.8.1
+- Current release notes with enough detail for package validation.
+
+## 2026.7.1
+- Previous release notes with enough detail for package validation.
+`;
+    mkdirSync(scriptsDir, { recursive: true });
+    writeFileSync(join(root, "package.json"), '{"name":"openclaw","version":"2026.8.1"}\n');
+    writeFileSync(join(root, "CHANGELOG.md"), sourceChangelog);
+
+    try {
+      writeFileSync(
+        join(scriptsDir, "package-changelog.mjs"),
+        readFileSync(packageChangelogPath, "utf8"),
+      );
+      execFileSync(process.execPath, ["scripts/package-changelog.mjs", "prepare"], {
+        cwd: root,
+        stdio: "pipe",
+      });
+      expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).not.toBe(sourceChangelog);
+      expect(existsSync(join(root, "scripts", "openclaw-postpack.mjs"))).toBe(false);
+
+      restoreRuntimePack(process.env, root);
+
+      expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
+      expect(
+        existsSync(join(root, ".artifacts", "package-changelog", "CHANGELOG.md.prepack-backup")),
+      ).toBe(false);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("resolves workspace package directories", () => {

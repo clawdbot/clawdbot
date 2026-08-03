@@ -16,13 +16,12 @@ class RoomChatTranscriptCacheTest {
     Room
       .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), GatewayCacheDatabase::class.java)
       .build()
+  private val store = RoomChatTranscriptCache(database = database)
 
   @After
   fun tearDown() {
     database.close()
   }
-
-  private fun cache(): RoomChatTranscriptCache = RoomChatTranscriptCache(database = database)
 
   private fun message(
     text: String,
@@ -39,10 +38,34 @@ class RoomChatTranscriptCacheTest {
       idempotencyKey = idempotencyKey,
     )
 
+  private suspend fun saveTranscript(
+    messages: List<ChatMessage>,
+    gatewayId: String = "gateway-a",
+    agentId: String = "main",
+    sessionKey: String = "main",
+  ) = store.saveTranscript(gatewayId, agentId, sessionKey, messages)
+
+  private suspend fun loadTranscript(
+    gatewayId: String = "gateway-a",
+    agentId: String = "main",
+    sessionKey: String = "main",
+  ): List<ChatMessage> = store.loadTranscript(gatewayId, agentId, sessionKey)
+
+  private suspend fun saveSessions(
+    sessions: List<ChatSessionEntry>,
+    gatewayId: String = "gateway-a",
+    agentId: String = "main",
+    retainedSessionKey: String? = null,
+  ) = store.saveSessions(gatewayId, agentId, sessions, retainedSessionKey)
+
+  private suspend fun loadSessions(
+    gatewayId: String = "gateway-a",
+    agentId: String = "main",
+  ): List<ChatSessionEntry> = store.loadSessions(gatewayId, agentId)
+
   @Test
   fun transcriptRoundTripKeepsTextAndManagedReferencesWithoutBinaryParts() =
     runTest {
-      val store = cache()
       val imagePart = ChatMessageContent(type = "image", mimeType = "image/png", fileName = "a.png", base64 = "AAAA")
       val managedImage =
         ChatMessageContent(
@@ -52,10 +75,7 @@ class RoomChatTranscriptCacheTest {
           url = "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full",
           alt = "Managed image",
         )
-      store.saveTranscript(
-        gatewayId = "gateway-a",
-        agentId = "main",
-        sessionKey = "main",
+      saveTranscript(
         messages =
           listOf(
             message("hello", role = "user", timestampMs = 10, idempotencyKey = "run-1:user", extraParts = listOf(imagePart)),
@@ -66,7 +86,7 @@ class RoomChatTranscriptCacheTest {
           ),
       )
 
-      val loaded = store.loadTranscript("gateway-a", "main", "main")
+      val loaded = loadTranscript()
 
       assertEquals(listOf("hello", null, "world"), loaded.map { it.content.single().text })
       assertTrue(loaded.all { message -> message.content.all { part -> part.base64 == null } })
@@ -79,7 +99,6 @@ class RoomChatTranscriptCacheTest {
   @Test
   fun transcriptRoundTripKeepsManagedAudioAndVideoMetadata() =
     runTest {
-      val store = cache()
       val audio =
         ChatMessageContent(
           type = "audio",
@@ -99,10 +118,7 @@ class RoomChatTranscriptCacheTest {
           width = 1920,
           height = 1080,
         )
-      store.saveTranscript(
-        gatewayId = "gateway-a",
-        agentId = "main",
-        sessionKey = "main",
+      saveTranscript(
         messages =
           listOf(
             ChatMessage(id = "audio", role = "assistant", content = listOf(audio), timestampMs = 10),
@@ -110,7 +126,7 @@ class RoomChatTranscriptCacheTest {
           ),
       )
 
-      val loaded = store.loadTranscript("gateway-a", "main", "main")
+      val loaded = loadTranscript()
 
       assertEquals(listOf(audio, video), loaded.map { it.content.single() })
     }
@@ -133,7 +149,7 @@ class RoomChatTranscriptCacheTest {
         ),
       )
 
-      val loaded = cache().loadTranscript("gateway-a", "main", "main").single()
+      val loaded = loadTranscript().single()
 
       assertEquals(listOf("legacy one", "legacy two"), loaded.content.map { it.text })
     }
@@ -141,7 +157,6 @@ class RoomChatTranscriptCacheTest {
   @Test
   fun lastDefaultOwnerIsGatewayScopedAndClearedWithItsCache() =
     runTest {
-      val store = cache()
       store.saveLastDefaultAgentId("gateway-a", "agent-a")
       store.saveLastDefaultAgentId("gateway-b", "agent-b")
 
@@ -157,11 +172,7 @@ class RoomChatTranscriptCacheTest {
   @Test
   fun transcriptRoundTripDropsInternalRoleRows() =
     runTest {
-      val store = cache()
-      store.saveTranscript(
-        gatewayId = "gateway-a",
-        agentId = "main",
-        sessionKey = "main",
+      saveTranscript(
         messages =
           listOf(
             message("hello", role = "user"),
@@ -171,7 +182,7 @@ class RoomChatTranscriptCacheTest {
           ),
       )
 
-      val loaded = store.loadTranscript("gateway-a", "main", "main")
+      val loaded = loadTranscript()
 
       assertEquals(listOf("hello", "visible plugin notice", "reply"), loaded.map { it.content.single().text })
       assertEquals(listOf("user", "custom", "assistant"), loaded.map { it.role })
@@ -180,15 +191,11 @@ class RoomChatTranscriptCacheTest {
   @Test
   fun transcriptWriteKeepsOnlyNewestBoundedMessages() =
     runTest {
-      val store = cache()
-      store.saveTranscript(
-        gatewayId = "gateway-a",
-        agentId = "main",
-        sessionKey = "main",
+      saveTranscript(
         messages = (0 until MAX_CACHED_MESSAGES_PER_SESSION + 50).map { index -> message("m$index", timestampMs = index.toLong()) },
       )
 
-      val loadedTexts = store.loadTranscript("gateway-a", "main", "main").map { it.content.single().text }
+      val loadedTexts = loadTranscript().map { it.content.single().text }
 
       assertEquals(MAX_CACHED_MESSAGES_PER_SESSION, loadedTexts.size)
       assertEquals("m50", loadedTexts.first())
@@ -198,35 +205,29 @@ class RoomChatTranscriptCacheTest {
   @Test
   fun sessionWriteEvictsBeyondBoundAndDropsOrphanedTranscripts() =
     runTest {
-      val store = cache()
-      store.saveTranscript(gatewayId = "gateway-a", agentId = "main", sessionKey = "session-10", messages = listOf(message("kept")))
-      store.saveTranscript(gatewayId = "gateway-a", agentId = "main", sessionKey = "session-55", messages = listOf(message("evicted")))
+      saveTranscript(sessionKey = "session-10", messages = listOf(message("kept")))
+      saveTranscript(sessionKey = "session-55", messages = listOf(message("evicted")))
 
-      store.saveSessions(
-        gatewayId = "gateway-a",
-        agentId = "main",
+      saveSessions(
         sessions =
           (0 until MAX_CACHED_SESSIONS + 10).map { index ->
             ChatSessionEntry(key = "session-$index", updatedAtMs = 1000L - index, displayName = "Session $index")
           },
       )
 
-      val sessions = store.loadSessions("gateway-a", "main")
+      val sessions = loadSessions()
       assertEquals(MAX_CACHED_SESSIONS, sessions.size)
       assertEquals("session-0", sessions.first().key)
       assertEquals("session-${MAX_CACHED_SESSIONS - 1}", sessions.last().key)
       assertEquals("Session 0", sessions.first().displayName)
-      assertEquals(listOf("kept"), store.loadTranscript("gateway-a", "main", "session-10").map { it.content.single().text })
-      assertEquals(emptyList<ChatMessage>(), store.loadTranscript("gateway-a", "main", "session-55"))
+      assertEquals(listOf("kept"), loadTranscript(sessionKey = "session-10").map { it.content.single().text })
+      assertEquals(emptyList<ChatMessage>(), loadTranscript(sessionKey = "session-55"))
     }
 
   @Test
   fun sessionRoundTripKeepsRunMetadata() =
     runTest {
-      val store = cache()
-      store.saveSessions(
-        gatewayId = "gateway-a",
-        agentId = "main",
+      saveSessions(
         sessions =
           listOf(
             ChatSessionEntry(
@@ -241,7 +242,7 @@ class RoomChatTranscriptCacheTest {
           ),
       )
 
-      val loaded = store.loadSessions("gateway-a", "main").single()
+      val loaded = loadSessions().single()
 
       assertEquals("done", loaded.status)
       assertEquals(1_000L, loaded.startedAt)
@@ -254,20 +255,17 @@ class RoomChatTranscriptCacheTest {
   @Test
   fun transcriptForSessionOutsideFullCachedListSurvivesEviction() =
     runTest {
-      val store = cache()
-      store.saveSessions(
-        gatewayId = "gateway-a",
-        agentId = "main",
+      saveSessions(
         sessions =
           (0 until MAX_CACHED_SESSIONS).map { index ->
             ChatSessionEntry(key = "session-$index", updatedAtMs = 1000L - index)
           },
       )
 
-      store.saveTranscript(gatewayId = "gateway-a", agentId = "main", sessionKey = "deep-session", messages = listOf(message("deep text")))
+      saveTranscript(sessionKey = "deep-session", messages = listOf(message("deep text")))
 
-      assertEquals(listOf("deep text"), store.loadTranscript("gateway-a", "main", "deep-session").map { it.content.single().text })
-      val sessionKeys = store.loadSessions("gateway-a", "main").map { it.key }
+      assertEquals(listOf("deep text"), loadTranscript(sessionKey = "deep-session").map { it.content.single().text })
+      val sessionKeys = loadSessions().map { it.key }
       assertEquals(MAX_CACHED_SESSIONS, sessionKeys.size)
       assertTrue(sessionKeys.contains("deep-session"))
     }
@@ -275,26 +273,22 @@ class RoomChatTranscriptCacheTest {
   @Test
   fun sessionCacheIsBoundedAcrossEveryAgentInOneGateway() =
     runTest {
-      val store = cache()
       repeat(MAX_CACHED_SESSIONS + 1) { index ->
-        store.saveTranscript(
-          gatewayId = "gateway-a",
+        saveTranscript(
           agentId = "agent-$index",
-          sessionKey = "main",
           messages = listOf(message("message-$index")),
         )
       }
 
       val cachedSessionCount =
         (0..MAX_CACHED_SESSIONS).sumOf { index ->
-          store.loadSessions("gateway-a", "agent-$index").size
+          loadSessions(agentId = "agent-$index").size
         }
       assertEquals(MAX_CACHED_SESSIONS, cachedSessionCount)
-      assertTrue(store.loadTranscript("gateway-a", "agent-0", "main").isEmpty())
+      assertTrue(loadTranscript(agentId = "agent-0").isEmpty())
       assertEquals(
         listOf("message-$MAX_CACHED_SESSIONS"),
-        store
-          .loadTranscript("gateway-a", "agent-$MAX_CACHED_SESSIONS", "main")
+        loadTranscript(agentId = "agent-$MAX_CACHED_SESSIONS")
           .map { it.content.single().text },
       )
     }
@@ -302,143 +296,123 @@ class RoomChatTranscriptCacheTest {
   @Test
   fun activeDeepTranscriptSurvivesSessionListRefresh() =
     runTest {
-      val store = cache()
       val listedSessions =
         (0 until MAX_CACHED_SESSIONS).map { index ->
           ChatSessionEntry(key = "session-$index", updatedAtMs = 1000L - index)
         }
-      store.saveSessions(gatewayId = "gateway-a", agentId = "main", sessions = listedSessions)
-      store.saveTranscript(
-        gatewayId = "gateway-a",
-        agentId = "main",
+      saveSessions(sessions = listedSessions)
+      saveTranscript(
         sessionKey = "deep-session",
         messages = listOf(message("deep text")),
       )
 
-      store.saveSessions(
-        gatewayId = "gateway-a",
-        agentId = "main",
+      saveSessions(
         sessions = listedSessions,
         retainedSessionKey = "deep-session",
       )
 
-      assertEquals(MAX_CACHED_SESSIONS, store.loadSessions("gateway-a", "main").size)
-      assertTrue(store.loadSessions("gateway-a", "main").any { it.key == "deep-session" })
+      assertEquals(MAX_CACHED_SESSIONS, loadSessions().size)
+      assertTrue(loadSessions().any { it.key == "deep-session" })
       assertEquals(
         listOf("deep text"),
-        store.loadTranscript("gateway-a", "main", "deep-session").map { it.content.single().text },
+        loadTranscript(sessionKey = "deep-session").map { it.content.single().text },
       )
     }
 
   @Test
   fun completeSessionListRefreshDropsMissingDeepTranscript() =
     runTest {
-      val store = cache()
-      store.saveSessions(
-        gatewayId = "gateway-a",
-        agentId = "main",
+      saveSessions(
         sessions = listOf(ChatSessionEntry(key = "deep-session", updatedAtMs = 1)),
       )
-      store.saveTranscript(
-        gatewayId = "gateway-a",
-        agentId = "main",
+      saveTranscript(
         sessionKey = "deep-session",
         messages = listOf(message("deleted remotely")),
       )
 
-      store.saveSessions(
-        gatewayId = "gateway-a",
-        agentId = "main",
+      saveSessions(
         sessions = listOf(ChatSessionEntry(key = "main", updatedAtMs = 2)),
       )
 
-      assertEquals(listOf("main"), store.loadSessions("gateway-a", "main").map { it.key })
-      assertTrue(store.loadTranscript("gateway-a", "main", "deep-session").isEmpty())
+      assertEquals(listOf("main"), loadSessions().map { it.key })
+      assertTrue(loadTranscript(sessionKey = "deep-session").isEmpty())
     }
 
   @Test
   fun deleteSessionRemovesSessionRowAndTranscript() =
     runTest {
-      val store = cache()
-      store.saveSessions(
-        gatewayId = "gateway-a",
-        agentId = "main",
+      saveSessions(
         sessions =
           listOf(
             ChatSessionEntry(key = "main", updatedAtMs = 1),
             ChatSessionEntry(key = "other", updatedAtMs = 2),
           ),
       )
-      store.saveTranscript(gatewayId = "gateway-a", agentId = "main", sessionKey = "main", messages = listOf(message("delete me")))
-      store.saveTranscript(gatewayId = "gateway-a", agentId = "other", sessionKey = "main", messages = listOf(message("delete me too")))
-      store.saveTranscript(gatewayId = "gateway-a", agentId = "main", sessionKey = "other", messages = listOf(message("keep me")))
+      saveTranscript(messages = listOf(message("delete me")))
+      saveTranscript(agentId = "other", messages = listOf(message("delete me too")))
+      saveTranscript(sessionKey = "other", messages = listOf(message("keep me")))
 
       store.deleteSession("gateway-a", "main", "main")
 
-      assertEquals(emptyList<ChatMessage>(), store.loadTranscript("gateway-a", "main", "main"))
-      assertEquals(listOf("delete me too"), store.loadTranscript("gateway-a", "other", "main").map { it.content.single().text })
-      assertEquals(listOf("other"), store.loadSessions("gateway-a", "main").map { it.key })
-      assertEquals(listOf("keep me"), store.loadTranscript("gateway-a", "main", "other").map { it.content.single().text })
+      assertEquals(emptyList<ChatMessage>(), loadTranscript())
+      assertEquals(listOf("delete me too"), loadTranscript(agentId = "other").map { it.content.single().text })
+      assertEquals(listOf("other"), loadSessions().map { it.key })
+      assertEquals(listOf("keep me"), loadTranscript(sessionKey = "other").map { it.content.single().text })
     }
 
   @Test
   fun transcriptsAreScopedToGatewayIdentity() =
     runTest {
-      val store = cache()
-      store.saveTranscript(gatewayId = "gateway-a", agentId = "main", sessionKey = "main", messages = listOf(message("gateway a text")))
-      store.saveSessions("gateway-a", "main", listOf(ChatSessionEntry(key = "main", updatedAtMs = 1)))
+      saveTranscript(messages = listOf(message("gateway a text")))
+      saveSessions(listOf(ChatSessionEntry(key = "main", updatedAtMs = 1)))
 
-      assertEquals(emptyList<ChatMessage>(), store.loadTranscript("gateway-b", "main", "main"))
-      assertEquals(emptyList<ChatSessionEntry>(), store.loadSessions("gateway-b", "main"))
-      store.saveTranscript(gatewayId = "gateway-b", agentId = "main", sessionKey = "main", messages = listOf(message("gateway b text")))
+      assertEquals(emptyList<ChatMessage>(), loadTranscript(gatewayId = "gateway-b"))
+      assertEquals(emptyList<ChatSessionEntry>(), loadSessions(gatewayId = "gateway-b"))
+      saveTranscript(gatewayId = "gateway-b", messages = listOf(message("gateway b text")))
 
-      assertEquals(listOf("gateway a text"), store.loadTranscript("gateway-a", "main", "main").map { it.content.single().text })
-      assertEquals(listOf("main"), store.loadSessions("gateway-a", "main").map { it.key })
+      assertEquals(listOf("gateway a text"), loadTranscript().map { it.content.single().text })
+      assertEquals(listOf("main"), loadSessions().map { it.key })
     }
 
   @Test
   fun blankGatewayIdentityDisablesReadsAndWrites() =
     runTest {
-      val store = cache()
-      store.saveTranscript(gatewayId = "", agentId = "main", sessionKey = "main", messages = listOf(message("must not persist")))
-      store.saveSessions("", "main", listOf(ChatSessionEntry(key = "main", updatedAtMs = 1)))
+      saveTranscript(gatewayId = "", messages = listOf(message("must not persist")))
+      saveSessions(listOf(ChatSessionEntry(key = "main", updatedAtMs = 1)), gatewayId = "")
 
-      assertEquals(emptyList<ChatMessage>(), store.loadTranscript("", "main", "main"))
-      assertEquals(emptyList<ChatSessionEntry>(), store.loadSessions("", "main"))
+      assertEquals(emptyList<ChatMessage>(), loadTranscript(gatewayId = ""))
+      assertEquals(emptyList<ChatSessionEntry>(), loadSessions(gatewayId = ""))
 
       // Nothing was written under a fallback scope either.
-      assertEquals(emptyList<ChatMessage>(), store.loadTranscript("gateway-a", "main", "main"))
-      assertEquals(emptyList<ChatSessionEntry>(), store.loadSessions("gateway-a", "main"))
+      assertEquals(emptyList<ChatMessage>(), loadTranscript())
+      assertEquals(emptyList<ChatSessionEntry>(), loadSessions())
     }
 
   @Test
   fun transcriptsAreScopedToAgentOwnership() =
     runTest {
-      val store = cache()
-      store.saveTranscript("gateway-a", "agent-a", "custom", listOf(message("agent a text")))
-      store.saveTranscript("gateway-a", "agent-b", "custom", listOf(message("agent b text")))
-      store.saveSessions(
-        "gateway-a",
-        "agent-a",
-        listOf(ChatSessionEntry(key = "agent-a-session", updatedAtMs = 1)),
+      saveTranscript(agentId = "agent-a", sessionKey = "custom", messages = listOf(message("agent a text")))
+      saveTranscript(agentId = "agent-b", sessionKey = "custom", messages = listOf(message("agent b text")))
+      saveSessions(
+        agentId = "agent-a",
+        sessions = listOf(ChatSessionEntry(key = "agent-a-session", updatedAtMs = 1)),
         retainedSessionKey = "custom",
       )
-      store.saveSessions(
-        "gateway-a",
-        "agent-b",
-        listOf(ChatSessionEntry(key = "agent-b-session", updatedAtMs = 2)),
+      saveSessions(
+        agentId = "agent-b",
+        sessions = listOf(ChatSessionEntry(key = "agent-b-session", updatedAtMs = 2)),
         retainedSessionKey = "custom",
       )
 
       assertEquals(
         listOf("agent a text"),
-        store.loadTranscript("gateway-a", "agent-a", "custom").map { it.content.single().text },
+        loadTranscript(agentId = "agent-a", sessionKey = "custom").map { it.content.single().text },
       )
       assertEquals(
         listOf("agent b text"),
-        store.loadTranscript("gateway-a", "agent-b", "custom").map { it.content.single().text },
+        loadTranscript(agentId = "agent-b", sessionKey = "custom").map { it.content.single().text },
       )
-      assertEquals(listOf("agent-a-session", "custom"), store.loadSessions("gateway-a", "agent-a").map { it.key })
-      assertEquals(listOf("agent-b-session", "custom"), store.loadSessions("gateway-a", "agent-b").map { it.key })
+      assertEquals(listOf("agent-a-session", "custom"), loadSessions(agentId = "agent-a").map { it.key })
+      assertEquals(listOf("agent-b-session", "custom"), loadSessions(agentId = "agent-b").map { it.key })
     }
 }

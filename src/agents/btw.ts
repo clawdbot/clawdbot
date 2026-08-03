@@ -591,6 +591,12 @@ type RunBtwSideQuestionParams = {
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
   sandboxSessionKey?: string;
+  /**
+   * Set by gateway-hosted callers so the prepared runtime resolves the owner the
+   * gateway published. Left unset by local callers such as the embedded TUI,
+   * which must not borrow the active registry's subagent and node capabilities.
+   */
+  allowGatewaySubagentBinding?: boolean;
   storePath?: string;
   resolvedThinkLevel?: ThinkLevel;
   resolvedReasoningLevel: ReasoningLevel;
@@ -715,6 +721,9 @@ export async function runBtwSideQuestion(
     agentDir: params.agentDir,
     inheritedAuthDir: resolveDefaultAgentDir(params.cfg),
     workspaceDir: requestedWorkspaceDir,
+    // Gateway-published owners are keyed with this flag, so a gateway-hosted
+    // request that omits it can never match one.
+    ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true as const } : {}),
   });
   const sessionAgentId =
     preparedModelRuntime.agentId ??
@@ -775,6 +784,7 @@ export async function runBtwSideQuestion(
       workspaceDir,
       ...(agentHarnessId ? { agentHarnessId } : {}),
       ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
+      pluginRegistry: preparedModelRuntime.pluginRegistry!,
     });
     const selectionParams = {
       provider,

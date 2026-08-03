@@ -196,7 +196,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>
     waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
 }));
-vi.mock("./subagent-announce.registry.runtime.js", () => ({
+vi.mock("./subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: () => 0,
   countPendingDescendantRuns: () => pendingDescendantRuns,
   countPendingDescendantRunsExcludingRun: () => 0,

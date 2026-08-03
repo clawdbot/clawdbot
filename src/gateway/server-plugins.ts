@@ -9,12 +9,14 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "../plugins/loader.js";
+import { activatePluginRegistry } from "../plugins/loader-shared.js";
+import type { ChannelPluginLoadIntent } from "../plugins/loader-types.js";
+import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
 import {
@@ -541,6 +543,19 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
   };
 }
 
+const GATEWAY_PLUGIN_RUNTIME_BINDINGS_KEY: unique symbol = Symbol.for(
+  "openclaw.gatewayPluginRuntimeBindings",
+);
+
+function getGatewayPluginRuntimeBindings(): Pick<PluginRuntime, "nodes" | "subagent"> {
+  // These delegates resolve the current request/fallback Gateway context per call.
+  // Keeping their identities process-stable preserves exact-key root load reuse.
+  return resolveGlobalSingleton(GATEWAY_PLUGIN_RUNTIME_BINDINGS_KEY, () => ({
+    nodes: createGatewayNodesRuntime(),
+    subagent: createGatewaySubagentRuntime(),
+  }));
+}
+
 // ── Plugin loading ──────────────────────────────────────────────────
 
 function createGatewayPluginRegistrationLogger(params?: {
@@ -573,7 +588,7 @@ export function loadGatewayPlugins(params: {
   baseMethods: string[];
   pluginIds?: string[];
   pluginLookUpTable?: PluginLookUpTable;
-  preferSetupRuntimeForChannelPlugins?: boolean;
+  channelPluginLoadIntent?: ChannelPluginLoadIntent;
   suppressPluginInfoLogs?: boolean;
   startupTrace?: {
     detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -633,9 +648,8 @@ export function loadGatewayPlugins(params: {
   ];
   const pluginIdsMs = performance.now() - started;
   if (pluginIds.length === 0) {
-    clearActivatedPluginRuntimeState();
     const pluginRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
+    activatePluginRegistry(pluginRegistry, null, "gateway-bindable", params.workspaceDir);
     params.startupTrace?.detail("plugins.gateway-load", [
       ["autoEnableMs", autoEnableMs],
       ["resolvedConfigMs", resolvedConfigMs],
@@ -652,7 +666,8 @@ export function loadGatewayPlugins(params: {
   }
   const beforeLoad = performance.now();
   const loaderStatsBefore = getPluginModuleLoaderStats();
-  const pluginRegistry = loadOpenClawPlugins({
+  const gatewayRuntimeBindings = getGatewayPluginRuntimeBindings();
+  const pluginRegistry = loadAndActivateRootPluginRegistry({
     config: resolvedConfig,
     activationSourceConfig: params.activationSourceConfig ?? params.cfg,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
@@ -672,8 +687,9 @@ export function loadGatewayPlugins(params: {
     }),
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
+      ...gatewayRuntimeBindings,
     },
-    preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+    channelPluginLoadIntent: params.channelPluginLoadIntent,
     preferBuiltPluginArtifacts: true,
     ...(params.startupTrace !== undefined && {
       startupTrace: params.startupTrace,

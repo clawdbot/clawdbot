@@ -12,11 +12,12 @@ type SubagentAnnounceDeliveryFailureReason =
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "requester_abandoned"
+  | "source_owner_changed"
   | "visible_reply_missing";
 
 type SubagentAnnounceSteerOutcome =
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
-  | { status: "none" | "dropped" };
+  | { status: "none" | "dropped" | "source_owner_changed" };
 
 /** Result of trying to deliver a subagent announcement. */
 export type SubagentAnnounceDeliveryResult = {
@@ -53,6 +54,15 @@ function mapSteerOutcomeToDeliveryResult(
       path: "steered",
       deliveredAt: outcome.deliveredAt,
       enqueuedAt: outcome.enqueuedAt,
+    };
+  }
+  if (outcome.status === "source_owner_changed") {
+    return {
+      delivered: false,
+      path: "none",
+      reason: "source_owner_changed",
+      error: "subagent source lifecycle changed before completion delivery",
+      terminal: true,
     };
   }
   return {
@@ -111,6 +121,9 @@ export async function runSubagentAnnounceDispatch(params: {
     if (primarySteer.delivered) {
       return withPhases(primarySteer);
     }
+    if (primarySteer.terminal) {
+      return withPhases(primarySteer);
+    }
     if (primarySteerOutcome.status === "dropped") {
       return withPhases(primarySteer);
     }
@@ -136,6 +149,9 @@ export async function runSubagentAnnounceDispatch(params: {
   const fallbackSteer = mapSteerOutcomeToDeliveryResult(fallbackSteerOutcome);
   appendPhase("steer-fallback", fallbackSteer);
   if (fallbackSteer.delivered) {
+    return withPhases(fallbackSteer);
+  }
+  if (fallbackSteer.terminal) {
     return withPhases(fallbackSteer);
   }
 

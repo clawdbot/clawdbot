@@ -46,7 +46,6 @@ export const hookRunner = {
   runAfterCompaction: vi.fn(async () => undefined),
 };
 
-export const ensureRuntimePluginsLoaded: Mock<(params?: unknown) => void> = vi.fn();
 export const acquireSessionWriteLockMock = vi.fn(async (_params?: unknown) => ({
   release: vi.fn(async () => {}),
 }));
@@ -69,7 +68,7 @@ export const resolveModelMock: Mock<
   modelRegistry: {},
 }));
 export const resolveModelAsyncMock = vi.fn(
-  async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
+  async (provider: string, modelId: string, agentDir?: string, cfg?: unknown, _options?: unknown) =>
     resolveModelMock(provider, modelId, agentDir, cfg),
 );
 export const sessionCompactImpl = vi.fn(async () => ({
@@ -424,6 +423,22 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   },
 };
 
+export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
+  async (input: Record<string, unknown>) => ({
+    snapshot: {
+      agentId: input.agentId,
+      agentDir: input.agentDir,
+      config: input.config,
+      workspaceDir: input.workspaceDir,
+      metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    },
+    release: vi.fn(),
+  }),
+);
+
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
   sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
@@ -536,7 +551,7 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runAfterCompaction.mockReset();
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
-  ensureRuntimePluginsLoaded.mockReset();
+  acquireAgentRunPreparedModelRuntimeMock.mockClear();
   acquireSessionWriteLockMock.mockClear();
 
   resolveContextEngineMock.mockReset();
@@ -569,8 +584,13 @@ export function resetCompactHooksHarnessMocks(): void {
   }));
   resolveModelAsyncMock.mockReset();
   resolveModelAsyncMock.mockImplementation(
-    async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
-      resolveModelMock(provider, modelId, agentDir, cfg),
+    async (
+      provider: string,
+      modelId: string,
+      agentDir?: string,
+      cfg?: unknown,
+      _options?: unknown,
+    ) => resolveModelMock(provider, modelId, agentDir, cfg),
   );
   resolveAgentHarnessPolicyMock.mockReset();
   resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
@@ -618,10 +638,6 @@ export async function loadCompactHooksHarness(): Promise<{
     initializeGlobalHookRunner: vi.fn(),
     resetGlobalHookRunner: vi.fn(),
     runGlobalGatewayStopSafely: vi.fn(async () => undefined),
-  }));
-
-  vi.doMock("../runtime-plugins.js", () => ({
-    ensureRuntimePluginsLoaded,
   }));
 
   vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
@@ -741,22 +757,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../prepared-model-runtime.js", () => ({
     activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
-    acquireAgentRunPreparedModelRuntime: vi.fn(async (input: Record<string, unknown>) => ({
-      snapshot: {
-        agentId: input.agentId,
-        agentDir: input.agentDir,
-        config: input.config,
-        workspaceDir: input.workspaceDir,
-        metadataSnapshot: {
-          ...emptyPluginMetadataSnapshot,
-          workspaceDir: input.workspaceDir as string | undefined,
-        },
-        configuredRuntimeModels: [],
-        inlineProviderModels: [],
-        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
-      },
-      release: vi.fn(),
-    })),
+    acquireAgentRunPreparedModelRuntime: acquireAgentRunPreparedModelRuntimeMock,
     prepareModelRuntimeSnapshot: vi.fn(async () => ({
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
     })),

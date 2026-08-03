@@ -9,13 +9,10 @@ import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig,
-  maybeRepairOpenAICodexAuthProfileStores,
 } from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
-import {
-  maybeRepairManagedNpmOpenClawPeerLinks,
-  maybeRepairStaleManagedNpmBundledPlugins,
-} from "../doctor-plugin-registry.js";
+import { maybeRepairPluginOpenClawHostLinks } from "../doctor-plugin-host-links.js";
+import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
 import { migrateLegacySkillWorkshopProposals } from "../doctor-skill-workshop-sqlite.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
@@ -58,6 +55,7 @@ export async function runDoctorRepairSequence(params: {
   changeNotes: string[];
   warningNotes: string[];
   authProfilesRepaired: boolean;
+  openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
 }> {
   let state = params.state;
   const changeNotes: string[] = [];
@@ -126,8 +124,7 @@ export async function runDoctorRepairSequence(params: {
     env,
     prompter: { shouldRepair: true },
   });
-  await maybeRepairManagedNpmOpenClawPeerLinks({
-    config: state.candidate,
+  await maybeRepairPluginOpenClawHostLinks({
     env,
     prompter: { shouldRepair: true },
   });
@@ -142,12 +139,15 @@ export async function runDoctorRepairSequence(params: {
     changes: codexRouteRepair.changes,
     warnings: codexRouteRepair.warnings,
   });
+  // Auth JSON is archived below; retain its exact collision-aware profile map
+  // so durable session selections can follow the same account after import.
+  const openAICodexAuthProfileIdMap = collectOpenAICodexAuthProfileStoreIdMap({
+    cfg: state.candidate,
+    env,
+  });
   applyMutation(
     maybeRepairOpenAICodexAuthConfig(state.candidate, {
-      profileIdMap: collectOpenAICodexAuthProfileStoreIdMap({
-        cfg: state.candidate,
-        env,
-      }),
+      profileIdMap: openAICodexAuthProfileIdMap,
     }),
   );
   applyMutation(
@@ -244,11 +244,6 @@ export async function runDoctorRepairSequence(params: {
     env,
   });
   appendRepairNotes(legacyOAuthSidecarRepair);
-  const openAIAuthProviderRepair = await maybeRepairOpenAICodexAuthProfileStores({
-    cfg: state.candidate,
-    env,
-  });
-  appendRepairNotes(openAIAuthProviderRepair);
   const staleOAuthShadowRepair = await repairStaleOAuthProfileShadows({
     cfg: state.candidate,
     env,
@@ -258,6 +253,7 @@ export async function runDoctorRepairSequence(params: {
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },
     env,
+    openAICodexAuthProfileIdMap,
   });
   if (authProfileSqliteMigration.configChanged) {
     state = applyDoctorConfigMutation({
@@ -277,9 +273,14 @@ export async function runDoctorRepairSequence(params: {
   applyMutation(staleAuthOrderRepair);
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
-    openAIAuthProviderRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
     authProfileSqliteMigration.changes.length > 0;
 
-  return { state, changeNotes, warningNotes, authProfilesRepaired };
+  return {
+    state,
+    changeNotes,
+    warningNotes,
+    authProfilesRepaired,
+    ...(openAICodexAuthProfileIdMap.size > 0 ? { openAICodexAuthProfileIdMap } : {}),
+  };
 }

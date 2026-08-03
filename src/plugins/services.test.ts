@@ -19,11 +19,7 @@ vi.mock("../logging/subsystem.js", () => ({
 import { STATE_DIR } from "../config/paths.js";
 import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
-import {
-  pinActivePluginHttpRouteRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "./runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { startPluginServices } from "./services.js";
 
 function createRegistry(
@@ -466,7 +462,6 @@ describe("startPluginServices", () => {
     const pinnedRegistry = createEmptyPluginRegistry();
 
     setActivePluginRegistry(pinnedRegistry);
-    pinActivePluginHttpRouteRegistry(pinnedRegistry);
 
     const handle = await startPluginServices({
       registry: serviceRegistry,

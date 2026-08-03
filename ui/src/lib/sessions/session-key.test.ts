@@ -2,9 +2,39 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalUiSessionKeyForPersistence,
+  isUiSelectedGlobalSessionKey,
+  parseSessionKeyParts,
   resolveUiSessionNavigationParentKey,
   uiSessionEventMatches,
 } from "./session-key.ts";
+
+describe("parseSessionKeyParts", () => {
+  it("preserves opaque channel account tails", () => {
+    expect(parseSessionKeyParts("agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN")).toEqual({
+      agentId: "data-expert",
+      channel: "dingtalk",
+      accountId: "cidzg6sF43NZMy52Rnk8EN",
+    });
+    expect(parseSessionKeyParts("agent:main:telegram:user:12345:extra")).toEqual({
+      agentId: "main",
+      channel: "telegram",
+      accountId: "user:12345:extra",
+    });
+  });
+
+  it.each([
+    "global:default",
+    "direct:some-key",
+    "",
+    "agent:",
+    "agent:main",
+    "agent:main:",
+    "agent:main:telegram",
+    "Agent:main:telegram:user",
+  ])("rejects malformed key %j", (key) => {
+    expect(parseSessionKeyParts(key)).toBeNull();
+  });
+});
 
 describe("UI session identity", () => {
   it.each([
@@ -57,6 +87,9 @@ describe("UI session identity", () => {
     expect(uiSessionEventMatches(host, "agent:ops:main")).toBe(true);
     expect(canonicalUiSessionKeyForPersistence(host, "main")).toBe("agent:ops:home");
     expect(canonicalUiSessionKeyForPersistence(host, "agent:ops:main")).toBe("agent:ops:home");
+    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:home")).toBe(true);
+    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:main")).toBe(true);
+    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:other")).toBe(false);
   });
 
   it.each([

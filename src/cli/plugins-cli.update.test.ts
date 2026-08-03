@@ -270,6 +270,103 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("previews plugin updates in Nix mode without acquiring a lease or writing state", async () => {
+    process.env.OPENCLAW_NIX_MODE = "1";
+    const config = createTrackedPluginConfig({
+      pluginId: "alpha",
+      spec: "@acme/alpha@1.0.0",
+    });
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [
+        {
+          pluginId: "alpha",
+          status: "updated",
+          message: "Would update alpha: 1.0.0 -> 1.1.0.",
+        },
+      ],
+    });
+    const lifecycleLease = await import("../plugins/plugin-lifecycle-lease.js");
+    const acquireLease = vi.spyOn(lifecycleLease, "withPluginLifecycleLease");
+
+    try {
+      await runPluginsCommand(["plugins", "update", "alpha", "--dry-run"]);
+
+      expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
+        expect.objectContaining({ dryRun: true, pluginIds: ["alpha"] }),
+      );
+      expect(acquireLease).not.toHaveBeenCalled();
+      expect(writeConfigFile).not.toHaveBeenCalled();
+      expect(replaceConfigFile).not.toHaveBeenCalled();
+      expect(writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+      expect(refreshPluginRegistry).not.toHaveBeenCalled();
+      expect(runtimeLogs).toContain("Would update alpha: 1.0.0 -> 1.1.0.");
+    } finally {
+      acquireLease.mockRestore();
+    }
+  });
+
+  it.each([
+    { id: "missing-plugin", args: [] },
+    { id: "missing-plugin", args: ["--dry-run"] },
+    { id: "constructor", args: [] },
+    { id: "@acme/missing-plugin@beta", args: [] },
+  ])("rejects untracked update target $id $args", async ({ id, args }) => {
+    const config = {} as OpenClawConfig;
+    primeUpdateConfigSnapshot({ config });
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [{ pluginId: id, status: "skipped", message: `No install record for "${id}".` }],
+    });
+
+    await expect(runPluginsCommand(["plugins", "update", id, ...args])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors.at(-1)).toContain(`No tracked plugin or hook pack found for "${id}".`);
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects an npm update target shared by multiple tracked plugins", async () => {
+    const config = {
+      plugins: {
+        installs: {
+          alpha: {
+            source: "npm",
+            spec: "@acme/shared",
+            installPath: "/tmp/alpha",
+            resolvedName: "@acme/shared",
+          },
+          beta: {
+            source: "npm",
+            spec: "@acme/shared",
+            installPath: "/tmp/beta",
+            resolvedName: "@acme/shared",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    primeUpdateConfigSnapshot({ config });
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+
+    await expect(runPluginsCommand(["plugins", "update", "@acme/shared@beta"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors.at(-1)).toContain(
+      'No tracked plugin or hook pack found for "@acme/shared@beta".',
+    );
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("updates tracked hook packs through plugins update", async () => {
     const cfg = {} as OpenClawConfig;
     const nextConfig = cfg;
@@ -303,8 +400,9 @@ describe("plugins cli update", () => {
     await runPluginsCommand(["plugins", "update", "demo-hooks"]);
 
     const hookUpdateParams = expectSingleCallParams(updateNpmInstalledHookPacks);
-    expect(hookUpdateParams.config).toBe(cfg);
+    expect(hookUpdateParams.config).toEqual({ ...cfg, plugins: { installs: {} } });
     expect(hookUpdateParams.hookIds).toEqual(["demo-hooks"]);
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
     expect(replaceConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({ nextConfig, baseHash: "update-config" }),
@@ -973,12 +1071,12 @@ describe("plugins cli update", () => {
     await runPluginsCommand(["plugins", "update", "demo-hooks"]);
 
     expect(runtimeErrors).toEqual([]);
-    const pluginUpdateParams = expectSingleCallParams(updateNpmInstalledPlugins);
-    expect(pluginUpdateParams.config).toEqual({
+    const hookUpdateParams = expectSingleCallParams(updateNpmInstalledHookPacks);
+    expect(hookUpdateParams.config).toEqual({
       ...cfg,
       plugins: { installs: {} },
     });
-    expect(updateNpmInstalledHookPacks).toHaveBeenCalledOnce();
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 

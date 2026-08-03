@@ -50,7 +50,7 @@ function channelRef(params?: Partial<StoredConversationReference>): StoredConver
   };
 }
 
-async function resolveMSTeamsProactiveReplyStyle(params: {
+async function resolveMSTeamsProactiveReplyTarget(params: {
   cfg?: MSTeamsConfig;
   conversationId: string;
   ref: StoredConversationReference;
@@ -76,12 +76,14 @@ async function resolveMSTeamsProactiveReplyStyle(params: {
       },
     },
   } as OpenClawConfig;
-  return (
-    await resolveMSTeamsSendContext({
-      cfg,
-      to: `conversation:${params.conversationId}`,
-    })
-  ).replyStyle;
+  const context = await resolveMSTeamsSendContext({
+    cfg,
+    to: `conversation:${params.conversationId}`,
+  });
+  return {
+    replyStyle: context.replyStyle,
+    threadActivityId: context.threadActivityId,
+  };
 }
 
 beforeEach(() => {
@@ -155,6 +157,7 @@ describe("resolveMSTeamsSendContext", () => {
       conversationId: "19:channel@thread.tacv2",
       ref: { threadId: "explicit-root" },
       replyStyle: "thread",
+      threadActivityId: "explicit-root",
     });
     expect(sendContextMockState.store.get).toHaveBeenCalledWith("19:channel@thread.tacv2");
   });
@@ -186,6 +189,7 @@ describe("resolveMSTeamsSendContext", () => {
       conversationId: "19:channel@thread.tacv2",
       ref: { threadId: "graph-root" },
       replyStyle: "thread",
+      threadActivityId: "graph-root",
     });
     expect(sendContextMockState.store.get).toHaveBeenCalledWith("19:channel@thread.tacv2");
   });
@@ -248,27 +252,27 @@ describe("resolveMSTeamsSendContext", () => {
   });
 });
 
-describe("resolveMSTeamsProactiveReplyStyle", () => {
+describe("resolveMSTeamsProactiveReplyTarget", () => {
   it("uses thread for channel conversations with a stored thread root", async () => {
     await expect(
-      resolveMSTeamsProactiveReplyStyle({
+      resolveMSTeamsProactiveReplyTarget({
         cfg: {},
         conversationId: "19:channel@thread.tacv2",
         ref: channelRef({ threadId: "thread-root-1" }),
         conversationType: "channel",
       }),
-    ).resolves.toBe("thread");
+    ).resolves.toEqual({ replyStyle: "thread", threadActivityId: "thread-root-1" });
   });
 
   it("falls back to activityId for legacy channel references", async () => {
     await expect(
-      resolveMSTeamsProactiveReplyStyle({
+      resolveMSTeamsProactiveReplyTarget({
         cfg: {},
         conversationId: "19:channel@thread.tacv2",
         ref: channelRef({ activityId: "legacy-root-1" }),
         conversationType: "channel",
       }),
-    ).resolves.toBe("thread");
+    ).resolves.toEqual({ replyStyle: "thread", threadActivityId: "legacy-root-1" });
   });
 
   it("keeps configured top-level channel routing", async () => {
@@ -284,44 +288,44 @@ describe("resolveMSTeamsProactiveReplyStyle", () => {
     };
 
     await expect(
-      resolveMSTeamsProactiveReplyStyle({
+      resolveMSTeamsProactiveReplyTarget({
         cfg,
         conversationId: "19:channel@thread.tacv2",
         ref: channelRef({ threadId: "thread-root-1" }),
         conversationType: "channel",
       }),
-    ).resolves.toBe("top-level");
+    ).resolves.toEqual({ replyStyle: "top-level", threadActivityId: undefined });
   });
 
   it("uses top-level when a channel has no stored thread root", async () => {
     await expect(
-      resolveMSTeamsProactiveReplyStyle({
+      resolveMSTeamsProactiveReplyTarget({
         cfg: { replyStyle: "thread" },
         conversationId: "19:channel@thread.tacv2",
         ref: channelRef(),
         conversationType: "channel",
       }),
-    ).resolves.toBe("top-level");
+    ).resolves.toEqual({ replyStyle: "top-level", threadActivityId: undefined });
   });
 
   it("uses top-level for non-channel conversations", async () => {
     const ref = channelRef({ activityId: "activity-1" });
 
     await expect(
-      resolveMSTeamsProactiveReplyStyle({
+      resolveMSTeamsProactiveReplyTarget({
         cfg: { replyStyle: "thread" },
         conversationId: "19:group@thread.v2",
         ref,
         conversationType: "groupChat",
       }),
-    ).resolves.toBe("top-level");
+    ).resolves.toEqual({ replyStyle: "top-level", threadActivityId: undefined });
     await expect(
-      resolveMSTeamsProactiveReplyStyle({
+      resolveMSTeamsProactiveReplyTarget({
         cfg: { replyStyle: "thread" },
         conversationId: "a:personal",
         ref,
         conversationType: "personal",
       }),
-    ).resolves.toBe("top-level");
+    ).resolves.toEqual({ replyStyle: "top-level", threadActivityId: undefined });
   });
 });

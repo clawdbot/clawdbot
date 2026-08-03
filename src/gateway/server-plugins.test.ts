@@ -1,19 +1,22 @@
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
-const clearActivatedPluginRuntimeState = vi.hoisted(() => vi.fn());
 const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn(() => ({
     startup: {
@@ -41,7 +44,7 @@ const handleGatewayRequest = vi.hoisted(() =>
 );
 
 vi.mock("../plugins/loader.js", () => ({
-  clearActivatedPluginRuntimeState,
+  loadAndActivateRootPluginRegistry: loadOpenClawPlugins,
   loadOpenClawPlugins,
 }));
 
@@ -149,7 +152,6 @@ function createLookUpTableForTest(params: {
     },
     startup: {
       channelPluginIds: [],
-      configuredDeferredChannelPluginIds: [],
       pluginIds: params.pluginIds ?? [],
     },
     workerProviderIds: params.workerProviderIds ?? [],
@@ -162,7 +164,6 @@ function createLookUpTableForTest(params: {
       indexPluginCount: 0,
       manifestPluginCount: 0,
       startupPluginCount: params.pluginIds?.length ?? 0,
-      deferredChannelPluginCount: 0,
     },
   };
 }
@@ -308,22 +309,21 @@ async function createSubagentRuntime(
   _serverPlugins: ServerPluginsModule,
   cfg: Record<string, unknown> = {},
 ): Promise<PluginRuntime["subagent"]> {
-  const log = createTestLog();
   loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-  serverPluginBootstrapModule.loadGatewayStartupPlugins({
+  loadGatewayStartupPluginsForTest({
     cfg,
-    workspaceDir: "/tmp",
-    log,
-    coreGatewayHandlers: {},
-    baseMethods: [],
   });
-  const call = getLastMockFirstArg(loadOpenClawPlugins, "plugin load") as
-    | { runtimeOptions?: { allowGatewaySubagentBinding?: boolean } }
+  return createRuntimeFromLastGatewayLoad().subagent;
+}
+
+function createRuntimeFromLastGatewayLoad(): PluginRuntime {
+  const runtimeOptions = getLastPluginLoadOption("runtimeOptions") as
+    | Parameters<PluginRuntimeModule["createPluginRuntime"]>[0]
     | undefined;
-  if (call?.runtimeOptions?.allowGatewaySubagentBinding !== true) {
-    throw new Error("Expected loadGatewayPlugins to opt into gateway subagent binding");
+  if (!runtimeOptions?.nodes || !runtimeOptions.subagent) {
+    throw new Error("Expected gateway plugin load to receive concrete node and subagent runtimes");
   }
-  return runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true }).subagent;
+  return runtimeModule.createPluginRuntime(runtimeOptions);
 }
 
 function registerActivePluginToolOwnership(
@@ -356,7 +356,7 @@ function loadGatewayPluginsForTest(
   overrides: Partial<Parameters<ServerPluginsModule["loadGatewayPlugins"]>[0]> = {},
 ) {
   const log = createTestLog();
-  serverPluginsModule.loadGatewayPlugins({
+  const loaded = serverPluginsModule.loadGatewayPlugins({
     cfg: {},
     workspaceDir: "/tmp",
     log,
@@ -364,6 +364,9 @@ function loadGatewayPluginsForTest(
     baseMethods: [],
     ...overrides,
   });
+  // The mocked root loader returns a value without performing its production
+  // installation side effect, so mirror that ownership boundary in the harness.
+  runtimeRegistryModule.setActivePluginRegistry(loaded.pluginRegistry);
   return log;
 }
 
@@ -371,7 +374,7 @@ function loadGatewayStartupPluginsForTest(
   overrides: Partial<Parameters<ServerPluginBootstrapModule["loadGatewayStartupPlugins"]>[0]> = {},
 ) {
   const log = createTestLog();
-  serverPluginBootstrapModule.loadGatewayStartupPlugins({
+  const loaded = serverPluginBootstrapModule.loadGatewayStartupPlugins({
     cfg: {},
     workspaceDir: "/tmp",
     log,
@@ -379,6 +382,7 @@ function loadGatewayStartupPluginsForTest(
     baseMethods: [],
     ...overrides,
   });
+  runtimeRegistryModule.setActivePluginRegistry(loaded.pluginRegistry);
   return log;
 }
 
@@ -387,7 +391,6 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  clearActivatedPluginRuntimeState.mockClear();
   loadOpenClawPlugins.mockReset();
   loadPluginLookUpTable.mockReset().mockReturnValue({
     startup: {
@@ -403,7 +406,6 @@ beforeEach(() => {
   pluginRuntimeLoaderLogger.error.mockClear();
   pluginRuntimeLoaderLogger.debug.mockClear();
   handleGatewayRequest.mockReset();
-  clearGatewaySubagentRuntime();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     switch (opts.req.method) {
       case "agent":
@@ -427,8 +429,8 @@ beforeEach(() => {
 afterEach(() => {
   setActiveDegradedPlugins([]);
   serverPluginsModule.clearFallbackGatewayContext();
-  clearGatewaySubagentRuntime();
   runtimeRegistryModule.resetPluginRuntimeStateForTest();
+  resetGlobalHookRunner();
 });
 
 describe("loadGatewayPlugins", () => {
@@ -570,20 +572,6 @@ describe("loadGatewayPlugins", () => {
     expect(getLastPluginLoadOption("manifestRegistry")).toBe(manifestRegistry);
     expect(getLastPluginLoadOption("installRecords")).toEqual(installRecords);
     expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["telegram"]);
-  });
-
-  test("pins the initial startup channel registry against later active-registry churn", () => {
-    const startupRegistry = createRegistry([]);
-    loadOpenClawPlugins.mockReturnValue(startupRegistry);
-
-    loadGatewayStartupPluginsForTest({
-      pluginIds: ["slack"],
-    });
-
-    const replacementRegistry = createRegistry([]);
-    runtimeRegistryModule.setActivePluginRegistry(replacementRegistry);
-
-    expect(runtimeRegistryModule.getActivePluginChannelRegistry()).toBe(startupRegistry);
   });
 
   test("keeps the raw activation source when a precomputed startup scope is reused", () => {
@@ -768,10 +756,27 @@ describe("loadGatewayPlugins", () => {
       baseMethods: ["sessions.get"],
     });
 
-    expect(clearActivatedPluginRuntimeState).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPlugins).not.toHaveBeenCalled();
     expect(result.pluginRegistry.plugins).toStrictEqual([]);
     expect(result.gatewayMethods).toEqual(["sessions.get"]);
+  });
+
+  test("activates the empty registry in the global hook runner", () => {
+    const previous = addLoadedPlugin(createRegistry([]), { id: "previous-plugin" });
+    runtimeRegistryModule.setActivePluginRegistry(previous);
+    initializeGlobalHookRunner(previous);
+    loadPluginLookUpTable.mockReturnValue({ startup: { pluginIds: [] } });
+
+    const result = serverPluginsModule.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: createTestLog(),
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+
+    expect(getGlobalPluginRegistry()).toBe(result.pluginRegistry);
+    expect(result.pluginRegistry.plugins).toStrictEqual([]);
   });
 
   test("stores workspaceDir on the active registry when startup scope is empty", () => {
@@ -1068,9 +1073,7 @@ describe("loadGatewayPlugins", () => {
       });
     });
 
-    const runtime = runtimeModule.createPluginRuntime({
-      allowGatewaySubagentBinding: true,
-    });
+    const runtime = createRuntimeFromLastGatewayLoad();
     const result = await runtime.nodes.list({ connected: true });
 
     expect(getLastDispatchedParams()).toStrictEqual({});
@@ -1098,7 +1101,7 @@ describe("loadGatewayPlugins", () => {
       });
     });
 
-    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    const runtime = createRuntimeFromLastGatewayLoad();
     const result = await runtime.nodes.list({ connected: true });
 
     expect(result.nodes[0]?.commands).toEqual([command]);
@@ -1110,9 +1113,7 @@ describe("loadGatewayPlugins", () => {
     loadGatewayStartupPluginsForTest();
     serverPluginsModule.setFallbackGatewayContext(createTestContext("nodes-invoke-browser-proxy"));
 
-    const runtime = runtimeModule.createPluginRuntime({
-      allowGatewaySubagentBinding: true,
-    });
+    const runtime = createRuntimeFromLastGatewayLoad();
     await gatewayRequestScopeModule.withPluginRuntimePluginScope(
       { pluginId: "google-meet", pluginOrigin: "bundled" },
       () =>
@@ -1143,7 +1144,7 @@ describe("loadGatewayPlugins", () => {
       } as GatewayRequestOptions["client"],
       isWebchatConnect: () => false,
     } satisfies PluginRuntimeGatewayRequestScope;
-    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    const runtime = createRuntimeFromLastGatewayLoad();
 
     await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
       gatewayRequestScopeModule.withPluginRuntimePluginScope(
@@ -1287,9 +1288,7 @@ describe("loadGatewayPlugins", () => {
       createTestContext("nodes-invoke-browser-proxy-no-elevate"),
     );
 
-    const runtime = runtimeModule.createPluginRuntime({
-      allowGatewaySubagentBinding: true,
-    });
+    const runtime = createRuntimeFromLastGatewayLoad();
     await gatewayRequestScopeModule.withPluginRuntimePluginScope(
       { pluginId: "third-party", pluginOrigin: "global" },
       () =>
@@ -1886,13 +1885,13 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("memory-core");
   });
 
-  test("can prefer setup-runtime channel plugins during startup loads", () => {
+  test("can select setup-runtime channel plugins for setup flows", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayPluginsForTest({
-      preferSetupRuntimeForChannelPlugins: true,
+      channelPluginLoadIntent: "setup",
     });
 
-    expect(getLastPluginLoadOption("preferSetupRuntimeForChannelPlugins")).toBe(true);
+    expect(getLastPluginLoadOption("channelPluginLoadIntent")).toBe("setup");
   });
 
   test("primes configured bindings during gateway startup", () => {
@@ -1942,88 +1941,6 @@ describe("loadGatewayPlugins", () => {
     const params = getRequiredLastDispatchedParams();
     expect(params.sessionKey).toBe("s-auto-enabled-bootstrap-policy");
     expect(params.model).toBe("openai/gpt-5.4");
-  });
-
-  test("can suppress duplicate diagnostics when reloading full runtime plugins", () => {
-    const { reloadDeferredGatewayPlugins } = serverPluginBootstrapModule;
-    const diagnostics: PluginDiagnostic[] = [
-      {
-        level: "error",
-        pluginId: "telegram",
-        source: "/tmp/telegram/index.ts",
-        message: "failed to load plugin: boom",
-      },
-    ];
-    loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
-    const log = createTestLog();
-
-    reloadDeferredGatewayPlugins({
-      cfg: {},
-      workspaceDir: "/tmp",
-      log,
-      coreGatewayHandlers: {},
-      baseMethods: [],
-      logDiagnostics: false,
-    });
-
-    expect(log.error).not.toHaveBeenCalled();
-    expect(log.info).not.toHaveBeenCalled();
-  });
-
-  test("reuses the initial startup plugin scope during deferred reloads", () => {
-    const { reloadDeferredGatewayPlugins } = serverPluginBootstrapModule;
-    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-    const manifestRegistry = { plugins: [], diagnostics: [] };
-
-    reloadDeferredGatewayPlugins({
-      cfg: {},
-      workspaceDir: "/tmp",
-      log: createTestLog(),
-      coreGatewayHandlers: {},
-      baseMethods: [],
-      pluginIds: ["discord"],
-      pluginLookUpTable: createLookUpTableForTest({
-        manifestRegistry,
-        pluginIds: ["discord"],
-      }),
-      logDiagnostics: false,
-    });
-
-    expect(loadPluginLookUpTable).not.toHaveBeenCalled();
-    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: {},
-      env: process.env,
-      manifestRegistry,
-    });
-    expect(getLastPluginLoadOption("manifestRegistry")).toBe(manifestRegistry);
-    expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["discord"]);
-  });
-
-  test("runs registry hook before priming configured bindings", () => {
-    const { prepareGatewayPluginLoad } = serverPluginBootstrapModule;
-    const order: string[] = [];
-    const pluginRegistry = createRegistry([]);
-    loadOpenClawPlugins.mockReturnValue(pluginRegistry);
-    primeConfiguredBindingRegistry.mockImplementation(() => {
-      order.push("prime");
-      return { bindingCount: 0, channelCount: 0 };
-    });
-
-    prepareGatewayPluginLoad({
-      cfg: {},
-      workspaceDir: "/tmp",
-      log: {
-        ...createTestLog(),
-      },
-      coreGatewayHandlers: {},
-      baseMethods: [],
-      beforePrimeRegistry: (loadedRegistry) => {
-        expect(loadedRegistry).toBe(pluginRegistry);
-        order.push("hook");
-      },
-    });
-
-    expect(order).toEqual(["hook", "prime"]);
   });
 
   test("shares fallback context across module reloads for existing runtimes", async () => {

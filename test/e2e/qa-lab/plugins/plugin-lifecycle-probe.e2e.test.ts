@@ -60,7 +60,7 @@ class FakeCommandChild extends EventEmitter {
   }
 }
 
-afterEach(tempDirs.cleanup);
+afterEach(() => tempDirs.cleanup());
 
 describe("plugin lifecycle matrix probe", () => {
   it("accepts inspect JSON for an enabled loaded plugin", async () => {

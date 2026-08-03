@@ -93,7 +93,6 @@ const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-read.ts",
   "src/gateway/server-methods/sessions-shared.ts",
   "src/gateway/server-methods/sessions-subscriptions.ts",
-  "src/gateway/server-methods/sessions.ts",
 ];
 
 export const migratedSessionAccessorFiles = new Set([

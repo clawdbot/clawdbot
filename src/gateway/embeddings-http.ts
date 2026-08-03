@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { drainRetainedLocalEmbeddingWorkerClients } from "../../packages/memory-host-sdk/src/host/embeddings-worker.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
@@ -129,6 +130,7 @@ async function drainEmbeddingProviderRetirements(scopeKey: string): Promise<void
   if (closeFailed) {
     throw firstError;
   }
+  await drainRetainedLocalEmbeddingWorkerClients();
 }
 
 function retainEmbeddingProviderForRetirement(
@@ -200,6 +202,9 @@ function encodeEmbeddingBase64(embedding: number[]): string {
 // Keep request limits local to the HTTP bridge; provider adapters may support
 // more, but this endpoint must protect gateway memory and request latency.
 function validateInputTexts(texts: string[]): string | undefined {
+  if (texts.length === 0 || texts.some((text) => text.length === 0)) {
+    return "`input` must contain at least one non-empty string.";
+  }
   if (texts.length > MAX_EMBEDDING_INPUTS) {
     return `Too many inputs (max ${MAX_EMBEDDING_INPUTS}).`;
   }

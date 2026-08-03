@@ -248,6 +248,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     params,
     cfg,
     accountId,
+    mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
     sessionKey,
@@ -263,6 +264,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
     const {
       conversationReadOrigin: _modelConversationReadOrigin,
+      mediaAccess: _modelMediaAccess,
       requesterAccountId: _modelRequesterAccountId,
       toolContext: _modelToolContext,
       ...runtimeParams
@@ -282,6 +284,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       },
       cfg,
       {
+        ...(mediaAccess !== undefined ? { mediaAccess } : {}),
         mediaLocalRoots,
         mediaReadFile,
         sessionKey,

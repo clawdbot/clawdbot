@@ -190,10 +190,8 @@ describe("createCodexAttemptTurnWatchController", () => {
       interruptTimeoutMs: 5_000,
       onInterruptTurn: vi.fn(),
       onTimeout,
-      onMarkTimedOut: vi.fn(),
       onAbort,
       onCompleted: vi.fn(),
-      onResolveCompletion: vi.fn(),
       onRecordEvent: vi.fn(),
       onAttemptProgress: vi.fn(),
       onProgressDiagnostic: vi.fn(),
@@ -3745,7 +3743,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    harness.close();
+    harness.close(
+      new Error('codex app-server exited: code=137 signal=SIGKILL stderr="worker exhausted"'),
+    );
 
     const result = await run;
     expect(readAttemptTerminal(result).promptError).toBe(
@@ -3759,6 +3759,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       replaySafe: true,
+      diagnostics: {
+        transportError:
+          'codex app-server exited: code=137 signal=SIGKILL stderr="worker exhausted"',
+      },
     });
   });
 

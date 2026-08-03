@@ -6,12 +6,8 @@ import type { SandboxToolPolicy } from "./sandbox.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagent-announce-handoff.js";
-import { isToolAllowedByPolicies } from "./tool-policy-match.js";
-import {
-  mergeAlsoAllowPolicy,
-  readToolAllowlistIntersection,
-  resolveToolProfilePolicy,
-} from "./tool-policy.js";
+import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "./tool-policy-match.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
 export type WebSearchToolPolicyParams = {
   webSearchEnabled?: boolean;
@@ -125,21 +121,10 @@ export function resolveWebSearchToolPolicy(
     requesterPolicies.subagentPolicy,
     requesterPolicies.inheritedToolPolicy,
   ];
-  const runtimeAllowlist = params.runtimeToolAllowlist;
-  const runtimeRestrictions = runtimeAllowlist
-    ? (readToolAllowlistIntersection(runtimeAllowlist) ?? [runtimeAllowlist])
-    : undefined;
-  // Runtime caps apply to the current turn only; persisting them would rotate
-  // a reusable provider session after a temporarily restricted handoff.
-  const runtimeAllowsWebSearch =
-    runtimeAllowlist === undefined ||
-    (runtimeRestrictions?.every(
-      (allow) => allow.length > 0 && isToolAllowedByPolicies("web_search", [{ allow }]),
-    ) ??
-      false);
   return {
+    // Runtime caps apply only to this turn; persistent policy keeps provider sessions reusable.
     allowed:
-      runtimeAllowsWebSearch &&
+      isRuntimeToolAllowed("web_search", params.runtimeToolAllowlist) &&
       isToolAllowedByPolicies("web_search", [
         ...fixedPolicies,
         requesterPolicies.groupPolicy,

@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -68,6 +69,12 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
       chatTypes: ["group"],
       threads: true,
     },
+    agentPrompt: {
+      messageToolHints: () => [
+        "- Buzz targets: use a configured room UUID, `buzz:<ROOM_UUID>`, or a unique current room name. Use the UUID when room names are ambiguous.",
+        "- Buzz mentions: write a unique current room member as `@Display Name`. For an explicit identity, include `nostr:npub...`; the public key must belong to the target room. Any unresolved or ambiguous label needs an explicit identity for every intended member.",
+      ],
+    },
     reload: { configPrefixes: ["channels.buzz"] },
     configSchema: BuzzConfigSchema,
     setupContract: buzzSetupContract,
@@ -101,7 +108,7 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
       inferTargetChatType: () => "group",
       targetResolver: {
         looksLikeId: looksLikeBuzzTarget,
-        hint: "<buzz:channel-uuid>",
+        hint: "<room UUID|configured room name>",
       },
       resolveOutboundSessionRoute: ({
         cfg,
@@ -133,9 +140,11 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
         });
       },
       resolveSessionConversation: ({ rawId }) => {
-        const channelId = parseBuzzTarget(rawId);
+        const { baseSessionKey, threadId } = parseThreadSessionSuffix(rawId);
+        const channelId = parseBuzzTarget(baseSessionKey ?? rawId);
         return {
           id: channelId,
+          threadId,
           baseConversationId: channelId,
           parentConversationCandidates: [channelId],
         };

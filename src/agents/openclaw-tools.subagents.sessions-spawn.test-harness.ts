@@ -236,7 +236,7 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
     getRuntimeConfig: () => hoisted.state.configOverride,
     cleanupBrowserSessionsForLifecycleEnd: async () => {},
     ensureContextEnginesInitialized: () => {},
-    ensureRuntimePluginsLoaded: () => {},
+    loadAgentRuntimePluginRegistryHandle: () => undefined,
     persistSubagentRunsToDisk: () => {
       hoisted.notifyEventWaiters();
     },

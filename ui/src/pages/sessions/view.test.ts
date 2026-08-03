@@ -549,6 +549,49 @@ describe("sessions view", () => {
     expect(onAssignCategory).toHaveBeenCalledWith("agent:main:main", "Research");
   });
 
+  it("disables category assignment controls without group write access", async () => {
+    const container = document.createElement("div");
+    const onAssignCategory = vi.fn();
+    const reason = "Operator write access is required.";
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "agent:main:main", kind: "direct", updatedAt: 1, category: "Research" },
+          ]),
+        ),
+        groupBy: "category",
+        knownCategories: ["Research"],
+        groupWriteDisabledReason: reason,
+        onAssignCategory,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const select = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move thread to a group"]',
+    );
+    expect(select?.disabled).toBe(true);
+    expect(select?.title).toBe(reason);
+    if (select) {
+      select.value = "";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    const headerRow = container.querySelector(".session-group-row");
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", {
+      value: {
+        types: ["application/x-openclaw-session-key"],
+        getData: () => "agent:main:main",
+      },
+    });
+    headerRow?.dispatchEvent(drop);
+
+    expect(onAssignCategory).not.toHaveBeenCalled();
+  });
+
   it("opens the session menu from the kebab and row context menu", async () => {
     const container = document.createElement("div");
     const onOpenSessionMenu = vi.fn();
@@ -1236,6 +1279,7 @@ describe("sessions view", () => {
           }),
         ),
         expandedSessionKey: "agent:main:main",
+        patchAdminDisabledReason: "Operator admin access is required.",
         checkpointItemsByKey: {
           "agent:main:main": [
             {
@@ -1294,6 +1338,12 @@ describe("sessions view", () => {
         (label) => label.textContent?.trim(),
       ),
     ).toEqual(["Label", "Thinking", "Fast", "Verbose", "Reasoning"]);
+    for (const select of overridesSection?.querySelectorAll<HTMLSelectElement>(
+      ".session-override-field select",
+    ) ?? []) {
+      expect(select.disabled).toBe(true);
+      expect(select.title).toBe("Operator admin access is required.");
+    }
 
     expect(
       compactionSection?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim(),

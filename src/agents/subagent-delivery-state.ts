@@ -26,8 +26,8 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
   entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
   entry.terminalOwner =
     entry.terminalOwner === "interrupted-recovery" &&
-    Number.isFinite(entry.endedAt) &&
-    entry.outcome?.status === "error" &&
+    Number.isFinite(entry.execution.endedAt) &&
+    entry.execution.outcome?.status === "error" &&
     entry.endedReason === "subagent-error" &&
     entry.pauseReason !== "sessions_yield"
       ? "interrupted-recovery"
@@ -46,6 +46,35 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
       supersededAt: Number.isFinite(killReconciliation.supersededAt)
         ? killReconciliation.supersededAt
         : undefined,
+    };
+  }
+  const killIntent = entry.killIntent;
+  if (
+    !killIntent ||
+    typeof killIntent !== "object" ||
+    !Number.isFinite(killIntent.requestedAt) ||
+    typeof killIntent.reason !== "string" ||
+    !killIntent.reason.trim()
+  ) {
+    delete entry.killIntent;
+  } else {
+    entry.killIntent = {
+      requestedAt: killIntent.requestedAt,
+      reason: killIntent.reason.trim(),
+      lifecycleGeneration:
+        typeof killIntent.lifecycleGeneration === "string" && killIntent.lifecycleGeneration.trim()
+          ? killIntent.lifecycleGeneration.trim()
+          : undefined,
+      sessionId:
+        typeof killIntent.sessionId === "string" && killIntent.sessionId.trim()
+          ? killIntent.sessionId.trim()
+          : undefined,
+      sessionLifecycleRevision:
+        typeof killIntent.sessionLifecycleRevision === "string" &&
+        killIntent.sessionLifecycleRevision.trim()
+          ? killIntent.sessionLifecycleRevision.trim()
+          : undefined,
+      suppressTaskDelivery: killIntent.suppressTaskDelivery === true ? true : undefined,
     };
   }
   // cleanupHandled is an in-process lock; after restart, unfinished cleanup must

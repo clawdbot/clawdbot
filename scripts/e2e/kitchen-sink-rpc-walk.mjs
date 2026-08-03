@@ -9,10 +9,15 @@ import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText,
+} from "../lib/bounded-response.mjs";
+import {
   resolveWindowsPowerShellPath,
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../lib/windows-taskkill.mjs";
+import { readTextFileTail } from "./lib/text-file-utils.mjs";
 
 const PLUGIN_SPEC =
   process.env.OPENCLAW_KITCHEN_SINK_NPM_SPEC || "npm:@openclaw/kitchen-sink@latest";
@@ -632,24 +637,12 @@ export function signalProcessGroup(
     useProcessGroup = platform !== "win32",
   } = {},
 ) {
-  if (useProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {}
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
-      return;
-    }
-  }
-  try {
-    child.kill(signal);
-  } catch (error) {
-    if (error?.code !== "ESRCH") {
-      throw error;
-    }
-  }
+  signalChildProcessTree(child, signal, {
+    killProcess: (pid, childSignal) => process.kill(pid, childSignal),
+    platform,
+    runTaskkill,
+    useProcessGroup,
+  });
 }
 
 async function runOpenClaw(runner, args, env, options = {}) {
@@ -1104,7 +1097,10 @@ export async function fetchJson(url, options = {}) {
         ? Promise.race([timeoutPromise, abortPromise])
         : timeoutPromise;
       const text = await Promise.race([
-        readBoundedResponseText(response, maxBodyBytes, bodyAbortPromise),
+        readBoundedResponseText(response, "fetch", maxBodyBytes, {
+          createTooLargeError: createBoundedResponseTooLargeError,
+          timeoutPromise: bodyAbortPromise,
+        }),
         bodyAbortPromise,
       ]);
       let body = null;
@@ -1155,75 +1151,6 @@ async function delayWithAbort(delayMs, signal) {
     }
     throw error;
   }
-}
-
-export async function readBoundedResponseText(response, byteLimit, timeoutPromise) {
-  const resolvedByteLimit = byteLimit ?? resolveKitchenSinkRpcConfig().fetchBodyMaxBytes;
-  const contentLength = response.headers?.get?.("content-length");
-  if (contentLength && /^\d+$/u.test(contentLength)) {
-    const parsedContentLength = Number(contentLength);
-    if (!Number.isSafeInteger(parsedContentLength) || parsedContentLength > resolvedByteLimit) {
-      await response.body?.cancel?.().catch(() => undefined);
-      throw createFetchBodyTooLargeError(resolvedByteLimit);
-    }
-  }
-
-  const reader = response.body?.getReader?.();
-  if (!reader) {
-    const text = await withOptionalTimeout(response.text(), timeoutPromise);
-    if (Buffer.byteLength(text, "utf8") > resolvedByteLimit) {
-      throw createFetchBodyTooLargeError(resolvedByteLimit);
-    }
-    return text;
-  }
-  const chunks = [];
-  let totalBytes = 0;
-  try {
-    for (;;) {
-      const read = reader.read();
-      const { done, value } = await withOptionalTimeout(
-        read,
-        timeoutPromise?.catch((error) => {
-          cancelReaderSoon(reader);
-          throw error;
-        }),
-      );
-      if (done) {
-        break;
-      }
-      const chunk = Buffer.from(value);
-      totalBytes += chunk.byteLength;
-      if (totalBytes > resolvedByteLimit) {
-        await reader.cancel().catch(() => undefined);
-        throw createFetchBodyTooLargeError(resolvedByteLimit);
-      }
-      chunks.push(chunk);
-    }
-  } finally {
-    try {
-      reader.releaseLock?.();
-    } catch {}
-  }
-  return Buffer.concat(chunks, totalBytes).toString("utf8");
-}
-
-function createFetchBodyTooLargeError(byteLimit) {
-  return Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
-    code: "ETOOBIG",
-  });
-}
-
-async function withOptionalTimeout(promise, timeoutPromise) {
-  if (!timeoutPromise) {
-    return await promise;
-  }
-  return await Promise.race([promise, timeoutPromise]);
-}
-
-function cancelReaderSoon(reader) {
-  void Promise.resolve()
-    .then(() => reader.cancel())
-    .catch(() => undefined);
 }
 
 function configureKitchenSink(env, port) {
@@ -1378,12 +1305,26 @@ export function signalGateway(child, signal, killProcess = defaultKillProcess, o
     runTaskkill = childProcess.spawnSync,
     useProcessGroup = platform !== "win32",
   } = options;
+  return signalChildProcessTree(child, signal, {
+    groupEsrchMeansExited: true,
+    killProcess,
+    platform,
+    runTaskkill,
+    useProcessGroup,
+  });
+}
+
+function signalChildProcessTree(
+  child,
+  signal,
+  { groupEsrchMeansExited = false, killProcess, platform, runTaskkill, useProcessGroup },
+) {
   if (useProcessGroup && typeof child.pid === "number") {
     try {
       killProcess(-child.pid, signal);
       return true;
     } catch (error) {
-      if (error?.code === "ESRCH") {
+      if (groupEsrchMeansExited && error?.code === "ESRCH") {
         return false;
       }
     }
@@ -1604,16 +1545,6 @@ export function assertChannelAccountRunning(payload) {
   return account;
 }
 
-export function extractTtsProviderIds(payload, surface) {
-  const entries =
-    surface === "providers"
-      ? payload?.providers
-      : surface === "status"
-        ? payload?.providerStates
-        : null;
-  return (Array.isArray(entries) ? entries : []).map((entry) => entry?.id).filter(isNonEmptyString);
-}
-
 export function assertTtsProviderCoverage(payload, surface) {
   const entries =
     surface === "providers"
@@ -1626,7 +1557,7 @@ export function assertTtsProviderCoverage(payload, surface) {
       `tts.${surface} returned invalid provider list: ${boundedJsonPreview(payload)}`,
     );
   }
-  const ids = extractTtsProviderIds(payload, surface);
+  const ids = entries.map((entry) => entry?.id).filter(isNonEmptyString);
   assertIncludesAny(ids, EXPECTED_SPEECH_PROVIDERS, `tts.${surface}`);
   const configuredEntry = entries.find(
     (entry) => EXPECTED_SPEECH_PROVIDERS.includes(entry?.id) && entry.configured === true,
@@ -1881,38 +1812,23 @@ function assertObjectPayload(payload, label) {
 
 export function assertGatewayHealthPayload(payload) {
   const health = assertObjectPayload(payload, "health");
-  const problems = [];
-  if (health.ok !== true) {
-    problems.push("ok=true");
-  }
-  if (!Number.isFinite(health.ts)) {
-    problems.push("numeric ts");
-  }
-  if (!Number.isFinite(health.durationMs)) {
-    problems.push("numeric durationMs");
-  }
-  if (!health.channels || typeof health.channels !== "object" || Array.isArray(health.channels)) {
-    problems.push("channels object");
-  }
-  if (!Array.isArray(health.channelOrder)) {
-    problems.push("channelOrder array");
-  }
-  if (!isNonEmptyString(health.defaultAgentId)) {
-    problems.push("defaultAgentId");
-  }
-  if (!Array.isArray(health.agents)) {
-    problems.push("agents array");
-  }
-  if (
-    !health.sessions ||
-    typeof health.sessions !== "object" ||
-    Array.isArray(health.sessions) ||
-    !isNonEmptyString(health.sessions.path) ||
-    !Number.isFinite(health.sessions.count) ||
-    !Array.isArray(health.sessions.recent)
-  ) {
-    problems.push("sessions summary");
-  }
+  const sessions = health.sessions;
+  const problems = failedPayloadChecks([
+    [health.ok === true, "ok=true"],
+    [Number.isFinite(health.ts), "numeric ts"],
+    [Number.isFinite(health.durationMs), "numeric durationMs"],
+    [isObjectRecord(health.channels), "channels object"],
+    [Array.isArray(health.channelOrder), "channelOrder array"],
+    [isNonEmptyString(health.defaultAgentId), "defaultAgentId"],
+    [Array.isArray(health.agents), "agents array"],
+    [
+      isObjectRecord(sessions) &&
+        isNonEmptyString(sessions.path) &&
+        Number.isFinite(sessions.count) &&
+        Array.isArray(sessions.recent),
+      "sessions summary",
+    ],
+  ]);
   if (problems.length > 0) {
     throw new Error(
       `health payload missing ${problems.join(", ")}: ${boundedJsonPreview(payload)}`,
@@ -1922,52 +1838,42 @@ export function assertGatewayHealthPayload(payload) {
 
 export function assertGatewayStatusPayload(payload) {
   const status = assertObjectPayload(payload, "status");
-  const problems = [];
-  if (
-    !status.heartbeat ||
-    typeof status.heartbeat !== "object" ||
-    Array.isArray(status.heartbeat) ||
-    !isNonEmptyString(status.heartbeat.defaultAgentId) ||
-    !Array.isArray(status.heartbeat.agents)
-  ) {
-    problems.push("heartbeat summary");
-  }
-  if (!Array.isArray(status.channelSummary)) {
-    problems.push("channelSummary array");
-  }
-  if (!Array.isArray(status.queuedSystemEvents)) {
-    problems.push("queuedSystemEvents array");
-  }
-  if (!status.tasks || typeof status.tasks !== "object" || Array.isArray(status.tasks)) {
-    problems.push("tasks summary");
-  }
-  if (
-    !status.taskAudit ||
-    typeof status.taskAudit !== "object" ||
-    Array.isArray(status.taskAudit)
-  ) {
-    problems.push("taskAudit summary");
-  }
-  if (
-    !status.sessions ||
-    typeof status.sessions !== "object" ||
-    Array.isArray(status.sessions) ||
-    !Array.isArray(status.sessions.paths) ||
-    !Number.isFinite(status.sessions.count) ||
-    !Array.isArray(status.sessions.recent) ||
-    !Array.isArray(status.sessions.byAgent) ||
-    !status.sessions.defaults ||
-    typeof status.sessions.defaults !== "object" ||
-    Array.isArray(status.sessions.defaults)
-  ) {
-    problems.push("sessions summary");
-  }
+  const { heartbeat, sessions } = status;
+  const problems = failedPayloadChecks([
+    [
+      isObjectRecord(heartbeat) &&
+        isNonEmptyString(heartbeat.defaultAgentId) &&
+        Array.isArray(heartbeat.agents),
+      "heartbeat summary",
+    ],
+    [Array.isArray(status.channelSummary), "channelSummary array"],
+    [Array.isArray(status.queuedSystemEvents), "queuedSystemEvents array"],
+    [isObjectRecord(status.tasks), "tasks summary"],
+    [isObjectRecord(status.taskAudit), "taskAudit summary"],
+    [
+      isObjectRecord(sessions) &&
+        Array.isArray(sessions.paths) &&
+        Number.isFinite(sessions.count) &&
+        Array.isArray(sessions.recent) &&
+        Array.isArray(sessions.byAgent) &&
+        isObjectRecord(sessions.defaults),
+      "sessions summary",
+    ],
+  ]);
   if (problems.length > 0) {
     throw new Error(
       `status payload missing ${problems.join(", ")}: ${boundedJsonPreview(payload)}`,
     );
   }
 }
+
+function failedPayloadChecks(checks) {
+  return checks.filter(([passed]) => !passed).map(([, label]) => label);
+}
+
+// This plain-Node entrypoint must run before workspace packages are linkable.
+const isObjectRecord = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
 
 function countDiagnosticEvents(payload, type) {
   const summaryCount = payload.summary?.byType?.[type];
@@ -2023,34 +1929,42 @@ async function samplePosixProcess(pid, run, commandLineNeedles = []) {
 }
 
 async function samplePosixProcessWithDescendants(pid, run) {
-  const safePid = Number(pid);
-  if (!Number.isInteger(safePid) || safePid <= 0) {
+  const snapshot = await readPosixProcessTreeSnapshot(pid, run);
+  if (!snapshot) {
     return null;
   }
-  try {
-    const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
-      timeoutMs: 5000,
-    });
-    const snapshot = parsePosixProcessRows(stdout);
-    if (!snapshot) {
-      return null;
-    }
-    const { malformedRows, rows } = snapshot;
-    const selected = rows.find((row) => row.processId === safePid);
-    if (!selected) {
-      return null;
-    }
-    const treeRows = collectPosixProcessTree(rows, safePid);
-    if (hasMalformedProcessTreeRows(malformedRows, treeRows)) {
-      return null;
-    }
-    return formatPosixProcessTreeSample(selected, treeRows);
-  } catch {
-    return null;
-  }
+  return formatPosixProcessTreeSample(snapshot.rootRow, snapshot.rootTreeRows);
 }
 
 async function samplePosixProcessTree(pid, run, commandLineNeedles) {
+  const snapshot = await readPosixProcessTreeSnapshot(pid, run);
+  if (!snapshot) {
+    return null;
+  }
+  const { rootRow, rootTreeRows, rows } = snapshot;
+  const descendants = rootTreeRows.filter((row) => row.processId !== rootRow.processId);
+  const matchesCommandNeedles = (row) =>
+    commandLineNeedles.every((needle) => row.command.toLowerCase().includes(needle.toLowerCase()));
+  const commandMatches = descendants.filter(matchesCommandNeedles);
+  const rootCommandMatches = matchesCommandNeedles(rootRow) ? [rootRow] : [];
+  const gatewayTitleMatches = descendants.filter((row) =>
+    row.command.toLowerCase().includes("openclaw-gateway"),
+  );
+  const selected = selectPeakRssProcess(
+    commandMatches.length > 0
+      ? commandMatches
+      : gatewayTitleMatches.length > 0
+        ? gatewayTitleMatches
+        : descendants.length > 0
+          ? descendants
+          : rootCommandMatches,
+  );
+  return selected
+    ? formatPosixProcessTreeSample(selected, collectPosixProcessTree(rows, selected.processId))
+    : null;
+}
+
+async function readPosixProcessTreeSnapshot(pid, run) {
   const safePid = Number(pid);
   if (!Number.isInteger(safePid) || safePid <= 0) {
     return null;
@@ -2065,36 +1979,11 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     }
     const { malformedRows, rows } = snapshot;
     const rootTreeRows = collectPosixProcessTree(rows, safePid);
-    if (hasMalformedProcessTreeRows(malformedRows, rootTreeRows)) {
+    const rootRow = rootTreeRows.find((row) => row.processId === safePid);
+    if (!rootRow || hasMalformedProcessTreeRows(malformedRows, rootTreeRows)) {
       return null;
     }
-    const rootRow = rootTreeRows.find((row) => row.processId === safePid) ?? null;
-    const descendants = rootTreeRows.filter((row) => row.processId !== safePid);
-    const matchesCommandNeedles = (row) =>
-      commandLineNeedles.every((needle) =>
-        row.command.toLowerCase().includes(needle.toLowerCase()),
-      );
-    const commandMatches = descendants.filter(matchesCommandNeedles);
-    const rootCommandMatches = rootRow && matchesCommandNeedles(rootRow) ? [rootRow] : [];
-    const gatewayTitleMatches = descendants.filter((row) =>
-      row.command.toLowerCase().includes("openclaw-gateway"),
-    );
-    const selected = selectPeakRssProcess(
-      commandMatches.length > 0
-        ? commandMatches
-        : gatewayTitleMatches.length > 0
-          ? gatewayTitleMatches
-          : descendants.length > 0
-            ? descendants
-            : rootCommandMatches,
-    );
-    if (!selected) {
-      return null;
-    }
-    return formatPosixProcessTreeSample(
-      selected,
-      collectPosixProcessTree(rows, selected.processId),
-    );
+    return { rootRow, rootTreeRows, rows };
   } catch {
     return null;
   }
@@ -2535,21 +2424,8 @@ function assertNoErrorLogs(logPath) {
   }
 }
 
-export function tailFile(file, maxBytes = LOG_TAIL_BYTES) {
-  if (!fs.existsSync(file)) {
-    return "";
-  }
-  const stat = fs.statSync(file);
-  const start = Math.max(0, stat.size - Math.max(1, maxBytes));
-  const length = stat.size - start;
-  const fd = fs.openSync(file, "r");
-  try {
-    const buffer = Buffer.alloc(length);
-    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return tailText(buffer.subarray(0, bytesRead).toString("utf8"));
-  } finally {
-    fs.closeSync(fd);
-  }
+function tailFile(file, maxBytes = LOG_TAIL_BYTES) {
+  return tailText(readTextFileTail(file, Math.max(1, maxBytes)));
 }
 
 function tailText(text) {
@@ -2560,7 +2436,7 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-export async function main() {
+async function main() {
   const config = resolveKitchenSinkRpcConfig();
   let runner = resolveOpenClawRunner();
   const port = await resolveKitchenSinkRpcPort();

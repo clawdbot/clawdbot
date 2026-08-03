@@ -129,6 +129,20 @@ export function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
     ?.focus({ preventScroll: true });
 }
 
+export function preserveComposerFocusOnPrimaryAction(
+  event: PointerEvent,
+  textarea: HTMLTextAreaElement | null,
+): void {
+  const composerShell = textarea?.closest<HTMLElement>(".agent-chat__composer-shell");
+  if (
+    document.activeElement === textarea &&
+    composerShell &&
+    Number.parseFloat(getComputedStyle(composerShell).marginBottom) === 0
+  ) {
+    event.preventDefault();
+  }
+}
+
 export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
   requestAnimationFrame(() => {
     if (document.activeElement !== target) {

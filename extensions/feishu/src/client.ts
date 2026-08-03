@@ -14,6 +14,7 @@ const require = createRequire(import.meta.url);
 const pluginVersion = readPluginPackageVersion({ require });
 
 const FEISHU_USER_AGENT = `openclaw-feishu-builtin/${pluginVersion}/${process.platform}`;
+const FEISHU_SDK_ORIGIN = "https://open.feishu.cn";
 
 const FEISHU_WS_CONFIG = {
   pingTimeout: 3,
@@ -260,14 +261,10 @@ const clientCache = new Map<
   }
 >();
 
-function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
-  if (domain === "lark") {
-    return feishuClientSdk.Domain.Lark;
-  }
-  if (domain === "feishu" || !domain) {
-    return feishuClientSdk.Domain.Feishu;
-  }
-  return domain.replace(/\/+$/, ""); // Custom URL for private deployment
+function resolveSdkDomain(domain: FeishuDomain | undefined): Lark.Domain {
+  // The SDK parses :port in its domain as an API route parameter; custom origins
+  // must stay in their account-owned HTTP transport until path expansion ends.
+  return domain === "lark" ? feishuClientSdk.Domain.Lark : feishuClientSdk.Domain.Feishu;
 }
 
 /**
@@ -276,13 +273,38 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
  * indefinite hangs, set a standardized User-Agent per OAPI best practices, and
  * keep axios from taking a separate ambient proxy path for HTTPS requests.
  */
-function createFeishuHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
+function createFeishuHttpInstance(
+  defaultTimeoutMs: number,
+  configuredDomain?: FeishuDomain,
+): Lark.HttpInstance {
   const base: FeishuHttpInstanceLike = feishuClientSdk.defaultHttpInstance;
+  const customDomain =
+    configuredDomain && configuredDomain !== "feishu" && configuredDomain !== "lark"
+      ? new URL(configuredDomain)
+      : undefined;
+
+  function resolveRequestUrl(url: string): string {
+    if (!customDomain) {
+      return url;
+    }
+    const requestUrl = new URL(url);
+    if (requestUrl.origin !== FEISHU_SDK_ORIGIN) {
+      return url;
+    }
+    const destination = new URL(customDomain);
+    destination.pathname = `${destination.pathname.replace(/\/+$/, "")}${requestUrl.pathname}`;
+    destination.search = requestUrl.search;
+    destination.hash = requestUrl.hash;
+    return destination.toString();
+  }
 
   async function injectRequestOptions<D>(
     opts?: Lark.HttpRequestOptions<D>,
   ): Promise<FeishuProxyAwareHttpRequestOptions<D>> {
     const next: FeishuProxyAwareHttpRequestOptions<D> = { timeout: defaultTimeoutMs, ...opts };
+    if (typeof next.url === "string") {
+      next.url = resolveRequestUrl(next.url);
+    }
     const agent = await getFeishuProxyAgent();
     if (agent) {
       if (isManagedProxyActive()) {
@@ -300,13 +322,18 @@ function createFeishuHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
   return {
     request: async (opts) =>
       base.request(await injectRequestOptions(normalizeMultipartUploadData(opts))),
-    get: async (url, opts) => base.get(url, await injectRequestOptions(opts)),
-    post: async (url, data, opts) => base.post(url, data, await injectRequestOptions(opts)),
-    put: async (url, data, opts) => base.put(url, data, await injectRequestOptions(opts)),
-    patch: async (url, data, opts) => base.patch(url, data, await injectRequestOptions(opts)),
-    delete: async (url, opts) => base.delete(url, await injectRequestOptions(opts)),
-    head: async (url, opts) => base.head(url, await injectRequestOptions(opts)),
-    options: async (url, opts) => base.options(url, await injectRequestOptions(opts)),
+    get: async (url, opts) => base.get(resolveRequestUrl(url), await injectRequestOptions(opts)),
+    post: async (url, data, opts) =>
+      base.post(resolveRequestUrl(url), data, await injectRequestOptions(opts)),
+    put: async (url, data, opts) =>
+      base.put(resolveRequestUrl(url), data, await injectRequestOptions(opts)),
+    patch: async (url, data, opts) =>
+      base.patch(resolveRequestUrl(url), data, await injectRequestOptions(opts)),
+    delete: async (url, opts) =>
+      base.delete(resolveRequestUrl(url), await injectRequestOptions(opts)),
+    head: async (url, opts) => base.head(resolveRequestUrl(url), await injectRequestOptions(opts)),
+    options: async (url, opts) =>
+      base.options(resolveRequestUrl(url), await injectRequestOptions(opts)),
   };
 }
 
@@ -352,8 +379,8 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     appId,
     appSecret,
     appType: feishuClientSdk.AppType.SelfBuild,
-    domain: resolveDomain(domain),
-    httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs),
+    domain: resolveSdkDomain(domain),
+    httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs, domain),
   });
 
   // Cache it
@@ -389,8 +416,8 @@ export async function createFeishuWSClient(
   return new feishuClientSdk.WSClient({
     appId,
     appSecret,
-    domain: resolveDomain(domain),
-    httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs),
+    domain: resolveSdkDomain(domain),
+    httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs, domain),
     ...callbacks,
     loggerLevel: feishuClientSdk.LoggerLevel.info,
     wsConfig: FEISHU_WS_CONFIG,

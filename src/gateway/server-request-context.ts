@@ -42,6 +42,7 @@ type GatewayRequestContextParams = {
   listSessionPendingApprovals: GatewayRequestContext["listSessionPendingApprovals"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
   loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
+  readPreparedGatewayModelCatalog?: GatewayRequestContext["readPreparedGatewayModelCatalog"];
   getHealthCache: GatewayRequestContext["getHealthCache"];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   logHealth: GatewayRequestContext["logHealth"];
@@ -184,6 +185,9 @@ export function createGatewayRequestContext(
     listSessionPendingApprovals: params.listSessionPendingApprovals,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
+    ...(params.readPreparedGatewayModelCatalog
+      ? { readPreparedGatewayModelCatalog: params.readPreparedGatewayModelCatalog }
+      : {}),
     getHealthCache: params.getHealthCache,
     refreshHealthSnapshot: params.refreshHealthSnapshot,
     logHealth: params.logHealth,
