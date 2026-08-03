@@ -9,6 +9,7 @@ import { withEnv } from "../test-utils/env.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
+  isStaleAutoFallbackOriginOverride,
   markAutoFallbackPrimaryProbe,
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
@@ -534,6 +535,52 @@ describe("resolveAgentConfig", () => {
         probeState,
       }),
     ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
+  });
+
+  it("detects polluted auto-fallback origins that no longer match the primary", () => {
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-haiku-4-5",
+    };
+
+    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-8")).toBe(true);
+    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-opus-4-7")).toBe(true);
+    expect(isStaleAutoFallbackOriginOverride(entry, "anthropic", "claude-haiku-4-5")).toBe(false);
+    expect(isStaleAutoFallbackOriginOverride(entry, "openai", "claude-haiku-4-5")).toBe(true);
+  });
+
+  it("does not treat user overrides or missing origins as stale origins", () => {
+    const autoEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus-4-8",
+    };
+    const userEntry: SessionEntry = {
+      ...autoEntry,
+      modelOverrideSource: "user",
+    };
+    const missingOriginEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      modelOverrideSource: "auto",
+    };
+
+    expect(isStaleAutoFallbackOriginOverride(autoEntry, "anthropic", "gpt-5.5")).toBe(true);
+    expect(isStaleAutoFallbackOriginOverride(userEntry, "anthropic", "gpt-5.5")).toBe(false);
+    expect(isStaleAutoFallbackOriginOverride(missingOriginEntry, "anthropic", "gpt-5.5")).toBe(
+      false,
+    );
   });
 
   it("prunes stale and excess primary probe throttle entries", () => {

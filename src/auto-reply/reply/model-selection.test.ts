@@ -2090,6 +2090,46 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(state.resetModelOverride).toBe(false);
   });
 
+  it("clears stale auto-failover override on normal turn when fallback origin changed", async () => {
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.3",
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideReason).toBe("stale");
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginModel).toBeUndefined();
+  });
+
+  it("preserves a user override on normal turn even when its origin looks stale", async () => {
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "user",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.3",
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+    });
+
+    expect(state.provider).toBe("openrouter");
+    expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
+  });
+
   it("preserves a legacy override with no modelOverrideSource (treated as user)", async () => {
     // Sessions persisted before modelOverrideSource was introduced lack the field.
     // Backward-compat rule: missing source + present override = user selection.

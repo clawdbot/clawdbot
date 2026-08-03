@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
+  isStaleAutoFallbackOriginOverride,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
   resolveAgentDir,
@@ -552,7 +553,6 @@ export async function getReplyFromConfig(
   }
   const {
     sessionCtx,
-    sessionEntry,
     initialSessionEntry,
     sessionEntryHandle,
     previousSessionEntry,
@@ -569,6 +569,7 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  let sessionEntry = sessionState.sessionEntry;
   const sessionModelSelectionLocked = isModelSelectionLocked(sessionEntry);
   if (sessionModelSelectionLocked && hasResolvedHeartbeatModelOverride) {
     // Heartbeat routing is turn-local. A native harness lock owns the durable
@@ -699,6 +700,36 @@ export async function getReplyFromConfig(
       : null;
   const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
   const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
+  // A polluted fallback origin (recorded as the chain's failed model instead of the
+  // configured primary) prevents the snap-back probe from firing. Repair it in place
+  // before the probe check so this turn can retry the primary.
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    sessionEntryHandle &&
+    !sessionModelSelectionLocked &&
+    isStaleAutoFallbackOriginOverride(sessionEntry, primaryProvider, primaryModel)
+  ) {
+    const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
+    const originPatch = {
+      modelOverrideFallbackOriginProvider: primaryProvider,
+      modelOverrideFallbackOriginModel: primaryModel,
+    };
+    const nextEntry = { ...sessionEntry, ...originPatch };
+    if (storePath) {
+      const persistedEntry = await updateSessionEntry(
+        { storePath, sessionKey },
+        (entry) => (entry.sessionId === nextEntry.sessionId ? originPatch : null),
+        { skipMaintenance: true, takeCacheOwnership: true },
+      );
+      sessionEntry = persistedEntry ?? nextEntry;
+    } else {
+      sessionEntry = nextEntry;
+    }
+    sessionEntryHandle.replaceCurrent(sessionEntry);
+    sessionStore[sessionKey] = sessionEntry;
+  }
   const hasSessionModelOverride = Boolean(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),

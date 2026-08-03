@@ -1,6 +1,7 @@
 /** Model selection state for reply runs, including catalog and override handling. */
 import {
   hasLegacyAutoFallbackWithoutOrigin,
+  isStaleAutoFallbackOriginOverride,
   resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultAgentId,
@@ -297,10 +298,14 @@ export async function createModelSelectionState(params: {
     normalizedDirectOverride !== null &&
     modelKey(normalizedCurrentSelection.provider, normalizedCurrentSelection.model) !==
       modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model);
+  const staleAutoFallbackOriginOverride =
+    directStoredModelOverride?.source === "session" &&
+    isStaleAutoFallbackOriginOverride(sessionEntry, primaryProvider, primaryModel);
   const staleDirectStoredOverride =
     staleHeartbeatAutoFallbackOverride ||
     staleLegacyOpenAICodexAutoOverride ||
-    staleLegacyAutoFallbackWithoutOrigin;
+    staleLegacyAutoFallbackWithoutOrigin ||
+    staleAutoFallbackOriginOverride;
 
   if (needsModelCatalog) {
     const catalogSnapshot = await loadRuntimeCatalogSnapshot();
@@ -434,7 +439,8 @@ export async function createModelSelectionState(params: {
   // Skip stored session model override only when an explicit heartbeat.model
   // was resolved. Heartbeats without heartbeat.model still inherit normal
   // overrides unless a direct auto fallback override is stale for the current
-  // configured default.
+  // configured default. Polluted fallback-origin metadata is also treated as
+  // stale so the snap-back probe can fire on subsequent turns.
   const skipStoredOverride =
     params.skipStoredModelOverride === true ||
     hasOneTurnModelOverride ||

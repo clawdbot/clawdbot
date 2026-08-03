@@ -14,6 +14,7 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
+import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import "./get-reply.test-runtime-mocks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -135,18 +136,31 @@ function makePerModelThinkingConfig(
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function mockAutoFallbackSession(params: { modelSelectionLocked?: boolean } = {}) {
+function mockAutoFallbackSession(
+  params: {
+    modelSelectionLocked?: boolean;
+    originProvider?: string;
+    originModel?: string;
+  } = {},
+) {
   const sessionKey = "agent:main:telegram:123";
+  const sessionStore: Record<string, SessionEntry> = {};
   const sessionEntry: SessionEntry = {
     sessionId: "fallback-session",
     updatedAt: Date.now(),
     providerOverride: "anthropic",
     modelOverride: "claude-fallback",
     modelOverrideSource: "auto",
-    modelOverrideFallbackOriginProvider: "openai",
-    modelOverrideFallbackOriginModel: "gpt-5.5",
+    modelOverrideFallbackOriginProvider: params.originProvider ?? "openai",
+    modelOverrideFallbackOriginModel: params.originModel ?? "gpt-5.5",
     modelSelectionLocked: params.modelSelectionLocked,
   };
+  sessionStore[sessionKey] = sessionEntry;
+  const sessionEntryHandle = createReplySessionEntryHandle({
+    sessionEntry,
+    sessionKey,
+    sessionStore,
+  });
   // Reply-turn admission re-reads the canonical SQLite store before starting
   // work; seed a real per-test store so the guard sees the same session the
   // mocks describe instead of depending on leftover host state.
@@ -156,13 +170,14 @@ function mockAutoFallbackSession(params: { modelSelectionLocked?: boolean } = {}
     createGetReplySessionState({
       sessionKey,
       sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
+      sessionEntryHandle,
+      sessionStore,
       storePath,
       triggerBodyNormalized: "hello",
       bodyStripped: "hello",
     }),
   );
-  return { sessionKey };
+  return { sessionKey, sessionStore, sessionEntryHandle };
 }
 
 function mockFallbackDirectiveResult(params: {
@@ -380,5 +395,28 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(runParams?.model).toBe("gpt-5.5");
     expect(runParams?.resolvedThinkLevel).toBe("high");
     expect(runParams?.resolvedReasoningLevel).toBe("off");
+  });
+
+  it("repairs a polluted fallback origin so the snap-back probe can fire", async () => {
+    const { sessionKey, sessionStore } = mockAutoFallbackSession({
+      originProvider: "anthropic",
+      originModel: "claude-fallback",
+    });
+    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), undefined, makeReasoningModelConfig()),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    const runParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+    expect(runParams?.provider).toBe("openai");
+    expect(runParams?.model).toBe("gpt-5.5");
+    const storedEntry = sessionStore[sessionKey];
+    expect(storedEntry?.providerOverride).toBe("anthropic");
+    expect(storedEntry?.modelOverride).toBe("claude-fallback");
+    expect(storedEntry?.modelOverrideSource).toBe("auto");
+    expect(storedEntry?.modelOverrideFallbackOriginProvider).toBe("openai");
+    expect(storedEntry?.modelOverrideFallbackOriginModel).toBe("gpt-5.5");
   });
 });

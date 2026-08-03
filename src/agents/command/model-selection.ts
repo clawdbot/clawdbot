@@ -27,6 +27,7 @@ import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
+  isStaleAutoFallbackOriginOverride,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
@@ -246,12 +247,6 @@ export async function resolveEmbeddedModelSelection(params: {
     hasLegacyAutoFallbackOverrideWithoutOrigin = false;
   }
 
-  const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
-    ? undefined
-    : sessionEntry?.providerOverride?.trim();
-  const storedModelOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
-    ? undefined
-    : sessionEntry?.modelOverride?.trim();
   const currentRunModelChannel = [
     params.runContext.messageChannel,
     params.opts.replyChannel,
@@ -287,6 +282,51 @@ export async function resolveEmbeddedModelSelection(params: {
     : null;
   const primaryProvider = normalizedChannelOverride?.provider ?? defaultProvider;
   const primaryModel = normalizedChannelOverride?.model ?? defaultModel;
+  // A polluted fallback origin (recorded as the chain's failed model instead of the
+  // configured primary) prevents the snap-back probe from firing. Clear it so this
+  // attempt can retry the primary and, if needed, recreate a clean auto-fallback pin.
+  if (
+    sessionEntry &&
+    params.sessionStore &&
+    params.sessionKey &&
+    !params.suppressVisibleSessionEffects &&
+    isStaleAutoFallbackOriginOverride(sessionEntry, primaryProvider, primaryModel)
+  ) {
+    const initialEntry = sessionEntry;
+    const entry = { ...sessionEntry };
+    const { updated } = applyModelOverrideToSessionEntry({
+      entry,
+      selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
+    });
+    if (updated) {
+      sessionEntry = await persistSessionEntry({
+        sessionStore: params.sessionStore,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        initialEntry,
+        entry,
+      });
+      const adoptedHasStoredOverride = Boolean(
+        sessionEntry?.modelOverride || sessionEntry?.providerOverride,
+      );
+      storedModelOverrideSource = adoptedHasStoredOverride
+        ? sessionEntry?.modelOverrideSource
+        : undefined;
+      storedModelOverrideRouteResolution = adoptedHasStoredOverride
+        ? resolveSessionModelOverrideRouteResolution(sessionEntry)
+        : undefined;
+      hasStoredAutoFallbackProvenance =
+        adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
+      hasLegacyAutoFallbackOverrideWithoutOrigin =
+        adoptedHasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
+    }
+  }
+  const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+    ? undefined
+    : sessionEntry?.providerOverride?.trim();
+  const storedModelOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+    ? undefined
+    : sessionEntry?.modelOverride?.trim();
   const hasEffectiveStoredOverride = Boolean(storedProviderOverride || storedModelOverride);
   if (normalizedChannelOverride && !hasEffectiveStoredOverride) {
     provider = normalizedChannelOverride.provider;

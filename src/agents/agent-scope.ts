@@ -123,6 +123,45 @@ export function hasLegacyAutoFallbackWithoutOrigin(
   );
 }
 
+/** Detects auto-fallback overrides whose recorded origin no longer matches the current primary.
+ *  A polluted origin (e.g. the chain's terminal failed model) prevents the snap-back probe from
+ *  firing, so this predicate lets model-selection paths treat the pin as stale and reset it. */
+export function isStaleAutoFallbackOriginOverride(
+  entry:
+    | Pick<
+        SessionEntry,
+        | "modelOverrideSource"
+        | "modelOverrideFallbackOriginProvider"
+        | "modelOverrideFallbackOriginModel"
+        | "providerOverride"
+        | "modelOverride"
+      >
+    | null
+    | undefined,
+  primaryProvider: string,
+  primaryModel: string,
+): boolean {
+  if (!entry) {
+    return false;
+  }
+  const recoveredAutoFallbackOverride =
+    entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
+  if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+    return false;
+  }
+  const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
+  const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
+  if (!originProvider || !originModel) {
+    return false;
+  }
+  const normalizedPrimaryProvider = normalizeOptionalString(primaryProvider);
+  const normalizedPrimaryModel = normalizeOptionalString(primaryModel);
+  if (!normalizedPrimaryProvider || !normalizedPrimaryModel) {
+    return false;
+  }
+  return originProvider !== normalizedPrimaryProvider || originModel !== normalizedPrimaryModel;
+}
+
 export function resolveAutoFallbackPrimaryProbe(params: {
   entry:
     | Pick<
