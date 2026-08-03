@@ -1,7 +1,6 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { slackPlugin } from "../../extensions/slack/channel-plugin-api.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { routeReply } from "../auto-reply/reply/route-reply.js";
 import * as bundledChannelPlugins from "../channels/plugins/bundled.js";
@@ -47,14 +46,23 @@ vi.mock("../channels/message/runtime.js", () => ({
 
 function installStructuredReplyTestChannel(loaded: boolean): () => void {
   const previousRegistry = captureActivePluginRegistrySnapshot();
+  const channelPlugin = {
+    ...createChannelTestPluginBase({ id: "slack" }),
+    messaging: {
+      hasStructuredReplyPayload: ({ payload }: { payload: ReplyPayload }) => {
+        const blocks = (payload.channelData?.slack as { blocks?: unknown } | undefined)?.blocks;
+        return Array.isArray(blocks) && blocks.length > 0;
+      },
+    },
+  };
   const originalGetBundledChannelPlugin = bundledChannelPlugins.getBundledChannelPlugin;
   const bundledPluginOverride = loaded
     ? undefined
     : vi
         .spyOn(bundledChannelPlugins, "getBundledChannelPlugin")
         .mockImplementation((channelId) =>
-          channelId === slackPlugin.id
-            ? (slackPlugin as ReturnType<typeof originalGetBundledChannelPlugin>)
+          channelId === channelPlugin.id
+            ? channelPlugin
             : originalGetBundledChannelPlugin(channelId),
         );
   setActivePluginRegistry(
@@ -64,16 +72,7 @@ function installStructuredReplyTestChannel(loaded: boolean): () => void {
             {
               pluginId: "slack",
               source: "tts-runtime-fallback-test",
-              plugin: {
-                ...createChannelTestPluginBase({ id: "slack" }),
-                messaging: {
-                  hasStructuredReplyPayload: ({ payload }: { payload: ReplyPayload }) => {
-                    const blocks = (payload.channelData?.slack as { blocks?: unknown } | undefined)
-                      ?.blocks;
-                    return Array.isArray(blocks) && blocks.length > 0;
-                  },
-                },
-              },
+              plugin: channelPlugin,
             },
           ]
         : [],
