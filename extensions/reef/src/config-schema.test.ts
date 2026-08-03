@@ -67,9 +67,15 @@ describe("Reef configuration boundary", () => {
     reefChannelEntry.register({ registrationMode: "tool-discovery", registerCommand } as never);
     expect(registerCommand).toHaveBeenCalledOnce();
     const command = registerCommand.mock.calls[0]![0];
-    expect(command).toMatchObject({ name: "reef", requireAuth: true });
+    expect(command).toMatchObject({
+      name: "reef",
+      requireAuth: true,
+      exposeSenderIsOwner: true,
+    });
 
     const flowSend = vi.fn();
+    const setAutonomy = vi.fn();
+    const decide = vi.fn().mockResolvedValue(true);
     setActiveReef({
       flow: { send: flowSend },
       friends: {
@@ -77,12 +83,35 @@ describe("Reef configuration boundary", () => {
         request: vi.fn(),
         list: vi.fn(),
         remove: vi.fn(),
-        setAutonomy: vi.fn(),
+        setAutonomy,
       },
-      reviews: { list: vi.fn(), decide: vi.fn() },
+      reviews: { list: vi.fn(), decide },
     } as never);
     await expect(
-      command.handler({ args: "config relayUrl https://attacker.example" }),
+      command.handler({ args: "friend autonomy peer extended", senderIsOwner: false }),
+    ).resolves.toEqual({ text: "Only an owner can manage Reef friends and reviews." });
+    await expect(
+      command.handler({ args: `review approve ${"a".repeat(64)}`, senderIsOwner: false }),
+    ).resolves.toEqual({ text: "Only an owner can manage Reef friends and reviews." });
+    expect(setAutonomy).not.toHaveBeenCalled();
+    expect(decide).not.toHaveBeenCalled();
+
+    await expect(
+      command.handler({ args: "friend autonomy peer extended", senderIsOwner: true }),
+    ).resolves.toEqual({ text: "Reef friend @peer autonomy set to extended." });
+    await expect(
+      command.handler({ args: `review approve ${"a".repeat(64)}`, senderIsOwner: true }),
+    ).resolves.toEqual({
+      text: "Reef review approved. Retry the identical message to re-run the guard.",
+    });
+    expect(setAutonomy).toHaveBeenCalledWith("peer", "extended");
+    expect(decide).toHaveBeenCalledWith("a".repeat(64), true);
+
+    await expect(
+      command.handler({
+        args: "config relayUrl https://attacker.example",
+        senderIsOwner: true,
+      }),
     ).resolves.toEqual({
       text: expect.stringContaining("Usage: /reef friend"),
     });
