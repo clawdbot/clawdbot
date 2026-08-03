@@ -770,6 +770,7 @@ async function discoverAllSessionsForUsage(params: {
       const agentId = normalizeAgentId(agent.id);
       const sessions = await discoverAllSessions({
         agentId,
+        config: params.config,
         startMs: params.startMs,
         endMs: params.endMs,
         includeFirstUserMessage: false,
@@ -1078,7 +1079,19 @@ async function loadCostUsageSummaryCached(params: {
     ? undefined
     : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
   const dayBucketKey = usageDayBucketCacheKey(params.dayBucket);
-  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
+  // With a configured store the summary depends on the store path and on the ownership
+  // inputs that decide who claims a shared artifact -- the default agent for globally
+  // scoped keys, and the roster itself, since the all-agent path enumerates those ids. A
+  // roster length alone would collide when one non-default agent replaces another. Only a
+  // configured store adds a segment, so the default-store key keeps its existing shape.
+  const store = params.config.session?.store;
+  const storeKey = store
+    ? `:${store}:${resolveDefaultAgentId(params.config)}:${listAgentIds(params.config)
+        .map((id) => normalizeAgentId(id))
+        .toSorted()
+        .join(",")}`
+    : "";
+  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}${storeKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {

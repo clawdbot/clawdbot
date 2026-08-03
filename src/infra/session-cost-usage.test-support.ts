@@ -1,7 +1,9 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "./session-cost-usage.js";
 
 type UsageCostRefreshParams = {
   agentId?: string;
+  config?: OpenClawConfig;
   sessionFiles?: string[];
 };
 

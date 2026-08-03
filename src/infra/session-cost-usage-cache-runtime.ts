@@ -1,4 +1,3 @@
-import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
@@ -43,7 +42,6 @@ type UsageCostRefreshState = {
   fullRefreshRequested: boolean;
   pendingSessionFiles: Set<string>;
   running: boolean;
-  sessionsDir: string;
   busyRetryDelayMs: number;
   timer?: ReturnType<typeof setTimeout>;
 };
@@ -72,7 +70,7 @@ export async function loadCostUsageSummary(params: {
   });
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
   const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
-  const files = await listUsageCountedTranscriptStats(params.agentId);
+  const files = await listUsageCountedTranscriptStats(params.agentId, { config: params.config });
   return buildCostUsageSummaryFromRollups({
     rollups,
     files,
@@ -99,7 +97,7 @@ export async function loadCostUsageSummaryFromCache(params: {
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
   let rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
-  let files = await listUsageCountedTranscriptStats(params.agentId);
+  let files = await listUsageCountedTranscriptStats(params.agentId, { config: params.config });
   const staleFiles = getUsageCostStaleRollupFiles({ rollups, files });
   if (params.requestRefresh !== false && staleFiles.length > 0) {
     const cachedFiles = countUsableUsageCostRollups({ rollups, files });
@@ -111,7 +109,7 @@ export async function loadCostUsageSummaryFromCache(params: {
         startMs: params.startMs,
       });
       rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
-      files = await listUsageCountedTranscriptStats(params.agentId);
+      files = await listUsageCountedTranscriptStats(params.agentId, { config: params.config });
       if (result === "refreshed" && getUsageCostStaleRollupFiles({ rollups, files }).length > 0) {
         requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
       }
@@ -224,7 +222,6 @@ function requestCostUsageCacheRefresh(params: {
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
     running: false,
-    sessionsDir: resolveSessionTranscriptsDirForAgent(params.agentId),
     busyRetryDelayMs: USAGE_COST_REFRESH_RETRY_MIN_MS,
   };
   mergeUsageCostRefreshRequest(state, params);
@@ -289,7 +286,6 @@ async function runQueuedUsageCostRefresh(
         config: state.config,
         agentId: state.agentId,
         databasePath: state.databasePath,
-        sessionsDir: state.sessionsDir,
         sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
       });
       if (result === "busy") {

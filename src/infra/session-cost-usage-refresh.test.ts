@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { testing as testApi } from "./session-cost-usage.test-support.js";
 
 describe("session cost usage refresh backoff", () => {
@@ -65,5 +66,32 @@ describe("session cost usage refresh backoff", () => {
     expect(refresh).toHaveBeenCalledTimes(12);
     await vi.advanceTimersByTimeAsync(1);
     expect(refresh).toHaveBeenCalledTimes(13);
+  });
+
+  it("queues a refresh with no scan target of its own, so late config decides the store", async () => {
+    // The queued state used to snapshot a scan directory when it was created and
+    // never refresh it, so a request that arrived before config pinned the default
+    // store for every later run against that agent. Nothing but the merged config
+    // may reach the runner.
+    const calls: Array<Record<string, unknown>> = [];
+    vi.spyOn(testApi.usageCostRefreshRuntime, "refreshCostUsageCacheForAgent").mockImplementation(
+      async (params) => {
+        calls.push({ ...params });
+        return "refreshed";
+      },
+    );
+
+    testApi.requestCostUsageCacheRefresh({ agentId: "merge-test" });
+    testApi.requestCostUsageCacheRefresh({
+      agentId: "merge-test",
+      config: { session: { store: "/configured/my-store.json" } } as OpenClawConfig,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).not.toHaveProperty("sessionsDir");
+    expect((calls[0]?.config as { session?: { store?: string } })?.session?.store).toBe(
+      "/configured/my-store.json",
+    );
   });
 });

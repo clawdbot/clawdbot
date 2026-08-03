@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentIds } from "../agents/agent-scope.js";
 import {
   materializeSessionArchiveForRead,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
@@ -21,6 +22,7 @@ import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
+  resolveStorePath,
 } from "../config/sessions/paths.js";
 import {
   listSessionTranscriptInstances,
@@ -28,15 +30,23 @@ import {
   loadTranscriptEventsSync,
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  resolveSqliteTargetFromSessionStorePath,
+  resolveUnsuffixedSqliteTargetFromSessionStorePath,
+} from "../config/sessions/session-sqlite-target.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSessionStoreAgentId } from "../gateway/session-store-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 
 export const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
+
+/** Config is the only input that decides which session store usage discovery scans. */
+type UsageCostDiscoveryScope = { minMtimeMs?: number; config?: OpenClawConfig };
 
 export type UsageCostTranscriptFile = {
   filePath: string;
@@ -50,20 +60,73 @@ export type UsageCostTranscriptFile = {
   maxSeq?: number;
 };
 
+// Discovery must enumerate the operator's configured store: a custom store
+// filename resolves to a different SQLite database than the default one, so
+// rebuilding the default path here hides every session the writer recorded.
 function resolveUsageCostSessionStorePath(params: {
   agentId: string;
-  sessionsDir?: string;
+  config?: OpenClawConfig;
 }): string {
-  return params.sessionsDir
-    ? path.join(params.sessionsDir, "sessions.json")
+  const store = params.config?.session?.store;
+  return store
+    ? resolveStorePath(store, { agentId: params.agentId })
     : resolveDefaultSessionStorePath(params.agentId);
+}
+
+/**
+ * A configured store is shared when it expands to the same target for every agent, and
+ * artifacts under it that carry no agent of their own -- legacy `<sessionId>.jsonl` files,
+ * globally scoped keys -- must then be claimed by exactly one scan, or the all-agent
+ * rollup counts them once per agent. `{agentId}` expansion is what makes a store
+ * per-agent, and the two halves of discovery key off different parts of it: the SQLite
+ * target follows the whole path, while legacy files only follow its directory. A store
+ * like `<dir>/{agentId}.json` has per-agent databases but one shared directory.
+ */
+function resolveSharedStoreConfig(
+  config: OpenClawConfig | undefined,
+  part: "path" | "directory",
+): OpenClawConfig | undefined {
+  const store = config?.session?.store;
+  if (typeof store !== "string" || !store.trim()) {
+    return undefined;
+  }
+  const scoped = part === "directory" ? path.dirname(store) : store;
+  return scoped.includes("{agentId}") ? undefined : config;
+}
+
+/**
+ * A legacy `<sessionId>.jsonl` name carries no agent, so ownership has to come from the
+ * directory holding it. A canonical store path names its owner (`agents/<id>/sessions/...`)
+ * and that is authoritative; a shared locator's owner is only the configured default, which
+ * names no one in particular. With no derivable owner and more than one agent, these files
+ * are unattributable: charging the default agent would report one agent's spend under
+ * another, which is worse than the omission it replaces -- they are not discovered at all
+ * today. A sole configured agent still claims them, since that directory cannot be ambiguous.
+ */
+function ownsLegacyStoreDirectory(
+  config: OpenClawConfig,
+  agentId: string,
+  storePath: string,
+): boolean {
+  // Resolve from the path alone: the agentId-aware form echoes the requesting agent back
+  // for a custom store, which would make every agent look like the owner.
+  const owner = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).agentId;
+  return owner
+    ? normalizeAgentId(owner) === normalizeAgentId(agentId)
+    : listAgentIds(config).length <= 1;
 }
 
 async function listUsageCountedTranscriptFileStats(
   agentId: string,
-  params?: { minMtimeMs?: number; sessionsDir?: string },
+  params?: UsageCostDiscoveryScope,
 ): Promise<UsageCostTranscriptFile[]> {
-  const sessionsDir = params?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
+  // Legacy JSONL transcripts sit beside the store file; SQLite needs the store itself.
+  const storePath = resolveUsageCostSessionStorePath({ agentId, ...params });
+  const sharedStoreConfig = resolveSharedStoreConfig(params?.config, "directory");
+  if (sharedStoreConfig && !ownsLegacyStoreDirectory(sharedStoreConfig, agentId, storePath)) {
+    return [];
+  }
+  const sessionsDir = path.dirname(storePath);
   let entries: fs.Dirent[];
   try {
     entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true });
@@ -133,16 +196,42 @@ async function listUsageCountedTranscriptFileStats(
 
 function listUsageCountedSqliteTranscriptStats(
   agentId: string,
-  params?: { minMtimeMs?: number; sessionsDir?: string },
+  params?: UsageCostDiscoveryScope,
 ): UsageCostTranscriptFile[] {
-  const storePath = resolveUsageCostSessionStorePath({
-    agentId,
-    ...(params?.sessionsDir ? { sessionsDir: params.sessionsDir } : {}),
-  });
+  const storePath = resolveUsageCostSessionStorePath({ agentId, ...params });
+  const requestedAgentId = normalizeAgentId(agentId);
+  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
+  // A fixed store can name one agent's own database, e.g. agents/<id>/sessions/sessions.json.
+  // Reading it as any other agent is not merely empty: the scope resolver rejects the
+  // mismatch, and one throw would abort the whole all-agent usage fan-out.
+  if (
+    sqliteTarget.shared !== true &&
+    sqliteTarget.agentId &&
+    normalizeAgentId(sqliteTarget.agentId) !== requestedAgentId
+  ) {
+    return [];
+  }
+  // Only an exact .sqlite locator under a fixed store is one database for every agent.
+  // Any other store resolves to a per-agent database, where each row is ours by
+  // construction and an ownership filter would silently drop transcripts.
+  const fixedStoreConfig = resolveSharedStoreConfig(params?.config, "path");
+  const sharedStoreConfig =
+    fixedStoreConfig && sqliteTarget.shared === true ? fixedStoreConfig : undefined;
   const files: UsageCostTranscriptFile[] = [];
   // This scan reads transcript identity/timestamps only; clone:false avoids
   // cloning every current entry before the history projection and SQL rollups.
   for (const instance of listSessionTranscriptInstances({ agentId, storePath, clone: false })) {
+    // The marker below stamps the caller's agent, so in a shared store every agent
+    // would claim the same transcript and the all-agent rollup would re-count it.
+    // Globally scoped keys have no agent of their own; the store-key owner rule
+    // hands them to the default agent so exactly one scan picks them up.
+    if (
+      sharedStoreConfig &&
+      normalizeAgentId(resolveSessionStoreAgentId(sharedStoreConfig, instance.sessionKey)) !==
+        requestedAgentId
+    ) {
+      continue;
+    }
     const marker = { agentId, sessionId: instance.sessionId, storePath };
     const mtimeMs = instance.updatedAtMs;
     if (params?.minMtimeMs !== undefined && mtimeMs < params.minMtimeMs) {
@@ -177,7 +266,7 @@ function formatCanonicalUsageCostSqliteMarker(marker: SqliteSessionFileMarker): 
 
 export async function listUsageCountedTranscriptStats(
   agentId: string,
-  params?: { minMtimeMs?: number; sessionsDir?: string },
+  params?: UsageCostDiscoveryScope,
 ): Promise<UsageCostTranscriptFile[]> {
   const fileBacked = await listUsageCountedTranscriptFileStats(agentId, params);
   const sqliteBacked = listUsageCountedSqliteTranscriptStats(agentId, params);

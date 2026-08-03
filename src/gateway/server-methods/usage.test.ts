@@ -489,6 +489,81 @@ describe("gateway usage helpers", () => {
     );
   });
 
+  it("loadCostUsageSummaryCached does not serve the previous store after session.store changes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+
+    // The summary is config-dependent now, so a reload that repoints session.store inside
+    // the TTL must not be answered from the entry built against the previous store.
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config: {} as OpenClawConfig,
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config: { session: { store: "/configured/my-store.json" } } as OpenClawConfig,
+    });
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
+  });
+
+  it("loadCostUsageSummaryCached re-reads when a non-default agent is swapped under one store", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+
+    // Same default and same roster size, different non-default agent: the all-agent path
+    // enumerates the ids, so a length-only key would serve the previous roster's totals.
+    const store = "/configured/my-store.json";
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config: {
+        agents: { entries: { main: { default: true }, beta: {} } },
+        session: { store },
+      } as unknown as OpenClawConfig,
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config: {
+        agents: { entries: { main: { default: true }, gamma: {} } },
+        session: { store },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
+  });
+
+  it("loadCostUsageSummaryCached re-reads when the ownership roster changes under one store", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+
+    // With a configured store, who claims a shared artifact depends on the default agent
+    // and on whether the roster holds more than one agent, so the store path alone is not
+    // a complete key.
+    const store = "/configured/my-store.json";
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config: {
+        agents: { entries: { main: { default: true } } },
+        session: { store },
+      } as unknown as OpenClawConfig,
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config: {
+        agents: { entries: { main: { default: true }, beta: {} } },
+        session: { store },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps refreshing cost summaries fresh for the TTL window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));

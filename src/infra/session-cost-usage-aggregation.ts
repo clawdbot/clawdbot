@@ -575,7 +575,6 @@ export async function refreshCostUsageCacheForAgent(params: {
   agentDir?: string;
   databasePath?: string;
   maxFiles?: number;
-  sessionsDir?: string;
   sessionFiles?: string[];
   startMs?: number;
 }): Promise<UsageCostRefreshResult> {
@@ -590,10 +589,9 @@ export async function refreshCostUsageCacheForAgent(params: {
     const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
     const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, rows);
-    const discoveredFiles = await listUsageCountedTranscriptStats(
-      params.agentId,
-      params.sessionsDir ? { sessionsDir: params.sessionsDir } : undefined,
-    );
+    const discoveredFiles = await listUsageCountedTranscriptStats(params.agentId, {
+      config: params.config,
+    });
     const requestedFiles: UsageCostTranscriptFile[] = [];
     for (const requested of params.sessionFiles ?? []) {
       const resolved = await resolveUsageCostTranscriptFile(requested);

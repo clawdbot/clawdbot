@@ -55,12 +55,14 @@ const USAGE_COST_DIRECT_REFRESH_RETRY_MS = 25;
  */
 export async function discoverAllSessions(params: {
   agentId: string;
+  config?: OpenClawConfig;
   startMs?: number;
   endMs?: number;
   includeFirstUserMessage?: boolean;
 }): Promise<DiscoveredSession[]> {
   const files = await listUsageCountedTranscriptStats(params.agentId, {
     minMtimeMs: params.startMs,
+    config: params.config,
   });
 
   const discovered = new Map<string, DiscoveredSession>();
