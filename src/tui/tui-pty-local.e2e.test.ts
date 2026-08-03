@@ -1327,7 +1327,7 @@ describe("TUI PTY real backends", () => {
         queueClient.onConnected = () => {
           queueClientConnected = true;
         };
-        // Queue admission emits chat/final before its chat.send ACK may arrive.
+        // Retain admission events that arrive before both chat.send ACKs settle.
         queueClient.onEvent = ({ event, payload }) => {
           if (event !== "chat" || !payload || typeof payload !== "object") {
             return;
