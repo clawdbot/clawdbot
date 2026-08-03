@@ -13,6 +13,7 @@ import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
+  preserveComposerFocusOnPrimaryAction,
   restoreHistoryCaret,
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
@@ -638,18 +639,6 @@ export function renderChatComposer(props: ChatComposerProps) {
       target.readOnly = true;
     }
   };
-  const handlePrimaryActionPointerDown = (event: PointerEvent) => {
-    const composerShell = state.composerTextarea?.closest<HTMLElement>(
-      ".agent-chat__composer-shell",
-    );
-    if (
-      document.activeElement === state.composerTextarea &&
-      composerShell &&
-      Number.parseFloat(getComputedStyle(composerShell).marginBottom) === 0
-    ) {
-      event.preventDefault();
-    }
-  };
   const runControlsProps: ChatRunControlsProps = {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(actionDraft),
@@ -678,7 +667,8 @@ export function renderChatComposer(props: ChatComposerProps) {
     microphonePicker,
     dictation,
     onDictationPointerDown: handleDictationPointerDown,
-    onPrimaryActionPointerDown: handlePrimaryActionPointerDown,
+    onPrimaryActionPointerDown: (event) =>
+      preserveComposerFocusOnPrimaryAction(event, state.composerTextarea),
   };
   const cameraFacingMode = props.realtimeTalkVideoStream
     ?.getVideoTracks?.()[0]

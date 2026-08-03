@@ -31,6 +31,32 @@ const QA_EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
+  status: "completed",
+  value: {
+    changed: true,
+    created: true,
+    diff: "+1 Replay safety: unsafe after write.",
+    patch: [
+      "--- compaction-retry-summary.txt",
+      "+++ compaction-retry-summary.txt",
+      "@@ -0,0 +1,1 @@",
+      "+Replay safety: unsafe after write.",
+      "",
+    ].join("\n"),
+    firstChangedLine: 1,
+  },
+  output: [],
+  replaySafe: false,
+  telemetry: {
+    catalogSize: 32,
+    sources: { openclaw: 32, mcp: 0, client: 0 },
+    counterScope: "qaFixtureScope01",
+    searchCount: 0,
+    describeCount: 0,
+    callCount: 1,
+  },
+} as const;
 
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -2265,6 +2291,146 @@ describe("qa mock openai server", () => {
 
     expect(finalReply.status).toBe(200);
     expect(outputText(await finalReply.json())).toBe("Protocol note: replay unsafe after write.");
+  });
+
+  it("finishes Anthropic Code Mode compaction retry after the structured write result", async () => {
+    const server = await startMockServer();
+    const callId = "toolu_compaction_retry_write";
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      messages: [
+        makeAnthropicUserText(
+          "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
+        ),
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: callId, name: "exec", input: {} }],
+        },
+        makeAnthropicToolResult(callId, JSON.stringify(QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT)),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const body = requireRecord(await response.json(), "Anthropic compaction retry response");
+    expect(body.stop_reason).toBe("end_turn");
+    expect(requireArray(body.content, "Anthropic response content")).toContainEqual({
+      type: "text",
+      text: "Protocol note: replay unsafe after write.",
+    });
+  });
+
+  it("accepts semantic Code Mode write evidence across diff formatting changes", async () => {
+    const server = await startMockServer();
+    const callId = "toolu_compaction_retry_write_semantic";
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      messages: [
+        makeAnthropicUserText(
+          "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
+        ),
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: callId, name: "exec", input: {} }],
+        },
+        makeAnthropicToolResult(
+          callId,
+          JSON.stringify({
+            ...QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT,
+            value: {
+              ...QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT.value,
+              diff: "display formatting may change independently",
+              patch: [
+                "--- compaction-retry-summary.txt",
+                "+++ compaction-retry-summary.txt",
+                "@@ -0,0 +1 @@",
+                "+Replay safety: unsafe after write.",
+              ].join("\r\n"),
+            },
+          }),
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const body = requireRecord(await response.json(), "Anthropic compaction retry response");
+    expect(requireArray(body.content, "Anthropic response content")).toContainEqual({
+      type: "text",
+      text: "Protocol note: replay unsafe after write.",
+    });
+  });
+
+  it.each([
+    {
+      label: "failed status",
+      result: { ...QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT, status: "failed" },
+    },
+    {
+      label: "replay-safe result",
+      result: { ...QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT, replaySafe: true },
+    },
+    {
+      label: "unchanged result",
+      result: {
+        ...QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT,
+        value: { changed: false },
+      },
+    },
+    {
+      label: "wrong target patch",
+      result: {
+        ...QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT,
+        value: {
+          ...QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT.value,
+          patch:
+            "--- other.txt\n+++ other.txt\n@@ -0,0 +1,1 @@\n+Replay safety: unsafe after write.\n",
+        },
+      },
+    },
+    {
+      label: "content added under another target",
+      result: {
+        ...QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT,
+        value: {
+          ...QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT.value,
+          patch: [
+            "--- compaction-retry-summary.txt",
+            "+++ compaction-retry-summary.txt",
+            "@@ -0,0 +1 @@",
+            "+Unrelated content.",
+            "--- other.txt",
+            "+++ other.txt",
+            "@@ -0,0 +1 @@",
+            "+Replay safety: unsafe after write.",
+          ].join("\n"),
+        },
+      },
+    },
+  ])("rejects Anthropic Code Mode compaction retry result with $label", async ({ result }) => {
+    const server = await startMockServer();
+    const callId = "toolu_compaction_retry_invalid";
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      messages: [
+        makeAnthropicUserText(
+          "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
+        ),
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: callId, name: "exec", input: {} }],
+        },
+        makeAnthropicToolResult(callId, JSON.stringify(result)),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const body = requireRecord(await response.json(), "Anthropic compaction retry response");
+    expect(requireArray(body.content, "Anthropic response content")).not.toContainEqual({
+      type: "text",
+      text: "Protocol note: replay unsafe after write.",
+    });
   });
 
   it("does not finish a compacted retry when failure text quotes the write success marker", async () => {
