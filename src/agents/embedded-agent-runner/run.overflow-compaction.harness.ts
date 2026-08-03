@@ -202,9 +202,7 @@ export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
   },
 );
 const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
-export const mockedSleepWithAbort = vi.fn(
-  async (_ms: number, _abortSignal?: AbortSignal) => undefined,
-);
+const mockedSleepWithAbort = vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined);
 function createMockAgentDiscoveryStores(): MockAgentDiscoveryStores {
   return {
     authStorage: {
@@ -251,7 +249,7 @@ const mockedPrepareProviderRuntimeAuth = vi.fn<
 >(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
-export const mockedBuildEmbeddedRunPayloads = vi.fn<
+const mockedBuildEmbeddedRunPayloads = vi.fn<
   (
     ...args: Parameters<typeof buildEmbeddedRunPayloads>
   ) => ReturnType<typeof buildEmbeddedRunPayloads>
@@ -307,7 +305,7 @@ const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
 );
 const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
 
-export const mockedLog: {
+const mockedLog: {
   debug: Mock<(...args: unknown[]) => void>;
   info: Mock<(...args: unknown[]) => void>;
   warn: Mock<(...args: unknown[]) => void>;
