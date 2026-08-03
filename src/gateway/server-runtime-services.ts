@@ -226,7 +226,7 @@ function startPendingSessionDeliveryRuntime(params: {
           const { settleCorrelatedSubagentDelivery } =
             await import("../agents/subagent-completion-delivery.js");
           await settleCorrelatedSubagentDelivery(entry, outcome);
-          removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
+          await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
         },
       });
       try {

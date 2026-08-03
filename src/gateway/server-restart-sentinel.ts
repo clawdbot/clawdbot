@@ -187,37 +187,37 @@ export async function deliverQueuedSessionDelivery(params: {
   entry: QueuedSessionDelivery;
   stateDir?: string;
 }) {
-  params = { ...params, entry: resolveCorrelatedSubagentDelivery(params.entry) };
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
-  const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
+  const queuedEntry = resolveCorrelatedSubagentDelivery(params.entry);
+  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(queuedEntry.sessionKey);
+  const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(queuedEntry);
 
-  if (params.entry.kind === "systemEvent") {
-    enqueueRestartSentinelWake(params.entry.text, canonicalKey, queuedDeliveryContext);
+  if (queuedEntry.kind === "systemEvent") {
+    enqueueRestartSentinelWake(queuedEntry.text, canonicalKey, queuedDeliveryContext);
     return;
   }
 
   if (
-    params.entry.expectedSessionId &&
-    (!entry?.sessionId || entry.sessionId !== params.entry.expectedSessionId)
+    queuedEntry.expectedSessionId &&
+    (!entry?.sessionId || entry.sessionId !== queuedEntry.expectedSessionId)
   ) {
     log.warn("restart continuation skipped: session changed", {
       sessionKey: canonicalKey,
-      queueId: params.entry.id,
-      expectedSessionId: params.entry.expectedSessionId,
+      queueId: queuedEntry.id,
+      expectedSessionId: queuedEntry.expectedSessionId,
       actualSessionId: entry?.sessionId ?? null,
     });
-    enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
+    enqueueRestartSentinelWake(queuedEntry.message, canonicalKey, queuedDeliveryContext);
     return;
   }
 
-  if (!params.entry.route) {
-    enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
+  if (!queuedEntry.route) {
+    enqueueRestartSentinelWake(queuedEntry.message, canonicalKey, queuedDeliveryContext);
     return;
   }
 
   if (
     await deliverQueuedGeneratedMediaAgentTurn({
-      entry: params.entry,
+      entry: queuedEntry,
       canonicalKey,
       sessionEntry: entry,
       ...(params.stateDir !== undefined ? { stateDir: params.stateDir } : {}),
@@ -225,9 +225,9 @@ export async function deliverQueuedSessionDelivery(params: {
   ) {
     return;
   }
-  if (params.entry.deliveryStartedAt !== undefined) {
+  if (queuedEntry.deliveryStartedAt !== undefined) {
     await markSessionDeliverySettlement(
-      params.entry,
+      queuedEntry,
       "moved-to-failed",
       ...sessionDeliveryStateDirArgs(params.stateDir),
     );
@@ -236,9 +236,9 @@ export async function deliverQueuedSessionDelivery(params: {
     );
   }
 
-  const route = params.entry.route;
-  const messageId = resolveQueuedRestartContinuationMessageId(params.entry);
-  const userMessage = params.entry.message.trim();
+  const route = queuedEntry.route;
+  const messageId = resolveQueuedRestartContinuationMessageId(queuedEntry);
+  const userMessage = queuedEntry.message.trim();
   const agentId = resolveSessionAgentId({
     sessionKey: canonicalKey,
     config: cfg,
@@ -300,7 +300,7 @@ export async function deliverQueuedSessionDelivery(params: {
       admission: "cancel-only",
       onAdopted: () =>
         markSessionDeliveryAttemptStarted(
-          params.entry,
+          queuedEntry,
           ...sessionDeliveryStateDirArgs(params.stateDir),
         ),
     },
@@ -399,7 +399,7 @@ async function drainRestartContinuationQueue(params: {
         }),
       onSettled: async (entry, outcome) => {
         await settleCorrelatedSubagentDelivery(entry, outcome);
-        removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
+        await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
       },
       selectEntry: (entry) => ({
         match: entry.id === params.entryId,
@@ -437,7 +437,7 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
     maxEnqueuedAt: params.maxEnqueuedAt,
     onSettled: async (entry, outcome) => {
       await settleCorrelatedSubagentDelivery(entry, outcome);
-      removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
+      await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
     },
   });
 }

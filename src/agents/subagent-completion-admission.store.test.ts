@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareClaimedSessionDelivery } from "../infra/session-delivery-queue-storage.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
@@ -22,6 +22,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
 
 const resumeSubagentRun = vi.hoisted(() => vi.fn());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./subagent-registry.js", () => ({ resumeSubagentRun }));
 
@@ -30,9 +31,7 @@ describe("atomic subagent completion admission store", () => {
   let database: OpenClawStateDatabase;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-subagent-admission-"),
-    );
+    tempDir = tempDirs.make("openclaw-subagent-admission-", resolvePreferredOpenClawTmpDir());
     database = openOpenClawStateDatabase({ path: path.join(tempDir, "state.sqlite") });
   });
 
@@ -40,7 +39,6 @@ describe("atomic subagent completion admission store", () => {
     subagentRuns.clear();
     resetTaskRegistryForTests({ persist: false });
     closeOpenClawStateDatabaseForTest();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   function records() {

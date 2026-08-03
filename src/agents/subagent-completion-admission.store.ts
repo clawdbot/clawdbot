@@ -2,7 +2,7 @@ import {
   bindDeliveryQueueEntry,
   loadDeliveryQueueEntryInDatabase,
   upsertBoundDeliveryQueueEntryInDatabase,
-} from "../infra/delivery-queue-sqlite.js";
+} from "../infra/delivery-queue-sqlite-bound.js";
 import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
