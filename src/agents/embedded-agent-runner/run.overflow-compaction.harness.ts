@@ -472,7 +472,7 @@ function resetMockAgentHarness(): void {
 }
 
 /** Reset every mocked runner dependency to the default successful no-op state. */
-export function resetRunOverflowCompactionHarnessMocks(): void {
+function resetRunOverflowCompactionHarnessMocks(): void {
   vi.unstubAllEnvs();
   resetCommandQueueStateForTest();
   resetMockAgentHarness();
