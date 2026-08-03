@@ -3,12 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
 
 describe("createTelegramPollingStatusPublisher", () => {
-  it("publishes start, successful poll, and stop status patches", () => {
+  it("publishes lifecycle at polling transition points", () => {
     const setStatus = vi.fn();
     const status = createTelegramPollingStatusPublisher(setStatus);
 
     status.notePollingStart();
     status.notePollSuccess(1234);
+    status.notePollingRecovery();
+    status.notePollingError("fetch failed", "recovering");
+    status.notePollingError("unauthorized", "blocked");
     status.notePollingStop();
 
     expect(setStatus).toHaveBeenNthCalledWith(1, {
@@ -24,9 +27,25 @@ describe("createTelegramPollingStatusPublisher", () => {
       lastConnectedAt: 1234,
       lastEventAt: 1234,
       lastTransportActivityAt: 1234,
+      lifecycle: "ready",
+      terminalDisconnect: undefined,
       lastError: null,
     });
-    expect(setStatus).toHaveBeenNthCalledWith(3, {
+    expect(setStatus).toHaveBeenNthCalledWith(3, { lifecycle: "recovering" });
+    expect(setStatus).toHaveBeenNthCalledWith(4, {
+      mode: "polling",
+      connected: false,
+      lifecycle: "recovering",
+      lastError: "fetch failed",
+    });
+    expect(setStatus).toHaveBeenNthCalledWith(5, {
+      mode: "polling",
+      connected: false,
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: "unauthorized",
+    });
+    expect(setStatus).toHaveBeenNthCalledWith(6, {
       mode: "polling",
       connected: false,
     });

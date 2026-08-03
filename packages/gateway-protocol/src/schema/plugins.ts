@@ -23,6 +23,8 @@ export const PluginControlUiDescriptorSchema = closedObject({
     Type.Literal("tool"),
     Type.Literal("run"),
     Type.Literal("settings"),
+    Type.Literal("tab"),
+    Type.Literal("widget"),
   ]),
   label: NonEmptyString,
   description: Type.Optional(Type.String()),

@@ -1,14 +1,13 @@
 /** Doctor diagnostics for pending, paired, and locally cached device auth state. */
-import path from "node:path";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { callGateway } from "../gateway/call.js";
+import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
 import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import {
   listApprovedPairedDeviceRoles,
@@ -18,8 +17,6 @@ import {
   type DevicePairingPendingRequest,
   type PairedDevice,
 } from "../infra/device-pairing.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
-import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 
@@ -105,26 +102,6 @@ type LocalDeviceAuthIssue = {
   message: string;
   fixHint: string;
 };
-
-function hasNumberVersion(value: object): value is { version: number } {
-  return "version" in value && typeof value.version === "number";
-}
-
-function isDeviceAuthStoreTokenEntry(value: unknown): value is DeviceAuthStore["tokens"][string] {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "token" in value &&
-    typeof value.token === "string" &&
-    "role" in value &&
-    typeof value.role === "string" &&
-    "scopes" in value &&
-    Array.isArray(value.scopes) &&
-    value.scopes.every((scope) => typeof scope === "string") &&
-    "updatedAtMs" in value &&
-    typeof value.updatedAtMs === "number"
-  );
-}
 
 function normalizeGatewayPairedDevice(device: GatewayListedPairedDevice): DoctorPairedDevice {
   return {
@@ -399,10 +376,6 @@ function formatPairedRecordIssue(issue: PairedRecordIssue): string {
   return `- ${issue.message}`;
 }
 
-function readJsonFile(filePath: string): unknown {
-  return tryReadJsonSync(filePath);
-}
-
 function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): { deviceId: string } | null {
   try {
     return loadDeviceIdentityIfPresent({ env });
@@ -411,43 +384,20 @@ function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): { deviceId: st
   }
 }
 
-function readLocalDeviceAuthStore(env: NodeJS.ProcessEnv = process.env): DeviceAuthStore | null {
-  const filePath = path.join(resolveStateDir(env), "identity", "device-auth.json");
-  const store = readJsonFile(filePath);
-  if (
-    !store ||
-    typeof store !== "object" ||
-    !hasNumberVersion(store) ||
-    store.version !== 1 ||
-    !("deviceId" in store) ||
-    typeof store.deviceId !== "string" ||
-    !store.deviceId.trim() ||
-    !("tokens" in store) ||
-    typeof store.tokens !== "object" ||
-    store.tokens === null
-  ) {
-    return null;
+function readLocalDeviceAuthTokens(deviceId: string, env: NodeJS.ProcessEnv = process.env) {
+  try {
+    return loadDeviceAuthTokens({ deviceId, env });
+  } catch {
+    return [];
   }
-  const tokens: DeviceAuthStore["tokens"] = {};
-  for (const [role, entry] of Object.entries(store.tokens)) {
-    if (!isDeviceAuthStoreTokenEntry(entry)) {
-      return null;
-    }
-    tokens[role] = entry;
-  }
-  return {
-    version: 1,
-    deviceId: store.deviceId,
-    tokens,
-  };
 }
 
 function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): LocalDeviceAuthIssue[] {
   const identity = readLocalIdentity();
-  const store = readLocalDeviceAuthStore();
-  if (!identity || !store || store.deviceId !== identity.deviceId) {
+  if (!identity) {
     return [];
   }
+  const localTokens = readLocalDeviceAuthTokens(identity.deviceId);
   const paired = snapshot.paired.find((device) => device.deviceId === identity.deviceId);
   if (!paired) {
     return [];
@@ -459,7 +409,7 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): LocalDev
   });
   const issues: LocalDeviceAuthIssue[] = [];
   const approvedRoles = new Set(listApprovedPairedDeviceRoles(paired));
-  for (const entry of Object.values(store.tokens)) {
+  for (const entry of localTokens) {
     const role = entry.role.trim();
     if (!role) {
       continue;

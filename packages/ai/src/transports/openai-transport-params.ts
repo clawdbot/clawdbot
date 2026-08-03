@@ -2,13 +2,14 @@ import type { Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
+import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
+import type { OpenAIToolProjection } from "../providers/openai-tool-projection.js";
 import {
   findOpenAIStrictToolProjectionDiagnostics,
   resolveOpenAIProjectedToolsStrictToolFlag,
-  type OpenAIToolProjection,
-} from "../internal/openai.js";
+} from "../providers/openai-tool-schema.js";
 import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from "./host-policy.js";
-import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
 import { isCodeModeModelVisibleToolName, sha256Hex } from "./transport-utils.js";
@@ -19,13 +20,13 @@ const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
 function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
   try {
-    return record[field];
+    return Object.hasOwn(record, field) ? record[field] : undefined;
   } catch {
     return undefined;
   }
 }
 
-function transportPayloadToolName(tool: unknown): string | undefined {
+export function readCodeModePayloadToolName(tool: unknown): string | undefined {
   if (!isRecord(tool)) {
     return undefined;
   }
@@ -41,30 +42,92 @@ function transportPayloadToolName(tool: unknown): string | undefined {
   return typeof fnName === "string" ? fnName : undefined;
 }
 
-export function enforceCodeModeResponsesToolSurface(payload: unknown): void {
-  if (!isRecord(payload) || !Array.isArray(payload.tools)) {
+export function filterCodeModePayloadTools(
+  payload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+): void {
+  if (!isRecord(payload)) {
     return;
   }
-  payload.tools = payload.tools.filter((tool) => {
-    const name = transportPayloadToolName(tool);
-    return typeof name === "string" && isCodeModeModelVisibleToolName(name);
+  const tools = readToolPayloadField(payload, "tools");
+  if (!Array.isArray(tools)) {
+    return;
+  }
+  payload.tools = tools.flatMap((tool) => {
+    const name = readCodeModePayloadToolName(tool);
+    if (typeof name === "string" && isCodeModeModelVisibleToolName(name, visibleToolNames)) {
+      return [tool];
+    }
+    if (!isRecord(tool)) {
+      return [];
+    }
+    const filteredGroups: Record<string, unknown> = {};
+    for (const key of ["functionDeclarations", "function_declarations"] as const) {
+      const declarations = readToolPayloadField(tool, key);
+      if (!Array.isArray(declarations)) {
+        continue;
+      }
+      const filtered = declarations.filter((declaration) => {
+        const declarationName = readCodeModePayloadToolName(declaration);
+        return (
+          typeof declarationName === "string" &&
+          isCodeModeModelVisibleToolName(declarationName, visibleToolNames)
+        );
+      });
+      if (filtered.length > 0) {
+        filteredGroups[key] = filtered;
+      }
+    }
+    return Object.keys(filteredGroups).length > 0 ? [filteredGroups] : [];
   });
 }
 
-export function assertCodeModeResponsesToolSurface(payload: unknown): void {
-  if (!isRecord(payload) || !Array.isArray(payload.tools)) {
+export function resolveCodeModeResponsesVisibleToolNames(
+  context: Pick<Context, "tools">,
+): ReadonlySet<string> {
+  return new Set(
+    (context.tools ?? [])
+      .map(readCodeModePayloadToolName)
+      .filter((name): name is string => typeof name === "string"),
+  );
+}
+
+export function enforceCodeModeResponsesToolSurface(
+  payload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+): void {
+  if (!isRecord(payload)) {
+    return;
+  }
+  const tools = readToolPayloadField(payload, "tools");
+  if (!Array.isArray(tools)) {
+    return;
+  }
+  payload.tools = tools.filter((tool) => {
+    const name = readCodeModePayloadToolName(tool);
+    return typeof name === "string" && isCodeModeModelVisibleToolName(name, visibleToolNames);
+  });
+}
+
+export function assertCodeModeResponsesToolSurface(
+  payload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+): void {
+  const tools = isRecord(payload) ? readToolPayloadField(payload, "tools") : undefined;
+  if (!Array.isArray(tools)) {
     throw new Error("Code mode payload tool surface violation: expected exec,wait; got no tools");
   }
-  const names = payload.tools
-    .map(transportPayloadToolName)
+  const names = tools
+    .map(readCodeModePayloadToolName)
     .filter((name): name is string => typeof name === "string" && name.length > 0)
     .toSorted((left, right) => left.localeCompare(right));
   if (
     names.length >= 2 &&
+    names.length === tools.length &&
     new Set(names).size === names.length &&
-    names.filter((name) => name === "exec").length === 1 &&
-    names.filter((name) => name === "wait").length === 1 &&
-    names.every(isCodeModeModelVisibleToolName)
+    names.includes("exec") &&
+    names.includes("wait") &&
+    names.every((name) => isCodeModeModelVisibleToolName(name, visibleToolNames))
   ) {
     return;
   }
@@ -216,13 +279,16 @@ export function buildOpenAIClientHeaders(
     ) &&
     usesNativeOpenAICodexResponsesBackend(model)
   ) {
-    resolvedHeaders.session_id = sessionId;
+    // The backend derives its prompt cache key from this header and enforces
+    // OpenAI's 64-char limit server-side; long internal session ids
+    // (companion/btw effects sessions) 400 without this clamp.
+    resolvedHeaders.session_id = clampOpenAIPromptCacheKey(sessionId) ?? sessionId;
   }
   return resolvedHeaders;
 }
 
-function resolveOpenAISdkTimeoutMs(model: Model): number | undefined {
-  return resolveModelRequestTimeoutMs(model, undefined);
+function resolveOpenAISdkTimeoutMs(model: Model, timeoutMs?: number): number | undefined {
+  return resolveModelRequestTimeoutMs(model, timeoutMs);
 }
 
 export function buildOpenAISdkClientOptions(model: Model): { timeout?: number } {
@@ -233,81 +299,41 @@ export function buildOpenAISdkClientOptions(model: Model): { timeout?: number } 
 export function buildOpenAISdkRequestOptions(
   model: Model,
   signal?: AbortSignal,
-  options?: { stream?: boolean },
-): { signal?: AbortSignal; timeout?: number; headers?: Record<string, string> } | undefined {
-  const timeout = resolveOpenAISdkTimeoutMs(model);
+  options?: { stream?: boolean; timeoutMs?: number; maxRetries?: number },
+):
+  | {
+      signal?: AbortSignal;
+      timeout?: number;
+      maxRetries?: number;
+      headers?: Record<string, string>;
+    }
+  | undefined {
+  const timeout = resolveOpenAISdkTimeoutMs(model, options?.timeoutMs);
   const headers =
     options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
       ? { Accept: "text/event-stream" }
       : undefined;
-  if (timeout === undefined && !signal && !headers) {
+  if (timeout === undefined && options?.maxRetries === undefined && !signal && !headers) {
     return undefined;
   }
   return {
     ...(headers ? { headers } : {}),
     ...(signal ? { signal } : {}),
     ...(timeout !== undefined ? { timeout } : {}),
-  };
-}
-
-function detectCompat(model: OpenAIModeModel) {
-  const { defaults } = detectOpenAICompletionsCompat(model);
-  return {
-    supportsStore: defaults.supportsStore,
-    supportsDeveloperRole: defaults.supportsDeveloperRole,
-    supportsReasoningEffort: defaults.supportsReasoningEffort,
-    reasoningEffortMap: {},
-    supportsUsageInStreaming: defaults.supportsUsageInStreaming,
-    maxTokensField: defaults.maxTokensField,
-    requiresToolResultName: false,
-    requiresAssistantAfterToolResult: false,
-    requiresThinkingAsText: false,
-    thinkingFormat: defaults.thinkingFormat,
-    visibleReasoningDetailTypes: defaults.visibleReasoningDetailTypes,
-    openRouterRouting: {},
-    vercelGatewayRouting: {},
-    supportsStrictMode: defaults.supportsStrictMode,
-    requiresReasoningContentOnAssistantMessages:
-      defaults.requiresReasoningContentOnAssistantMessages,
-    requiresNonEmptyUserOrAssistantMessage: defaults.requiresNonEmptyUserOrAssistantMessage,
+    ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
   };
 }
 
 export function getCompat(model: OpenAIModeModel) {
-  const detected = detectCompat(model);
+  const resolved = resolveOpenAICompletionsCompat(model as Model<"openai-completions">);
   const compat = model.compat ?? {};
-  const supportsStore =
-    typeof compat.supportsStore === "boolean" ? compat.supportsStore : detected.supportsStore;
-  const supportsReasoningEffort =
-    typeof compat.supportsReasoningEffort === "boolean"
-      ? compat.supportsReasoningEffort
-      : detected.supportsReasoningEffort;
   return {
-    supportsStore,
-    supportsDeveloperRole: compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
-    supportsReasoningEffort,
-    reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, detected.reasoningEffortMap),
-    supportsUsageInStreaming: compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
-    maxTokensField: (compat.maxTokensField as string | undefined) ?? detected.maxTokensField,
-    requiresToolResultName: compat.requiresToolResultName ?? detected.requiresToolResultName,
-    requiresAssistantAfterToolResult:
-      compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
-    requiresThinkingAsText: compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
-    thinkingFormat: compat.thinkingFormat ?? detected.thinkingFormat,
-    openRouterRouting: (compat.openRouterRouting as Record<string, unknown> | undefined) ?? {},
-    vercelGatewayRouting:
-      (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??
-      detected.vercelGatewayRouting,
-    supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
-    supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
-    supportsLongCacheRetention: compat.supportsLongCacheRetention !== false,
+    ...resolved,
+    cacheControlFormat: resolved.cacheControlFormat,
+    reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, {}),
+    openRouterRouting: (resolved.openRouterRouting as Record<string, unknown> | undefined) ?? {},
+    vercelGatewayRouting: resolved.vercelGatewayRouting as Record<string, unknown>,
     requiresStringContent: compat.requiresStringContent ?? false,
     strictMessageKeys: compat.strictMessageKeys === true,
-    visibleReasoningDetailTypes:
-      compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
-    requiresReasoningContentOnAssistantMessages:
-      compat.requiresReasoningContentOnAssistantMessages ??
-      detected.requiresReasoningContentOnAssistantMessages,
-    requiresNonEmptyUserOrAssistantMessage: detected.requiresNonEmptyUserOrAssistantMessage,
   };
 }

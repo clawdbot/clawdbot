@@ -69,6 +69,8 @@ describe("invokeNodeClaudeCliRun", () => {
         nodeId: "node-1",
         argv: ["-p"],
         stdin: "hello",
+        env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
+        clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         timeoutMs: 10_000,
         idleTimeoutMs: 1_000,
         onProgress: () => {},
@@ -80,6 +82,10 @@ describe("invokeNodeClaudeCliRun", () => {
       expect.objectContaining({
         expectedConnId: "conn-1",
         expectedPairingGeneration: "generation-1",
+        params: expect.objectContaining({
+          env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
+          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+        }),
       }),
     );
   });

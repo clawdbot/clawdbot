@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateConversationListParams,
   validateConversationSendParams,
   validateConversationTurnCancelParams,
@@ -35,6 +34,7 @@ import type {
   GatewayRequestHandlers,
   RespondFn,
 } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type ConversationHandlerDeps = {
   cancelConversationTurn: typeof cancelPendingConversationTurn;
@@ -201,15 +201,9 @@ export function createConversationHandlers(
   const deps = { ...defaultConversationHandlerDeps, ...overrides };
   return {
     "conversations.list": async ({ params, respond, context }) => {
-      if (!validateConversationListParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid conversations.list params: ${formatValidationErrors(validateConversationListParams.errors)}`,
-          ),
-        );
+      if (
+        !assertValidParams(params, validateConversationListParams, "conversations.list", respond)
+      ) {
         return;
       }
       const request = params as ConversationListParams;
@@ -237,15 +231,9 @@ export function createConversationHandlers(
       }
     },
     "conversations.send": async ({ params, respond, context, client }) => {
-      if (!validateConversationSendParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid conversations.send params: ${formatValidationErrors(validateConversationSendParams.errors)}`,
-          ),
-        );
+      if (
+        !assertValidParams(params, validateConversationSendParams, "conversations.send", respond)
+      ) {
         return;
       }
       const request = params as ConversationSendParams;
@@ -291,15 +279,14 @@ export function createConversationHandlers(
       });
     },
     "conversations.turn.cancel": ({ params, respond }) => {
-      if (!validateConversationTurnCancelParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid conversations.turn.cancel params: ${formatValidationErrors(validateConversationTurnCancelParams.errors)}`,
-          ),
-        );
+      if (
+        !assertValidParams(
+          params,
+          validateConversationTurnCancelParams,
+          "conversations.turn.cancel",
+          respond,
+        )
+      ) {
         return;
       }
       const request = params as ConversationTurnCancelParams;
@@ -315,15 +302,9 @@ export function createConversationHandlers(
       );
     },
     "conversations.turn": async ({ params, respond, context, client }) => {
-      if (!validateConversationTurnParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid conversations.turn params: ${formatValidationErrors(validateConversationTurnParams.errors)}`,
-          ),
-        );
+      if (
+        !assertValidParams(params, validateConversationTurnParams, "conversations.turn", respond)
+      ) {
         return;
       }
       const request = params as ConversationTurnParams;

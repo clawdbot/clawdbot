@@ -58,7 +58,6 @@ const dependencyManifestFields = [
 export function isDependencyFile(filename) {
   return (
     filename.endsWith("package-lock.json") ||
-    filename.endsWith("npm-shrinkwrap.json") ||
     filename.endsWith("pnpm-lock.yaml") ||
     filename === "pnpm-workspace.yaml" ||
     filename.startsWith("patches/")
@@ -70,11 +69,7 @@ export function isDependencyManifest(filename) {
 }
 
 export function isPackageLockfile(filename) {
-  return (
-    filename.endsWith("pnpm-lock.yaml") ||
-    filename.endsWith("package-lock.json") ||
-    filename.endsWith("npm-shrinkwrap.json")
-  );
+  return filename.endsWith("pnpm-lock.yaml") || filename.endsWith("package-lock.json");
 }
 
 export function dependencyFieldChanges(baseManifest, headManifest) {
@@ -85,6 +80,10 @@ export function dependencyFieldChanges(baseManifest, headManifest) {
     }
   }
   return changes;
+}
+
+export function isRemovalOnlyDependencyGraphChange(changes) {
+  return changes.length > 0 && changes.every((change) => change.change_type === "removed");
 }
 
 export function shouldAutoscrubDependencyLockfiles({
@@ -273,8 +272,8 @@ function renderDependencyAwarenessComment(dependencyFiles) {
     "",
     "Maintainer follow-up:",
     "- Review whether the dependency changes are intentional.",
-    "- Inspect resolved package deltas when lockfile, shrinkwrap, or workspace dependency policy changes are present.",
-    "- Treat `package-lock.json` and `npm-shrinkwrap.json` diffs as security-review surfaces.",
+    "- Inspect resolved package deltas when lockfiles or workspace dependency policy changes are present.",
+    "- Treat `pnpm-lock.yaml` and `package-lock.json` diffs as dependency security-review surfaces.",
     "- Run `pnpm deps:changes:report -- --base-ref origin/main --markdown /tmp/dependency-changes.md --json /tmp/dependency-changes.json` locally for detailed release-style evidence.",
   ].join("\n");
 }
@@ -310,6 +309,26 @@ export function renderTrustedDependencyComment({ actor, headSha }) {
     `- Trusted role: ${markdownCode(actor.reason)}`,
     "",
     "Security review is still recommended before merge when the dependency graph change is intentional.",
+  ].join("\n");
+}
+
+export function renderRemovalOnlyDependencyComment({ dependencyGraphChanges, headSha }) {
+  const removalLines = dependencyGraphChanges.map(
+    (change) =>
+      `- Removed ${markdownCode(change.name ?? "<unknown dependency>")} from ${markdownCode(change.manifest ?? "<unknown manifest>")}.`,
+  );
+  return [
+    dependencyGraphGuardMarker,
+    "",
+    "### Dependency removals noted",
+    "",
+    "This PR only removes dependencies from the dependency graph, so the dependency guard is informational and does not require `/allow-dependencies-change`.",
+    "",
+    ...removalLines,
+    "",
+    `- Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
+    "",
+    "A later push that adds or changes dependency graph entries will require a fresh security approval.",
   ].join("\n");
 }
 
@@ -727,6 +746,27 @@ async function main() {
         renderClearedDependencyGuardComment({ headSha: pullRequest.head?.sha }),
       );
     }
+    return;
+  }
+
+  const dependencyGraphChanges = await api.paginate(
+    `/repos/${owner}/${repo}/dependency-graph/compare/${pullRequest.base?.sha}...${pullRequest.head?.sha}`,
+  );
+  if (isRemovalOnlyDependencyGraphChange(dependencyGraphChanges)) {
+    if (mode === "detect") {
+      await setOutput("autoscrub", "false");
+    }
+    await upsertComment(
+      existingGuardComment,
+      renderRemovalOnlyDependencyComment({
+        dependencyGraphChanges,
+        headSha: pullRequest.head?.sha,
+      }),
+    );
+    await writeSummary(
+      "## Dependency Guard\n\nDependency removals are informational and do not require security approval.",
+    );
+    console.log("Dependency removals detected; guard is informational.");
     return;
   }
 

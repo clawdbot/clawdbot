@@ -1,5 +1,6 @@
 type ReplyOperationAdmissionSnapshot =
   | { status: "owned" }
+  | { status: "accepted"; mode: "steer" | "followup" }
   | { status: "skipped"; reason: "active-run" | "aborted" | "lifecycle-invalidated" };
 
 export type ReplyOperationRunState = {
@@ -10,7 +11,7 @@ export type ReplyOperationRunState = {
 // heartbeat cleanup never infers it from whichever operation is active later.
 export const REPLY_OPERATION_RUN_STATE = Symbol("openclaw.replyOperationRunState");
 
-type ReplyOptionsWithOperationRunState = {
+export type ReplyOptionsWithOperationRunState = {
   [REPLY_OPERATION_RUN_STATE]?: ReplyOperationRunState;
 };
 

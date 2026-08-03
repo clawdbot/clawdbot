@@ -67,6 +67,49 @@ describe("xai responses tool helpers", () => {
     });
   });
 
+  it("collects every response text block and deduplicates citations across output items", () => {
+    expect(
+      requireXaiResponseTextAndCitations(
+        {
+          output: [
+            { type: "web_search_call" },
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: "First ",
+                  annotations: [{ type: "url_citation", url: "https://example.com/a" }],
+                },
+                {
+                  type: "output_text",
+                  text: "second",
+                  annotations: [
+                    { type: "url_citation", url: "https://example.com/b" },
+                    { type: "url_citation", url: "https://example.com/a" },
+                  ],
+                },
+              ],
+            },
+            {
+              type: "output_text",
+              text: " and ",
+              annotations: [{ type: "url_citation", url: "https://example.com/c" }],
+            },
+            {
+              type: "message",
+              content: [{ type: "output_text", text: "third" }],
+            },
+          ],
+        },
+        "xAI tool failed",
+      ),
+    ).toEqual({
+      content: "First second and third",
+      citations: ["https://example.com/a", "https://example.com/b", "https://example.com/c"],
+    });
+  });
+
   it("ignores malformed output, content, and annotation entries", () => {
     expect(
       extractXaiWebSearchContent({

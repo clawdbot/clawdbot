@@ -88,14 +88,6 @@ function resolveManifest(manifestRoot, requestedDigest) {
     if (!error || error.code !== "ENOENT") throw error;
   }
 
-  // Drain only the immediately preceding unshipped gateway format. The caller
-  // supplies that same profile's full locale; this is not a shipped migration.
-  let legacyCompare;
-  try {
-    legacyCompare = new Intl.Collator(legacyGatewayLocale).compare;
-  } catch {
-    fail("invalid legacy gateway locale");
-  }
   const candidates = fs
     .readdirSync(manifestRoot)
     .filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
@@ -136,17 +128,7 @@ function resolveManifest(manifestRoot, requestedDigest) {
     } catch {
       continue;
     }
-    if (crypto.createHash("sha256").update(canonical).digest("hex") !== requestedDigest) {
-      // Old gateways used their default locale collation for the accepted ref.
-      const legacySeed = [
-        ...value.entries.filter((entry) => entry.type === "directory"),
-        ...value.entries.filter((entry) => entry.type !== "directory"),
-      ];
-      canonical = serializeManifest(value.baseCommit ?? null, legacySeed, (left, right) =>
-        legacyCompare(left.path, right.path),
-      );
-      if (crypto.createHash("sha256").update(canonical).digest("hex") !== requestedDigest) continue;
-    }
+    if (crypto.createHash("sha256").update(canonical).digest("hex") !== requestedDigest) continue;
     if (publishManifest(manifestRoot, canonical) !== requestedDigest) {
       fail("resolved workspace manifest digest mismatch");
     }

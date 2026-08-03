@@ -215,10 +215,8 @@ describe("managed npm generation-dir loader precedence", () => {
     const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
 
     const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expectRecordFields(loaded.discord, {
-      installPath: differentlyCasedActivePath,
-      resolvedVersion: "1.0.0",
-    });
+    const record = expectRecordFields(loaded.discord, { resolvedVersion: "1.0.0" });
+    expect(String(record.installPath).toLowerCase()).toBe(downgradedPackageDir.toLowerCase());
     expect(emitWarning).not.toHaveBeenCalled();
   });
 

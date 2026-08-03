@@ -7,13 +7,14 @@ import type {
   WorkerDrainingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import {
-  projectWorkspaceResultConflict,
-  type WorkerWorkspaceResultConflict,
-} from "./workspace-conflicts.js";
+import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
+import {
+  finalizeWorkspaceResultConflicts,
+  settleStagedWorkspaceResult,
+} from "./workspace-result-finalize.js";
 import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
@@ -21,7 +22,6 @@ import {
   deleteWorkerWorkspaceResultCleanupRefs,
   hasWorkerWorkspaceResultRef,
   isWorkerWorkspaceResultCleanupRef,
-  moveStagedWorkerWorkspaceResultToCleanup,
   preparedWorkerWorkspaceResultRef,
   restoreStagedWorkerWorkspaceResultFromCleanup,
   workerWorkspaceResultRef,
@@ -270,7 +270,6 @@ export async function recoverPendingWorkspaceResults(
           });
           await reconciliation.verifyLocalStable();
           const conflictPaths = reconciliation.conflictPaths;
-          const retainStagedResult = conflictPaths.length > 0;
           if (pending.workspaceAcceptedAtMs === null) {
             placements.acceptWorkspaceResult(turnClaim);
           }
@@ -282,69 +281,44 @@ export async function recoverPendingWorkspaceResults(
             });
             ownedStagedResultRef = canonicalStagedResultRef;
           }
-          const supersededConflict =
-            priorWorkspaceResultConflict &&
-            (conflictPaths.length === 0 ||
-              priorWorkspaceResultConflict.stagedResultRef !== ownedStagedResultRef)
-              ? priorWorkspaceResultConflict
-              : undefined;
-          if (supersededConflict && supersededConflict.stagedResultRef !== ownedStagedResultRef) {
-            await deleteStagedWorkerWorkspaceResult({
-              root: localPath,
-              stagedResultRef: supersededConflict.stagedResultRef,
-            });
-          }
-          if (conflictPaths.length > 0) {
-            const projectedConflict = projectWorkspaceResultConflict(
-              conflictPaths,
-              ownedStagedResultRef,
-            );
-            placements.recordWorkspaceResultConflict(turnClaim, projectedConflict);
-            await deps.reportWorkspaceResultConflict({
-              sessionId: placement.sessionId,
-              sessionKey: placement.sessionKey,
-              agentId: placement.agentId,
-              ...projectedConflict,
-            });
-          } else if (supersededConflict) {
-            placements.recordWorkspaceResultConflict(turnClaim, undefined);
-          }
-          if (supersededConflict && conflictPaths.length === 0) {
-            await deps.reportWorkspaceResultConflict({
-              sessionId: placement.sessionId,
-              sessionKey: placement.sessionKey,
-              agentId: placement.agentId,
-              cleared: true,
-            });
-          }
-          const cleanupRef = !retainStagedResult
-            ? isWorkerWorkspaceResultCleanupRef(ownedStagedResultRef)
-              ? ownedStagedResultRef
-              : await moveStagedWorkerWorkspaceResultToCleanup({
-                  root: localPath,
-                  stagedResultRef: ownedStagedResultRef,
-                })
-            : undefined;
-          const currentEnvironment = environments.get(placement.environmentId);
-          if (
-            currentEnvironment &&
-            currentEnvironment.state !== "destroyed" &&
-            currentEnvironment.ownerEpoch === placement.activeOwnerEpoch
-          ) {
-            await environments.destroy(placement.environmentId);
-          }
-          const reclaimed = placements.completeWorkspaceResultAndReleaseTurn(turnClaim, {
-            reclaim: true,
+          const finalized = await finalizeWorkspaceResultConflicts({
+            placements,
+            turnClaim,
+            conflictPaths,
+            priorConflict: priorWorkspaceResultConflict,
+            stagedResultRef: ownedStagedResultRef,
+            root: localPath,
+            report: async (report) =>
+              await deps.reportWorkspaceResultConflict({
+                sessionId: placement.sessionId,
+                sessionKey: placement.sessionKey,
+                agentId: placement.agentId,
+                ...report,
+              }),
           });
-          if (reclaimed.state !== "reclaimed") {
-            throw new Error("Recovered worker result did not reclaim its stale environment");
-          }
-          if (cleanupRef) {
-            await deleteStagedWorkerWorkspaceResult({
-              root: localPath,
-              stagedResultRef: cleanupRef,
-            }).catch(() => undefined);
-          }
+          await settleStagedWorkspaceResult({
+            placements,
+            turnClaim,
+            root: localPath,
+            stagedResultRef: ownedStagedResultRef,
+            conflictRetained: finalized.conflictRetained,
+            reclaim: true,
+            beforeComplete: async () => {
+              const currentEnvironment = environments.get(placement.environmentId);
+              if (
+                currentEnvironment &&
+                currentEnvironment.state !== "destroyed" &&
+                currentEnvironment.ownerEpoch === placement.activeOwnerEpoch
+              ) {
+                await environments.destroy(placement.environmentId);
+              }
+            },
+            validateCompleted: (completed) => {
+              if (completed.state !== "reclaimed") {
+                throw new Error("Recovered worker result did not reclaim its stale environment");
+              }
+            },
+          });
           await environments
             .stopTunnel(placement.environmentId, placement.activeOwnerEpoch)
             .catch(() => undefined);
@@ -438,74 +412,49 @@ export async function recoverPendingWorkspaceResults(
           if (conflictPaths.length > 0 && !recordedStagedResultRef) {
             throw new Error("Recovered cloud workspace conflict has no staged result reference");
           }
-          const supersededConflict =
-            priorWorkspaceResultConflict &&
-            (conflictPaths.length === 0 ||
-              priorWorkspaceResultConflict.stagedResultRef !== recordedStagedResultRef)
-              ? priorWorkspaceResultConflict
-              : undefined;
-          if (
-            supersededConflict &&
-            supersededConflict.stagedResultRef !== recordedStagedResultRef
-          ) {
-            await deleteStagedWorkerWorkspaceResult({
-              root: localPath,
-              stagedResultRef: supersededConflict.stagedResultRef,
-            });
-          }
-          if (conflictPaths.length > 0 && recordedStagedResultRef) {
-            const projectedConflict = projectWorkspaceResultConflict(
-              conflictPaths,
-              recordedStagedResultRef,
-            );
-            placements.recordWorkspaceResultConflict(turnClaim, projectedConflict);
-            await deps.reportWorkspaceResultConflict({
-              sessionId: placement.sessionId,
-              sessionKey: placement.sessionKey,
-              agentId: placement.agentId,
-              ...projectedConflict,
-            });
-          } else if (supersededConflict) {
-            placements.recordWorkspaceResultConflict(turnClaim, undefined);
-          }
-          if (supersededConflict && conflictPaths.length === 0) {
-            await deps.reportWorkspaceResultConflict({
-              sessionId: placement.sessionId,
-              sessionKey: placement.sessionKey,
-              agentId: placement.agentId,
-              cleared: true,
-            });
-          }
-          const cleanupRef =
-            recordedStagedResultRef && conflictPaths.length === 0
-              ? await moveStagedWorkerWorkspaceResultToCleanup({
-                  root: localPath,
-                  stagedResultRef: recordedStagedResultRef,
-                })
-              : undefined;
-          if (sameGatewayInstance) {
-            await quiescence.resume();
-            quiescenceHandled = true;
-            placements.completeWorkspaceResultAndReleaseTurn(turnClaim);
-          } else {
-            await environments.destroy(placement.environmentId);
-            quiescenceHandled = true;
-            const reclaimed = placements.completeWorkspaceResultAndReleaseTurn(turnClaim, {
-              reclaim: true,
-            });
-            if (reclaimed.state !== "reclaimed") {
-              throw new Error("Recovered worker result did not reclaim its stale environment");
-            }
-            await environments
-              .stopTunnel(placement.environmentId, placement.activeOwnerEpoch)
-              .catch(() => undefined);
-          }
-          if (cleanupRef) {
-            await deleteStagedWorkerWorkspaceResult({
-              root: localPath,
-              stagedResultRef: cleanupRef,
-            }).catch(() => undefined);
-          }
+          const finalized = await finalizeWorkspaceResultConflicts({
+            placements,
+            turnClaim,
+            conflictPaths,
+            priorConflict: priorWorkspaceResultConflict,
+            stagedResultRef: recordedStagedResultRef,
+            root: localPath,
+            report: async (report) =>
+              await deps.reportWorkspaceResultConflict({
+                sessionId: placement.sessionId,
+                sessionKey: placement.sessionKey,
+                agentId: placement.agentId,
+                ...report,
+              }),
+          });
+          await settleStagedWorkspaceResult({
+            placements,
+            turnClaim,
+            root: localPath,
+            stagedResultRef: recordedStagedResultRef,
+            conflictRetained: finalized.conflictRetained,
+            reclaim: !sameGatewayInstance,
+            beforeComplete: async () => {
+              if (sameGatewayInstance) {
+                await quiescence.resume();
+              } else {
+                await environments.destroy(placement.environmentId);
+              }
+              quiescenceHandled = true;
+            },
+            validateCompleted: (completed) => {
+              if (!sameGatewayInstance && completed.state !== "reclaimed") {
+                throw new Error("Recovered worker result did not reclaim its stale environment");
+              }
+            },
+            afterComplete: async () => {
+              if (!sameGatewayInstance) {
+                await environments
+                  .stopTunnel(placement.environmentId, placement.activeOwnerEpoch)
+                  .catch(() => undefined);
+              }
+            },
+          });
         } finally {
           if (!quiescenceHandled) {
             await quiescence.resume();

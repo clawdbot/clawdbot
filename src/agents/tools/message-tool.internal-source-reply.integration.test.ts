@@ -10,7 +10,7 @@ import { createMessageTool } from "./message-tool.js";
 describe("WebChat message tool internal source reply", () => {
   it("projects a real targetless send and preserves the automatic final reply", async () => {
     const tool = createMessageTool({
-      config: {},
+      config: { agents: { entries: { main: { default: true } } } },
       currentChannelProvider: "webchat",
       sourceReplyDeliveryMode: "automatic",
       agentSessionKey: "agent:main:webchat:dm:dashboard",

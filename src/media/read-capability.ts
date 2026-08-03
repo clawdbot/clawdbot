@@ -8,6 +8,7 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { createBoundedOutboundMediaReadFile } from "./bounded-read-file.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
 import {
   getAgentScopedMediaLocalRoots,
@@ -76,10 +77,15 @@ function createAgentScopedHostMediaReadFile(
     params.workspaceDir ??
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   const workspaceRoot = resolveWorkspaceRoot(inferredWorkspaceDir);
-  return async (filePath: string) => {
+  return createBoundedOutboundMediaReadFile(async (filePath, options) => {
     const resolvedPath = resolvePathFromInput(filePath, workspaceRoot);
-    return (await readLocalFileSafely({ filePath: resolvedPath })).buffer;
-  };
+    return (
+      await readLocalFileSafely({
+        filePath: resolvedPath,
+        maxBytes: options?.maxBytes,
+      })
+    ).buffer;
+  });
 }
 
 function appendWorkspaceDirToLocalRoots(

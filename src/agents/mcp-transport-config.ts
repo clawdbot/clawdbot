@@ -170,21 +170,19 @@ function resolveHttpTransportConfig(
     !Array.isArray((rawServer as { oauth?: unknown }).oauth)
       ? { oauth: (rawServer as { oauth: Record<string, unknown> }).oauth }
       : {}),
-    ...(getBooleanField(rawServer, ["sslVerify", "ssl_verify"]) !== undefined
-      ? { sslVerify: getBooleanField(rawServer, ["sslVerify", "ssl_verify"]) }
+    ...(getBooleanField(rawServer, ["sslVerify"]) !== undefined
+      ? { sslVerify: getBooleanField(rawServer, ["sslVerify"]) }
       : {}),
-    ...(getStringField(rawServer, ["clientCert", "client_cert"])
-      ? { clientCert: getStringField(rawServer, ["clientCert", "client_cert"]) }
+    ...(getStringField(rawServer, ["clientCert"])
+      ? { clientCert: getStringField(rawServer, ["clientCert"]) }
       : {}),
-    ...(getStringField(rawServer, ["clientKey", "client_key"])
-      ? { clientKey: getStringField(rawServer, ["clientKey", "client_key"]) }
+    ...(getStringField(rawServer, ["clientKey"])
+      ? { clientKey: getStringField(rawServer, ["clientKey"]) }
       : {}),
     description: describeHttpMcpServerLaunchConfig(launch.config),
     connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
     requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-    supportsParallelToolCalls:
-      getBooleanField(rawServer, ["supportsParallelToolCalls", "supports_parallel_tool_calls"]) ??
-      false,
+    supportsParallelToolCalls: getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
   };
 }
 
@@ -217,9 +215,7 @@ export function resolveMcpTransportConfig(
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
       connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
       requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-      supportsParallelToolCalls:
-        getBooleanField(rawServer, ["supportsParallelToolCalls", "supports_parallel_tool_calls"]) ??
-        false,
+      supportsParallelToolCalls: getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
     };
   }
 

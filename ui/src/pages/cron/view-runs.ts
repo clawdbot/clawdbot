@@ -5,11 +5,10 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { CronRunLogEntry } from "../../api/types.ts";
 import type { CronDeliveryStatus, CronRunsStatusValue, CronSortDir } from "../../api/types.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
 import { icon } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
-import { t } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -17,13 +16,14 @@ import {
   formatMs,
   formatTokens,
 } from "../../lib/format.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 
 // Leaf contract: the slice of the cron view props this module needs. Keeping
 // it local (instead of importing CronProps from view.ts) avoids a module
 // cycle between view.ts and view-runs.ts.
 type CronRunsSectionProps = {
   basePath: string;
+  agentId: string;
   runs: CronRunLogEntry[];
   runsHasMore: boolean;
   runsLoadingMore: boolean;
@@ -90,6 +90,16 @@ function renderFilterDropdown(params: {
   onToggle: (value: string, checked: boolean) => void;
   onClear: () => void;
 }) {
+  const selectedLabels = params.options
+    .filter((option) => params.selected.includes(option.value))
+    .map((option) => option.label);
+  const accessibleSummary =
+    selectedLabels.length > 2
+      ? `${params.summary} (${new Intl.ListFormat(i18n.getLocale(), {
+          style: "long",
+          type: "conjunction",
+        }).format(selectedLabels)})`
+      : params.summary;
   return html`
     <div class="cron-filter-dropdown" data-filter=${params.id}>
       <wa-dropdown
@@ -115,7 +125,7 @@ function renderFilterDropdown(params: {
             ? "active"
             : ""}"
           title=${params.title}
-          aria-label=${params.title}
+          aria-label=${`${params.title} ${accessibleSummary}`}
         >
           <span>${params.summary}</span>
           ${icon("chevronDown")}
@@ -231,7 +241,9 @@ export function renderRunsSection(props: CronRunsSectionProps) {
             `
         : html`
             <div class="cron-runs__list">
-              ${runs.map((entry) => renderRun(entry, props.basePath, props.onNavigateToChat))}
+              ${runs.map((entry) =>
+                renderRun(entry, props.agentId, props.basePath, props.onNavigateToChat),
+              )}
             </div>
           `}
       ${props.runsHasMore
@@ -282,12 +294,18 @@ function runDeliveryLabel(value: string): string {
 
 function renderRun(
   entry: CronRunLogEntry,
+  fallbackAgentId: string,
   basePath: string,
   onNavigateToChat?: (sessionKey: string) => void,
 ) {
   const chatUrl =
     typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
-      ? `${pathForRoute("chat", basePath)}${searchForSession(entry.sessionKey)}`
+      ? sessionNavigationTarget({
+          face: "chat",
+          sessionKey: entry.sessionKey,
+          fallbackAgentId,
+          basePath,
+        }).href
       : null;
   const status = runStatusLabel(entry.status ?? "unknown");
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");

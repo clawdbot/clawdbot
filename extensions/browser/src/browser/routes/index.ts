@@ -5,6 +5,7 @@
  * or in-process route registrar.
  */
 import type { BrowserRouteContext } from "../server-context.js";
+import { registerBrowserExtractRoute } from "./agent.extract.js";
 import { registerBrowserAgentRoutes } from "./agent.js";
 import { registerBrowserBasicRoutes } from "./basic.js";
 import { registerBrowserPermissionRoutes } from "./permissions.js";
@@ -16,5 +17,6 @@ export function registerBrowserRoutes(app: BrowserRouteRegistrar, ctx: BrowserRo
   registerBrowserBasicRoutes(app, ctx);
   registerBrowserTabRoutes(app, ctx);
   registerBrowserPermissionRoutes(app, ctx);
+  registerBrowserExtractRoute(app, ctx);
   registerBrowserAgentRoutes(app, ctx);
 }

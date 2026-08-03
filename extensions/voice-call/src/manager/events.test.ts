@@ -15,7 +15,9 @@ import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 import { speakInitialMessage } from "./outbound.js";
+import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
 
+const MANAGER_REPLAY_KEY_LIMIT = 10_000;
 const logSpy = vi.hoisted(() => {
   const logEntries: string[] = [];
   return {
@@ -93,7 +95,7 @@ function createContext(overrides: Partial<CallManagerContext> = {}): CallManager
     activeCalls: new Map(),
     providerCallIdMap: new Map(),
     processedEventIds: new Set(),
-    rejectedProviderCallIds: new Set(),
+    rejectedProviderCallIds: new Map(),
     provider: null,
     config: VoiceCallConfigSchema.parse({
       enabled: true,
@@ -769,6 +771,91 @@ describe("processEvent (functional)", () => {
       waiterResolved: false,
     });
     expect(replayResult).toEqual({ kind: "ignored" });
+  });
+
+  it("bounds committed replay keys in both manager and persisted call owners", () => {
+    const now = Date.now();
+    const managerKeys = Array.from(
+      { length: MANAGER_REPLAY_KEY_LIMIT },
+      (_, index) => `manager-${index}`,
+    );
+    const callKeys = Array.from({ length: MAX_CALL_REPLAY_KEYS }, (_, index) => `call-${index}`);
+    const ctx = createContext({ processedEventIds: new Set(managerKeys) });
+    ctx.activeCalls.set("call-bounded", {
+      callId: "call-bounded",
+      providerCallId: "provider-bounded",
+      provider: "plivo",
+      direction: "outbound",
+      state: "active",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: callKeys,
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-bounded", "call-bounded");
+
+    const result = processEvent(ctx, {
+      id: "evt-bounded-new",
+      type: "call.dtmf",
+      callId: "call-bounded",
+      providerCallId: "provider-bounded",
+      timestamp: now + 1,
+      digits: "1",
+    });
+
+    const call = ctx.activeCalls.get("call-bounded");
+    expect(result).toEqual({ kind: "processed" });
+    expect(ctx.processedEventIds.size).toBe(MANAGER_REPLAY_KEY_LIMIT);
+    expect(ctx.processedEventIds.has("manager-0")).toBe(false);
+    expect(ctx.processedEventIds.has("evt-bounded-new")).toBe(true);
+    expect(call?.processedEventIds).toHaveLength(MAX_CALL_REPLAY_KEYS);
+    expect(call?.processedEventIds[0]).toBe("call-1");
+    expect(call?.processedEventIds.at(-1)).toBe("evt-bounded-new");
+    expect(
+      processEvent(ctx, {
+        id: "evt-bounded-new",
+        type: "call.dtmf",
+        callId: "call-bounded",
+        providerCallId: "provider-bounded",
+        timestamp: now + 2,
+        digits: "1",
+      }),
+    ).toEqual({ kind: "ignored" });
+  });
+
+  it("bounds rejected provider calls while retaining hangup-once behavior", () => {
+    const rejectedProviderCallIds = new Map<string, symbol>(
+      Array.from(
+        { length: MANAGER_REPLAY_KEY_LIMIT },
+        (_, index) => [`provider-${index}`, Symbol(`provider-${index}`)] as const,
+      ),
+    );
+    const { ctx, hangupCalls } = createRejectingInboundContext();
+    ctx.rejectedProviderCallIds = rejectedProviderCallIds;
+
+    processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: "evt-rejected-new",
+        providerCallId: "provider-new",
+        from: "+15552222222",
+      }),
+    );
+    processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: "evt-rejected-new-replay",
+        providerCallId: "provider-new",
+        from: "+15552222222",
+      }),
+    );
+
+    expect(ctx.rejectedProviderCallIds.size).toBe(MANAGER_REPLAY_KEY_LIMIT);
+    expect(ctx.rejectedProviderCallIds.has("provider-0")).toBe(false);
+    expect(ctx.rejectedProviderCallIds.has("provider-new")).toBe(true);
+    expect(hangupCalls).toHaveLength(1);
   });
 
   it("keeps retryable call.error events replayable", () => {

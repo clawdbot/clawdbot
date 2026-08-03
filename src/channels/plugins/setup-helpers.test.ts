@@ -13,6 +13,7 @@ import {
   createEnvPatchedAccountSetupAdapter,
   createPatchedAccountSetupAdapter,
   moveSingleAccountChannelSectionToDefaultAccount,
+  patchScopedAccountConfig,
   prepareScopedSetupConfig,
 } from "./setup-helpers.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
@@ -200,6 +201,90 @@ describe("applySetupAccountConfigPatch", () => {
     expect(personal.botToken).toBe("personal-token");
     expect(workTeam.enabled).toBe(true);
     expect(workTeam.botToken).toBe("work-token");
+  });
+});
+
+describe("patchScopedAccountConfig credential clearing", () => {
+  it("clears only default-account credential fields before applying their replacement", () => {
+    const next = patchScopedAccountConfig({
+      cfg: asConfig({
+        channels: {
+          "demo-setup": {
+            enabled: false,
+            token: "old-token",
+            tokenFile: "/old/token",
+            webhookPath: "/keep",
+          },
+        },
+      }),
+      channelKey: "demo-setup",
+      accountId: DEFAULT_ACCOUNT_ID,
+      clearFields: ["token", "tokenFile"],
+      patch: { token: "new-token" },
+      ensureChannelEnabled: false,
+    });
+
+    expect(channelRecord(next, "demo-setup")).toEqual({
+      enabled: false,
+      token: "new-token",
+      webhookPath: "/keep",
+    });
+  });
+
+  it("clears only selected named-account credentials and preserves disabled siblings", () => {
+    const next = patchScopedAccountConfig({
+      cfg: asConfig({
+        channels: {
+          "demo-setup": {
+            enabled: false,
+            token: "root-token",
+            accounts: {
+              work: { enabled: false, token: "old-token", tokenFile: "/old/token" },
+              alerts: { enabled: false, token: "alerts-token" },
+            },
+          },
+        },
+      }),
+      channelKey: "demo-setup",
+      accountId: "work",
+      clearFields: ["token", "tokenFile"],
+      patch: { token: "new-token" },
+      ensureChannelEnabled: false,
+      ensureAccountEnabled: false,
+    });
+
+    const channel = channelRecord(next, "demo-setup");
+    expect(channel.enabled).toBe(false);
+    expect(channel.token).toBe("root-token");
+    expect(accountRecord(channel, "work")).toEqual({ enabled: false, token: "new-token" });
+    expect(accountRecord(channel, "alerts")).toEqual({
+      enabled: false,
+      token: "alerts-token",
+    });
+  });
+
+  it("allows setup to explicitly re-enable an existing disabled named account", () => {
+    const next = patchScopedAccountConfig({
+      cfg: asConfig({
+        channels: {
+          "demo-setup": {
+            enabled: false,
+            accounts: { work: { enabled: false, tokenFile: "/old/token" } },
+          },
+        },
+      }),
+      channelKey: "demo-setup",
+      accountId: "work",
+      patch: { token: "new-token" },
+      accountPatch: { enabled: true, token: "new-token" },
+      clearFields: ["tokenFile"],
+      ensureChannelEnabled: true,
+      ensureAccountEnabled: false,
+    });
+
+    const channel = channelRecord(next, "demo-setup");
+    expect(channel.enabled).toBe(true);
+    expect(accountRecord(channel, "work")).toEqual({ enabled: true, token: "new-token" });
   });
 });
 

@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import { fetchBrowserScreenshotDataUrl } from "./browser-client.ts";
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  await i18n.setLocale("en");
 });
 
 describe("fetchBrowserScreenshotDataUrl", () => {
@@ -39,7 +41,49 @@ describe("fetchBrowserScreenshotDataUrl", () => {
         authToken: null,
         path: "/tmp/missing.png",
       }),
-    ).rejects.toThrow("screenshot fetch failed (404)");
+    ).rejects.toThrow("Screenshot fetch failed (404).");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cancels an unsuccessful screenshot response body", async () => {
+    vi.useFakeTimers();
+    const response = new Response("not found", { status: 404 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => response),
+    );
+
+    await expect(
+      fetchBrowserScreenshotDataUrl({
+        basePath: "/openclaw",
+        authToken: null,
+        path: "/tmp/missing.png",
+      }),
+    ).rejects.toThrow("Screenshot fetch failed (404).");
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects an unsuccessful screenshot without waiting for stream cancellation", async () => {
+    vi.useFakeTimers();
+    const response = new Response("not found", { status: 404 });
+    const cancel = vi
+      .spyOn(response.body!, "cancel")
+      .mockImplementation(() => new Promise<void>(() => {}));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => response),
+    );
+
+    await expect(
+      fetchBrowserScreenshotDataUrl({
+        basePath: "/openclaw",
+        authToken: null,
+        path: "/tmp/missing.png",
+      }),
+    ).rejects.toThrow("Screenshot fetch failed (404).");
+    expect(cancel).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -125,5 +169,29 @@ describe("fetchBrowserScreenshotDataUrl", () => {
 
     await outcome;
     expect(init?.signal?.aborted).toBe(true);
+  });
+
+  it("localizes screenshot failures while preserving the HTTP status", async () => {
+    i18n.registerTranslation("pt-BR", {
+      browser: {
+        errors: {
+          screenshotFetchFailed: "Falha ao buscar captura de tela ({status}).",
+        },
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(null, { status: 503 })),
+    );
+
+    await expect(
+      fetchBrowserScreenshotDataUrl({
+        basePath: "/openclaw",
+        authToken: null,
+        path: "/tmp/missing.png",
+      }),
+    ).rejects.toThrow("Falha ao buscar captura de tela (503).");
   });
 });

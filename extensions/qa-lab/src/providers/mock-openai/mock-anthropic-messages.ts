@@ -17,7 +17,12 @@ import {
   type AnthropicStreamEvent,
 } from "./mock-openai-contracts.js";
 import { buildAssistantEvents } from "./mock-openai-events.js";
-import { extractToolOutput, extractAllRequestTexts } from "./mock-openai-input.js";
+import {
+  extractAllRequestTexts,
+  extractLastUserText,
+  extractToolOutput,
+  extractToolOutputCallId,
+} from "./mock-openai-input.js";
 import { buildToolCallEventsWithArgs } from "./mock-openai-tooling.js";
 
 export async function buildMessagesPayload(
@@ -58,16 +63,22 @@ export async function buildMessagesPayload(
   const allInputText = extractAllRequestTexts(input, dispatchBody);
   if (QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE.test(allInputText)) {
     const toolOutput = extractToolOutput(input);
+    const toolOutputCallId = extractToolOutputCallId(input);
+    const scenarioKey = `${normalizedModel}\n${extractLastUserText(input)}`;
     const shouldEmitThinkingError =
-      toolOutput.length > 0 && scenarioState.anthropicThinkingErrorPhase === 0;
+      toolOutput.length > 0 &&
+      toolOutputCallId.length > 0 &&
+      !scenarioState.anthropicThinkingErrorScenarioKeys.has(scenarioKey);
+    // Safe retries generate fresh read call IDs. The original user prompt stays
+    // stable, so fail once per model and nonce-bearing logical scenario instead.
+    if (shouldEmitThinkingError) {
+      scenarioState.anthropicThinkingErrorScenarioKeys.add(scenarioKey);
+    }
     const events =
       toolOutput.length === 0
         ? buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" })
         : shouldEmitThinkingError
-          ? (() => {
-              scenarioState.anthropicThinkingErrorPhase = 1;
-              return buildAssistantEvents("");
-            })()
+          ? buildAssistantEvents("")
           : buildAssistantEvents("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
     const extracted = extractFinalAssistantOutputFromEvents(events);
     const responseBody = shouldEmitThinkingError

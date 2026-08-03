@@ -151,6 +151,25 @@ describe("feishu normalizeCompatibilityConfig streaming aliases", () => {
     expect(work?.streaming).toEqual({ mode: "off", block: { enabled: true } });
   });
 
+  it("moves tools.base to tools.bitable at root and account scope", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: feishuConfig({
+        tools: { base: false, doc: true },
+        accounts: {
+          work: { tools: { base: false } },
+          canonical: { tools: { base: false, bitable: true } },
+        },
+      }),
+    });
+
+    const feishu = result.config.channels?.feishu as unknown as Record<string, unknown>;
+    expect(feishu.tools).toEqual({ bitable: false, doc: true });
+    const accounts = feishu.accounts as Record<string, Record<string, unknown>>;
+    expect(accounts.work?.tools).toEqual({ bitable: false });
+    expect(accounts.canonical?.tools).toEqual({ bitable: true });
+    expect(FeishuConfigSchema.safeParse(feishu).success).toBe(true);
+  });
+
   it("sanitizes legacy Feishu-only coalesce fields so doctor output validates", () => {
     // The retired Feishu coalesce schema advertised enabled/minDelayMs/
     // maxDelayMs, which no runtime path read; migrated output must still pass
@@ -171,9 +190,34 @@ describe("feishu normalizeCompatibilityConfig streaming aliases", () => {
     expect(FeishuConfigSchema.safeParse(feishu).success).toBe(true);
   });
 
+  it("strips unread legacy Feishu heartbeat fields at root and account scope", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: feishuConfig({
+        heartbeat: { visibility: "hidden", intervalMs: 1000 },
+        accounts: {
+          work: { heartbeat: { visibility: "visible" } },
+          empty: { heartbeat: {} },
+        },
+      }),
+    });
+
+    const feishu = result.config.channels?.feishu as unknown as Record<string, unknown>;
+    expect(feishu.heartbeat).toBeUndefined();
+    const work = (feishu.accounts as Record<string, Record<string, unknown>>).work;
+    expect(work?.heartbeat).toBeUndefined();
+    const empty = (feishu.accounts as Record<string, Record<string, unknown>>).empty;
+    expect(empty?.heartbeat).toBeUndefined();
+    expect(result.changes).toEqual([
+      "Removed channels.feishu.heartbeat (legacy Feishu fields were never read by runtime).",
+      "Removed channels.feishu.accounts.work.heartbeat (legacy Feishu fields were never read by runtime).",
+      "Removed channels.feishu.accounts.empty.heartbeat (legacy Feishu fields were never read by runtime).",
+    ]);
+    expect(FeishuConfigSchema.safeParse(feishu).success).toBe(true);
+  });
+
   it("is idempotent: a second run reports no changes", () => {
     const first = normalizeCompatibilityConfig({
-      cfg: feishuConfig({ streaming: true, blockStreaming: true }),
+      cfg: feishuConfig({ streaming: true, blockStreaming: true, tools: { base: false } }),
     });
     expect(first.changes.length).toBeGreaterThan(0);
 

@@ -23,6 +23,7 @@ type PackageManifest = {
   name: string;
   version: string;
   dependencies?: Record<string, string>;
+  scripts?: Record<string, string>;
   [key: string]: unknown;
 };
 
@@ -184,16 +185,23 @@ function runNpmCommand(
   });
 }
 
-function normalizeWorkspaceDependencies(
+async function normalizeWorkspaceDependencies(
+  repoRoot: string,
   dependencies: Record<string, string> | undefined,
-): Record<string, string> | undefined {
+): Promise<Record<string, string> | undefined> {
   if (!dependencies) {
     return undefined;
   }
   const normalized: Record<string, string> = {};
   for (const [name, spec] of Object.entries(dependencies)) {
-    normalized[name] =
-      name.startsWith("@openclaw/") && spec.startsWith("workspace:") ? "0.0.0-private" : spec;
+    if (name.startsWith("@openclaw/") && spec.startsWith("workspace:")) {
+      const dependencyManifest = await readRawPackageManifest(
+        resolveWorkspacePackageRoot(repoRoot, name),
+      );
+      normalized[name] = dependencyManifest.version;
+      continue;
+    }
+    normalized[name] = spec;
   }
   return normalized;
 }
@@ -205,9 +213,10 @@ async function readRawPackageManifest(packageRoot: string): Promise<PackageManif
 
 async function readPackageManifest(packageRoot: string): Promise<PackageManifest> {
   const manifest = await readRawPackageManifest(packageRoot);
+  const repoRoot = path.resolve(packageRoot, "..", "..");
   return {
     ...manifest,
-    dependencies: normalizeWorkspaceDependencies(manifest.dependencies),
+    dependencies: await normalizeWorkspaceDependencies(repoRoot, manifest.dependencies),
   };
 }
 
@@ -392,7 +401,8 @@ describe("OpenClaw SDK package e2e", () => {
 
     for (const packageRoot of packageRoots) {
       const manifest = await readRawPackageManifest(packageRoot);
-      await runPnpmCommand(["--filter", manifest.name, "build"], {
+      const buildScript = manifest.scripts?.prepack ? "prepack" : "build";
+      await runPnpmCommand(["--filter", manifest.name, buildScript], {
         cwd: repoRoot,
         timeoutMs: 180_000,
       });

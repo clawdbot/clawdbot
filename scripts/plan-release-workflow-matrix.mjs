@@ -8,14 +8,8 @@ const DOCKER_E2E_CHUNKS = [
   },
   {
     chunk_id: "package-update-openai",
-    label: "package/update OpenAI install",
+    label: "package/update OpenAI",
     timeout_minutes: 45,
-    profiles: "beta minimum stable full",
-  },
-  {
-    chunk_id: "package-update-anthropic",
-    label: "package/update Anthropic install",
-    timeout_minutes: 60,
     profiles: "beta minimum stable full",
   },
   {
@@ -100,7 +94,7 @@ const LIVE_MODEL_PROVIDERS = [
   {
     provider_label: "MiniMax",
     providers: "minimax",
-    models: "minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7",
+    models: "minimax/MiniMax-M3,minimax-portal/MiniMax-M3",
     max_models: "2",
     profiles: "stable full",
   },

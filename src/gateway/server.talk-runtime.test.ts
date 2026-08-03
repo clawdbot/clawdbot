@@ -2,7 +2,7 @@
  * Tests gateway talk runtime wiring for speech provider execution.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODE_HEAVY_SPOKEN_FALLBACK } from "../../packages/speech-core/src/speech-text.js";
+import { CODE_HEAVY_SPOKEN_FALLBACK } from "../tts/speech-text.js";
 import {
   invokeTalkSpeakDirect,
   type TalkSpeakTestPayload,
@@ -149,14 +149,12 @@ describe("gateway talk runtime", () => {
         expect(synthesizeParams.disableFallback).toBe(true);
         const ttsConfig = (
           synthesizeParams.cfg as {
-            messages?: {
-              tts?: {
-                provider?: string;
-                providers?: Record<string, { resolvedBy?: string; voiceId?: string }>;
-              };
+            tts?: {
+              provider?: string;
+              providers?: Record<string, { resolvedBy?: string; voiceId?: string }>;
             };
           }
-        ).messages?.tts;
+        ).tts;
         expect(ttsConfig?.provider).toBe("acme");
         expect(ttsConfig?.providers?.acme?.resolvedBy).toBe("acme-test-provider");
         expect(ttsConfig?.providers?.acme?.voiceId).toBe("plugin-voice");

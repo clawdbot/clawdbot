@@ -43,7 +43,7 @@ Global setting:
 }
 ```
 
-Per-agent override (optional, at `agents.list[].tools.loopDetection`):
+Per-agent override (optional, at `agents.entries.*.tools.loopDetection`):
 
 ```json5
 {
@@ -63,6 +63,8 @@ Per-agent override (optional, at `agents.list[].tools.loopDetection`):
 ```
 
 The per-agent setting overrides the global setting.
+
+You can also enable the global rolling-history detectors in **Settings -> Labs** in the Control UI.
 
 ### Field behavior
 

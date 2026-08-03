@@ -434,6 +434,7 @@ async function prepareProviderPluginAuthMethod(
         profileId,
         credential,
         agentDir,
+        stateDir: params.env?.OPENCLAW_STATE_DIR,
       });
     }
     profilesPersisted = true;

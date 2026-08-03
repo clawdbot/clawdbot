@@ -75,7 +75,7 @@ function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEng
 const sessionParams = {
   sessionIdUsed: "session-1",
   sessionId: "session-1",
-  sessionKey: "agent:main",
+  sessionKey: "agent:main:main",
   sessionFile: "sessions/main.jsonl",
 };
 
@@ -214,7 +214,11 @@ describe("harness context engine lifecycle", () => {
       sessionTarget,
     };
     const engine = createContextEngine({
-      info: { id: engineId, name: "Configured runtime settings proof engine" },
+      info: {
+        id: engineId,
+        name: "Configured runtime settings proof engine",
+        acceptedHostParams: ["runtimeSettings", "runtimeContext", "sessionTarget"],
+      },
       bootstrap: vi.fn(async (params) => {
         captured.push({
           hook: "bootstrap",

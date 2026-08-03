@@ -54,7 +54,6 @@ describe("ProxyConfigSchema", () => {
 
   it("accepts HTTPS proxy URLs for TLS-to-proxy endpoints", () => {
     const result = ProxyConfigSchema.parse({
-      enabled: true,
       proxyUrl: "https://proxy.example.com:8443",
     });
 
@@ -71,10 +70,9 @@ describe("ProxyConfigSchema", () => {
 
   it("rejects proxyUrl values that are not HTTP forward proxies", () => {
     const socksIssues = expectProxyConfigFailure({
-      enabled: true,
       proxyUrl: "socks5://127.0.0.1",
     });
-    const invalidUrlIssues = expectProxyConfigFailure({ enabled: true, proxyUrl: "not-a-url" });
+    const invalidUrlIssues = expectProxyConfigFailure({ proxyUrl: "not-a-url" });
     expect(socksIssues.map((issue) => issue.path.join("."))).toContain("proxyUrl");
     expect(invalidUrlIssues.map((issue) => issue.path.join("."))).toContain("proxyUrl");
   });
@@ -87,7 +85,6 @@ describe("ProxyConfigSchema", () => {
   it("rejects unknown proxy TLS keys", () => {
     expect(() =>
       ProxyConfigSchema.parse({
-        enabled: true,
         proxyUrl: "https://proxy.example.com:8443",
         tls: {
           ca: "/etc/openclaw/proxy-ca.pem",
@@ -96,7 +93,7 @@ describe("ProxyConfigSchema", () => {
     ).toThrow();
   });
 
-  it("accepts enabled: false to disable the proxy", () => {
+  it("accepts enabled: false as an explicit opt-out", () => {
     const result = ProxyConfigSchema.parse({ enabled: false });
     expect(result?.enabled).toBe(false);
   });

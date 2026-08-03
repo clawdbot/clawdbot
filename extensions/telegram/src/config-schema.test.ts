@@ -31,6 +31,24 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it('rejects dmPolicy="allowlist" without allowFrom', () => {
+    expectTelegramConfigIssue({ dmPolicy: "allowlist", botToken: "fake" }, "allowFrom");
+  });
+
+  it("accepts account allowlist policy inherited from the channel", () => {
+    expectTelegramConfigValid({
+      allowFrom: ["12345"],
+      accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } },
+    });
+  });
+
+  it("rejects account allowlist without account or channel allowFrom", () => {
+    expectTelegramConfigIssue(
+      { accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } } },
+      "accounts.bot1.allowFrom",
+    );
+  });
+
   it("defaults dm/group policy", () => {
     const res = TelegramConfigSchema.safeParse({});
 

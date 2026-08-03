@@ -11,7 +11,8 @@ import {
   maybeRepairContextEngineHostCompatibility,
 } from "./context-engine-host-compat.js";
 
-vi.mock("../../../agents/agent-scope-config.js", () => ({
+vi.mock("../../../agents/agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../agents/agent-scope-config.js")>()),
   resolveDefaultAgentDir: vi.fn(() => "/tmp/openclaw-doctor-host-compat"),
 }));
 
@@ -35,10 +36,6 @@ vi.mock("../../../agents/harness/registry.js", () => ({
 
 vi.mock("../../../context-engine/init.js", () => ({
   ensureContextEnginesInitialized: vi.fn(),
-}));
-
-vi.mock("../../../plugins/runtime/runtime-registry-loader.js", () => ({
-  ensurePluginRegistryLoaded: vi.fn(),
 }));
 
 let engineCounter = 0;

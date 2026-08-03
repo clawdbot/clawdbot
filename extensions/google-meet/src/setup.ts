@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   addMeetingSetupCheck,
   createMeetingSetupStatus,
+  MeetingPlatformAdapter,
   type MeetingSetupCheck,
   type MeetingSetupStatus,
 } from "openclaw/plugin-sdk/meeting-runtime";
@@ -113,7 +114,7 @@ export function getGoogleMeetSetupStatus(
   const mode = options?.mode ?? config.defaultMode;
   const transport = options?.transport ?? config.defaultTransport;
   const needsChromeRealtimeAudio =
-    (mode === "agent" || mode === "bidi") &&
+    MeetingPlatformAdapter.isTalkBackMode(mode) &&
     (transport === "chrome" || transport === "chrome-node");
   const pluginEntries = asRecord(asRecord(fullConfig.plugins).entries);
   const pluginAllow = asRecord(fullConfig.plugins).allow;

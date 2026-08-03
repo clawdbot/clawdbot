@@ -1,5 +1,4 @@
 // Commander registration for foreground node host and node service lifecycle commands.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -7,7 +6,6 @@ import { loadNodeHostConfig } from "../../node-host/config.js";
 import { runNodeHost } from "../../node-host/runner.js";
 import { runNodeHostWorker } from "../../node-host/worker.js";
 import { defaultRuntime } from "../../runtime.js";
-import { parsePort } from "../daemon-cli/shared.js";
 import { formatInvalidPortOption } from "../error-format.js";
 import { formatHelpExamples } from "../help-format.js";
 import {
@@ -18,15 +16,8 @@ import {
   runNodeDaemonStop,
   runNodeDaemonUninstall,
 } from "./daemon.js";
+import { resolveNodeGatewayOptions } from "./gateway-options.js";
 import { runNodeIdentityShow } from "./identity.js";
-
-function parsePortOption(value: unknown, fallback: number): number | null {
-  // Undefined keeps config/default port; invalid explicit input returns null for CLI errors.
-  if (value === undefined) {
-    return fallback;
-  }
-  return parsePort(value);
-}
 
 export function registerNodeCli(program: Command) {
   const node = program
@@ -69,38 +60,26 @@ export function registerNodeCli(program: Command) {
     .option("--no-share-installed-apps", "Disable installed application sharing")
     .action(async (opts) => {
       const existing = await loadNodeHostConfig();
-      const host =
-        normalizeOptionalString(opts.host as string | undefined) ||
-        existing?.gateway?.host ||
-        "127.0.0.1";
-      const port = parsePortOption(opts.port, existing?.gateway?.port ?? 18789);
+      const { host, port, contextPath, tls, tlsFingerprint } = resolveNodeGatewayOptions(
+        opts,
+        existing,
+      );
       if (port === null) {
         defaultRuntime.error(formatInvalidPortOption("--port"));
         defaultRuntime.exit(1);
         return;
       }
-      const retargetedGateway = opts.host !== undefined || opts.port !== undefined;
-      const explicitContextPath = opts.contextPath !== undefined;
-      const explicitTlsDisabled = opts.tls === false;
-      if (explicitTlsDisabled && opts.tlsFingerprint !== undefined) {
+      if (opts.tls === false && opts.tlsFingerprint !== undefined) {
         defaultRuntime.error("--no-tls cannot be combined with --tls-fingerprint");
         defaultRuntime.exit(1);
         return;
       }
-      const tlsFingerprint =
-        explicitTlsDisabled || retargetedGateway
-          ? opts.tlsFingerprint
-          : (opts.tlsFingerprint ?? existing?.gateway?.tlsFingerprint);
-      const inheritedTls = retargetedGateway ? undefined : existing?.gateway?.tls;
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
-        gatewayTls:
-          typeof opts.tls === "boolean" ? opts.tls : Boolean(tlsFingerprint) || inheritedTls,
+        gatewayTls: tls,
         gatewayTlsFingerprint: tlsFingerprint,
-        gatewayContextPath:
-          normalizeOptionalString(opts.contextPath as string | undefined) ??
-          (explicitContextPath || retargetedGateway ? undefined : existing?.gateway?.contextPath),
+        gatewayContextPath: contextPath,
         nodeId: opts.nodeId,
         displayName: opts.displayName,
         installedAppsSharing: opts.shareInstalledApps,
@@ -129,7 +108,8 @@ export function registerNodeCli(program: Command) {
     .option("--host <host>", "Gateway host")
     .option("--port <port>", "Gateway port")
     .option("--context-path <path>", "Gateway WebSocket context path (e.g. /openclaw-gw)")
-    .option("--tls", "Use TLS for the gateway connection", false)
+    .option("--tls", "Use TLS for the gateway connection")
+    .option("--no-tls", "Disable TLS for the gateway connection")
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override the generated node instance id")
     .option("--display-name <name>", "Override node display name")

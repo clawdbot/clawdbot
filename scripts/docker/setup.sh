@@ -409,9 +409,16 @@ contains_disallowed_chars() {
   [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\t'* ]]
 }
 
-is_valid_timezone() {
+is_valid_timezone_in_image() {
   local value="$1"
-  [[ -e "/usr/share/zoneinfo/$value" && ! -d "/usr/share/zoneinfo/$value" ]]
+  docker run --rm --network none --entrypoint node "$IMAGE_NAME" -e '
+const timezone = process.argv[1];
+try {
+  new Intl.DateTimeFormat("en", { timeZone: timezone }).format(0);
+} catch {
+  process.exit(1);
+}
+' "$value"
 }
 
 validate_mount_path_value() {
@@ -496,9 +503,6 @@ if [[ -n "$TIMEZONE" ]]; then
   fi
   if [[ ! "$TIMEZONE" =~ ^[A-Za-z0-9/_+\-]+$ ]]; then
     fail "OPENCLAW_TZ must be a valid IANA timezone string (e.g. Asia/Shanghai)."
-  fi
-  if ! is_valid_timezone "$TIMEZONE"; then
-    fail "OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo (e.g. Asia/Shanghai)."
   fi
 fi
 
@@ -780,6 +784,10 @@ else
     echo "ERROR: Failed to pull image $IMAGE_NAME. Please check the image name and your access permissions." >&2
     exit 1
   fi
+fi
+
+if [[ -n "$TIMEZONE" ]] && ! is_valid_timezone_in_image "$TIMEZONE"; then
+  fail "OPENCLAW_TZ must be supported by $IMAGE_NAME (e.g. Asia/Shanghai)."
 fi
 
 # Ensure bind-mounted data directories are writable by the container's `node`

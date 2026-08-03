@@ -13,11 +13,11 @@ import { testState } from "../test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpers.js";
 
-setupGatewaySessionsTestHarness();
+setupGatewaySessionsHandlerTestHarness();
 
 function requireStateDir(): string {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
@@ -168,7 +168,7 @@ test("sessions.abort aborts an unconfigured agent with rows in a fixed store", a
   expect(activeRun.controller.signal.aborted).toBe(true);
 });
 
-test("sessions.abort recognizes an unconfigured agent in a fixed legacy store", async () => {
+test("sessions.abort rejects an unconfigured agent found only in a fixed legacy store", async () => {
   const storePath = await configureFixedSessionStore("legacy");
   const sessionKey = "agent:retired:legacy";
   fs.writeFileSync(
@@ -180,8 +180,8 @@ test("sessions.abort recognizes an unconfigured agent in a fixed legacy store", 
   const result = await directSessionReq("sessions.abort", { key: sessionKey });
 
   expect(result).toMatchObject({
-    ok: true,
-    payload: { ok: true, abortedRunId: null, status: "no-active-run" },
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: 'agent "retired" not found' },
   });
   const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
     agentId: "retired",

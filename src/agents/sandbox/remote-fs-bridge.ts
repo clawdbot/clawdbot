@@ -11,7 +11,10 @@ import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
-import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
+import {
+  SANDBOX_CREATE_EXISTS_EXIT_CODE,
+  SANDBOX_PINNED_MUTATION_PYTHON,
+} from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
 import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
@@ -80,7 +83,14 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     filePath: string;
     cwd?: string;
     signal?: AbortSignal;
+    maxBytes?: number;
   }): Promise<Buffer> {
+    if (
+      params.maxBytes !== undefined &&
+      (!Number.isSafeInteger(params.maxBytes) || params.maxBytes < 0)
+    ) {
+      throw new RangeError("Sandbox file read limit must be a non-negative safe integer.");
+    }
     const target = this.resolveTarget(params);
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
     if (
@@ -96,6 +106,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         target.mountRootPath,
         path.posix.dirname(relativePath) === "." ? "" : path.posix.dirname(relativePath),
         path.posix.basename(relativePath),
+        ...(params.maxBytes === undefined ? [] : [String(params.maxBytes)]),
       ],
       signal: params.signal,
     });
@@ -181,6 +192,48 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       stdin: buffer,
       signal: params.signal,
     });
+  }
+
+  async createFileExclusive(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<"created" | "exists"> {
+    const target = this.resolveTarget(params);
+    await this.ensureRemoteWritable(target, "create files", params.signal);
+    const pinned = await this.resolvePinnedParent({
+      containerPath: target.containerPath,
+      action: "create files",
+      requireWritable: true,
+      signal: params.signal,
+    });
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const result = await this.runMutation({
+      args: [
+        "create",
+        pinned.mountRootPath,
+        pinned.relativeParentPath,
+        pinned.basename,
+        params.mkdir !== false ? "1" : "0",
+      ],
+      stdin: buffer,
+      allowFailure: true,
+      signal: params.signal,
+    });
+    if (result.code === SANDBOX_CREATE_EXISTS_EXIT_CODE) {
+      return "exists";
+    }
+    if (result.code !== 0) {
+      throw new Error(
+        `Sandbox create failed for ${target.containerPath}: ${result.stderr.toString("utf8").trim()}`,
+      );
+    }
+    return "created";
   }
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {

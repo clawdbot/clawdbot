@@ -57,6 +57,10 @@ With folder:
 }
 ```
 
+Document creation is title-only. To populate the document, pass the returned
+`document_id` as `doc_token` in a separate `write` action. Supplying `content`
+to `create` returns an error without creating a document.
+
 **Important:** Always pass `owner_open_id` with the requesting user's `open_id` (from inbound metadata `sender_id`) so the user automatically gets `full_access` permission on the created document. Without this, only the bot app has access.
 
 ### List Blocks

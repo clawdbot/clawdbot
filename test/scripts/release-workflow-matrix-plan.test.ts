@@ -79,12 +79,12 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
 const PROFILE_EXPECTATIONS = [
   {
     profile: "minimum",
-    dockerE2eChunks: ["package-update-openai", "package-update-anthropic", "package-update-core"],
+    dockerE2eChunks: ["package-update-openai", "package-update-core"],
     liveModelProviders: ["openai"],
   },
   {
     profile: "beta",
-    dockerE2eChunks: ["package-update-openai", "package-update-anthropic", "package-update-core"],
+    dockerE2eChunks: ["package-update-openai", "package-update-core"],
     liveModelProviders: ["openai"],
   },
   {
@@ -92,7 +92,6 @@ const PROFILE_EXPECTATIONS = [
     dockerE2eChunks: [
       "core",
       "package-update-openai",
-      "package-update-anthropic",
       "package-update-core",
       "plugins-runtime-plugins",
       "plugins-runtime-services",
@@ -112,7 +111,6 @@ const PROFILE_EXPECTATIONS = [
     dockerE2eChunks: [
       "core",
       "package-update-openai",
-      "package-update-anthropic",
       "package-update-core",
       "plugins-runtime-plugins",
       "plugins-runtime-services",
@@ -238,7 +236,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       releaseProfile: "stable",
     });
 
-    expect(plan.dockerE2e.count).toBe(14);
+    expect(plan.dockerE2e.count).toBe(13);
     expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual([
       "anthropic",
       "google",
@@ -255,7 +253,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     ]);
   });
 
-  it("limits MiniMax Docker live-model coverage to the stable M2.7 pair", () => {
+  it("limits MiniMax Docker live-model coverage to the stable M3 pair", () => {
     const plan = createReleaseWorkflowMatrixPlan({
       includeLiveSuites: true,
       includeReleasePathSuites: true,
@@ -265,7 +263,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(plan.liveModels.matrix.include).toContainEqual({
       provider_label: "MiniMax",
       providers: "minimax",
-      models: "minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7",
+      models: "minimax/MiniMax-M3,minimax-portal/MiniMax-M3",
       max_models: "2",
       profiles: "stable full",
     });

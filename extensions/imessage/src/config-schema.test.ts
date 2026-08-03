@@ -24,6 +24,14 @@ describe("imessage config schema", () => {
     }
   });
 
+  it("accepts account allowlist policy inherited from the channel", () => {
+    const result = IMessageConfigSchema.safeParse({
+      allowFrom: ["alice"],
+      accounts: { work: { dmPolicy: "allowlist" } },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("defaults dm/group policy", () => {
     const res = IMessageConfigSchema.safeParse({});
 

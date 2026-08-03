@@ -32,6 +32,7 @@ import {
   buildGatewayStatusArgsFromHelpText,
   buildReleaseOnboardArgs,
   ensureManagedGatewayReady,
+  resolveInstalledGatewayStopArgs,
   runInstalledCli,
 } from "./installed.ts";
 import { readLogFileSize, readLogTextSince } from "./logs.ts";
@@ -108,7 +109,12 @@ export async function exerciseManagedGatewayLifecycle(
   logLanePhase(params.lane, "gateway-stop");
   await runInstalledCli({
     cliPath: params.cliPath,
-    args: ["gateway", "stop", "--force"],
+    args: await resolveInstalledGatewayStopArgs({
+      cliPath: params.cliPath,
+      cwd: params.lane.homeDir,
+      env: params.env,
+      logPath: `${params.logPrefix}-stop-help.log`,
+    }),
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-stop.log`,

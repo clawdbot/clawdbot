@@ -29,8 +29,6 @@ type QaScriptEvidenceTarget = {
   codeRefs?: readonly string[];
   docsRefs?: readonly string[];
   id: string;
-  primaryCoverageIds?: readonly string[];
-  secondaryCoverageIds?: readonly string[];
   sourcePath: string;
   title: string;
 };

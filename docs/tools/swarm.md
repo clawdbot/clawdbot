@@ -6,7 +6,7 @@ read_when:
   - You want a Code Mode script to fan out work across several agents
   - You need structured child results, decision gates, or first-completion pipelines
   - You are enabling or tuning tools.swarm limits
-  - You want to observe collector children in the session dashboard
+  - You want to observe collector children in chat
 ---
 
 Swarm is an experimental, opt-in way to orchestrate many sub-agents from a
@@ -67,7 +67,7 @@ Numeric values must be positive integers. OpenClaw bounds
 `1`–`86400`.
 
 You can override Swarm for one configured agent with
-`agents.list[].tools.swarm`. The per-agent object merges over the top-level
+`agents.entries.*.tools.swarm`. The per-agent object merges over the top-level
 `tools.swarm` object.
 
 ## Requirements
@@ -171,6 +171,12 @@ return await agents.run(
 `Promise.all` is the fan-out and fan-in boundary. OpenClaw starts up to
 `maxConcurrent` children for the group and queues the rest in submission
 order.
+
+Code Mode separately bounds concurrent guest bridge calls with
+`tools.codeMode.maxPendingToolCalls` (default `16`, maximum `128`). For very
+large groups, launch bounded batches below that limit and leave headroom for
+`phase()`, `log()`, and child wait transitions. `maxConcurrent` limits running
+children; it does not raise the guest bridge-call limit.
 
 ### Loop on a decision gate
 
@@ -305,14 +311,15 @@ is rejected with the relevant config key in the error.
 
 ## Observe a Swarm
 
-Open the parent session's dashboard in the Control UI while a swarm is active.
-The Swarm widget renders each active collector group as one dot per child with
-queued, running, done, or failed state. Labels appear in dot tooltips, so short
-stable labels make larger swarms easier to read.
+Keep the parent session open in Chat while a swarm is active. The Control UI and
+native Android, iOS, and macOS chat surfaces show a compact Swarm progress widget
+between the transcript and composer, rendering each active collector group as one
+dot per child with queued, running, done, or failed state. Accessible labels identify
+each child and status; the Control UI also exposes them as dot tooltips. The widget
+disappears after every group child reaches a terminal state.
 
-The session sidebar keeps the normal parent/child tree. Expand the parent row
-to inspect a collector child or open its transcript without losing the swarm
-hierarchy.
+The session sidebar keeps the normal parent/child tree. Expand the parent row to
+inspect a collector child or open its transcript without losing the swarm hierarchy.
 
 Collector results remain waitable until their group is archived. After every
 member reaches its retention deadline, OpenClaw archives the group's children
@@ -328,29 +335,39 @@ calls.
 Codex Code Mode automatically exposes eligible dynamic OpenClaw tools under
 `tools.*`. It does not use OpenClaw's QuickJS guest API or require
 `tools.codeMode`, but `tools.swarm` must still be enabled. Codex harness
-`agents_wait` calls support the full 600-second timeout. Use this pattern:
+`agents_wait` calls support the full 600-second timeout.
+
+With the currently supported Codex runtime, dynamic OpenClaw tool results reach
+Code Mode as JSON text. Parse each result before reading fields. Codex also
+serializes dynamic tool calls, so `Promise.all` does not submit several
+`sessions_spawn` calls concurrently. Launch collectors in a bounded loop;
+already-accepted children can still run while later launches are submitted.
 
 ```javascript
+function parseToolResult(value) {
+  if (typeof value !== "string") return value;
+  return JSON.parse(value);
+}
+
 const tasks = [
   "Check the authentication path.",
   "Check the storage path.",
   "Check the recovery path.",
 ];
+const launches = [];
 
-const launches = await Promise.all(
-  tasks.map((task, index) =>
-    tools.sessions_spawn({
+for (const [index, task] of tasks.entries()) {
+  const launch = parseToolResult(
+    await tools.sessions_spawn({
       task,
       collect: true,
       label: `review-${index + 1}`,
     }),
-  ),
-);
-
-for (const launch of launches) {
+  );
   if (launch.status !== "accepted") {
     throw new Error(launch.error ?? "Collector spawn was not accepted.");
   }
+  launches.push(launch);
 }
 
 const pending = new Set(launches.map((launch) => launch.runId));
@@ -358,10 +375,12 @@ const completed = [];
 
 while (pending.size > 0) {
   const ids = [...pending].slice(0, 1000);
-  const batch = await tools.agents_wait({
-    ids,
-    timeoutSeconds: 30,
-  });
+  const batch = parseToolResult(
+    await tools.agents_wait({
+      ids,
+      timeoutSeconds: 30,
+    }),
+  );
 
   // Rotate this bounded window behind ids that have not been checked yet.
   for (const runId of ids) {

@@ -73,6 +73,11 @@ type PackageManifest = {
   devDependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
+  openclaw?: {
+    build?: {
+      staticAssets?: Array<{ source?: string }>;
+    };
+  };
 };
 const trackedFilesByRoot = new Map<string, readonly string[] | null>();
 
@@ -138,15 +143,33 @@ function shouldSkipRuntimeFile(filePath: string): boolean {
 }
 
 function listRuntimeFiles(root: string): string[] {
+  const manifest = readPackageManifest(path.join(root, "package.json"));
+  // Static assets execute from the packaged plugin even when a dirty remote sync has not added
+  // their new source paths to Git's index, so the manifest must remain an authoritative input.
+  const staticAssetSources = (manifest.openclaw?.build?.staticAssets ?? []).flatMap((entry) => {
+    const source = entry.source?.trim().replace(/^\.\/+/, "");
+    if (!source || source.startsWith("../") || source.includes("/../")) {
+      return [];
+    }
+    const filePath = toRepoPath(path.posix.join(root, source));
+    return EXTENSION_RUNTIME_FILE_EXTENSIONS.has(path.extname(filePath)) &&
+      !shouldSkipRuntimeFile(filePath) &&
+      fs.existsSync(path.resolve(REPO_ROOT, filePath))
+      ? [filePath]
+      : [];
+  });
   const trackedFiles = listTrackedFiles(root);
   if (trackedFiles) {
-    return trackedFiles
-      .filter(
-        (filePath) =>
-          EXTENSION_RUNTIME_FILE_EXTENSIONS.has(path.extname(filePath)) &&
-          !shouldSkipRuntimeFile(filePath),
-      )
-      .toSorted();
+    return [
+      ...new Set([
+        ...trackedFiles.filter(
+          (filePath) =>
+            EXTENSION_RUNTIME_FILE_EXTENSIONS.has(path.extname(filePath)) &&
+            !shouldSkipRuntimeFile(filePath),
+        ),
+        ...staticAssetSources,
+      ]),
+    ].toSorted();
   }
 
   const files: string[] = [];
@@ -168,7 +191,7 @@ function listRuntimeFiles(root: string): string[] {
     }
   };
   visit(root);
-  return files.toSorted();
+  return [...new Set([...files, ...staticAssetSources])].toSorted();
 }
 
 function readManifestText(root: string): string {

@@ -11,6 +11,7 @@ import {
   readMissingScopeError,
   readMissingScopeErrorDetails,
   UnknownAgentIdErrorDetailsSchema,
+  WizardNotFoundErrorDetailsSchema,
 } from "./error-codes.js";
 
 describe("gateway error details", () => {
@@ -41,6 +42,15 @@ describe("gateway error details", () => {
     expect(Value.Check(UnknownAgentIdErrorDetailsSchema, details)).toBe(true);
     expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
     expect(Value.Check(UnknownAgentIdErrorDetailsSchema, { ...details, agentId: "" })).toBe(false);
+  });
+
+  it("validates missing wizard details", () => {
+    const details = { code: GatewayErrorDetailCodes.WIZARD_NOT_FOUND };
+    expect(Value.Check(WizardNotFoundErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(WizardNotFoundErrorDetailsSchema, { ...details, sessionId: "stale" })).toBe(
+      false,
+    );
   });
 
   it("builds a distinct forbidden missing-scope response", () => {

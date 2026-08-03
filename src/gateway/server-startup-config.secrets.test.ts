@@ -871,7 +871,7 @@ describe("gateway startup config secret preflight", () => {
           ownerId: "tts",
           state: "unavailable" as const,
           degradationState: "cold" as const,
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["env:default:ELEVENLABS_API_KEY"],
           reason: "secret reference was not found" as const,
         },
@@ -995,7 +995,7 @@ describe("gateway startup config secret preflight", () => {
           ownerId: "tts",
           state: "unavailable" as const,
           degradationState: "cold" as const,
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["env:default:ELEVENLABS_API_KEY"],
           reason: "secret reference was not found" as const,
         },
@@ -1492,21 +1492,19 @@ describe("gateway startup config secret preflight", () => {
 
   it("allows cold startup snapshots with isolated SecretRef owners", async () => {
     const sourceConfig = gatewayTokenConfig({
-      messages: {
-        tts: {
-          providers: {
-            elevenlabs: {
-              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
-            },
+      tts: {
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
           },
         },
       },
     });
     const warning: SecretResolverWarning = {
       code: "SECRETS_OWNER_UNAVAILABLE",
-      path: "messages.tts.providers.elevenlabs.apiKey",
+      path: "tts.providers.elevenlabs.apiKey",
       message:
-        "Secret owner capability:tts is configured-unavailable; paths: messages.tts.providers.elevenlabs.apiKey; reason: secret provider policy denied resolution.",
+        "Secret owner capability:tts is configured-unavailable; paths: tts.providers.elevenlabs.apiKey; reason: secret provider policy denied resolution.",
     };
     const prepareRuntimeSecretsSnapshot = vi.fn(async () => ({
       ...preparedSnapshot(sourceConfig),
@@ -1517,7 +1515,7 @@ describe("gateway startup config secret preflight", () => {
           ownerKind: "capability" as const,
           ownerId: "tts",
           state: "unavailable" as const,
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["env:default:ELEVENLABS_API_KEY"],
           reason: "secret provider policy denied resolution",
         },
@@ -1536,8 +1534,8 @@ describe("gateway startup config secret preflight", () => {
       activate: true,
     });
 
-    expect(result.config.messages?.tts?.providers?.elevenlabs?.apiKey).toEqual(
-      sourceConfig.messages?.tts?.providers?.elevenlabs?.apiKey,
+    expect(result.config.tts?.providers?.elevenlabs?.apiKey).toEqual(
+      sourceConfig.tts?.providers?.elevenlabs?.apiKey,
     );
     expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ allowUnavailableSecretOwners: true }),
@@ -1572,7 +1570,7 @@ describe("gateway startup config secret preflight", () => {
         },
         {
           code: "SECRETS_OWNER_UNAVAILABLE" as const,
-          path: "messages.tts.providers.elevenlabs.apiKey",
+          path: "tts.providers.elevenlabs.apiKey",
           message: "Secret owner capability:tts is configured-unavailable.",
         },
       ],
@@ -1592,7 +1590,7 @@ describe("gateway startup config secret preflight", () => {
           ownerId: "tts",
           state: "unavailable" as const,
           degradationState: "stale" as const,
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["exec:vault:tts/elevenlabs"],
           reason: "secret provider failed",
           providerFailures,
@@ -1671,14 +1669,14 @@ describe("gateway startup config secret preflight", () => {
     async (reason) => {
       activateSecretsRuntimeSnapshotForTest(preparedSnapshot(gatewayTokenConfig({})));
       const invalidSecretError = new Error(
-        "messages.tts.providers.elevenlabs.apiKey resolved to a non-string or empty value.",
+        "tts.providers.elevenlabs.apiKey resolved to a non-string or empty value.",
       );
       associateSecretResolutionErrorOwners(invalidSecretError, [
         {
           ownerKind: "capability",
           ownerId: "tts",
           state: "unavailable",
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["file:ttsfile:/private/value"],
           reason: "resolved secret value was invalid",
           degradationState: "stale",
@@ -1724,7 +1722,7 @@ describe("gateway startup config secret preflight", () => {
         ownerKind: "capability",
         ownerId: "tts",
         state: "unavailable",
-        paths: ["messages.tts.providers.elevenlabs.apiKey"],
+        paths: ["tts.providers.elevenlabs.apiKey"],
         refKeys: ["env:default:EXPIRED_RELOAD_REF"],
         reason: "secret reference was not found",
         degradationState: "stale",
@@ -1881,7 +1879,7 @@ describe("gateway startup config secret preflight", () => {
           ownerKind: "capability" as const,
           ownerId: "tts",
           state: "unavailable" as const,
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["env:default:ELEVENLABS_API_KEY"],
           reason: "secret reference was not found",
         },
@@ -2213,12 +2211,10 @@ describe("gateway startup config secret preflight", () => {
     ]);
 
     const unrelatedChangedSourceConfig = structuredClone(sourceConfig);
-    unrelatedChangedSourceConfig.messages = {
-      tts: {
-        providers: {
-          elevenlabs: {
-            apiKey: { source: "env", provider: "default", id: "UNRELATED_TTS_KEY" },
-          },
+    unrelatedChangedSourceConfig.tts = {
+      providers: {
+        elevenlabs: {
+          apiKey: { source: "env", provider: "default", id: "UNRELATED_TTS_KEY" },
         },
       },
     };

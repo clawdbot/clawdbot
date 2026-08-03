@@ -77,6 +77,35 @@ describe("local audio selection", () => {
     });
   });
 
+  it("retries binary inspection after a transient failure", async () => {
+    const tempDir = await createTempDir();
+    const modelPath = path.join(tempDir, "whisper.bin");
+    await fs.writeFile(modelPath, "model");
+    const attempts = new Map<string, number>();
+    const checkExecutable = async (filePath: string) => {
+      const attempt = (attempts.get(filePath) ?? 0) + 1;
+      attempts.set(filePath, attempt);
+      if (attempt === 1) {
+        throw new Error("transient filesystem failure");
+      }
+      return path.basename(filePath) === "whisper-cli";
+    };
+    const options = {
+      env: { PATH: tempDir, WHISPER_CPP_MODEL: modelPath },
+      platform: "linux" as const,
+      arch: "x64",
+      checkExecutable,
+      inspectLinkedLibraries: async () => null,
+    };
+
+    await expect(inspectLocalAudioSelection(options)).rejects.toThrow(
+      "transient filesystem failure",
+    );
+    await expect(inspectLocalAudioSelection(options)).resolves.toMatchObject({
+      selected: { id: "whisper-cli", resolvedCommand: path.join(tempDir, "whisper-cli") },
+    });
+  });
+
   it("does not rank Metal-capable whisper ahead of sherpa until a run observes Metal", async () => {
     const tempDir = await createTempDir();
     const modelPath = path.join(tempDir, "whisper.bin");
@@ -117,6 +146,7 @@ describe("local audio selection", () => {
       "sherpa-onnx-offline",
       "whisper-cli",
     ]);
+    expect(selection.entries.flatMap((entry) => entry.args ?? [])).toContain("{{AttachmentPath}}");
 
     recordLocalAudioBackendObservation({
       command: "/custom/bin/whisper-cli",

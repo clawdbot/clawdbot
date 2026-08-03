@@ -1,11 +1,11 @@
 /** SQLite column codec for cron payload variants. */
+import { safeParseJson } from "@openclaw/normalization-core";
 import type { CronPayload } from "../types.js";
 import {
   booleanToInteger,
   integerToBoolean,
   normalizeNumber,
   parseJsonArray,
-  parseJsonValue,
   serializeJson,
 } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
@@ -40,14 +40,14 @@ function payloadToolAllowFromRow(
 }
 
 function parseExternalContentSource(raw: string | null): "gmail" | "webhook" | undefined {
-  const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : undefined;
+  const parsed = raw ? safeParseJson(raw) : undefined;
   return parsed === "gmail" || parsed === "webhook" ? parsed : undefined;
 }
 
 function parseCommandPayloadMessage(
   raw: string | null,
 ): Omit<Extract<CronPayload, { kind: "command" }>, "kind" | "timeoutSeconds"> | null {
-  const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : undefined;
+  const parsed = raw ? safeParseJson(raw) : undefined;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }
@@ -92,7 +92,7 @@ function parseCommandPayloadMessage(
 function parseScriptPayloadMessage(
   raw: string | null,
 ): Omit<Extract<CronPayload, { kind: "script" }>, "kind" | "timeoutSeconds"> | null {
-  const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : undefined;
+  const parsed = raw ? safeParseJson(raw) : undefined;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }
@@ -132,6 +132,20 @@ export function bindPayloadColumns(
     return {
       payload_kind: "systemEvent",
       payload_message: payload.text,
+      payload_model: null,
+      payload_fallbacks_json: null,
+      payload_thinking: null,
+      payload_timeout_seconds: null,
+      payload_allow_unsafe_external_content: null,
+      payload_external_content_source_json: null,
+      payload_light_context: null,
+      ...bindPayloadToolAllowColumns(payload),
+    };
+  }
+  if (payload.kind === "heartbeat") {
+    return {
+      payload_kind: "heartbeat",
+      payload_message: null,
       payload_model: null,
       payload_fallbacks_json: null,
       payload_thinking: null,
@@ -250,6 +264,9 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
       ...(timeoutSeconds != null ? { timeoutSeconds } : {}),
       ...payloadToolAllowFromRow(row),
     };
+  }
+  if (row.payload_kind === "heartbeat") {
+    return { kind: "heartbeat" };
   }
   if (row.payload_kind === "script") {
     const script = parseScriptPayloadMessage(row.payload_message);

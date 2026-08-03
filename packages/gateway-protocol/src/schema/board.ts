@@ -7,6 +7,16 @@ export const BoardTabIdSchema = Type.String({ pattern: "^[a-z0-9-]{1,40}$" });
 export const BoardWidgetNameSchema = Type.String({
   pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
 });
+export const BoardWidgetGeneratedIdentitySchema = closedObject({
+  source: Type.Literal("show_widget"),
+  key: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  fallbackName: BoardWidgetNameSchema,
+});
+export type BoardWidgetGeneratedIdentity = Static<typeof BoardWidgetGeneratedIdentitySchema>;
+export const BoardWidgetPluginKindSchema = Type.String({
+  pattern: "^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$",
+});
+export const BoardWidgetPluginPropsSchema = Type.Record(Type.String(), Type.Unknown());
 export const BoardChatDockSchema = Type.Union([
   Type.Literal("left"),
   Type.Literal("right"),
@@ -60,7 +70,9 @@ export const BoardWidgetSchema = closedObject({
   name: BoardWidgetNameSchema,
   tabId: BoardTabIdSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
-  contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app")]),
+  contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app"), Type.Literal("plugin")]),
+  pluginKind: Type.Optional(BoardWidgetPluginKindSchema),
+  props: Type.Optional(BoardWidgetPluginPropsSchema),
   presentation: Type.Optional(BoardWidgetPresentationSchema),
   heightMode: Type.Optional(BoardWidgetHeightModeSchema),
   sizeW: Type.Integer({ minimum: 1, maximum: 12 }),
@@ -86,12 +98,13 @@ export const BoardWidgetSchema = closedObject({
 });
 export type BoardWidget = Static<typeof BoardWidgetSchema>;
 
-export const BoardSnapshotSchema = closedObject({
+const BoardSnapshotFields = {
   sessionKey: NonEmptyString,
   revision: Type.Integer({ minimum: 0 }),
   tabs: Type.Array(BoardTabSchema),
   widgets: Type.Array(BoardWidgetSchema),
-});
+};
+export const BoardSnapshotSchema = closedObject(BoardSnapshotFields);
 export type BoardSnapshot = Static<typeof BoardSnapshotSchema>;
 
 export const BoardTabCreateOpSchema = closedObject({
@@ -173,14 +186,21 @@ export const BoardWidgetMcpAppPutContentSchema = closedObject({
   kind: Type.Literal("mcp-app"),
   viewId: NonEmptyString,
 });
+export const BoardWidgetPluginContentSchema = closedObject({
+  kind: Type.Literal("plugin"),
+  pluginKind: BoardWidgetPluginKindSchema,
+  props: Type.Optional(BoardWidgetPluginPropsSchema),
+});
 export const BoardWidgetContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContentSchema,
+  BoardWidgetPluginContentSchema,
 ]);
 export type BoardWidgetContent = Static<typeof BoardWidgetContentSchema>;
 export type BoardWidgetMaterializedContent =
   | Static<typeof BoardWidgetHtmlContentSchema>
-  | (Static<typeof BoardWidgetMcpAppContentSchema> & { interactive: boolean });
+  | (Static<typeof BoardWidgetMcpAppContentSchema> & { interactive: boolean })
+  | Static<typeof BoardWidgetPluginContentSchema>;
 
 export const BoardCanvasDocumentSourceSchema = closedObject({
   kind: Type.Literal("canvas-doc"),
@@ -191,6 +211,7 @@ export type BoardCanvasDocumentSource = Static<typeof BoardCanvasDocumentSourceS
 export const BoardWidgetPutContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppPutContentSchema,
+  BoardWidgetPluginContentSchema,
   BoardCanvasDocumentSourceSchema,
 ]);
 export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;
@@ -210,12 +231,18 @@ export const BoardWidgetPutParamsSchema = closedObject({
     }),
   ),
   declared: Type.Optional(BoardWidgetDeclaredSchema),
+  generatedIdentity: Type.Optional(BoardWidgetGeneratedIdentitySchema),
 });
 export type BoardWidgetPutParams = Static<typeof BoardWidgetPutParamsSchema>;
 /** Materialized input accepted by the board store after gateway source resolution. */
 export type BoardWidgetMaterializedPutParams = Omit<BoardWidgetPutParams, "content"> & {
   content: BoardWidgetMaterializedContent;
 };
+export const BoardWidgetPutResultSchema = closedObject({
+  ...BoardSnapshotFields,
+  resolvedWidgetName: BoardWidgetNameSchema,
+});
+export type BoardWidgetPutResult = Static<typeof BoardWidgetPutResultSchema>;
 
 export const BoardWidgetGrantParamsSchema = closedObject({
   sessionKey: NonEmptyString,

@@ -2,13 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildMattermostFlushIngressLifecycle,
   createMattermostIngressMonitor,
   type MattermostIngressLifecycle,
 } from "./monitor-ingress.js";
@@ -493,10 +493,7 @@ describe("Mattermost merged ingress lifecycle", () => {
   it("fans adoption out to every constituent claim", async () => {
     const first = testLifecycle();
     const second = testLifecycle();
-    const merged = buildMattermostFlushIngressLifecycle([
-      { turnAdoptionLifecycle: first.lifecycle },
-      { turnAdoptionLifecycle: second.lifecycle },
-    ]);
+    const merged = fanInChannelIngressLifecycles([first.lifecycle, second.lifecycle]);
 
     merged.lifecycle?.onDeferred();
     await merged.lifecycle?.onAdopted();
@@ -511,10 +508,7 @@ describe("Mattermost merged ingress lifecycle", () => {
   it("completes all claims when a gated flush never dispatches", async () => {
     const first = testLifecycle();
     const second = testLifecycle();
-    const merged = buildMattermostFlushIngressLifecycle([
-      { turnAdoptionLifecycle: first.lifecycle },
-      { turnAdoptionLifecycle: second.lifecycle },
-    ]);
+    const merged = fanInChannelIngressLifecycles([first.lifecycle, second.lifecycle]);
 
     await merged.settle();
 

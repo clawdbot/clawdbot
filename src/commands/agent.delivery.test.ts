@@ -6,6 +6,8 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => []),
@@ -70,6 +72,14 @@ vi.mock("../infra/outbound/targets.js", async () => {
 });
 
 describe("deliverAgentCommandResult", () => {
+  function sessionEntry(context: DeliveryContext): SessionEntry {
+    return {
+      sessionId: "fixture",
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({ context }),
+    };
+  }
+
   function createRuntime(): RuntimeEnv {
     return {
       log: vi.fn(),
@@ -130,9 +140,7 @@ describe("deliverAgentCommandResult", () => {
         accountId: "kev",
         to: "+15551234567",
       },
-      sessionEntry: {
-        lastAccountId: "default",
-      } as SessionEntry,
+      sessionEntry: sessionEntry({ accountId: "default" }),
     });
 
     expect(readDeliveryCall().accountId).toBe("kev");
@@ -145,10 +153,7 @@ describe("deliverAgentCommandResult", () => {
         deliver: true,
         channel: "whatsapp",
       },
-      sessionEntry: {
-        lastAccountId: "legacy",
-        lastChannel: "whatsapp",
-      } as SessionEntry,
+      sessionEntry: sessionEntry({ accountId: "legacy", channel: "whatsapp" }),
     });
 
     expect(readDeliveryCall().accountId).toBe("legacy");
@@ -163,9 +168,7 @@ describe("deliverAgentCommandResult", () => {
         to: "+15551234567",
         deliveryTargetMode: "explicit",
       },
-      sessionEntry: {
-        lastAccountId: "legacy",
-      } as SessionEntry,
+      sessionEntry: sessionEntry({ accountId: "legacy" }),
     });
 
     const targetCall = readResolveTargetCall();
@@ -181,10 +184,7 @@ describe("deliverAgentCommandResult", () => {
         deliver: true,
         channel: "whatsapp",
       },
-      sessionEntry: {
-        lastAccountId: "legacy",
-        lastChannel: "telegram",
-      } as SessionEntry,
+      sessionEntry: sessionEntry({ accountId: "legacy", channel: "telegram" }),
     });
 
     const targetCall = readResolveTargetCall();
@@ -198,10 +198,7 @@ describe("deliverAgentCommandResult", () => {
         message: "hello",
         deliver: true,
       },
-      sessionEntry: {
-        lastChannel: "telegram",
-        lastTo: "123",
-      } as SessionEntry,
+      sessionEntry: sessionEntry({ channel: "telegram", to: "123" }),
     });
 
     const targetCall = readResolveTargetCall();
@@ -219,11 +216,7 @@ describe("deliverAgentCommandResult", () => {
         replyChannel: "slack",
         replyAccountId: "ops",
       },
-      sessionEntry: {
-        lastChannel: "telegram",
-        lastTo: "123",
-        lastAccountId: "legacy",
-      } as SessionEntry,
+      sessionEntry: sessionEntry({ channel: "telegram", to: "123", accountId: "legacy" }),
     });
 
     const targetCall = readResolveTargetCall();
@@ -258,11 +251,7 @@ describe("deliverAgentCommandResult", () => {
           accountId: "work",
         },
       },
-      sessionEntry: {
-        lastChannel: "slack",
-        lastTo: "U_WRONG",
-        lastAccountId: "wrong",
-      } as SessionEntry,
+      sessionEntry: sessionEntry({ channel: "slack", to: "U_WRONG", accountId: "wrong" }),
     });
 
     const targetCall = readResolveTargetCall();
@@ -280,10 +269,7 @@ describe("deliverAgentCommandResult", () => {
           messageChannel: "whatsapp",
         },
       },
-      sessionEntry: {
-        lastChannel: "slack",
-        lastTo: "U_WRONG",
-      } as SessionEntry,
+      sessionEntry: sessionEntry({ channel: "slack", to: "U_WRONG" }),
     });
 
     const targetCall = readResolveTargetCall();

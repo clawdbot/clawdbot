@@ -7,6 +7,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
+import { setGatewayDedupeEntry, waitForAgentJob } from "../gateway/server-methods/agent-job.js";
+import type { DedupeEntry } from "../gateway/server-shared.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
@@ -14,9 +17,25 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
+import { reserveChildAdmissionSlot } from "./child-admission.js";
+import { createAcpVisibleTextAccumulator } from "./command/attempt-execution.helpers.js";
+import {
+  buildAcpResult,
+  createAcpToolLifecycleTracker,
+  emitAcpLifecycleEnd,
+} from "./command/attempt-execution.js";
 import { resolveThinkingDefault } from "./model-selection.js";
+import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
+import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import type { RegisterSubagentRunParams } from "./subagent-registry-run-manager.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
+type BoundaryLifecycleControllerParams = Parameters<
+  typeof createSubagentRegistryLifecycleController
+>[0];
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -36,13 +55,9 @@ function createDefaultSpawnConfig(): OpenClawConfig {
     session: {
       mainKey: "main",
       scope: "per-sender",
-    },
-    channels: {
-      discord: {
-        threadBindings: {
-          enabled: true,
-          spawnSessions: true,
-        },
+      threadBindings: {
+        enabled: true,
+        spawnSessions: true,
       },
     },
   };
@@ -74,6 +89,7 @@ const hoisted = vi.hoisted(() => {
   const countActiveRunsForSessionMock = vi.fn();
   const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
+  const upsertSessionEntryMock = vi.fn();
   const createSessionAccessorMock = () => {
     const resolveMockStorePath = (scope: {
       agentId?: string;
@@ -97,21 +113,26 @@ const hoisted = vi.hoisted(() => {
       >;
       return store[scope.sessionKey];
     };
+    const listMockEntries = (
+      scope: {
+        agentId?: string;
+        env?: NodeJS.ProcessEnv;
+        storePath?: string;
+      } = {},
+    ) => {
+      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
+        string,
+        SessionEntry
+      >;
+      return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    };
     return {
-      listSessionEntries: (
-        scope: {
-          agentId?: string;
-          env?: NodeJS.ProcessEnv;
-          storePath?: string;
-        } = {},
-      ) => {
-        const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
-          string,
-          SessionEntry
-        >;
-        return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
-      },
+      listSessionEntries: listMockEntries,
+      listSessionEntriesReadOnly: listMockEntries,
       loadSessionEntry: loadMockEntry,
+      loadSessionEntryReadOnly: loadMockEntry,
+      upsertSessionEntry: async (scope: unknown, patch: SessionEntry) =>
+        await upsertSessionEntryMock(scope, patch),
       resolveSessionTranscriptRuntimeTarget: async (scope: {
         agentId: string;
         sessionId: string;
@@ -162,6 +183,7 @@ const hoisted = vi.hoisted(() => {
     countActiveRunsForSessionMock,
     getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
+    upsertSessionEntryMock,
     createSessionAccessorMock,
     state,
   };
@@ -195,14 +217,15 @@ vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: hoisted.resolveStorePathMock,
 }));
 
-vi.mock("../config/sessions/store.js", () => ({
-  loadSessionStore: hoisted.loadSessionStoreMock,
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  ...hoisted.createSessionAccessorMock(),
 }));
-
-vi.mock("../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
 
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
+  resolveAgentIdFromSessionKey: (sessionKey: string) =>
+    sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
   resolveStorePath: hoisted.resolveStorePathMock,
 }));
 
@@ -226,14 +249,16 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
   startAcpSpawnParentStreamRelay: hoisted.startAcpSpawnParentStreamRelayMock,
 }));
 
-vi.mock("./subagent-registry.js", () => ({
+vi.mock("./subagent-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-registry.js")>()),
   countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
   getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
   // ACP registration deliberately moved behind the shared spawn pipeline.
   registerSubagentRun: hoisted.registerSubagentRunMock,
 }));
 
-vi.mock("../tasks/runtime-internal.js", () => ({
+vi.mock("../tasks/runtime-internal.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tasks/runtime-internal.js")>()),
   listTasksForOwnerKey: hoisted.listTasksForOwnerKeyMock,
 }));
 
@@ -404,6 +429,54 @@ function expectAcceptedSpawn(result: SpawnResult): Extract<SpawnResult, { status
   return result;
 }
 
+async function waitForAgentReplySnapshot(runId: string) {
+  const result = await waitForAgentJob({ runId, timeoutMs: 0 });
+  expect(result).toEqual(expect.objectContaining({ status: "ok" }));
+  return result as { terminalReply?: AgentRunTerminalReplySnapshot };
+}
+
+function createRegisteredRunEntry(registration: RegisterSubagentRunParams): SubagentRunRecord {
+  return {
+    ...registration,
+    createdAt: 100,
+    execution: { status: "running", startedAt: 100 },
+  };
+}
+
+function createBoundaryLifecycleController(params: {
+  entry: SubagentRunRecord;
+  captureSubagentCompletionReply: BoundaryLifecycleControllerParams["captureSubagentCompletionReply"];
+  runSubagentAnnounceFlow: BoundaryLifecycleControllerParams["runSubagentAnnounceFlow"];
+}) {
+  return createSubagentRegistryLifecycleController({
+    runs: new Map([[params.entry.runId, params.entry]]),
+    resumedRuns: new Set(),
+    subagentAnnounceTimeoutMs: 1_000,
+    getRuntimeConfig: () => ({}),
+    persist: vi.fn(),
+    persistOrThrow: vi.fn(),
+    clearPendingLifecycleError: vi.fn(),
+    countPendingDescendantRuns: () => 0,
+    suppressAnnounceForSteerRestart: () => false,
+    resolveSubagentTask: () => ({ lookup: "unavailable" }),
+    shouldEmitEndedHookForRun: () => false,
+    emitSubagentEndedHookForRun: vi.fn(async () => {}),
+    emitSubagentProgressEndedForRun: vi.fn(async () => {}),
+    notifyContextEngineSubagentEnded: vi.fn(async () => {}),
+    retireSupersededRun: vi.fn(async () => {}),
+    resumeSubagentRun: vi.fn(),
+    callGateway: async <T = Record<string, unknown>>(_opts: CallGatewayOptions): Promise<T> =>
+      ({}) as T,
+    captureSubagentCompletionReply: params.captureSubagentCompletionReply,
+    runSubagentAnnounceFlow: params.runSubagentAnnounceFlow,
+    maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (wakeParams) => {
+      wakeParams.completeBatch([wakeParams.settledEntry.runId]);
+      return false;
+    }),
+    warn: vi.fn(),
+  });
+}
+
 function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
@@ -456,8 +529,8 @@ function expectGatewayMethodNotCalled(method: string): void {
   expect(gatewayRequests().some((request) => request.method === method)).toBe(false);
 }
 
-function expectSessionPatchFields(expected: Record<string, unknown>): void {
-  expectRecordFields(gatewayRequest("sessions.patch").params, expected);
+function expectCreatedSessionFields(expected: Record<string, unknown>): void {
+  expectRecordFields(firstMockCall(hoisted.upsertSessionEntryMock, "session create")[1], expected);
 }
 
 function expectInitializeSessionFields(expected: Record<string, unknown>): Record<string, unknown> {
@@ -629,12 +702,11 @@ function enableLineCurrentConversationBindings(): void {
 function enableTelegramCurrentConversationBindings(): void {
   replaceSpawnConfig({
     ...hoisted.state.cfg,
-    channels: {
-      ...hoisted.state.cfg.channels,
-      telegram: {
-        threadBindings: {
-          enabled: true,
-        },
+    session: {
+      ...hoisted.state.cfg.session,
+      threadBindings: {
+        ...hoisted.state.cfg.session?.threadBindings,
+        enabled: true,
       },
     },
   });
@@ -705,6 +777,13 @@ describe("spawnAcpDirect", () => {
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
     hoisted.getSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
     hoisted.listTasksForOwnerKeyMock.mockReset().mockReturnValue([]);
+    hoisted.upsertSessionEntryMock
+      .mockReset()
+      .mockImplementation(async (_scope: unknown, patch: Partial<SessionEntry>) => ({
+        ...patch,
+        sessionId: patch.sessionId ?? "sess-123",
+        updatedAt: patch.updatedAt ?? Date.now(),
+      }));
 
     hoisted.callGatewayMock.mockReset();
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
@@ -863,25 +942,25 @@ describe("spawnAcpDirect", () => {
     expect(accepted.runId).toBe("run-1");
     expect(accepted.mode).toBe("session");
     expect(accepted.inlineDelivery).toBe(true);
-    expectSessionPatchFields({
-      key: accepted.childSessionKey,
+    expectCreatedSessionFields({
       spawnedBy: "agent:main:main",
       completionOwnerSessionKey: "agent:main:main",
       inheritedToolPolicyVersion: 1,
+      parentSessionKey: "agent:main:main",
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: "agent:main:main" },
+      createdAt: expect.any(Number),
     });
     expectBindingCallFields({
       targetKind: "session",
       placement: "child",
     });
-    const patchCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
-      (call: unknown[]) => (call[0] as { method?: string }).method === "sessions.patch",
-    );
     const agentCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
       (call: unknown[]) => (call[0] as { method?: string }).method === "agent",
     );
-    const patchCallOrder = expectDefined(
-      hoisted.callGatewayMock.mock.invocationCallOrder[patchCallIndex],
-      "hoisted.callGatewayMock.mock.invocationCallOrder[patchCallIndex] test invariant",
+    const createCallOrder = expectDefined(
+      hoisted.upsertSessionEntryMock.mock.invocationCallOrder[0],
+      "hoisted.upsertSessionEntryMock.mock.invocationCallOrder[0] test invariant",
     );
     const initializeCallOrder = expectDefined(
       hoisted.initializeSessionMock.mock.invocationCallOrder[0],
@@ -891,10 +970,10 @@ describe("spawnAcpDirect", () => {
       hoisted.callGatewayMock.mock.invocationCallOrder[agentCallIndex],
       "hoisted.callGatewayMock.mock.invocationCallOrder[agentCallIndex] test invariant",
     );
-    expect(typeof patchCallOrder).toBe("number");
+    expect(typeof createCallOrder).toBe("number");
     expect(typeof initializeCallOrder).toBe("number");
     expect(typeof agentCallOrder).toBe("number");
-    expect(patchCallOrder < initializeCallOrder).toBe(true);
+    expect(createCallOrder < initializeCallOrder).toBe(true);
     expect(initializeCallOrder < agentCallOrder).toBe(true);
     expectResolvedIntroTextInBindMetadata();
 
@@ -1318,7 +1397,7 @@ describe("spawnAcpDirect", () => {
     });
     expect(result).toHaveProperty(
       "error",
-      'agentId "pleres" is an OpenClaw config agent, not an ACP harness. Use runtime="subagent" or omit runtime for OpenClaw config agents. Use runtime="acp" only with external ACP harness ids such as codex, claude, droid, gemini, or opencode, or configure agents.list[].runtime.type="acp" with runtime.acp.agent.',
+      'agentId "pleres" is an OpenClaw config agent, not an ACP harness. Use runtime="subagent" or omit runtime for OpenClaw config agents. Use runtime="acp" only with external ACP harness ids such as codex, claude, droid, gemini, or opencode, or configure agents.entries.*.runtime.type="acp" with runtime.acp.agent.',
     );
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
     expectGatewayMethodNotCalled("agent");
@@ -1421,9 +1500,8 @@ describe("spawnAcpDirect", () => {
       agentSessionKey: "agent:main:subagent:parent",
     });
 
-    const accepted = expectAcceptedSpawn(result);
-    expectSessionPatchFields({
-      key: accepted.childSessionKey,
+    expectAcceptedSpawn(result);
+    expectCreatedSessionFields({
       spawnedBy: "agent:main:subagent:parent",
       spawnDepth: 2,
       subagentRole: "leaf",
@@ -1478,6 +1556,211 @@ describe("spawnAcpDirect", () => {
     const failed = expectFailedSpawn(result, "forbidden");
     expect(failed.errorCode).toBe("subagent_policy");
     expect(failed.error).toContain("max active children");
+  });
+
+  it("enforces child caps while a sibling ACP dispatch has not registered", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxChildrenPerAgent: 1,
+          },
+        },
+      },
+    });
+    hoisted.countActiveRunsForSessionMock.mockImplementation(
+      () => hoisted.registerSubagentRunMock.mock.calls.length,
+    );
+    let releaseFirstDispatch!: () => void;
+    const pendingFirstDispatch = new Promise<void>((resolve) => {
+      releaseFirstDispatch = resolve;
+    });
+    let dispatchedRuns = 0;
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method !== "agent") {
+        return {};
+      }
+      const runNumber = ++dispatchedRuns;
+      if (runNumber === 1) {
+        await pendingFirstDispatch;
+      }
+      return { runId: `acp-run-${runNumber}` };
+    });
+    const context = {
+      ...createRequesterContext(),
+      agentSessionKey: "agent:main:subagent:parent",
+      completionOwnerKey: "agent:main:main",
+    };
+
+    const first = spawnAcpDirect(createSpawnRequest({ task: "first pending ACP child" }), context);
+    await vi.waitFor(() => expect(dispatchedRuns).toBe(1));
+    const rejected = await spawnAcpDirect(
+      createSpawnRequest({ task: "second over-cap ACP child" }),
+      context,
+    );
+    releaseFirstDispatch();
+    const accepted = await first;
+
+    expect(expectFailedSpawn(rejected, "forbidden")).toMatchObject({
+      errorCode: "subagent_policy",
+      error: expect.stringContaining("max active children for this session (1/1"),
+    });
+    expectAcceptedSpawn(accepted);
+    expect(dispatchedRuns).toBe(1);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts a pending ACP task row and its admission reservation only once", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxChildrenPerAgent: 2,
+          },
+        },
+      },
+    });
+    const activeTasks: Array<{ runtime: string; status: string; childSessionKey: string }> = [];
+    hoisted.listTasksForOwnerKeyMock.mockImplementation(() => activeTasks);
+    hoisted.countActiveRunsForSessionMock.mockImplementation(
+      () => hoisted.registerSubagentRunMock.mock.calls.length,
+    );
+    hoisted.getSubagentRunByChildSessionKeyMock.mockImplementation((childSessionKey: string) =>
+      hoisted.registerSubagentRunMock.mock.calls.some(
+        ([run]) => (run as { childSessionKey?: string }).childSessionKey === childSessionKey,
+      )
+        ? { childSessionKey, execution: { status: "running" } }
+        : null,
+    );
+    let releaseFirstDispatch!: () => void;
+    const pendingFirstDispatch = new Promise<void>((resolve) => {
+      releaseFirstDispatch = resolve;
+    });
+    let dispatchedRuns = 0;
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: { sessionKey?: string } }) => {
+        if (request.method !== "agent") {
+          return {};
+        }
+        const runNumber = ++dispatchedRuns;
+        activeTasks.push({
+          runtime: "acp",
+          status: "running",
+          childSessionKey: request.params?.sessionKey ?? "",
+        });
+        if (runNumber === 1) {
+          await pendingFirstDispatch;
+        }
+        return { runId: `acp-run-${runNumber}` };
+      },
+    );
+    const context = {
+      ...createRequesterContext(),
+      agentSessionKey: "agent:main:subagent:parent",
+    };
+
+    const first = spawnAcpDirect(createSpawnRequest({ task: "first pending ACP child" }), context);
+    await vi.waitFor(() => expect(dispatchedRuns).toBe(1));
+    const second = await spawnAcpDirect(
+      createSpawnRequest({ task: "second admitted ACP child" }),
+      context,
+    );
+    releaseFirstDispatch();
+    const firstResult = await first;
+
+    expectAcceptedSpawn(firstResult);
+    expectAcceptedSpawn(second);
+    expect(dispatchedRuns).toBe(2);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts unrelated ACP task rows separately from anonymous child reservations", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxChildrenPerAgent: 2,
+          },
+        },
+      },
+    });
+    hoisted.listTasksForOwnerKeyMock.mockReturnValue([
+      {
+        runtime: "acp",
+        status: "running",
+        childSessionKey: "agent:codex:acp:independent-task",
+      },
+    ]);
+    const controllerSessionKey = "agent:main:subagent:parent";
+    const pendingNativeChild = reserveChildAdmissionSlot({
+      controllerSessionKey,
+      resolveAdmission: () => ({ ok: true as const }),
+    });
+    if (!pendingNativeChild.ok) {
+      throw new Error("Expected native child reservation");
+    }
+
+    try {
+      const rejected = await spawnAcpDirect(createSpawnRequest(), {
+        ...createRequesterContext(),
+        agentSessionKey: controllerSessionKey,
+      });
+
+      expect(expectFailedSpawn(rejected, "forbidden")).toMatchObject({
+        errorCode: "subagent_policy",
+        error: expect.stringContaining("max active children for this session (2/2"),
+      });
+      expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    } finally {
+      pendingNativeChild.release();
+    }
+  });
+
+  it("returns ACP child capacity after run registration fails", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxChildrenPerAgent: 1,
+          },
+        },
+      },
+    });
+    hoisted.registerSubagentRunMock.mockImplementationOnce(() => {
+      throw new Error("registry unavailable");
+    });
+    const context = {
+      ...createRequesterContext(),
+      agentSessionKey: "agent:main:subagent:parent",
+    };
+
+    const failed = await spawnAcpDirect(
+      createSpawnRequest({ task: "unregistered child" }),
+      context,
+    );
+    const replacement = await spawnAcpDirect(
+      createSpawnRequest({ task: "replacement child" }),
+      context,
+    );
+
+    expect(expectFailedSpawn(failed, "error")).toMatchObject({
+      errorCode: "spawn_failed",
+      error: expect.stringContaining("registry unavailable"),
+    });
+    expectAcceptedSpawn(replacement);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(2);
   });
 
   it('counts streamTo="parent" ACP runs toward subagent child caps', async () => {
@@ -1574,6 +1857,7 @@ describe("spawnAcpDirect", () => {
         ? {
             childSessionKey,
             createdAt: Date.now(),
+            execution: { status: "running", startedAt: Date.now() },
           }
         : null,
     );
@@ -2532,12 +2816,11 @@ describe("spawnAcpDirect", () => {
   it("fails fast when Discord ACP thread spawn is disabled", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
-      channels: {
-        discord: {
-          threadBindings: {
-            enabled: true,
-            spawnSessions: false,
-          },
+      session: {
+        ...hoisted.state.cfg.session,
+        threadBindings: {
+          enabled: true,
+          spawnSessions: false,
         },
       },
     });
@@ -2661,6 +2944,124 @@ describe("spawnAcpDirect", () => {
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      name: "visible",
+      chunks: ["v".repeat(5_000)],
+      expected: { disposition: "visible", text: `${"v".repeat(4_095)}…` } as const,
+      resultText: `${"v".repeat(4_095)}…`,
+    },
+    {
+      name: "silent",
+      chunks: ["NO_REPLY"],
+      expected: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+    },
+    {
+      name: "punctuation-wrapped-silent",
+      chunks: ["NO_REPLY:"],
+      expected: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+    },
+    {
+      name: "empty",
+      chunks: [] as string[],
+      expected: { disposition: "empty" } as const,
+      resultText: null,
+    },
+  ])(
+    "carries bounded $name ACP output from spawn pipeline through wait and registry",
+    async ({ name, chunks, expected, resultText }) => {
+      for (const order of ["lifecycle-first", "dedupe-first"] as const) {
+        const runId = `run-acp-boundary-${name}-${order}`;
+        hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
+          const args = argsUnknown as { method?: string };
+          if (args.method === "agent") {
+            return { runId };
+          }
+          if (args.method === "sessions.patch" || args.method === "sessions.delete") {
+            return { ok: true };
+          }
+          return {};
+        });
+
+        const spawned = expectAcceptedSpawn(
+          await spawnAcpDirect(createSpawnRequest(), createRequesterContext()),
+        );
+        expect(spawned).toMatchObject({ runId, mode: "run" });
+        const registration = latestMockCall(
+          hoisted.registerSubagentRunMock,
+          "subagent registration",
+        )[0] as RegisterSubagentRunParams;
+        expect(registration).toMatchObject({ runId, spawnMode: "run" });
+
+        const accumulator = createAcpVisibleTextAccumulator();
+        for (const chunk of chunks) {
+          accumulator.consume(chunk);
+        }
+        const terminalReply = accumulator.finalizeReplySnapshot();
+        expect(terminalReply).toEqual(expected);
+        const result = buildAcpResult({
+          payloadText: accumulator.finalize(),
+          terminalReply,
+          startedAt: 100,
+          resultStatus: "completed",
+        });
+        const dedupe = new Map<string, DedupeEntry>();
+        const observeLifecycle = () =>
+          emitAcpLifecycleEnd({
+            runId,
+            toolTracker: createAcpToolLifecycleTracker(),
+            resultStatus: "completed",
+            terminalReply,
+          });
+        const observeDedupe = () =>
+          setGatewayDedupeEntry({
+            dedupe,
+            key: `agent:${runId}`,
+            entry: {
+              ts: 200,
+              ok: true,
+              payload: { runId, status: "ok", startedAt: 100, endedAt: 200, result },
+            },
+          });
+        for (const observe of order === "lifecycle-first"
+          ? [observeLifecycle, observeDedupe]
+          : [observeDedupe, observeLifecycle]) {
+          observe();
+        }
+
+        const waited = await waitForAgentReplySnapshot(runId);
+        expect(waited.terminalReply).toEqual(expected);
+        const entry = createRegisteredRunEntry(registration);
+        const captureSubagentCompletionReply = vi.fn(async () => undefined);
+        const runSubagentAnnounceFlow = vi.fn(async () => true);
+        await createBoundaryLifecycleController({
+          entry,
+          captureSubagentCompletionReply,
+          runSubagentAnnounceFlow,
+        }).completeSubagentRun({
+          runId,
+          endedAt: 200,
+          outcome: { status: "ok" },
+          reason: SUBAGENT_ENDED_REASON_COMPLETE,
+          triggerCleanup: true,
+          terminalReply: waited.terminalReply,
+        });
+
+        expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
+        expect(entry.completion).toMatchObject({
+          terminalReply: expected,
+          resultText,
+        });
+        expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+        expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
+          expect.objectContaining({ terminalReply: expected }),
+        );
+      }
+    },
+  );
+
   it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
@@ -2683,16 +3084,18 @@ describe("spawnAcpDirect", () => {
     hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
       const store: Record<
         string,
-        { sessionId: string; updatedAt: number; deliveryContext?: unknown }
+        { sessionId: string; updatedAt: number; delivery?: SessionEntry["delivery"] }
       > = {
         "agent:main:subagent:parent": {
           sessionId: "parent-sess-1",
           updatedAt: Date.now(),
-          deliveryContext: {
-            channel: "discord",
-            to: "channel:parent-channel",
-            accountId: "default",
-          },
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "discord",
+              to: "channel:parent-channel",
+              accountId: "default",
+            },
+          }),
         },
       };
       return new Proxy(store, {
@@ -2761,7 +3164,7 @@ describe("spawnAcpDirect", () => {
         {
           sessionId: string;
           updatedAt: number;
-          deliveryContext?: unknown;
+          delivery?: SessionEntry["delivery"];
           spawnedBy?: string;
           spawnDepth?: number;
           subagentRole?: string;
@@ -2771,11 +3174,13 @@ describe("spawnAcpDirect", () => {
         "agent:main:acp:child": {
           sessionId: "parent-sess-1",
           updatedAt: Date.now(),
-          deliveryContext: {
-            channel: "discord",
-            to: "channel:parent-channel",
-            accountId: "default",
-          },
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "discord",
+              to: "channel:parent-channel",
+              accountId: "default",
+            },
+          }),
           spawnedBy: "agent:main:subagent:parent",
           spawnDepth: 1,
           subagentRole: "orchestrator",

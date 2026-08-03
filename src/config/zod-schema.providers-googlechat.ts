@@ -47,7 +47,6 @@ const GoogleChatAccountSchemaBase = z
       .union([z.string(), z.record(z.string(), z.unknown()), SecretRefSchema])
       .optional()
       .register(sensitive),
-    serviceAccountRef: SecretRefSchema.optional().register(sensitive),
     serviceAccountFile: z.string().optional(),
     audienceType: z.enum(["app-url", "project-number"]).optional(),
     audience: z.string().optional(),

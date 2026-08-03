@@ -31,7 +31,7 @@ import type {
   TelegramTranscriptMirrorPayload,
 } from "./bot-message-dispatch.types.js";
 import type { TelegramBotOptions } from "./bot.types.js";
-import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
+import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
 import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
@@ -150,6 +150,7 @@ export function createTelegramDeliveryController(params: {
       ...(record.text ? { text: record.text } : {}),
       ...(record.projection ? { promptContextProjection: record.projection } : {}),
       ...(params.threadSpec.id !== undefined ? { messageThreadId: params.threadSpec.id } : {}),
+      successfulSendThread: params.threadSpec,
     });
   const createPromptContextSequence = (source?: TelegramPromptContextSource) =>
     createTelegramPromptContextProjectionSequence({
@@ -333,7 +334,9 @@ export function createTelegramDeliveryController(params: {
     if (params.isDispatchSuperseded() || result.kind !== "preview-finalized") {
       return;
     }
-    (params.telegramDeps.emitInternalMessageSentHook ?? emitInternalMessageSentHook)({
+    // A finalized preview is the durable Telegram message. Emit the composite
+    // terminal here so plugin and internal observers see that one provider result.
+    (params.telegramDeps.emitTelegramMessageSentHooks ?? emitTelegramMessageSentHooks)({
       sessionKeyForInternalHooks: sessionKey,
       chatId: String(context.chatId),
       accountId: context.route.accountId,

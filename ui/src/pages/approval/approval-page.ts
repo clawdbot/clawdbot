@@ -19,11 +19,13 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
+const APPROVAL_REQUIRED_SCOPE = "operator.approvals";
 
 type ApprovalRequestError = "connection" | "unavailable" | null;
 type ResolutionOrigin = "here" | "elsewhere" | "observed";
@@ -106,6 +108,9 @@ function renderPresentation(presentation: ApprovalPresentation) {
   return html`
     <div class="approval-page__preview-label">${t("approvalPage.requestLabel")}</div>
     <div class=${previewClass}>${presentation.description}</div>
+    ${presentation.kind === "plugin" && presentation.detail
+      ? html`<pre class="approval-page__preview mono" dir="ltr">${presentation.detail}</pre>`
+      : nothing}
     <dl class="approval-page__meta">
       ${
         // severity/pluginId/toolName exist only on the plugin presentation.
@@ -179,6 +184,8 @@ export class ApprovalPage extends OpenClawLightDomElement {
 
   @state() private approval: ApprovalSnapshot | null = null;
   @state() private connected = false;
+  @state() private approvalsAccess = true;
+  @state() private approvalGrantAccess = false;
   @state() private loading = true;
   @state() private resolving = false;
   @state() private resolvingDecision: ApprovalDecision | null = null;
@@ -246,24 +253,35 @@ export class ApprovalPage extends OpenClawLightDomElement {
     this.resolvingDecision = null;
     this.requestError = this.approvalId ? null : "unavailable";
     this.resolutionOrigin = "observed";
-    if (this.approvalId && this.connected && this.client) {
+    if (this.approvalId && this.connected && this.client && this.hasApprovalAccess) {
       void this.loadApproval();
     }
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
-    const connectionChanged = snapshot.connected !== this.connected;
-    const becameConnected = snapshot.connected && !this.connected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
+    const becameConnected = snapshot.phase === "connected" && !this.connected;
+    const access = readGatewayOperatorAccess(snapshot);
+    const nextApprovalsAccess = access.canReviewApprovals;
+    const approvalAccessChanged = nextApprovalsAccess !== this.approvalsAccess;
+    const approvalGrantAccessChanged = access.canGrantApprovals !== this.approvalGrantAccess;
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
-    if (clientChanged || connectionChanged) {
+    this.connected = snapshot.phase === "connected";
+    this.approvalsAccess = nextApprovalsAccess;
+    this.approvalGrantAccess = access.canGrantApprovals;
+    if (clientChanged || connectionChanged || approvalAccessChanged || approvalGrantAccessChanged) {
       this.invalidateOperations();
       this.clearPollTimer();
       this.resolving = false;
       this.resolvingDecision = null;
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (!this.approvalsAccess) {
+      // A revoke can arrive in the same snapshot as disconnect; redact before
+      // the connection branch can preserve the previously visible command.
+      this.approval = null;
+    }
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       if (this.approvalId) {
         this.loading = false;
         this.requestError =
@@ -271,12 +289,18 @@ export class ApprovalPage extends OpenClawLightDomElement {
       }
       return;
     }
+    if (!this.approvalsAccess) {
+      this.approval = null;
+      this.loading = false;
+      this.requestError = null;
+      return;
+    }
     if (!this.approvalId) {
       this.loading = false;
       this.requestError = "unavailable";
       return;
     }
-    if (clientChanged || becameConnected || !this.approval) {
+    if (clientChanged || becameConnected || approvalAccessChanged || !this.approval) {
       void this.loadApproval();
       return;
     }
@@ -294,6 +318,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
   }): boolean {
     return (
       this.hasGatewayConnection &&
+      this.hasApprovalAccess &&
       this.client === params.client &&
       this.approvalId === params.id &&
       this.operationGeneration === params.generation
@@ -304,10 +329,24 @@ export class ApprovalPage extends OpenClawLightDomElement {
     return this.connected && Boolean(this.client);
   }
 
+  private get hasApprovalAccess(): boolean {
+    return (
+      this.approvalsAccess &&
+      readGatewayOperatorAccess(this.context.gateway.snapshot).canReviewApprovals
+    );
+  }
+
+  private get hasApprovalGrantAccess(): boolean {
+    return (
+      this.approvalGrantAccess &&
+      readGatewayOperatorAccess(this.context.gateway.snapshot).canGrantApprovals
+    );
+  }
+
   private async loadApproval(options: { background?: boolean } = {}) {
     const client = this.client;
     const id = this.approvalId;
-    if (!client || !this.connected || !id) {
+    if (!client || !this.connected || !id || !this.hasApprovalAccess) {
       return;
     }
     const generation = ++this.operationGeneration;
@@ -363,6 +402,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
     if (
       !client ||
       !this.connected ||
+      !this.hasApprovalGrantAccess ||
       !id ||
       approval?.status !== "pending" ||
       !Array.prototype.includes.call(approval.presentation.allowedDecisions, decision) ||
@@ -372,6 +412,8 @@ export class ApprovalPage extends OpenClawLightDomElement {
     }
     const kind = approval.presentation.kind;
     const generation = ++this.operationGeneration;
+    const isCurrentDecision = () =>
+      this.isCurrentOperation({ client, generation, id }) && this.hasApprovalGrantAccess;
     let shouldFocusTerminal = false;
     let shouldRecoverCanonicalState = false;
     this.clearPollTimer();
@@ -384,7 +426,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
         kind,
         decision,
       });
-      if (!this.isCurrentOperation({ client, generation, id })) {
+      if (!isCurrentDecision()) {
         return;
       }
       if (
@@ -403,22 +445,22 @@ export class ApprovalPage extends OpenClawLightDomElement {
         shouldFocusTerminal = true;
       }
     } catch (error) {
-      if (!this.isCurrentOperation({ client, generation, id })) {
+      if (!isCurrentDecision()) {
         return;
       }
       this.requestError = isUnavailableApprovalError(error) ? "unavailable" : "connection";
     } finally {
-      if (this.isCurrentOperation({ client, generation, id })) {
+      if (isCurrentDecision()) {
         this.resolving = false;
         this.resolvingDecision = null;
         this.schedulePoll();
       }
     }
-    if (shouldRecoverCanonicalState && this.isCurrentOperation({ client, generation, id })) {
+    if (shouldRecoverCanonicalState && isCurrentDecision()) {
       await this.loadApproval({ background: true });
       return;
     }
-    if (shouldFocusTerminal && this.isCurrentOperation({ client, generation, id })) {
+    if (shouldFocusTerminal && isCurrentDecision()) {
       await this.focusTerminalState();
     }
   }
@@ -447,6 +489,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
     const approval = this.approval;
     if (
       !this.hasGatewayConnection ||
+      !this.hasApprovalAccess ||
       this.resolving ||
       this.requestError === "unavailable" ||
       approval?.status !== "pending" ||
@@ -470,7 +513,12 @@ export class ApprovalPage extends OpenClawLightDomElement {
       this.clearPollTimer();
       return;
     }
-    if (this.approval?.status === "pending" && this.hasGatewayConnection && !this.resolving) {
+    if (
+      this.approval?.status === "pending" &&
+      this.hasGatewayConnection &&
+      this.hasApprovalAccess &&
+      !this.resolving
+    ) {
       void this.loadApproval({ background: true });
     }
   };
@@ -511,6 +559,16 @@ export class ApprovalPage extends OpenClawLightDomElement {
     `;
   }
 
+  private renderMissingScope() {
+    return html`
+      <div class="approval-page__state approval-page__state--unavailable" role="alert">
+        <div class="approval-page__state-mark" aria-hidden="true">!</div>
+        <h1 id="approval-page-title">${t("common.disabled")}</h1>
+        <p><code>${APPROVAL_REQUIRED_SCOPE}</code></p>
+      </div>
+    `;
+  }
+
   private renderConnectionState() {
     return html`
       <div class="approval-page__state approval-page__state--connection" role="alert">
@@ -520,7 +578,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
         <button
           type="button"
           class="btn"
-          ?disabled=${!this.hasGatewayConnection || this.loading}
+          ?disabled=${!this.hasGatewayConnection || !this.hasApprovalAccess || this.loading}
           @click=${() => void this.loadApproval()}
         >
           ${t("approvalPage.retry")}
@@ -539,7 +597,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
         <button
           type="button"
           class="btn btn--sm"
-          ?disabled=${!this.hasGatewayConnection || this.loading}
+          ?disabled=${!this.hasGatewayConnection || !this.hasApprovalAccess || this.loading}
           @click=${() => void this.loadApproval()}
         >
           ${t("approvalPage.retry")}
@@ -596,6 +654,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
                     data-decision=${decision}
                     ?disabled=${this.resolving ||
                     !this.hasGatewayConnection ||
+                    !this.hasApprovalGrantAccess ||
                     this.requestError !== null}
                     @click=${() => void this.resolveApproval(decision)}
                   >
@@ -616,13 +675,16 @@ export class ApprovalPage extends OpenClawLightDomElement {
   }
 
   override render() {
+    const missingScope = this.connected && !this.approvalsAccess;
     const unavailable = this.requestError === "unavailable";
     const disconnected = this.requestError === "connection" && !this.approval;
-    const documentState = unavailable
-      ? "unavailable"
-      : disconnected
-        ? "connection-error"
-        : (this.approval?.status ?? "loading");
+    const documentState = missingScope
+      ? "missing-scope"
+      : unavailable
+        ? "unavailable"
+        : disconnected
+          ? "connection-error"
+          : (this.approval?.status ?? "loading");
     return html`
       <main class="approval-page" data-state=${documentState}>
         <div class="approval-page__backdrop" aria-hidden="true"></div>
@@ -633,13 +695,15 @@ export class ApprovalPage extends OpenClawLightDomElement {
         >
           ${this.renderHeader()}
           <div class="approval-page__content">
-            ${this.loading && !this.approval
-              ? this.renderLoading()
-              : disconnected
-                ? this.renderConnectionState()
-                : unavailable || !this.approval
-                  ? this.renderUnavailable()
-                  : this.renderApproval(this.approval)}
+            ${missingScope
+              ? this.renderMissingScope()
+              : this.loading && !this.approval
+                ? this.renderLoading()
+                : disconnected
+                  ? this.renderConnectionState()
+                  : unavailable || !this.approval
+                    ? this.renderUnavailable()
+                    : this.renderApproval(this.approval)}
           </div>
         </section>
         <a class="approval-page__back-link" href=${`${this.context.basePath}/chat`}>
@@ -651,17 +715,19 @@ export class ApprovalPage extends OpenClawLightDomElement {
 
   private updateDocumentTitle() {
     const pageTitle =
-      this.requestError === "unavailable"
-        ? t("approvalPage.unavailableTitle")
-        : this.requestError === "connection" && !this.approval
-          ? t("approvalPage.connectionErrorTitle")
-          : this.approval
-            ? this.approval.status === "pending"
-              ? this.approval.presentation.kind === "plugin"
-                ? this.approval.presentation.title
-                : t("approvalPage.execTitle")
-              : terminalTitle(this.approval, this.resolutionOrigin)
-            : t("approvalPage.loadingTitle");
+      this.connected && !this.approvalsAccess
+        ? t("common.disabled")
+        : this.requestError === "unavailable"
+          ? t("approvalPage.unavailableTitle")
+          : this.requestError === "connection" && !this.approval
+            ? t("approvalPage.connectionErrorTitle")
+            : this.approval
+              ? this.approval.status === "pending"
+                ? this.approval.presentation.kind === "plugin"
+                  ? this.approval.presentation.title
+                  : t("approvalPage.execTitle")
+                : terminalTitle(this.approval, this.resolutionOrigin)
+              : t("approvalPage.loadingTitle");
     const title = `${pageTitle} — ${t("approvalPage.brandName")}`;
     document.title = title;
     this.activeDocumentTitle = title;

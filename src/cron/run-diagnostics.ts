@@ -1,13 +1,13 @@
 /** Builds bounded, redacted diagnostics for cron run logs and UI surfaces. */
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import { normalizeToolName as normalizePolicyToolName } from "../agents/tool-policy.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import {
   formatUnknownError,
-  isRecord,
+  normalizeCronRunDiagnosticSummary,
   normalizeCronRunDiagnostics as normalizeCronRunDiagnosticsValue,
   normalizeExitCode,
   normalizeToolName,
@@ -20,7 +20,6 @@ import type {
   CronRunDiagnosticSource,
 } from "./types.js";
 
-const MAX_SUMMARY_CHARS = 2_000;
 const EXEC_DIAGNOSTIC_TAIL_CHARS = 2_000;
 const WEB_SEARCH_TOOL_NAME = "web_search";
 
@@ -37,17 +36,6 @@ export function toolsAllowRequestsWebSearch(toolsAllow?: string[]): boolean {
   );
 }
 
-function trimSummary(value: string | undefined): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized.length <= MAX_SUMMARY_CHARS) {
-    return normalized;
-  }
-  return `${truncateUtf16Safe(normalized, MAX_SUMMARY_CHARS - 1)}…`;
-}
-
 /** Returns the operator-facing summary for persisted cron diagnostics. */
 export function summarizeCronRunDiagnostics(
   diagnostics: CronRunDiagnostics | undefined,
@@ -55,7 +43,7 @@ export function summarizeCronRunDiagnostics(
   if (!diagnostics) {
     return undefined;
   }
-  return trimSummary(diagnostics.summary ?? diagnostics.entries[0]?.message);
+  return normalizeCronRunDiagnosticSummary(diagnostics.summary ?? diagnostics.entries[0]?.message);
 }
 
 /** Normalizes untrusted cron diagnostic payloads into bounded, redacted entries. */
@@ -84,7 +72,9 @@ export function mergeCronRunDiagnostics(
       normalized.entries.findLast((entry) => entry.severity === "error") ??
       normalized.entries.findLast((entry) => entry.severity === "warn") ??
       normalized.entries.findLast((entry) => entry.severity === "info");
-    const summary = trimSummary(normalized.summary ?? entryCandidate?.message);
+    const summary = normalizeCronRunDiagnosticSummary(
+      normalized.summary ?? entryCandidate?.message,
+    );
     if (summary) {
       const severity =
         entryCandidate?.severity === "error" ? 2 : entryCandidate?.severity === "warn" ? 1 : 0;
@@ -175,16 +165,17 @@ function createCronRunDiagnosticsFromExecDetails(
     finalStatus?: "ok" | "error" | "skipped";
   },
 ): CronRunDiagnostics | undefined {
-  if (!isRecord(details)) {
+  const record = asOptionalObjectRecord(details);
+  if (!record) {
     return undefined;
   }
-  const status = typeof details.status === "string" ? details.status : undefined;
-  const exitCode = normalizeExitCode(details.exitCode);
+  const status = typeof record.status === "string" ? record.status : undefined;
+  const exitCode = normalizeExitCode(record.exitCode);
   const relevant = status === "failed" || (typeof exitCode === "number" && exitCode !== 0);
   if (!relevant) {
     return undefined;
   }
-  const aggregated = normalizeOptionalString(details.aggregated);
+  const aggregated = normalizeOptionalString(record.aggregated);
   const message = aggregated
     ? tailText(aggregated, EXEC_DIAGNOSTIC_TAIL_CHARS)
     : typeof exitCode === "number"
@@ -213,20 +204,21 @@ function createCronRunDiagnosticsFromToolPayload(
   payload: unknown,
   opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
 ): CronRunDiagnostics | undefined {
-  if (!isRecord(payload)) {
+  const record = asOptionalObjectRecord(payload);
+  if (!record) {
     return undefined;
   }
-  const toolName = normalizeToolName(payload.toolName) ?? normalizeToolName(payload.name);
-  const detailsDiagnostics = createCronRunDiagnosticsFromExecDetails(payload.details, {
+  const toolName = normalizeToolName(record.toolName) ?? normalizeToolName(record.name);
+  const detailsDiagnostics = createCronRunDiagnosticsFromExecDetails(record.details, {
     nowMs: opts?.nowMs,
     toolName,
     finalStatus: opts?.finalStatus,
   });
-  const isError = payload.isError === true;
-  const text = typeof payload.text === "string" ? payload.text : undefined;
+  const isError = record.isError === true;
+  const text = typeof record.text === "string" ? record.text : undefined;
   const isNonTerminalToolWarning =
     opts?.finalStatus === "ok" &&
-    getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
+    getReplyPayloadMetadata(record)?.nonTerminalToolErrorWarning === true;
   const textDiagnostics =
     isError && text
       ? createCronRunDiagnosticsFromError("tool", text, {
@@ -243,7 +235,7 @@ export function createCronRunDiagnosticsFromAgentResult(
   result: unknown,
   opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
 ): CronRunDiagnostics | undefined {
-  const record = isRecord(result) ? result : {};
+  const record = asOptionalObjectRecord(result) ?? {};
   const meta =
     record.meta && typeof record.meta === "object" ? (record.meta as Record<string, unknown>) : {};
   const diagnostics: Array<CronRunDiagnostics | undefined> = [];

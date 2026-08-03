@@ -169,9 +169,7 @@ export function createImageLifecycleCore() {
         Surface: params.channel,
         MessageSid: params.messageId,
         Timestamp: params.timestamp,
-        MediaPath: params.media?.[0]?.path,
-        MediaType: params.media?.[0]?.contentType ?? params.media?.[0]?.kind,
-        MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
+        media: params.media,
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,
         ...params.extra,
@@ -296,16 +294,14 @@ export function expectImageLifecycleDelivery(params: {
   expect(params.finalizeInboundContextMock).toHaveBeenCalledWith(
     expect.objectContaining({
       SenderName: senderName,
-      MediaPath: mediaPath,
-      MediaType: mediaType,
+      media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
     }),
   );
   expect(params.recordInboundSessionMock).toHaveBeenCalledWith(
     expect.objectContaining({
       ctx: expect.objectContaining({
         SenderName: senderName,
-        MediaPath: mediaPath,
-        MediaType: mediaType,
+        media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
       }),
     }),
   );

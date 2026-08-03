@@ -2,6 +2,10 @@ import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runt
 // Qa Lab plugin module implements qa transport registry behavior.
 import type { QaBusState } from "./bus-state.js";
 import {
+  acquireQaCredentialLease,
+  startQaCredentialLeaseHeartbeat,
+} from "./live-transports/shared/credential-lease.runtime.js";
+import {
   createQaChannelTransport,
   QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY,
 } from "./qa-channel-transport.js";
@@ -69,6 +73,24 @@ function requireQaTransportFactory(
   return factory;
 }
 
+function createQaTransportCleanup(cleanup: () => Promise<void> | undefined): () => Promise<void> {
+  let pending: Promise<void> | undefined;
+
+  return () => {
+    if (!pending) {
+      // Share cleanup across overlapping owners; release failed phases so a
+      // later caller can retry instead of leaking a live transport or lease.
+      pending = Promise.resolve().then(async () => {
+        await cleanup();
+      });
+      void pending.catch(() => {
+        pending = undefined;
+      });
+    }
+    return pending;
+  };
+}
+
 function createQaTransportAdapterFactoryRegistry(
   factories: readonly QaTransportAdapterFactory[] = [],
 ): QaTransportAdapterFactoryRegistry {
@@ -84,6 +106,10 @@ function createQaTransportAdapterFactoryRegistry(
           const definition = await factory.create({
             adapterOptions: context.adapterOptions,
             channelId: context.channelId,
+            credentials: {
+              acquire: acquireQaCredentialLease,
+              startHeartbeat: startQaCredentialLeaseHeartbeat,
+            },
             driver: context.driver,
             messages: {
               addInboundMessage: (input) => context.state.addInboundMessage(input),
@@ -103,22 +129,10 @@ function createQaTransportAdapterFactoryRegistry(
           },
         );
       }
-      let cleanupBeforeGatewayStopComplete = false;
-      let cleanupAfterGatewayStopComplete = false;
-      const cleanupBeforeGatewayStop = async () => {
-        if (cleanupBeforeGatewayStopComplete) {
-          return;
-        }
-        await adapter.cleanup?.();
-        cleanupBeforeGatewayStopComplete = true;
-      };
-      const cleanupAfterGatewayStop = async () => {
-        if (cleanupAfterGatewayStopComplete) {
-          return;
-        }
-        await adapter.cleanupAfterGatewayStop?.();
-        cleanupAfterGatewayStopComplete = true;
-      };
+      const cleanupBeforeGatewayStop = createQaTransportCleanup(() => adapter.cleanup?.());
+      const cleanupAfterGatewayStop = createQaTransportCleanup(() =>
+        adapter.cleanupAfterGatewayStop?.(),
+      );
       const cleanupWithoutGateway = async () => {
         const errors: unknown[] = [];
         for (const cleanup of [cleanupBeforeGatewayStop, cleanupAfterGatewayStop]) {

@@ -1,7 +1,6 @@
 {
   "extends": "../tsconfig.package-boundary.base.json",
   "compilerOptions": {
-    "rootDir": ".",
     "paths": {
       "openclaw/plugin-sdk/*": [
         "../../dist/plugin-sdk/*.d.ts"
@@ -123,8 +122,8 @@
       "openclaw/plugin-sdk/codex-mcp-projection": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/codex-mcp-projection.d.ts"
       ],
-      "openclaw/plugin-sdk/codex-native-task-runtime": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/codex-native-task-runtime.d.ts"
+      "openclaw/plugin-sdk/codex-session-transcript-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/codex-session-transcript-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/agent-harness-task-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-task-runtime.d.ts"
@@ -206,6 +205,9 @@
       ],
       "openclaw/plugin-sdk/test-node-mocks": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/test-node-mocks.d.ts"
+      ],
+      "openclaw/plugin-sdk/test-state": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/test-state.d.ts"
       ],
       "openclaw/plugin-sdk/time-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/time-runtime.d.ts"
@@ -291,8 +293,8 @@
       "openclaw/plugin-sdk/session-binding-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/session-binding-runtime.d.ts"
       ],
-      "openclaw/plugin-sdk/session-catalog": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/session-catalog.d.ts"
+      "openclaw/plugin-sdk/session-catalog-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/session-catalog-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/session-key-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/session-key-runtime.d.ts"
@@ -507,9 +509,6 @@
       "openclaw/plugin-sdk/tool-payload": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/tool-payload.d.ts"
       ],
-      "openclaw/plugin-sdk/tool-results": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/tool-results.d.ts"
-      ],
       "openclaw/plugin-sdk/webhook-targets": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/webhook-targets.d.ts"
       ],
@@ -548,6 +547,9 @@
       ],
       "@openclaw/qa-channel/api.js": [
         "../../dist/plugin-sdk/extensions/qa-channel/api.d.ts"
+      ],
+      "@openclaw/memory-core/api.js": [
+        "../../dist/plugin-sdk/extensions/memory-core/api.d.ts"
       ],
       "@openclaw/ai": [
         "../../dist/plugin-sdk/packages/ai/src/index.d.ts"
@@ -729,17 +731,8 @@
       "@openclaw/acp-core": [
         "../../dist/plugin-sdk/packages/acp-core/src/index.d.ts"
       ],
-      "@openclaw/acp-core/normalize-text": [
-        "../../dist/plugin-sdk/packages/acp-core/src/normalize-text.d.ts"
-      ],
       "@openclaw/acp-core/meta": [
         "../../dist/plugin-sdk/packages/acp-core/src/meta.d.ts"
-      ],
-      "@openclaw/acp-core/numeric-options": [
-        "../../dist/plugin-sdk/packages/acp-core/src/numeric-options.d.ts"
-      ],
-      "@openclaw/acp-core/record-shared": [
-        "../../dist/plugin-sdk/packages/acp-core/src/record-shared.d.ts"
       ],
       "@openclaw/acp-core/session": [
         "../../dist/plugin-sdk/packages/acp-core/src/session.d.ts"
@@ -855,23 +848,7 @@
       ],
       "@openclaw/ollama/runtime-api.js": [
         "./.boundary-stubs/ollama-runtime-api.d.ts"
-      ],
-      "@openclaw/speech-core/runtime-api.js": [
-        "./.boundary-stubs/speech-core-runtime-api.d.ts"
       ]
     }
-  },
-  "include": [
-    "./*.ts",
-    "./src/**/*.ts"
-  ],
-  "exclude": [
-    "./**/*.test.ts",
-    "./dist/**",
-    "./node_modules/**",
-    "./src/test-support/**",
-    "./src/**/*test-helpers.ts",
-    "./src/**/*test-harness.ts",
-    "./src/**/*test-support.ts"
-  ]
+  }
 }

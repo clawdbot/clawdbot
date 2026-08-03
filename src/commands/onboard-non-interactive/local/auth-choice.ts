@@ -21,6 +21,7 @@ import {
 import { formatAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
+import type { OnboardingAgentTarget } from "../../onboard-agent-target.js";
 import {
   applyCustomApiConfig,
   CustomApiError,
@@ -44,7 +45,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
-  workspaceDir?: string;
+  target: OnboardingAgentTarget;
 }): Promise<OpenClawConfig | null> {
   const { opts, runtime, baseConfig } = params;
   let authChoice = normalizeApiKeyTokenProviderAuthChoice({
@@ -62,21 +63,26 @@ export async function applyNonInteractiveAuthChoice(params: {
     runtime.exit(1);
     return null;
   }
-  const toStoredSecretInput = (resolved: ResolvedNonInteractiveApiKey): SecretInput | null => {
+  const toStoredSecretInput = (paramsLocal: {
+    resolved: ResolvedNonInteractiveApiKey;
+    provider: string;
+    envVarName?: string;
+  }): SecretInput | null => {
+    const { resolved } = paramsLocal;
     const storePlaintextSecret = requestedSecretInputMode !== "ref"; // pragma: allowlist secret
     if (storePlaintextSecret) {
       return resolved.key;
     }
-    if (resolved.source !== "env") {
-      return resolved.key;
-    }
-    if (!resolved.envVarName) {
-      // Secret refs need a durable env-var id; provider auto-detection without
-      // a concrete name cannot be serialized as a config reference.
+    if (resolved.source !== "env" || !resolved.envVarName) {
+      // Existing profiles may be reused, but neither serializer may turn their
+      // resolved secret or a literal flag into plaintext when refs were requested.
+      const envHint = paramsLocal.envVarName
+        ? `Set ${paramsLocal.envVarName} in env and retry`
+        : "Set the provider API key env var and retry";
       runtime.error(
         [
-          `Unable to determine which environment variable to store as a ref for provider "${authChoice}".`,
-          "Set an explicit provider env var and retry, or use --secret-input-mode plaintext.",
+          `--secret-input-mode ref requires an explicit environment variable for provider "${paramsLocal.provider}".`,
+          `${envHint}, or use --secret-input-mode plaintext.`,
         ].join("\n"),
       );
       runtime.exit(1);
@@ -93,6 +99,8 @@ export async function applyNonInteractiveAuthChoice(params: {
   const resolveApiKey = (input: Parameters<typeof resolveNonInteractiveApiKey>[0]) =>
     resolveNonInteractiveApiKey({
       ...input,
+      agentDir: params.target.agentDir,
+      workspaceDir: params.target.workspaceDir,
       secretInputMode: requestedSecretInputMode,
     });
   const toApiKeyCredential = (paramsLocal: {
@@ -101,39 +109,17 @@ export async function applyNonInteractiveAuthChoice(params: {
     email?: string;
     metadata?: Record<string, string>;
   }): ApiKeyCredential | null => {
-    const storeSecretRef =
-      requestedSecretInputMode === "ref" && paramsLocal.resolved.source === "env"; // pragma: allowlist secret
-    if (storeSecretRef) {
-      if (!paramsLocal.resolved.envVarName) {
-        // Plugin profile credentials have the same secret-ref contract as core
-        // provider config: the stored ref must name a specific env variable.
-        runtime.error(
-          [
-            `--secret-input-mode ref requires an explicit environment variable for provider "${paramsLocal.provider}".`,
-            "Set the provider API key env var and retry, or use --secret-input-mode plaintext.",
-          ].join("\n"),
-        );
-        runtime.exit(1);
-        return null;
-      }
-      return {
-        type: "api_key",
-        provider: paramsLocal.provider,
-        keyRef: {
-          source: "env",
-          provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
-            preferFirstProviderForSource: true,
-          }),
-          id: paramsLocal.resolved.envVarName,
-        },
-        ...(paramsLocal.email ? { email: paramsLocal.email } : {}),
-        ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
-      };
+    const stored = toStoredSecretInput({
+      resolved: paramsLocal.resolved,
+      provider: paramsLocal.provider,
+    });
+    if (!stored) {
+      return null;
     }
     return {
       type: "api_key",
       provider: paramsLocal.provider,
-      key: paramsLocal.resolved.key,
+      ...(typeof stored === "string" ? { key: stored } : { keyRef: stored }),
       ...(paramsLocal.email ? { email: paramsLocal.email } : {}),
       ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
     };
@@ -141,7 +127,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     isDeprecatedAuthChoice(authChoice, {
       config: nextConfig,
-      workspaceDir: params.workspaceDir,
+      workspaceDir: params.target.workspaceDir,
       env: process.env,
     })
   ) {
@@ -149,7 +135,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     // either plugin dispatch or built-in setup handling.
     const replacement = resolveDeprecatedAuthChoiceReplacement(authChoice, {
       config: nextConfig,
-      workspaceDir: params.workspaceDir,
+      workspaceDir: params.target.workspaceDir,
       env: process.env,
     });
     if (replacement) {
@@ -159,7 +145,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       runtime.error(
         formatDeprecatedNonInteractiveAuthChoiceError(authChoice, {
           config: nextConfig,
-          workspaceDir: params.workspaceDir,
+          workspaceDir: params.target.workspaceDir,
           env: process.env,
         })!,
       );
@@ -170,14 +156,14 @@ export async function applyNonInteractiveAuthChoice(params: {
 
   const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
     config: nextConfig,
-    workspaceDir: params.workspaceDir,
+    workspaceDir: params.target.workspaceDir,
     env: process.env,
   });
   const deprecatedInstallChoice = deprecatedChoice
     ? undefined
     : resolveDeprecatedProviderInstallCatalogEntry(authChoice as string, {
         config: nextConfig,
-        workspaceDir: params.workspaceDir,
+        workspaceDir: params.target.workspaceDir,
         env: process.env,
         includeUntrustedWorkspacePlugins: false,
       });
@@ -196,7 +182,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         includeLegacyAliases: false,
         includeSkip: true,
         config: nextConfig,
-        workspaceDir: params.workspaceDir,
+        workspaceDir: params.target.workspaceDir,
         env: process.env,
       }).split("|"),
       ...GENERIC_NON_INTERACTIVE_AUTH_CHOICES,
@@ -216,10 +202,11 @@ export async function applyNonInteractiveAuthChoice(params: {
     opts,
     runtime,
     baseConfig,
+    target: params.target,
     resolveApiKey: (input) =>
       resolveApiKey({
         ...input,
-        cfg: baseConfig,
+        cfg: nextConfig,
         runtime,
       }),
     toApiKeyCredential,
@@ -260,7 +247,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       });
       const resolvedCustomApiKey = await resolveApiKey({
         provider: resolvedProviderId.providerId,
-        cfg: baseConfig,
+        cfg: nextConfig,
         flagValue: customAuth.apiKey,
         flagName: "--custom-api-key",
         envVar: "CUSTOM_API_KEY",
@@ -269,19 +256,21 @@ export async function applyNonInteractiveAuthChoice(params: {
         required: false,
       });
       let customApiKeyInput: SecretInput | undefined;
-      if (resolvedCustomApiKey) {
-        const storeCustomApiKeyAsRef = requestedSecretInputMode === "ref"; // pragma: allowlist secret
-        if (storeCustomApiKeyAsRef) {
-          // Reuse the same SecretInput conversion as core providers so custom
-          // endpoints preserve env-ref storage semantics.
-          const stored = toStoredSecretInput(resolvedCustomApiKey);
-          if (!stored) {
-            return null;
-          }
-          customApiKeyInput = stored;
-        } else {
-          customApiKeyInput = resolvedCustomApiKey.key;
+      if (
+        resolvedCustomApiKey &&
+        (requestedSecretInputMode !== "ref" || resolvedCustomApiKey.source !== "profile")
+      ) {
+        // Profile ownership stays in the auth store; serializing its resolved
+        // value would expose plaintext and overwrite an existing SecretRef.
+        const stored = toStoredSecretInput({
+          resolved: resolvedCustomApiKey,
+          provider: resolvedProviderId.providerId,
+          envVarName: "CUSTOM_API_KEY",
+        });
+        if (!stored) {
+          return null;
         }
+        customApiKeyInput = stored;
       }
       const result = applyCustomApiConfig({
         config: nextConfig,

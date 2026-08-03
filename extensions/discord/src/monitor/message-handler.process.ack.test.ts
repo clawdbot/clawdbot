@@ -21,7 +21,6 @@ import type { DispatchInboundParams } from "./message-handler.process.test-harne
 import {
   expectReactAckCallAt,
   expectReactionCallsContain,
-  expectRemoveAckCallAt,
   firstMockArg,
   firstMockCall,
   getReactionEmojis,
@@ -164,7 +163,7 @@ describe("processDiscordMessage ack reactions", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
     const ctx = await createAutomaticSourceDeliveryContext({
-      cfg: { session: { typingMode: "never" } },
+      cfg: { agents: { defaults: { typingMode: "never" } } },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -199,7 +198,7 @@ describe("processDiscordMessage ack reactions", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
     const ctx = await createAutomaticSourceDeliveryContext({
-      cfg: { session: { typingMode: "message" } },
+      cfg: { agents: { defaults: { typingMode: "message" } } },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -376,32 +375,6 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
   });
 
-  it("applies status reaction emoji/timing overrides from config", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.();
-      return createNoQueuedDispatchResult();
-    });
-
-    const ctx = await createAutomaticSourceDeliveryContext({
-      cfg: {
-        messages: {
-          ackReaction: "👀",
-          statusReactions: {
-            emojis: { queued: "🟦", thinking: "🧪", done: "🏁" },
-            timing: { debounceMs: 0 },
-          },
-        },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    const emojis = getReactionEmojis();
-    expect(emojis).toContain("🟦");
-    expect(emojis).toContain("🏁");
-  });
-
   it("falls back to plain ack when status reactions are disabled", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReasoningStream?.();
@@ -462,40 +435,11 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).toContain(DEFAULT_EMOJIS.thinking);
   });
 
-  it("clears status reactions when dispatch aborts and removeAckAfterReply is enabled", async () => {
-    const abortController = new AbortController();
-    dispatchInboundMessage.mockImplementationOnce(async () => {
-      abortController.abort();
-      throw new Error("aborted");
-    });
-
-    const ctx = await createAutomaticSourceDeliveryContext({
-      abortSignal: abortController.signal,
-      cfg: {
-        messages: {
-          ackReaction: "👀",
-          removeAckAfterReply: true,
-        },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    await vi.waitFor(() => expect(sendMocks.removeReactionDiscord).toHaveBeenCalled());
-    expectRemoveAckCallAt(0, "👀", {
-      accountId: "default",
-      ackReaction: "👀",
-      removeAckAfterReply: true,
-    });
-  });
-
-  it("removes the plain ack reaction when status reactions are disabled and removeAckAfterReply is enabled", async () => {
+  it("keeps the plain ack reaction when status reactions are disabled", async () => {
     const ctx = await createAutomaticSourceDeliveryContext({
       cfg: {
         messages: {
           ackReaction: "👀",
-          removeAckAfterReply: true,
           statusReactions: {
             enabled: false,
           },
@@ -507,76 +451,6 @@ describe("processDiscordMessage ack reactions", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getReactionEmojis()).toEqual(["👀"]);
-    expectRemoveAckCallAt(0, "👀", {
-      accountId: "default",
-      ackReaction: "👀",
-      removeAckAfterReply: true,
-    });
+    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      outcome: "done",
-      timingKey: "doneHoldMs",
-      configuredHoldMs: 2_000,
-      builtInHoldMs: DEFAULT_TIMING.doneHoldMs,
-      terminalEmoji: DEFAULT_EMOJIS.done,
-    },
-    {
-      outcome: "error",
-      timingKey: "errorHoldMs",
-      configuredHoldMs: 4_000,
-      builtInHoldMs: DEFAULT_TIMING.errorHoldMs,
-      terminalEmoji: DEFAULT_EMOJIS.error,
-    },
-  ] as const)(
-    "uses built-in statusReactions.timing.$timingKey for $outcome cleanup",
-    async ({ outcome, timingKey, configuredHoldMs, builtInHoldMs, terminalEmoji }) => {
-      vi.useFakeTimers();
-      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-        if (outcome === "done") {
-          await params?.replyOptions?.onReasoningStream?.();
-          return createNoQueuedDispatchResult();
-        }
-        return {
-          queuedFinal: false,
-          counts: { final: 0, tool: 0, block: 0 },
-          failedCounts: { final: 1 },
-        };
-      });
-
-      const ctx = await createAutomaticSourceDeliveryContext({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            removeAckAfterReply: true,
-            statusReactions: {
-              timing: { [timingKey]: configuredHoldMs, debounceMs: 0 },
-            },
-          },
-          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-        },
-      });
-
-      await runProcessDiscordMessage(ctx);
-      expect(getReactionEmojis()).toContain(terminalEmoji);
-
-      await vi.advanceTimersByTimeAsync(builtInHoldMs - 1);
-      expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        terminalEmoji,
-        expect.anything(),
-      );
-
-      await vi.advanceTimersByTimeAsync(1);
-      await vi.runAllTimersAsync();
-      expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        terminalEmoji,
-        expect.anything(),
-      );
-    },
-  );
 });

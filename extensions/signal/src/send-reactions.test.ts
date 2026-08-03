@@ -18,6 +18,14 @@ vi.mock("./accounts.js", () => ({
     accountId: "default",
     enabled: true,
     baseUrl: "http://signal.local",
+    transport: {
+      kind: "managed-native",
+      baseUrl: "http://signal.local",
+      cliPath: "signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+      startupTimeoutMs: 30_000,
+    },
     configured: true,
     config: { account: "+15550001111" },
   }),
@@ -78,7 +86,7 @@ describe("sendReactionSignal", () => {
       {
         baseUrl: "http://signal.local",
         timeoutMs: undefined,
-        apiMode: undefined,
+        transportKind: "managed-native",
       },
     );
     const params = requireRpcParams();
@@ -100,6 +108,23 @@ describe("sendReactionSignal", () => {
     expect(params.recipients).toBeUndefined();
     expect(params.groupIds).toEqual(["group-id"]);
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
+  });
+
+  it("honors an explicit container endpoint override", async () => {
+    await sendReactionSignal("+15551230000", 123, "✅", {
+      cfg: SIGNAL_TEST_CFG,
+      baseUrl: "http://container:8080",
+      transportKind: "container",
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      "sendReaction",
+      expect.any(Object),
+      expect.objectContaining({
+        baseUrl: "http://container:8080",
+        transportKind: "container",
+      }),
+    );
   });
 
   it("defaults targetAuthor to recipient for removals", async () => {

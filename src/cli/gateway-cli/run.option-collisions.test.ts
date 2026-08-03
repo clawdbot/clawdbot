@@ -6,6 +6,7 @@ import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "../../state/openclaw-state-db-schema-migration-required.js";
 import {
   captureEnv,
   deleteTestEnvValue,
@@ -36,9 +37,14 @@ const findVerifiedGatewayListenerPidsOnPortSync = vi.fn((_port: number) => [] as
 const formatGatewayPidList = vi.fn((pids: number[]) => pids.join(", "));
 const isTerminalInteractive = vi.fn(() => true);
 const offerInvalidConfigRecovery = vi.fn(async () => ({ status: "declined" as const }));
+const parkCurrentLaunchAgentForMaintenance = vi.fn(async () => false);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
-const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
+type GatewayLoopParams = {
+  start: GatewayLoopStart;
+  completeBoot?: (completion: unknown) => void;
+};
+const runGatewayLoop = vi.fn(async ({ start }: GatewayLoopParams) => {
   await start();
 });
 const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
@@ -96,6 +102,7 @@ const writeDiagnosticStabilityBundleForFailureSync = vi.fn((_reason: string, _er
   path: "/tmp/openclaw-stability.json",
 }));
 const bootLifecycle = vi.hoisted(() => ({
+  manualChannelStartHint: `Start a channel manually with: openclaw gateway call channels.start --params '{"channel":"<id>"}'`,
   decisions: [] as Array<{
     tripped: boolean;
     uncleanBoots: number;
@@ -113,7 +120,13 @@ const bootLifecycle = vi.hoisted(() => ({
         recovered: false,
       },
   ),
-  record: vi.fn((_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string) => "boot-id"),
+  record: vi.fn(
+    (_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string): string | undefined => "boot-id",
+  ),
+  recover: vi.fn(
+    (_bootId?: string, _env?: NodeJS.ProcessEnv, _nowMs?: number): string | undefined =>
+      "recovered-boot-id",
+  ),
   complete: vi.fn(),
 }));
 const netState = vi.hoisted(() => ({
@@ -260,6 +273,11 @@ vi.mock("../../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
 }));
 
+vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/launchd.js")>()),
+  parkCurrentLaunchAgentForMaintenance: () => parkCurrentLaunchAgentForMaintenance(),
+}));
+
 vi.mock("../../gateway/ws-logging.js", () => ({
   setGatewayWsLogStyle: (style: string) => setGatewayWsLogStyle(style),
 }));
@@ -297,11 +315,14 @@ vi.mock("../../logging/diagnostic-stability-bundle.js", () => ({
 
 vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
   GATEWAY_CRASH_LOOP_BREAKER_REASON: "gateway.crash_loop_breaker",
+  formatGatewayCrashLoopManualChannelStartHint: () => bootLifecycle.manualChannelStartHint,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON: "gateway.crash_loop_recovered",
   inspectGatewayCrashLoopBreaker: (env?: NodeJS.ProcessEnv, nowMs?: number) =>
     bootLifecycle.inspect(env, nowMs),
   recordGatewayBootStart: (env?: NodeJS.ProcessEnv, nowMs?: number, reason?: string) =>
     bootLifecycle.record(env, nowMs, reason),
+  recordGatewayCrashLoopRecovery: (bootId?: string, env?: NodeJS.ProcessEnv, nowMs?: number) =>
+    bootLifecycle.recover(bootId, env, nowMs),
   completeGatewayBootLifecycle: (bootId: string | undefined, completion: unknown) =>
     bootLifecycle.complete(bootId, completion),
 }));
@@ -394,6 +415,7 @@ describe("gateway run option collisions", () => {
     bootLifecycle.decisions.length = 0;
     bootLifecycle.inspect.mockClear();
     bootLifecycle.record.mockClear();
+    bootLifecycle.recover.mockClear();
     bootLifecycle.complete.mockClear();
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
@@ -406,6 +428,8 @@ describe("gateway run option collisions", () => {
     isTerminalInteractive.mockReset();
     isTerminalInteractive.mockReturnValue(true);
     offerInvalidConfigRecovery.mockClear();
+    parkCurrentLaunchAgentForMaintenance.mockReset();
+    parkCurrentLaunchAgentForMaintenance.mockResolvedValue(false);
     cleanStaleGatewayProcessesSync.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
@@ -449,7 +473,8 @@ describe("gateway run option collisions", () => {
     return callArg(startGatewayServer, index, 1) as {
       auth?: { mode?: string; token?: string; password?: string };
       bind?: string;
-      channelAutostartSuppression?: { reason?: string };
+      channelAutostartSuppression?: { reason?: string; message?: string };
+      tryRecoverChannelAutostartSuppression?: () => boolean;
       ambientEnvTriggers?: "allow" | "suppress";
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
@@ -460,7 +485,7 @@ describe("gateway run option collisions", () => {
     expect(gatewayStartOptions().auth?.mode).toBe(mode);
   }
 
-  it("runs the fast-path bootstrap hook before gateway startup", async () => {
+  it("composes gateway run registration through startup after the fast-path bootstrap", async () => {
     normalizeStateDirEnv.mockImplementation((_env?: NodeJS.ProcessEnv) => {
       callOrder.push("normalize");
     });
@@ -473,6 +498,15 @@ describe("gateway run option collisions", () => {
 
     expect(beforeRun).toHaveBeenCalledOnce();
     expect(callOrder).toEqual(["bootstrap", "normalize", "normalize", "start"]);
+  });
+
+  it("rejects invalid gateway ports before startup", async () => {
+    await expect(
+      runGatewayCli(["gateway", "--port", "0", "--token", "test-token"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Invalid --port. Use a port number from 1 to 65535");
   });
 
   it("suppresses ambient channel triggers for dev gateways by default", async () => {
@@ -1004,6 +1038,18 @@ describe("gateway run option collisions", () => {
     expect(startGatewayServer).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("openclaw gateway run --dev");
     expect(runtimeErrors.join("\n")).toContain("--profile <name> with a free port");
+  });
+
+  it("reports forced port cleanup failures before startup", async () => {
+    forceFreePortAndWait.mockRejectedValueOnce(new Error("boom"));
+
+    await expect(
+      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--force"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Could not free port 18789: boom");
+    expect(runtimeErrors.join("\n")).toContain("openclaw gateway status --deep");
   });
 
   it("marks service-mode gateway descendants with the live gateway pid", async () => {
@@ -1570,7 +1616,59 @@ describe("gateway run option collisions", () => {
     expect(gatewayStartOptions(0).channelAutostartSuppression).toMatchObject({
       reason: "crash-loop-breaker",
     });
+    expect(gatewayStartOptions(0).channelAutostartSuppression?.message).toContain(
+      bootLifecycle.manualChannelStartHint,
+    );
     expect(gatewayStartOptions(1).channelAutostartSuppression).toBeUndefined();
+    expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
+  });
+
+  it("recovers channel autostart only after the full breaker window drains", async () => {
+    runGatewayLoop.mockImplementationOnce(
+      async ({
+        beginBoot,
+        start,
+      }: {
+        beginBoot?: (startedAtMs: number) => Promise<void> | void;
+        start: GatewayLoopStart;
+      }) => {
+        await beginBoot?.(1000);
+        await start({ startupStartedAt: 1000 });
+      },
+    );
+    bootLifecycle.decisions.push({
+      tripped: true,
+      uncleanBoots: 3,
+      windowMs: 300_000,
+      shouldWriteStabilityBundle: false,
+      recovered: false,
+    });
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    const recover = gatewayStartOptions().tryRecoverChannelAutostartSuppression;
+    expect(recover).toBeTypeOf("function");
+    bootLifecycle.decisions.push(
+      {
+        tripped: false,
+        uncleanBoots: 1,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: false,
+        recovered: true,
+      },
+      {
+        tripped: false,
+        uncleanBoots: 0,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: false,
+        recovered: true,
+      },
+    );
+
+    expect(recover?.()).toBe(false);
+    expect(bootLifecycle.recover).not.toHaveBeenCalled();
+    expect(recover?.()).toBe(true);
+    expect(bootLifecycle.recover).toHaveBeenCalledWith("boot-id", process.env, undefined);
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
   });
 
@@ -1594,6 +1692,55 @@ describe("gateway run option collisions", () => {
     });
 
     expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
+    expect(startGatewayServer).toHaveBeenCalledWith(port, expect.any(Object));
+    expect(runtimeErrors.join("\n")).toContain(`gateway already running on port ${port}`);
+    expect(runtimeErrors.join("\n")).toContain("gateway stop");
+  });
+
+  it("exits 78 and parks launchd for a repairable shared-state schema", async () => {
+    bootLifecycle.record.mockReturnValueOnce(undefined);
+    runGatewayLoop.mockImplementationOnce(async ({ start, completeBoot }: GatewayLoopParams) => {
+      try {
+        await start();
+      } catch (error) {
+        completeBoot?.({ outcome: "startup_failed", reason: "schema migration required" });
+        throw error;
+      }
+    });
+    startGatewayServer.mockRejectedValueOnce(
+      new OpenClawStateDatabaseSchemaMigrationRequiredError(
+        "agent-databases-composite-primary-key",
+        "/tmp/openclaw.sqlite",
+      ),
+    );
+    parkCurrentLaunchAgentForMaintenance.mockResolvedValueOnce(true);
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:78",
+    );
+
+    expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
+    expect(bootLifecycle.complete).toHaveBeenCalledWith(undefined, {
+      outcome: "startup_failed",
+      reason: "schema migration required",
+    });
+    expect(runtimeErrors.join("\n")).toContain(
+      "state database schema migration required (agent-databases-composite-primary-key)",
+    );
+  });
+
+  it("does not park launchd for a nonrepairable shared-state schema", async () => {
+    startGatewayServer.mockRejectedValueOnce(
+      new Error(
+        "OpenClaw state database /tmp/openclaw.sqlite has a noncanonical agent database registry schema that cannot be repaired automatically.",
+      ),
+    );
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(parkCurrentLaunchAgentForMaintenance).not.toHaveBeenCalled();
   });
 
   it.each([

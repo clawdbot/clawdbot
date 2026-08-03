@@ -8,6 +8,7 @@ import {
   formatMediaPlaceholderText,
   runChannelInboundEvent,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createInternalHookEvent,
   deriveInboundMessageHookContext,
@@ -25,6 +26,7 @@ import {
   resolveWhatsAppInboundPolicy,
 } from "../../inbound-policy.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
@@ -36,14 +38,16 @@ import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
+import type { EchoTracker } from "./echo.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
   type GroupHistoryEntry,
 } from "./inbound-context.js";
 import {
-  buildWhatsAppInboundContext,
+  buildWhatsAppInboundTransportContext,
   createWhatsAppReplyPlan,
+  prepareWhatsAppInboundContext,
   resolveWhatsAppDmRouteTarget,
   resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
@@ -117,7 +121,7 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
 }
 
 function emitWhatsAppMessageReceivedHooks(params: {
-  ctx: Awaited<ReturnType<typeof buildWhatsAppInboundContext>>;
+  ctx: Awaited<ReturnType<typeof prepareWhatsAppInboundContext>>["ctxPayload"];
   sessionKey: string;
 }): void {
   const canonical = deriveInboundMessageHookContext(params.ctx);
@@ -152,7 +156,7 @@ function emitWhatsAppMessageReceivedHooks(params: {
 
 function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
   cfg: ReturnType<LoadConfigFn>;
-  ctx: Awaited<ReturnType<typeof buildWhatsAppInboundContext>>;
+  ctx: Awaited<ReturnType<typeof prepareWhatsAppInboundContext>>["ctxPayload"];
   accountId?: string;
   sessionKey: string;
 }): void {
@@ -195,19 +199,13 @@ export async function processMessage(params: {
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<typeof getChildLogger>;
   backgroundTasks: Set<Promise<unknown>>;
-  rememberSentText: (
-    text: string | undefined,
-    opts: {
-      combinedBody?: string;
-      combinedBodySessionKey?: string;
-      logVerboseMessage?: boolean;
-    },
-  ) => void;
-  echoHas: (key: string) => boolean;
-  echoForget: (key: string) => void;
+  rememberSentText: EchoTracker["rememberText"];
+  echoHas: EchoTracker["has"];
+  echoForget: EchoTracker["forget"];
   buildCombinedEchoKey: (p: { sessionKey: string; combinedBody: string }) => string;
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
+  groupHistoryLimit?: number;
   suppressGroupHistoryClear?: boolean;
   ackAlreadySent?: boolean;
   ackReaction?: AckReactionHandle | null;
@@ -293,7 +291,7 @@ export async function processMessage(params: {
 
   // If we have a transcript, replace the agent-facing body so the agent sees the spoken text.
   // mediaPath and mediaType are intentionally preserved so that inboundAudio detection
-  // (used by features such as messages.tts.auto: "inbound") still sees this as an
+  // (used by features such as tts.auto: "inbound") still sees this as an
   // audio message. The transcript and transcribed media index are also stored on
   // context so downstream media understanding does not transcribe it again.
   const msgForAgent: AdmittedWebInboundMessage =
@@ -475,15 +473,22 @@ export async function processMessage(params: {
           peerId: dmRouteTarget ?? conversationId,
         });
 
-  const ctxPayload = await buildWhatsAppInboundContext({
+  const commandAuthorization =
+    commandAuthorized === undefined
+      ? ({ kind: "not_checked" } as const)
+      : commandAuthorized
+        ? ({ kind: "authorized" } as const)
+        : ({ kind: "denied" } as const);
+  const prepared = await prepareWhatsAppInboundContext({
     bodyForAgent: msgForAgent.payload.body,
     combinedBody,
     command: {
       kind: isTextCommand ? "text-slash" : "normal",
       body: commandBody,
-      authorized: commandAuthorized,
+      authorization: commandAuthorization,
     },
     groupHistory: visibleGroupHistory,
+    groupHistoryLimit: params.groupHistoryLimit,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,
     msg: params.msg,
@@ -500,6 +505,12 @@ export async function processMessage(params: {
     visibleReplyTo: visibleReplyTo ?? undefined,
     suppressMessageReceivedHooks: true,
   });
+  const { inbound, turnInput, ctxPayload } = prepared;
+  const transport = buildWhatsAppInboundTransportContext(params.msg);
+  const ingressLifecycle = resolveWhatsAppIngressLifecycle(params.msg);
+  const turnAdoptionLifecycle = ingressLifecycle
+    ? bindIngressLifecycleToReplyOptions(ingressLifecycle).turnAdoptionLifecycle
+    : undefined;
   emitWhatsAppMessageReceivedHooksIfEnabled({
     cfg: params.cfg,
     ctx: ctxPayload,
@@ -526,16 +537,10 @@ export async function processMessage(params: {
   const turnResult = await runChannelInboundEvent({
     channel: "whatsapp",
     accountId: params.route.accountId,
-    raw: params.msg,
+    raw: inbound,
+    ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
     adapter: {
-      ingest: () => ({
-        id: params.msg.event.id ?? `${conversationId}:${Date.now()}`,
-        timestamp: params.msg.event.timestamp,
-        rawText: ctxPayload.RawBody ?? "",
-        textForAgent: ctxPayload.BodyForAgent,
-        textForCommands: ctxPayload.CommandBody,
-        raw: params.msg,
-      }),
+      ingest: () => turnInput,
       preflight: () => {
         const reason = admission.ingress.reasonCode;
         if (admission.ingress.admission === "dispatch") {
@@ -565,7 +570,7 @@ export async function processMessage(params: {
           groupHistoryKey: params.groupHistoryKey,
           maxMediaBytes: params.maxMediaBytes,
           maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
-          msg: params.msg,
+          inbound,
           onModelSelected,
           rememberSentText: params.rememberSentText,
           replyLogger: params.replyLogger,
@@ -577,6 +582,8 @@ export async function processMessage(params: {
           route: params.route,
           shouldClearGroupHistory,
           statusReactionController,
+          transport,
+          turnAdoptionLifecycle,
         });
         finalizeReply = finalize;
         return {
@@ -609,7 +616,7 @@ export async function processMessage(params: {
     ? (finalizeReply?.(turnResult.dispatchResult) ?? false)
     : false;
   removeAckReactionHandleAfterReply({
-    removeAfterReply: Boolean(params.cfg.messages?.removeAckAfterReply && didSendReply),
+    removeAfterReply: false,
     ackReaction,
     onError: (err) => {
       logAckFailure({

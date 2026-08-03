@@ -7,13 +7,18 @@ import {
   listChatCommandsForConfig,
   resolveTextCommand,
 } from "../auto-reply/commands-registry.js";
-import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
+import {
+  formatThinkingLevels,
+  listThinkingLevelLabels,
+  type ReasoningLevel,
+  type VerboseLevel,
+} from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
 
-const VERBOSE_LEVELS = ["on", "off"];
+const VERBOSE_LEVELS = ["on", "off", "full"] satisfies VerboseLevel[];
 const TRACE_LEVELS = ["on", "off"];
 const FAST_LEVELS = ["status", "auto", "on", "off"];
-const REASONING_LEVELS = ["on", "off"];
+const REASONING_LEVELS = ["on", "off", "stream"] satisfies ReasoningLevel[];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
 const USAGE_FOOTER_LEVELS = ["off", "tokens", "full", "reset", "inherit", "clear", "default"];
@@ -33,16 +38,6 @@ type SlashCommandOptions = {
   dynamicCommands?: CommandEntry[];
 };
 
-const COMMAND_ALIASES: Record<string, string> = {
-  crestodian: "openclaw", // hidden alias
-  gwstatus: "gateway-status",
-};
-
-// These shared commands have explicit local TUI routing but no same-named
-// built-in autocomplete entry. Other shared commands require the Gateway and
-// must stay out of local autocomplete and model prompts.
-const LOCAL_TUI_ROUTED_SHARED_COMMANDS = new Set(["btw", "goal", "queue", "stop"]);
-
 function createLevelCompletion(
   levels: string[],
 ): NonNullable<SlashCommand["getArgumentCompletions"]> {
@@ -55,6 +50,144 @@ function createLevelCompletion(
       }));
 }
 
+/** Keep TUI help and no-argument usage aligned with actual directive completions. */
+export function formatTuiLevelCommandUsage(command: "verbose" | "reasoning"): string {
+  const levels = command === "verbose" ? VERBOSE_LEVELS : REASONING_LEVELS;
+  return `/${command} <${levels.join("|")}>`;
+}
+
+type TuiCommandDescriptor = {
+  name: string;
+  description?: string;
+  aliases?: readonly { name: string; description?: string; hidden?: boolean }[];
+  scope?: "both" | "local" | "remote";
+  shared?: boolean;
+  handler?: true;
+  help?: string | readonly string[];
+  completions?: readonly string[] | "thinking";
+};
+
+type TuiCommandRow = readonly [
+  name: string,
+  description?: string,
+  help?: string | readonly string[],
+  completions?: readonly string[] | "thinking",
+  options?: Pick<TuiCommandDescriptor, "aliases" | "scope" | "shared"> & { handler?: false },
+];
+
+const TUI_COMMAND_ROWS = [
+  ["help", "Show slash command help", "/help"],
+  [
+    "commands",
+    undefined,
+    "/commands",
+    undefined,
+    { scope: "remote", shared: true, handler: false },
+  ],
+  ["status", undefined, "/status", undefined, { scope: "remote", shared: true, handler: false }],
+  [
+    "gateway-status",
+    "Show gateway status summary",
+    ["/gateway-status", "/gwstatus"],
+    undefined,
+    { aliases: [{ name: "gwstatus", description: "Alias for /gateway-status" }] },
+  ],
+  ["auth", "Run provider auth/login flow", "/auth [provider]", undefined, { scope: "local" }],
+  ["agent", "Switch agent (or open picker)", "/agent <id> (or /agents)"],
+  ["agents", "Open agent picker"],
+  [
+    "openclaw",
+    "Return to OpenClaw",
+    "/openclaw [request]",
+    undefined,
+    { aliases: [{ name: "crestodian", hidden: true }] },
+  ],
+  ["session", "Switch session (or open picker)", "/session <key> (or /sessions)"],
+  ["sessions", "Open session picker"],
+  ["model", "Set model (or open picker)", "/model <provider/model> (or /models)"],
+  ["models", "Open model picker"],
+  ["think", "Set thinking level", "/think <{thinkingLevels}>", "thinking"],
+  ["fast", "Set fast mode auto/on/off", "/fast <status|auto|on|off>", FAST_LEVELS],
+  [
+    "verbose",
+    `Set verbose ${VERBOSE_LEVELS.join("/")}`,
+    formatTuiLevelCommandUsage("verbose"),
+    VERBOSE_LEVELS,
+  ],
+  ["trace", "Set trace on/off", "/trace <on|off>", TRACE_LEVELS],
+  [
+    "reasoning",
+    `Set reasoning ${REASONING_LEVELS.join("/")}`,
+    formatTuiLevelCommandUsage("reasoning"),
+    REASONING_LEVELS,
+  ],
+  [
+    "usage",
+    "Toggle per-response usage line",
+    "/usage <off|tokens|full|reset|inherit|clear|default>",
+    USAGE_FOOTER_LEVELS,
+  ],
+  [
+    "elevated",
+    "Set elevated on/off/ask/full",
+    ["/elevated <on|off|ask|full>", "/elev <on|off|ask|full>"],
+    ELEVATED_LEVELS,
+    { aliases: [{ name: "elev", description: "Alias for /elevated" }] },
+  ],
+  ["activation", "Set group activation", "/activation <mention|always>", ACTIVATION_LEVELS],
+  ["context", undefined, undefined, undefined, { scope: "remote", shared: true }],
+  [
+    "goal",
+    undefined,
+    "/goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear",
+    undefined,
+    { shared: true },
+  ],
+  ["btw", undefined, "/btw <side question>", undefined, { shared: true }],
+  ["queue", undefined, "/queue [mode]", undefined, { shared: true }],
+  ["stop", undefined, "/stop", undefined, { shared: true }],
+  ["new", "Spawn a new isolated session", "/new or /reset"],
+  ["reset", "Reset the current session"],
+  ["abort", "Abort active run", "/abort"],
+  ["settings", "Open settings", "/settings"],
+  [
+    "exit",
+    "Exit the TUI",
+    "/exit",
+    undefined,
+    { aliases: [{ name: "quit", description: "Exit the TUI" }] },
+  ],
+] as const satisfies readonly TuiCommandRow[];
+
+const TUI_COMMAND_ROW_VALUES: readonly TuiCommandRow[] = TUI_COMMAND_ROWS;
+const TUI_COMMAND_DESCRIPTORS: readonly TuiCommandDescriptor[] = TUI_COMMAND_ROW_VALUES.map(
+  ([name, description, help, completions, options]) => {
+    const descriptor: TuiCommandDescriptor = { name, description, help, completions };
+    descriptor.aliases = options?.aliases;
+    descriptor.scope = options?.scope;
+    descriptor.shared = options?.shared;
+    if (options?.handler !== false) {
+      descriptor.handler = true;
+    }
+    return descriptor;
+  },
+);
+
+export type TuiCommandHandlerName = Exclude<
+  (typeof TUI_COMMAND_ROWS)[number][0],
+  "commands" | "status"
+>;
+
+export function resolveTuiCommandDescriptor(name: string): TuiCommandDescriptor | undefined {
+  return TUI_COMMAND_DESCRIPTORS.find(
+    (command) => command.name === name || command.aliases?.some((alias) => alias.name === name),
+  );
+}
+
+function commandIsVisible(command: TuiCommandDescriptor, local: boolean): boolean {
+  return command.scope !== (local ? "remote" : "local");
+}
+
 function normalizeSlashCommandName(value: string): string {
   return value.replace(/^\//, "").trim();
 }
@@ -64,13 +197,14 @@ function appendSlashCommand(
   seen: Set<string>,
   name: string,
   description: string,
+  getArgumentCompletions?: SlashCommand["getArgumentCompletions"],
 ) {
   const normalizedName = normalizeSlashCommandName(name);
   if (!normalizedName || seen.has(normalizedName)) {
     return;
   }
   seen.add(normalizedName);
-  commands.push({ name: normalizedName, description });
+  commands.push({ name: normalizedName, description, getArgumentCompletions });
 }
 
 export function parseCommand(input: string): ParsedCommand {
@@ -87,8 +221,9 @@ export function parseCommand(input: string): ParsedCommand {
   }
   const [name, ...rest] = trimmed.split(/\s+/);
   const normalized = normalizeLowercaseStringOrEmpty(name);
+  const descriptor = resolveTuiCommandDescriptor(normalized);
   return {
-    name: COMMAND_ALIASES[normalized] ?? normalized,
+    name: descriptor?.name ?? normalized,
     args: rest.join(" ").trim(),
   };
 }
@@ -102,92 +237,43 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   const thinkLevels = options.thinkingLevels?.length
     ? options.thinkingLevels.map((level) => level.label)
     : listThinkingLevelLabels(options.provider, options.model, undefined, options.agentRuntime);
-  const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
-  const traceCompletions = createLevelCompletion(TRACE_LEVELS);
-  const fastCompletions = createLevelCompletion(FAST_LEVELS);
-  const reasoningCompletions = createLevelCompletion(REASONING_LEVELS);
-  const usageCompletions = createLevelCompletion(USAGE_FOOTER_LEVELS);
-  const elevatedCompletions = createLevelCompletion(ELEVATED_LEVELS);
-  const activationCompletions = createLevelCompletion(ACTIVATION_LEVELS);
-  const commands: SlashCommand[] = [
-    { name: "help", description: "Show slash command help" },
-    { name: "gateway-status", description: "Show gateway status summary" },
-    { name: "gwstatus", description: "Alias for /gateway-status" },
-    ...(options.local ? [{ name: "auth", description: "Run provider auth/login flow" }] : []),
-    { name: "agent", description: "Switch agent (or open picker)" },
-    { name: "agents", description: "Open agent picker" },
-    { name: "openclaw", description: "Return to OpenClaw" },
-    { name: "session", description: "Switch session (or open picker)" },
-    { name: "sessions", description: "Open session picker" },
-    {
-      name: "model",
-      description: "Set model (or open picker)",
-    },
-    { name: "models", description: "Open model picker" },
-    {
-      name: "think",
-      description: "Set thinking level",
-      getArgumentCompletions: (prefix) =>
-        thinkLevels
-          .filter((v) => v.startsWith(normalizeLowercaseStringOrEmpty(prefix)))
-          .map((value) => ({ value, label: value })),
-    },
-    {
-      name: "fast",
-      description: "Set fast mode auto/on/off",
-      getArgumentCompletions: fastCompletions,
-    },
-    {
-      name: "verbose",
-      description: "Set verbose on/off",
-      getArgumentCompletions: verboseCompletions,
-    },
-    {
-      name: "trace",
-      description: "Set trace on/off",
-      getArgumentCompletions: traceCompletions,
-    },
-    {
-      name: "reasoning",
-      description: "Set reasoning on/off",
-      getArgumentCompletions: reasoningCompletions,
-    },
-    {
-      name: "usage",
-      description: "Toggle per-response usage line",
-      getArgumentCompletions: usageCompletions,
-    },
-    {
-      name: "elevated",
-      description: "Set elevated on/off/ask/full",
-      getArgumentCompletions: elevatedCompletions,
-    },
-    {
-      name: "elev",
-      description: "Alias for /elevated",
-      getArgumentCompletions: elevatedCompletions,
-    },
-    {
-      name: "activation",
-      description: "Set group activation",
-      getArgumentCompletions: activationCompletions,
-    },
-    { name: "abort", description: "Abort active run" },
-    { name: "new", description: "Spawn a new isolated session" },
-    { name: "reset", description: "Reset the current session" },
-    { name: "settings", description: "Open settings" },
-    { name: "exit", description: "Exit the TUI" },
-    { name: "quit", description: "Exit the TUI" },
-  ];
+  const commands: SlashCommand[] = [];
+  const seen = new Set<string>();
+  for (const command of TUI_COMMAND_DESCRIPTORS) {
+    if (
+      command.shared ||
+      !command.description ||
+      !commandIsVisible(command, options.local === true)
+    ) {
+      continue;
+    }
+    const completions =
+      command.completions === "thinking"
+        ? createLevelCompletion(thinkLevels)
+        : command.completions
+          ? createLevelCompletion([...command.completions])
+          : undefined;
+    appendSlashCommand(commands, seen, command.name, command.description, completions);
+    for (const alias of command.aliases ?? []) {
+      if (!alias.hidden) {
+        appendSlashCommand(
+          commands,
+          seen,
+          alias.name,
+          alias.description ?? command.description,
+          completions,
+        );
+      }
+    }
+  }
 
-  const seen = new Set(commands.map((command) => command.name));
   const gatewayCommands = options.cfg ? listChatCommandsForConfig(options.cfg) : listChatCommands();
   for (const command of gatewayCommands) {
-    if (
-      options.local &&
-      !seen.has(command.key) &&
-      !LOCAL_TUI_ROUTED_SHARED_COMMANDS.has(command.key)
-    ) {
+    const descriptor = resolveTuiCommandDescriptor(command.key);
+    if (options.local && !seen.has(command.key) && !descriptor?.shared) {
+      continue;
+    }
+    if (options.local && descriptor && !commandIsVisible(descriptor, true)) {
       continue;
     }
     const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
@@ -236,29 +322,19 @@ export function helpText(options: SlashCommandOptions = {}): string {
     undefined,
     options.agentRuntime,
   );
+  const commandHelp = TUI_COMMAND_DESCRIPTORS.flatMap((command) => {
+    if (!command.help || !commandIsVisible(command, options.local === true)) {
+      return [];
+    }
+    const lines = typeof command.help === "string" ? [command.help] : command.help;
+    return lines.map((line) => line.replace("{thinkingLevels}", thinkLevels));
+  });
   return [
     "Slash commands:",
-    "/help",
-    ...(options.local ? [] : ["/commands", "/status"]),
-    "/gateway-status",
-    "/gwstatus",
-    ...(options.local ? ["/auth [provider]"] : []),
-    "/agent <id> (or /agents)",
-    "/openclaw [request]",
-    "/session <key> (or /sessions)",
-    "/model <provider/model> (or /models)",
-    `/think <${thinkLevels}>`,
-    "/fast <status|auto|on|off>",
-    "/verbose <on|off>",
-    "/trace <on|off>",
-    "/reasoning <on|off>",
-    "/usage <off|tokens|full|reset|inherit|clear|default>",
-    "/elevated <on|off|ask|full>",
-    "/elev <on|off|ask|full>",
-    "/activation <mention|always>",
-    "/new or /reset",
-    "/abort",
-    "/settings",
-    "/exit",
+    ...commandHelp,
+    "",
+    "Keyboard shortcuts:",
+    "Enter: send message",
+    "Shift+Enter or Ctrl+J: insert a newline",
   ].join("\n");
 }

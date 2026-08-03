@@ -16,6 +16,7 @@ import {
   type GatewayRestartSignalAdmissionLease,
 } from "../process/gateway-work-admission.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { formatErrorMessage } from "./errors.js";
 import { type GatewayRestartIntent, normalizeRestartIntentReason } from "./restart-intent.js";
 import { cleanStaleGatewayProcessesSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
@@ -448,13 +449,32 @@ function updatePendingRestartEmitHooks(
 async function rejectPreparedRestartHook(hooks: RestartEmitHooks | undefined): Promise<void> {
   try {
     await hooks?.afterEmitRejected?.();
-  } catch {}
+  } catch (err) {
+    warnRestartEmitHookFailure("afterEmitRejected", err);
+  }
 }
 
 async function rejectPreparedRestartHooks(hooksList: readonly RestartEmitHooks[]): Promise<void> {
   for (const hooks of hooksList) {
     await rejectPreparedRestartHook(hooks);
   }
+}
+
+function warnRestartEmitHookFailure(
+  hook: "afterEmitRejected" | "afterEmitFailed",
+  err: unknown,
+): void {
+  // Hook diagnostics are best-effort; formatting or logging must never skip later cleanup.
+  let error = "Unknown error";
+  try {
+    error = formatErrorMessage(err);
+  } catch {}
+  try {
+    restartLog.warn("restart hook callback failed; restart will continue", {
+      hook,
+      error,
+    });
+  } catch {}
 }
 
 // Single-flight: only emitPreparedGatewayRestart calls this, after synchronously
@@ -580,7 +600,9 @@ async function emitPreparedGatewayRestartUnderAdmission(
     for (const prepared of preparedHooksList) {
       try {
         await prepared.afterEmitFailed?.();
-      } catch {}
+      } catch (err) {
+        warnRestartEmitHookFailure("afterEmitFailed", err);
+      }
     }
   }
   return emitResult;

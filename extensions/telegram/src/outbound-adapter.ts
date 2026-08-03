@@ -413,6 +413,9 @@ export function createTelegramOutboundAdapter(
     chunkerMode: "markdown",
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+    preserveMarkdownDetails: ({ cfg, accountId }) =>
+      mergeTelegramAccountConfig(cfg, accountId ?? resolveDefaultTelegramAccountId(cfg))
+        .richMessages === true,
     // Default Telegram delivery reparses this result as Markdown; use its bold
     // and strike delimiters. Rich accounts must keep the agent's HTML islands
     // (<details>, <tg-math-block>, checkbox lists) intact — the blocks emitter
@@ -518,6 +521,7 @@ export function createTelegramOutboundAdapter(
         return await send(outboundTo, params.text, {
           ...baseOpts,
           mediaUrl: params.mediaUrl,
+          ...(params.mediaAccess !== undefined ? { mediaAccess: params.mediaAccess } : {}),
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
           forceDocument: params.forceDocument ?? false,
@@ -538,6 +542,7 @@ export function createTelegramOutboundAdapter(
         payload: params.payload,
         baseOpts: {
           ...baseOpts,
+          ...(params.mediaAccess !== undefined ? { mediaAccess: params.mediaAccess } : {}),
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
           forceDocument: params.forceDocument ?? false,

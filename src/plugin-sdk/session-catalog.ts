@@ -2,6 +2,8 @@ export type {
   SessionCatalogArchiveProviderParams,
   SessionCatalogContinueProviderParams,
   SessionCatalogContinueProviderResult,
+  SessionCatalogEntrySnapshot,
+  SessionCatalogEntrySummary,
   SessionCatalogListProviderParams,
   SessionCatalogProvider,
   SessionCatalogReadProviderParams,
@@ -11,6 +13,16 @@ export type {
   SessionUpstreamKind,
   SessionUpstreamProbe,
 } from "../plugins/session-catalog.js";
+export {
+  createSessionCatalogAdoptionCoordinator,
+  isExternalUserText,
+  listAdoptedSessionCatalogSessions,
+  listSessionCatalogEntries,
+  normalizeUserText,
+  sessionCatalogAdoptedSessionKey,
+  sessionCatalogAdoptedSourceKey,
+} from "../plugins/session-catalog.js";
+export { importSessionCatalogHistory } from "../plugins/session-catalog-history-import.js";
 export type {
   SessionCatalog,
   SessionCatalogCapabilities,

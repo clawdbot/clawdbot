@@ -130,7 +130,17 @@ const CronDisplayNameSchema = Type.String({ minLength: 1, maxLength: 200, patter
 const CronOwnerSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
+  accountId: Type.Optional(NonEmptyString),
 });
+const CronScheduledToolPolicySchema = Type.Union([
+  closedObject({ version: Type.Literal(1), mode: Type.Literal("trusted") }),
+  closedObject({
+    version: Type.Literal(1),
+    mode: Type.Literal("account"),
+    ownerSessionKey: NonEmptyString,
+    ownerAccountId: NonEmptyString,
+  }),
+]);
 const CronAnnounceChannelSchema = Type.Union([Type.Literal("last"), NonBlankString]);
 const CronFailoverReasonSchema = Type.Union([
   Type.Literal("auth"),
@@ -141,6 +151,7 @@ const CronFailoverReasonSchema = Type.Union([
   Type.Literal("billing"),
   Type.Literal("server_error"),
   Type.Literal("timeout"),
+  Type.Literal("tls_certificate"),
   Type.Literal("context_overflow"),
   Type.Literal("model_not_found"),
   Type.Literal("session_expired"),
@@ -286,6 +297,15 @@ const CronPayloadSchema = Type.Union([
   }),
 ]);
 
+/**
+ * Reported payloads add the system-owned heartbeat monitor kind; it is
+ * gateway-converged only, so create/patch schemas intentionally omit it.
+ */
+const CronReportedPayloadSchema = Type.Union([
+  ...CronPayloadSchema.anyOf,
+  closedObject({ kind: Type.Literal("heartbeat") }),
+]);
+
 /** Partial cron payload for job updates. */
 const CronPayloadPatchSchema = Type.Union([
   closedObject({
@@ -410,9 +430,16 @@ const CronFailureNotificationDeliverySchema = closedObject({
   error: Type.Optional(Type.String()),
 });
 
+const CronAutoDisabledSchema = closedObject({
+  reason: Type.Union([Type.Literal("consecutive-failures"), Type.Literal("schedule-errors")]),
+  atMs: Type.Integer({ minimum: 0 }),
+  consecutiveErrors: Type.Integer({ minimum: 1 }),
+});
+
 /** Scheduler-maintained state for the latest run/delivery outcome. */
 export const CronJobStateSchema = closedObject({
   nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  scheduleActivatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   lastRunStatus: Type.Optional(CronRunStatusSchema),
@@ -423,6 +450,8 @@ export const CronJobStateSchema = closedObject({
   lastErrorReason: Type.Optional(CronFailoverReasonSchema),
   lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
+  // Report-only scheduler ownership fact; callers cannot patch this field.
+  autoDisabled: Type.Optional(CronAutoDisabledSchema),
   consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
   lastDelivered: Type.Optional(Type.Boolean()),
   lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
@@ -505,6 +534,7 @@ export const CronJobSchema = closedObject({
   declarationKey: Type.Optional(CronDeclarationKeySchema),
   displayName: Type.Optional(CronDisplayNameSchema),
   owner: Type.Optional(CronOwnerSchema),
+  scheduledToolPolicy: Type.Optional(CronScheduledToolPolicySchema),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   name: NonEmptyString,
@@ -520,7 +550,7 @@ export const CronJobSchema = closedObject({
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
-  payload: CronPayloadSchema,
+  payload: CronReportedPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
   state: CronJobStateSchema,
@@ -549,6 +579,7 @@ export const CronListParamsSchema = closedObject({
   sortDir: Type.Optional(CronSortDirSchema),
   agentId: Type.Optional(NonEmptyString),
   compact: Type.Optional(Type.Boolean()),
+  includeDeliveryPreviews: Type.Optional(Type.Boolean()),
 });
 
 /** Empty request payload for scheduler status. */
@@ -556,6 +587,40 @@ export const CronStatusParamsSchema = closedObject({});
 
 /** Looks up a job by stable id or legacy jobId alias. */
 export const CronGetParamsSchema = cronIdOrJobIdParams({});
+
+export const CronScratchSchema = closedObject({
+  content: Type.String({ maxLength: 262144 }),
+  revision: Type.Integer({ minimum: 1 }),
+  updatedAtMs: Type.Integer({ minimum: 0 }),
+});
+
+/** Reads private per-job scratch without adding it to the public job schema. */
+export const CronScratchGetParamsSchema = cronIdOrJobIdParams({});
+export const CronScratchGetResultSchema = closedObject({
+  scratch: Type.Union([CronScratchSchema, Type.Null()]),
+  // Monotonic across unset/recreate; pass as expectedRevision for safe writes.
+  currentRevision: Type.Integer({ minimum: 0 }),
+  maxBytes: Type.Integer({ minimum: 1 }),
+});
+
+/** Compare-and-swaps or clears private per-job scratch. */
+export const CronScratchSetParamsSchema = cronIdOrJobIdParams({
+  content: Type.Union([Type.String({ maxLength: 262144 }), Type.Null()]),
+  expectedRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+export const CronScratchSetResultSchema = Type.Union([
+  closedObject({
+    ok: Type.Literal(true),
+    scratch: Type.Union([CronScratchSchema, Type.Null()]),
+    currentRevision: Type.Integer({ minimum: 0 }),
+    maxBytes: Type.Integer({ minimum: 1 }),
+  }),
+  closedObject({
+    ok: Type.Literal(false),
+    reason: Type.Literal("revision-conflict"),
+    currentRevision: Type.Integer({ minimum: 0 }),
+  }),
+]);
 
 /** Creates a scheduled job with schedule, target, payload, and delivery policy. */
 export const CronAddParamsSchema = closedObject({

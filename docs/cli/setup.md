@@ -41,8 +41,9 @@ automatic pass. Detected local runtimes are auto-tested after CLI and API-key
 candidates; when several local models are available, OpenClaw prefers the
 strongest tool-calling instruct family. The selected candidate must answer a
 real completion before its provider and model configuration is saved.
-Installed Gemini, Antigravity, Pi, and OpenCode CLIs are also reported when
-they cannot serve as the reusable inference route for guided setup.
+Pi and OpenCode CLIs may also be reported for context when they cannot serve as
+the reusable inference route for guided setup. Gemini CLI and Antigravity are
+not offered as detected setup routes.
 
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
 auth (`--auth-choice`, `--token`, provider key flags), Gateway
@@ -116,6 +117,8 @@ openclaw setup --non-interactive --accept-risk --mode remote --remote-url wss://
 
 ## Notes
 
+- Inside the interactive OpenClaw chat, `configure skills`, `configure web search`, and `configure gateway` run hosted setup flows. `open search wizard` and `open gateway wizard` hand credential entry to masked terminal wizards. Gateway setup is local-only and config-only; restart afterward with `restart gateway` in chat or `openclaw gateway restart` in the terminal. See [`openclaw setup` operations](/cli/openclaw#operations-and-approval).
+- `import memory` copies detected local memory into the existing default agent workspace without importing config, credentials, or skills. Finish onboarding first; the chat reports partial and failed copies instead of assuming success.
 - After baseline setup, run `openclaw onboard` for the full guided journey, `openclaw configure` for targeted changes, or `openclaw channels add` to add channel accounts.
 - If Hermes state is detected, interactive onboarding can offer migration automatically. Import onboarding requires a fresh setup; use [Migrate](/cli/migrate) for dry-run plans, backups, and overwrite mode outside onboarding.
 

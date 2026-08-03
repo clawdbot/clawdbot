@@ -1,5 +1,6 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ModelProvidersRouteData } from "./model-providers-page.ts";
@@ -9,7 +10,7 @@ async function loadModelProvidersRouteData(
 ): Promise<ModelProvidersRouteData> {
   const gatewaySnapshot = context.gateway.snapshot;
   const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
-  const client = gatewaySnapshot.connected ? gatewaySnapshot.client : null;
+  const client = gatewaySnapshot.phase === "connected" ? gatewaySnapshot.client : null;
   const agentsList =
     context.agents.state.agentsList ?? (client ? await context.agents.ensureList() : null);
   const requestedAgentId = context.agentSelection.state.scopeId;
@@ -26,9 +27,7 @@ async function loadModelProvidersRouteData(
 }
 
 export const page = definePage({
-  id: "model-providers",
-  path: "/settings/model-providers",
-  aliases: ["/model-providers"],
+  ...routePageSpec("model-providers"),
   loader: loadModelProvidersRouteData,
   component: () =>
     import("./model-providers-page.ts").then(() => ({

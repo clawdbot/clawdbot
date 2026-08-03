@@ -2,8 +2,8 @@ title: Docker update channel switch
 
 scenario:
   id: docker-update-channel-switch
-  surface: cli-install-update-onboard-doctor
-  category: cli-install-update-onboard-doctor.updates-and-upgrades
+  surface: cli
+  category: cli.updates-and-upgrades
   coverage:
     primary:
       - cli.install-kind-switching

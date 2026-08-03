@@ -3,12 +3,14 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/web-awesome.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
 import {
-  handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
-  toSanitizedMarkdownHtml,
-} from "../../../components/markdown.ts";
+  markdownFileLinkFromKeyboardEvent,
+} from "../../../components/markdown-file-links.ts";
+import "../../../components/web-awesome.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import "../../../components/tooltip.ts";
 import { extractRawText } from "../../../lib/chat/message-extract.ts";
@@ -19,33 +21,30 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
+import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import "./session-discussion-panel.ts";
 import "./session-diff-panel.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 import type { SessionDiffLoader } from "./session-diff-panel.ts";
-import type {
-  SessionDiscussionInfoLoader,
-  SessionDiscussionOpener,
-  SessionDiscussionStateListener,
-} from "./session-discussion-panel.ts";
-
-export const CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
-export type DetailFullMessageResult = {
+type DetailFullMessageResult = {
   ok?: boolean;
   message?: unknown;
   unavailableReason?: DetailUnavailableReason;
 };
 
-export type SidebarFullMessageRequest = {
+type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
   messageId: string;
   kind: "assistant_message" | "tool_output";
 };
+
+export type SidebarFullMessageLoader = (
+  request: SidebarFullMessageRequest,
+) => Promise<DetailFullMessageResult | null | undefined>;
 
 type MarkdownSidebarContent = {
   kind: "markdown";
@@ -82,18 +81,6 @@ type SessionDiffSidebarContent = {
   kind: "session-diff";
   /** Fetches a fresh sessions.diff snapshot; the panel refetches on refresh. */
   load: SessionDiffLoader;
-  rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
-};
-
-type SessionDiscussionSidebarContent = {
-  kind: "session-discussion";
-  sessionKey: string;
-  canOpen: boolean;
-  loadInfo: SessionDiscussionInfoLoader;
-  openDiscussion: SessionDiscussionOpener;
-  onStateChange: SessionDiscussionStateListener;
   rawText?: string | null;
   fullMessageRequest?: SidebarFullMessageRequest;
   unavailableReason?: DetailUnavailableReason | null;
@@ -152,7 +139,6 @@ export type SidebarContent =
   | CanvasSidebarContent
   | ImageSidebarContent
   | FileSidebarContent
-  | SessionDiscussionSidebarContent
   | SessionDiffSidebarContent;
 
 function hasFullMessageRequest(content: SidebarContent): content is SidebarContent & {
@@ -166,11 +152,11 @@ function hasFullMessageRequest(content: SidebarContent): content is SidebarConte
 function formatUnavailableReason(reason: DetailUnavailableReason | null | undefined): string {
   switch (reason) {
     case "oversized":
-      return "Full content is unavailable because the stored transcript entry is too large to return safely.";
+      return t("chat.detailPanel.fullContentOversized");
     case "not_visible":
-      return "Full content is unavailable because this transcript entry does not have a visible WebChat projection.";
+      return t("chat.detailPanel.fullContentNotVisible");
     default:
-      return "Full content is no longer available for this transcript entry.";
+      return t("chat.detailPanel.fullContentUnavailable");
   }
 }
 
@@ -259,8 +245,12 @@ function absoluteFilePath(content: FileSidebarContent): string | null {
   return `${content.root.replace(/[\\/]+$/, "")}/${content.path.replace(/^[\\/]+/, "")}`;
 }
 
+type FileCopyAction = "path" | "contents";
+type FileCopyFeedback = Partial<Record<FileCopyAction, "copied" | "failed">>;
+const noFileCopyFeedback: FileCopyFeedback = {};
+
 type FileViewControls = {
-  copied: boolean;
+  copyFeedback: FileCopyFeedback;
   currentMatchIndex: number;
   dirty: boolean;
   editorMenuOpen: boolean;
@@ -272,7 +262,7 @@ type FileViewControls = {
   saveNotice: { kind: "conflict" } | { kind: "error"; message: string } | null;
   saving: boolean;
   searchOpen: boolean;
-  onCopyContents: () => void;
+  onCopy: (action: FileCopyAction) => void;
   onDiscard: () => void;
   onEdit: () => void;
   onNextMatch: () => void;
@@ -288,6 +278,31 @@ type FileViewControls = {
   onToggleSearch: () => void;
 };
 
+function renderFileCopyButton(action: FileCopyAction, controls?: FileViewControls) {
+  const feedback = controls?.copyFeedback[action];
+  const label = t(
+    feedback === "failed"
+      ? "common.copyFailed"
+      : feedback === "copied"
+        ? "common.copied"
+        : action === "path"
+          ? "chat.detailPanel.copyPath"
+          : "chat.detailPanel.copyContents",
+  );
+  return html`
+    <openclaw-tooltip .content=${label}>
+      <button
+        class="btn btn--sm sidebar-file-view__action ${feedback === "copied" ? "copied" : ""}"
+        type="button"
+        aria-label=${label}
+        @click=${() => controls?.onCopy(action)}
+      >
+        ${feedback === "copied" ? icons.check : icons.copy}
+      </button>
+    </openclaw-tooltip>
+  `;
+}
+
 function renderFileSidebarContent(
   content: FileSidebarContent,
   onViewRawText: () => void,
@@ -300,16 +315,7 @@ function renderFileSidebarContent(
       <div class="sidebar-file-view__path-bar">
         <div class="sidebar-file-view__path-field">
           <span class="sidebar-file-view__path" title=${content.path}>${content.path}</span>
-          <openclaw-tooltip .content=${t("chat.detailPanel.copyPath")}>
-            <button
-              class="btn btn--sm sidebar-file-view__action"
-              type="button"
-              aria-label=${t("chat.detailPanel.copyPath")}
-              @click=${() => void copyToClipboard(content.path)}
-            >
-              ${icons.copy}
-            </button>
-          </openclaw-tooltip>
+          ${renderFileCopyButton("path", controls)}
         </div>
         ${controls
           ? html`
@@ -322,7 +328,7 @@ function renderFileSidebarContent(
                         ?disabled=${!controls.dirty || controls.saving}
                         @click=${controls.onSave}
                       >
-                        ${controls.saving ? "Saving…" : "Save"}
+                        ${controls.saving ? t("common.saving") : t("common.save")}
                       </button>
                       <button
                         class="btn btn--sm"
@@ -380,23 +386,15 @@ function renderFileSidebarContent(
                         onOpenChange: controls.onEditorMenuOpenChange,
                         onOpenEditor: controls.onOpenEditor,
                       })}
-                      <openclaw-tooltip content="Copy file contents">
-                        <button
-                          class="btn btn--sm sidebar-file-view__action ${controls.copied
-                            ? "copied"
-                            : ""}"
-                          type="button"
-                          aria-label=${controls.copied ? "Copied" : "Copy file contents"}
-                          @click=${controls.onCopyContents}
-                        >
-                          ${controls.copied ? icons.check : icons.copy}
-                        </button>
-                      </openclaw-tooltip>
+                      ${renderFileCopyButton("contents", controls)}
                     `}
               </div>
             `
           : nothing}
       </div>
+      ${Object.values(controls?.copyFeedback ?? {}).includes("failed")
+        ? html`<div class="file-view__save-notice" role="alert">${t("common.copyFailed")}</div>`
+        : nothing}
       ${controls?.searchOpen
         ? html`
             <div class="file-view__search">
@@ -438,7 +436,7 @@ function renderFileSidebarContent(
             <div class="file-view__save-notice" role="alert">
               <span>
                 ${controls.saveNotice.kind === "conflict"
-                  ? "File changed on disk since it was loaded."
+                  ? t("chat.detailPanel.fileChanged")
                   : controls.saveNotice.message}
               </span>
               ${controls.saveNotice.kind === "conflict"
@@ -494,22 +492,39 @@ function resolveSidebarCanvasSandbox(
     : "allow-scripts";
 }
 
+function openSidebarImage(
+  onOpenImage: ((item: ImageLightboxItem) => void) | undefined,
+  src: string,
+  title: string,
+) {
+  if (onOpenImage) {
+    onOpenImage({ src, title });
+  } else {
+    openExternalUrlSafe(src, { allowDataImage: true });
+  }
+}
+
 type MarkdownSidebarProps = {
   content: SidebarContent | null;
   error: string | null;
   fileView?: FileViewControls;
   onClose: () => void;
+  onOpenImage?: (item: ImageLightboxItem) => void;
   onViewRawText: () => void;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  embedded?: boolean;
 };
 
 function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   const content = props.content;
   const markdownHtml =
     content?.kind === "markdown" && content.content.trim()
-      ? toSanitizedMarkdownHtml(content.content, { fileLinks: true })
+      ? toSanitizedMarkdownHtml(content.content, {
+          fileLinks: true,
+          interactiveImages: props.onOpenImage !== undefined,
+        })
       : "";
   const canvasSandbox =
     content?.kind === "canvas"
@@ -525,38 +540,36 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       : null;
   const title =
     content?.kind === "canvas"
-      ? content.title?.trim() || "Render Preview"
+      ? content.title?.trim() || t("chat.detailPanel.renderPreview")
       : content?.kind === "image"
-        ? content.title.trim() || "Image Preview"
+        ? content.title.trim() || t("chat.detailPanel.imagePreview")
         : content?.kind === "file"
-          ? content.name.trim() || "File"
+          ? content.name.trim() || t("chat.detailPanel.file")
           : content?.kind === "session-diff"
             ? t("chat.sessionDiff.title")
-            : content?.kind === "session-discussion"
-              ? t("chat.sessionDiscussion.title")
-              : content?.kind === "markdown"
-                ? "Markdown Preview"
-                : "Tool Details";
+            : content?.kind === "markdown"
+              ? t("chat.detailPanel.markdownPreview")
+              : t("chat.detailPanel.toolDetails");
   return html`
     <div class="sidebar-panel">
-      <div class="sidebar-header">
-        <div class="sidebar-title">${title}</div>
-        <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
-          <button
-            @click=${props.onClose}
-            class="btn"
-            type="button"
-            aria-label=${t("chat.detailPanel.close")}
-          >
-            ${icons.x}
-          </button>
-        </openclaw-tooltip>
-      </div>
-      <div
-        class="sidebar-content ${content?.kind === "session-discussion"
-          ? "sidebar-content--discussion"
-          : ""}"
-      >
+      ${props.embedded
+        ? nothing
+        : html`<div class="sidebar-header">
+            <div class="sidebar-title">${title}</div>
+            <div class="sidebar-header__actions">
+              <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
+                <button
+                  @click=${props.onClose}
+                  class="btn"
+                  type="button"
+                  aria-label=${t("chat.detailPanel.close")}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
+            </div>
+          </div> `}
+      <div class="sidebar-content">
         ${props.error
           ? html`
               <div class="callout danger">${props.error}</div>
@@ -578,34 +591,55 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
               ? renderFileSidebarContent(content, props.onViewRawText, props.fileView)
               : content.kind === "session-diff"
                 ? html`<openclaw-session-diff .loader=${content.load}></openclaw-session-diff>`
-                : content.kind === "session-discussion"
+                : content.kind === "canvas"
                   ? html`
-                      <openclaw-session-discussion
-                        .sessionKey=${content.sessionKey}
-                        .canOpen=${content.canOpen}
-                        .loadInfo=${content.loadInfo}
-                        .openDiscussion=${content.openDiscussion}
-                        .onStateChange=${content.onStateChange}
-                      ></openclaw-session-discussion>
+                      <div class="chat-tool-card__preview" data-kind="canvas">
+                        <div class="chat-tool-card__preview-panel" data-side="front">
+                          ${keyed(
+                            `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
+                            html`
+                              <iframe
+                                class="chat-tool-card__preview-frame"
+                                title=${content.title?.trim() ||
+                                t("chat.detailPanel.renderPreview")}
+                                sandbox=${canvasSandbox}
+                                src=${canvasSrc ?? nothing}
+                                style=${content.preferredHeight
+                                  ? `height:${content.preferredHeight}px`
+                                  : ""}
+                              ></iframe>
+                            `,
+                          )}
+                        </div>
+                        ${content.rawText?.trim()
+                          ? html`
+                              <div style="margin-top: 12px;">
+                                <button @click=${props.onViewRawText} class="btn" type="button">
+                                  ${t("chat.detailPanel.viewRawText")}
+                                </button>
+                              </div>
+                            `
+                          : nothing}
+                      </div>
                     `
-                  : content.kind === "canvas"
+                  : content.kind === "image"
                     ? html`
-                        <div class="chat-tool-card__preview" data-kind="canvas">
+                        <div class="chat-tool-card__preview" data-kind="image">
                           <div class="chat-tool-card__preview-panel" data-side="front">
-                            ${keyed(
-                              `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
-                              html`
-                                <iframe
-                                  class="chat-tool-card__preview-frame"
-                                  title=${content.title?.trim() || "Render preview"}
-                                  sandbox=${canvasSandbox}
-                                  src=${canvasSrc ?? nothing}
-                                  style=${content.preferredHeight
-                                    ? `height:${content.preferredHeight}px`
-                                    : ""}
-                                ></iframe>
-                              `,
-                            )}
+                            <button
+                              type="button"
+                              class="chat-tool-card__preview-image-button"
+                              aria-label=${t("chat.imageLightbox.open", { title })}
+                              @click=${() =>
+                                openSidebarImage(props.onOpenImage, content.src, title)}
+                            >
+                              <img
+                                class="chat-tool-card__preview-image"
+                                src=${content.src}
+                                alt=${title}
+                                style="display:block;max-width:100%;height:auto;border-radius:8px;"
+                              />
+                            </button>
                           </div>
                           ${content.rawText?.trim()
                             ? html`
@@ -618,61 +652,35 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                             : nothing}
                         </div>
                       `
-                    : content.kind === "image"
-                      ? html`
-                          <div class="chat-tool-card__preview" data-kind="image">
-                            <div class="chat-tool-card__preview-panel" data-side="front">
-                              <img
-                                class="chat-tool-card__preview-image"
-                                src=${content.src}
-                                alt=${title}
-                                style="display:block;max-width:100%;height:auto;border-radius:8px;"
-                              />
-                            </div>
-                            ${content.rawText?.trim()
-                              ? html`
-                                  <div style="margin-top: 12px;">
-                                    <button @click=${props.onViewRawText} class="btn" type="button">
-                                      ${t("chat.detailPanel.viewRawText")}
-                                    </button>
-                                  </div>
-                                `
-                              : nothing}
-                          </div>
-                        `
-                      : html`
-                          <section class="sidebar-markdown-shell">
-                            <div class="sidebar-markdown-shell__toolbar">
-                              <div class="sidebar-markdown-shell__intro">
-                                <div class="sidebar-markdown-shell__eyebrow">
-                                  ${icons.scrollText}
-                                  <span>${t("chat.detailPanel.renderedMarkdown")}</span>
-                                </div>
-                                <div class="sidebar-markdown-shell__hint">
-                                  ${t("chat.detailPanel.renderedMarkdownHint")}
-                                </div>
+                    : html`
+                        <section class="sidebar-markdown-shell">
+                          <div class="sidebar-markdown-shell__toolbar">
+                            <div class="sidebar-markdown-shell__intro">
+                              <div class="sidebar-markdown-shell__eyebrow">
+                                ${icons.scrollText}
+                                <span>${t("chat.detailPanel.renderedMarkdown")}</span>
                               </div>
-                              <button
-                                @click=${props.onViewRawText}
-                                class="btn btn--sm"
-                                type="button"
-                              >
-                                ${t("chat.detailPanel.viewRawText")}
-                              </button>
+                              <div class="sidebar-markdown-shell__hint">
+                                ${t("chat.detailPanel.renderedMarkdownHint")}
+                              </div>
                             </div>
-                            ${markdownHtml
-                              ? html`
-                                  <article class="sidebar-markdown-reader sidebar-markdown">
-                                    ${unsafeHTML(markdownHtml)}
-                                  </article>
-                                `
-                              : html`
-                                  <div class="sidebar-markdown-empty">
-                                    ${t("chat.detailPanel.noPreviewableMarkdown")}
-                                  </div>
-                                `}
-                          </section>
-                        `
+                            <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
+                              ${t("chat.detailPanel.viewRawText")}
+                            </button>
+                          </div>
+                          ${markdownHtml
+                            ? html`
+                                <article class="sidebar-markdown-reader sidebar-markdown">
+                                  ${unsafeHTML(markdownHtml)}
+                                </article>
+                              `
+                            : html`
+                                <div class="sidebar-markdown-empty">
+                                  ${t("chat.detailPanel.noPreviewableMarkdown")}
+                                </div>
+                              `}
+                        </section>
+                      `
             : html` <div class="muted">${t("chat.detailPanel.noContent")}</div> `}
       </div>
     </div>
@@ -681,16 +689,16 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: SidebarContent | null = null;
-  @property({ attribute: false }) loadFullMessage?:
-    | ((request: SidebarFullMessageRequest) => Promise<DetailFullMessageResult | null | undefined>)
-    | null = null;
+  @property({ attribute: false }) loadFullMessage?: SidebarFullMessageLoader | null = null;
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;
+  @property({ type: Boolean }) embedded = false;
   @property({ attribute: false }) onOpenWorkspaceFile?:
     | ((target: { path: string; line?: number | null }) => void)
     | null = null;
   @property({ attribute: false }) onRevealInWorkspace?: ((path: string) => void) | null = null;
+  @property({ attribute: false }) onOpenImage?: ((item: ImageLightboxItem) => void) | null = null;
 
   @state() private visibleContent: SidebarContent | null = null;
   @state() private error: string | null = null;
@@ -698,7 +706,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @state() private fileSearchQuery = "";
   @state() private fileSearchMatchIndex = 0;
   @state() private fileEditorMenuOpen = false;
-  @state() private fileContentsCopied = false;
+  @state() private fileCopyFeedback = noFileCopyFeedback;
   @state() private fileEditorLoading = false;
   @state() private fileEditing = false;
   @state() private fileDirty = false;
@@ -717,20 +725,22 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   private fileDraftContent: string | null = null;
   private fileSavedContent = "";
   private fileHash = "";
-  private copyFeedbackTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private readonly copyAttempts = new Map<FileCopyAction, number>();
+  private readonly copyFeedbackTimers = new Map<
+    FileCopyAction,
+    ReturnType<typeof globalThis.setTimeout>
+  >();
 
   override connectedCallback() {
     super.connectedCallback();
+    this.fileCopyFeedback = noFileCopyFeedback;
     document.addEventListener("pointerdown", this.handleDocumentPointerDown);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
     this.destroyFileEditor();
-    if (this.copyFeedbackTimer) {
-      globalThis.clearTimeout(this.copyFeedbackTimer);
-      this.copyFeedbackTimer = null;
-    }
+    this.clearFileCopyFeedback();
     super.disconnectedCallback();
   }
 
@@ -746,7 +756,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.fileSearchQuery = "";
     this.fileSearchMatchIndex = 0;
     this.fileEditorMenuOpen = false;
-    this.fileContentsCopied = false;
+    this.clearFileCopyFeedback();
+    this.fileCopyFeedback = noFileCopyFeedback;
     this.fileOperationVersion += 1;
     this.fileEditing = false;
     this.fileDirty = false;
@@ -773,9 +784,16 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.fileDirty = Boolean(restoredDraft);
     this.fileEditorLoading = this.content?.kind === "file";
     this.destroyFileEditor();
-    if (this.copyFeedbackTimer) {
-      globalThis.clearTimeout(this.copyFeedbackTimer);
-      this.copyFeedbackTimer = null;
+  }
+
+  private clearFileCopyFeedback() {
+    for (const timer of this.copyFeedbackTimers.values()) {
+      globalThis.clearTimeout(timer);
+    }
+    this.copyFeedbackTimers.clear();
+    // Keep attempt tokens monotonic so old work cannot become current after reconnection.
+    for (const [action, attempt] of this.copyAttempts) {
+      this.copyAttempts.set(action, attempt + 1);
     }
   }
 
@@ -979,23 +997,37 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     openEditor(editor, absPath, content.line);
   };
 
-  private readonly copyFileContents = () => {
+  private readonly copyFileValue = (action: FileCopyAction) => {
     const content = this.visibleContent;
     if (content?.kind !== "file") {
       return;
     }
-    void copyToClipboard(content.content).then((copied) => {
-      if (!copied) {
+    const attempt = (this.copyAttempts.get(action) ?? 0) + 1;
+    this.copyAttempts.set(action, attempt);
+    void copyToClipboard(action === "path" ? content.path : content.content).then((copied) => {
+      // A newer copy or file selection owns feedback; stale completions must stay invisible.
+      if (
+        this.copyAttempts.get(action) !== attempt ||
+        this.visibleContent !== content ||
+        !this.isConnected
+      ) {
         return;
       }
-      this.fileContentsCopied = true;
-      if (this.copyFeedbackTimer) {
-        globalThis.clearTimeout(this.copyFeedbackTimer);
-      }
-      this.copyFeedbackTimer = globalThis.setTimeout(() => {
-        this.copyFeedbackTimer = null;
-        this.fileContentsCopied = false;
-      }, 1500);
+      this.fileCopyFeedback = {
+        ...this.fileCopyFeedback,
+        [action]: copied ? "copied" : "failed",
+      };
+      globalThis.clearTimeout(this.copyFeedbackTimers.get(action));
+      this.copyFeedbackTimers.set(
+        action,
+        globalThis.setTimeout(
+          () => {
+            this.copyFeedbackTimers.delete(action);
+            this.fileCopyFeedback = { ...this.fileCopyFeedback, [action]: undefined };
+          },
+          copied ? 1500 : 2000,
+        ),
+      );
     });
   };
 
@@ -1122,7 +1154,10 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           return;
         }
         if (!latest) {
-          this.fileSaveNotice = { kind: "error", message: "Failed to reload the latest file." };
+          this.fileSaveNotice = {
+            kind: "error",
+            message: t("chat.detailPanel.reloadFailed"),
+          };
           return;
         }
         this.fileEditor?.setContent(latest.content);
@@ -1174,7 +1209,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         if (!latest) {
           this.fileSaveNotice = {
             kind: "error",
-            message: "Failed to load the latest file before overwriting.",
+            message: t("chat.detailPanel.overwriteLoadFailed"),
           };
           return;
         }
@@ -1239,9 +1274,9 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       if (version !== this.requestVersion || this.content !== content) {
         return;
       }
-      this.error = `Failed to load full content: ${
-        error instanceof Error ? error.message : String(error)
-      }`;
+      this.error = t("chat.detailPanel.fullContentLoadFailed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -1261,8 +1296,32 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   };
 
   private readonly handlePanelClick = (event: Event) => {
+    const imageButton = event
+      .composedPath()
+      .find(
+        (target): target is HTMLElement =>
+          target instanceof HTMLElement &&
+          target.classList.contains("markdown-inline-image-button"),
+      );
+    const image = imageButton?.querySelector<HTMLImageElement>(".markdown-inline-image");
+    if (image) {
+      event.preventDefault();
+      openSidebarImage(
+        this.onOpenImage ?? undefined,
+        image.currentSrc || image.src,
+        image.alt.trim() || t("chat.imageLightbox.untitled"),
+      );
+      return;
+    }
     handleMarkdownCodeBlockCopy(event);
     const target = markdownFileLinkFromEvent(event);
+    if (target) {
+      this.onOpenWorkspaceFile?.(target);
+    }
+  };
+
+  private readonly handlePanelKeyDown = (event: KeyboardEvent) => {
+    const target = markdownFileLinkFromKeyboardEvent(event);
     if (target) {
       this.onOpenWorkspaceFile?.(target);
     }
@@ -1273,16 +1332,21 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const currentMatchIndex = matches.length
       ? Math.min(this.fileSearchMatchIndex, matches.length - 1)
       : 0;
-    // The discussion iframe has no intrinsic height, so its host wrapper must
-    // stretch; content-sized kinds (files, tool details) keep auto height.
-    const fillHost = this.visibleContent?.kind === "session-discussion";
+    // Markdown previews and file editors need a bounded host wrapper so their
+    // inner content can shrink and scroll. Content-sized kinds keep auto height.
+    const fillHost =
+      this.visibleContent?.kind === "file" || this.visibleContent?.kind === "markdown";
     return html`
-      <div class=${fillHost ? "sidebar-panel-host--fill" : ""} @click=${this.handlePanelClick}>
+      <div
+        class=${fillHost ? "sidebar-panel-host--fill" : ""}
+        @click=${this.handlePanelClick}
+        @keydown=${this.handlePanelKeyDown}
+      >
         ${renderMarkdownSidebar({
           content: this.visibleContent,
           error: this.error,
           fileView: {
-            copied: this.fileContentsCopied,
+            copyFeedback: this.fileCopyFeedback,
             currentMatchIndex,
             dirty: this.fileDirty,
             editorMenuOpen: this.fileEditorMenuOpen,
@@ -1294,7 +1358,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
             saveNotice: this.fileSaveNotice,
             saving: this.fileSaving,
             searchOpen: this.fileSearchOpen,
-            onCopyContents: this.copyFileContents,
+            onCopy: this.copyFileValue,
             onDiscard: this.discardFileEdits,
             onEdit: this.editFile,
             onNextMatch: () => this.moveFileSearch(1),
@@ -1314,7 +1378,9 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           canvasPluginSurfaceUrl: this.canvasPluginSurfaceUrl,
           embedSandboxMode: this.embedSandboxMode,
           allowExternalEmbedUrls: this.allowExternalEmbedUrls,
+          embedded: this.embedded,
           onClose: this.close,
+          onOpenImage: this.onOpenImage ?? undefined,
           onViewRawText: this.showRawText,
         })}
       </div>

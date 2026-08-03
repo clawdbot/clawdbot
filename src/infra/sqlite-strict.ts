@@ -1,6 +1,6 @@
 // Migrates OpenClaw-owned SQLite tables to canonical STRICT schemas.
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
@@ -126,8 +126,7 @@ function readTableRowidModel(
 }
 
 function readCanonicalStrictTables(schemaSql: string): CanonicalStrictTable[] {
-  const sqlite = requireNodeSqlite();
-  const canonical = new sqlite.DatabaseSync(":memory:");
+  const canonical = openNodeSqliteDatabase(":memory:");
   try {
     canonical.exec(schemaSql);
     const tables = readMainTableList(canonical).filter((row) => row.type === "table");

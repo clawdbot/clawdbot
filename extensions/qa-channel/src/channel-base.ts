@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Qa Channel plugin module implements channel base behavior.
 import {
   listQaChannelAccountIds,
@@ -7,7 +8,7 @@ import {
 } from "./accounts.js";
 import { qaChannelPluginConfigSchema } from "./config-schema.js";
 import type { ChannelPlugin } from "./runtime-api.js";
-import { applyQaSetup } from "./setup.js";
+import { applyQaSetup, type QaChannelSetupInput } from "./setup.js";
 import type { CoreConfig } from "./types.js";
 
 export const QA_CHANNEL_ID = "qa-channel" as const;
@@ -25,7 +26,7 @@ const qaChannelSetupMeta = qaChannelRuntimeMeta;
 
 type QaChannelPluginBase = Pick<
   ChannelPlugin<ResolvedQaChannelAccount>,
-  "id" | "meta" | "capabilities" | "reload" | "configSchema" | "setup" | "config"
+  "id" | "meta" | "capabilities" | "reload" | "configSchema" | "setupContract" | "config"
 >;
 
 export function createQaChannelPluginBase(
@@ -39,14 +40,26 @@ export function createQaChannelPluginBase(
     },
     reload: { configPrefixes: ["channels.qa-channel"] },
     configSchema: qaChannelPluginConfigSchema,
-    setup: {
-      applyAccountConfig: ({ cfg, accountId, input }) =>
-        applyQaSetup({
-          cfg,
-          accountId,
-          input: input as Record<string, unknown>,
-        }),
-    },
+    setupContract: defineChannelSetupContract({
+      fields: {
+        baseUrl: {
+          kind: "string",
+          cli: { flags: "--base-url <url>", description: "QA channel base URL" },
+        },
+        botUserId: {
+          kind: "string",
+          cli: { flags: "--bot-user-id <id>", description: "QA channel bot user id" },
+        },
+        botDisplayName: {
+          kind: "string",
+          cli: { flags: "--bot-display-name <name>", description: "QA channel bot display name" },
+        },
+      },
+      adapter: {
+        applyAccountConfig: ({ cfg, accountId, input }) =>
+          applyQaSetup({ cfg, accountId, input: input as QaChannelSetupInput }),
+      },
+    }),
     config: {
       listAccountIds: (cfg) => listQaChannelAccountIds(cfg as CoreConfig),
       resolveAccount: (cfg, accountId) =>

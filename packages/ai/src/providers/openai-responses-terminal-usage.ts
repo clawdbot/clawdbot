@@ -91,13 +91,19 @@ function mapResponsesTerminalStopReason(
  */
 export function resolveResponsesTerminalStopReason(params: {
   status: OpenAI.Responses.ResponseStatus | undefined;
+  terminalEventType?: "response.completed" | "response.incomplete";
   incompleteReason?: string;
   hasToolCall: boolean;
 }): { stopReason: StopReason; errorMessage?: string } {
-  if (params.status === "incomplete" && params.incompleteReason === "content_filter") {
+  // Compatible endpoints can omit response.status; the terminal SSE event still
+  // identifies incomplete turns and must retain filtered-output protection.
+  const status =
+    params.status ??
+    (params.terminalEventType === "response.incomplete" ? "incomplete" : undefined);
+  if (status === "incomplete" && params.incompleteReason === "content_filter") {
     return { stopReason: "error", errorMessage: "Provider incomplete_reason: content_filter" };
   }
-  const stopReason = mapResponsesTerminalStopReason(params.status);
+  const stopReason = mapResponsesTerminalStopReason(status);
   if (stopReason === "stop" && params.hasToolCall) {
     return { stopReason: "toolUse" };
   }

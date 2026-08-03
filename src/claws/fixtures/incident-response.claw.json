@@ -7,31 +7,19 @@
     "identity": {
       "name": "Incident Response",
       "emoji": "siren"
-    },
-    "groupChat": {
-      "mentionPatterns": ["@incident-response"]
-    },
-    "sandbox": {
-      "mode": "all",
-      "scope": "agent",
-      "workspaceAccess": "rw"
-    },
-    "tools": {
-      "allow": ["read", "write", "web_fetch"],
-      "deny": ["exec", "browser"]
-    },
-    "heartbeat": {
-      "every": "30m",
-      "lightContext": true,
-      "isolatedSession": true,
-      "skipWhenBusy": true,
-      "timeoutSeconds": 120
     }
+  },
+  "metadata": {
+    "openclaw.config": "profiles/incident-response.openclaw.yml"
   },
   "workspace": {
     "bootstrapFiles": {
-      "SOUL.md": { "source": "workspace/SOUL.md" },
-      "HEARTBEAT.md": { "source": "workspace/HEARTBEAT.md" }
+      "SOUL.md": {
+        "source": "workspace/SOUL.md"
+      },
+      "HEARTBEAT.md": {
+        "source": "workspace/HEARTBEAT.md"
+      }
     }
   },
   "packages": [
@@ -51,7 +39,10 @@
   "mcpServers": {
     "statuspage": {
       "command": "npx",
-      "args": ["--yes", "@acme/statuspage-mcp@1.0.0"],
+      "args": [
+        "--yes",
+        "@acme/statuspage-mcp@1.0.0"
+      ],
       "env": {
         "STATUSPAGE_TOKEN": "${STATUSPAGE_TOKEN}"
       }

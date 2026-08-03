@@ -5,6 +5,7 @@ import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
+import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mjs";
 import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -18,7 +19,10 @@ import {
   WORKSPACE_TEMPLATE_PACK_PATHS,
   createWorkspaceBootstrapSmokeEnv,
 } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
-import { collectInstalledRootDependencyManifestErrors } from "../scripts/openclaw-npm-postpublish-verify.ts";
+import {
+  collectInstalledBundledRuntimeSidecarPaths,
+  collectInstalledRootDependencyManifestErrors,
+} from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
@@ -43,7 +47,9 @@ import {
   resolveMissingPackBuildHint,
   runReleaseCheckCommand,
 } from "../scripts/release-check.ts";
+import { listStaticExtensionAssetOutputs } from "../scripts/runtime-postbuild.mjs";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
+import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
 import { withEnv } from "../src/test-utils/env.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
@@ -63,6 +69,7 @@ const requiredPluginSdkPackPaths = listPluginSdkDistArtifacts();
 const packagedPrivatePluginSdkRuntimePaths = listPackagedPrivatePluginSdkRuntimeArtifacts();
 const unpackagedPrivatePluginSdkPaths = listUnpackagedPrivatePluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+const requiredStaticExtensionAssetPaths = listStaticExtensionAssetOutputs();
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -714,6 +721,7 @@ describe("collectMissingPackPaths", () => {
       "scripts/lib/official-external-plugin-catalog.json",
       "scripts/lib/official-external-provider-catalog.json",
       "scripts/lib/recommended-tool-installs.json",
+      "scripts/lib/guard-inventory-utils.mjs",
       "scripts/lib/package-dist-imports.mjs",
       "scripts/postinstall-bundled-plugins.mjs",
       "dist/agents/compaction-planning.worker.js",
@@ -735,7 +743,6 @@ describe("collectMissingPackPaths", () => {
   it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
     expect(
       collectMissingPackPaths([
-        "npm-shrinkwrap.json",
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
@@ -743,6 +750,7 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/mcp-command-line.mjs",
         "dist/extensions/acpx/mcp-proxy.mjs",
         ...requiredBundledPluginPackPaths,
+        ...requiredStaticExtensionAssetPaths,
         ...requiredPluginSdkPackPaths,
         ...packagedPrivatePluginSdkRuntimePaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -753,6 +761,7 @@ describe("collectMissingPackPaths", () => {
         "scripts/lib/official-external-plugin-catalog.json",
         "scripts/lib/official-external-provider-catalog.json",
         "scripts/lib/recommended-tool-installs.json",
+        "scripts/lib/guard-inventory-utils.mjs",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/agents/compaction-planning.worker.js",
@@ -785,8 +794,18 @@ describe("collectMissingPackPaths", () => {
         mkdirSync(dirname(filePath), { recursive: true });
         writeFileSync(filePath, "export {};\n");
       }
-      for (const pluginId of ["image-generation-core", "media-understanding-core"]) {
-        writeFileSync(join(distDir, "extensions", pluginId, "package.json"), "{}\n");
+      for (const relativePath of requiredBundledPluginPackPaths) {
+        if (!/^dist\/extensions\/[^/]+\/package\.json$/u.test(relativePath)) {
+          continue;
+        }
+        const packageJsonPath = join(packageRoot, relativePath);
+        mkdirSync(dirname(packageJsonPath), { recursive: true });
+        writeFileSync(packageJsonPath, "{}\n");
+      }
+      for (const relativePath of collectInstalledBundledRuntimeSidecarPaths(packageRoot)) {
+        const sidecarPath = join(packageRoot, relativePath);
+        mkdirSync(dirname(sidecarPath), { recursive: true });
+        writeFileSync(sidecarPath, "export {};\n");
       }
       writeFileSync(
         join(packageRoot, "package.json"),
@@ -894,6 +913,14 @@ describe("collectPackUnpackedSizeErrors", () => {
     ).toStrictEqual([]);
   });
 
+  it("accepts npm 12 name-keyed pack results", () => {
+    expect(
+      collectPackUnpackedSizeErrors({
+        openclaw: makePackResult("openclaw-2026.3.14.tgz", 120_354_302),
+      }),
+    ).toStrictEqual([]);
+  });
+
   it("flags oversized pack results that risk low-memory startup failures", () => {
     expect(
       collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.12.tgz", 224_002_564)]),
@@ -911,6 +938,20 @@ describe("collectPackUnpackedSizeErrors", () => {
     ).toEqual([
       "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
     ]);
+  });
+});
+
+describe("resolveNpmJsonEntries", () => {
+  it("normalizes npm <=11 arrays and npm 12 name-keyed objects", () => {
+    const entry = makePackResult("openclaw-2026.7.2.tgz", 120_354_302);
+
+    expect(resolveNpmJsonEntries([entry])).toEqual([entry]);
+    expect(resolveNpmJsonEntries(entry)).toEqual([entry]);
+    expect(resolveNpmJsonEntries({ openclaw: entry })).toEqual([entry]);
+    expect(resolveNpmJsonEntries({ "@openclaw/demo": entry })).toEqual([entry]);
+    expect(resolveNpmJsonEntries({ openclaw: entry })).toEqual(
+      resolveRuntimeNpmJsonEntries({ openclaw: entry }),
+    );
   });
 });
 

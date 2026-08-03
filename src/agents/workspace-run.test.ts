@@ -1,9 +1,11 @@
 // Workspace run tests cover runtime workspace resolution from explicit input,
 // agent config, session keys, and environment fallback.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveRunWorkspaceDir } from "./workspace-run.js";
+
+vi.unmock("./agent-scope-config.js");
 
 describe("resolveRunWorkspaceDir", () => {
   it("resolves explicit workspace values without fallback", () => {
@@ -11,6 +13,7 @@ describe("resolveRunWorkspaceDir", () => {
     const result = resolveRunWorkspaceDir({
       workspaceDir: explicit,
       sessionKey: "agent:main:subagent:test",
+      config: { agents: { list: [{ id: "main", default: true }] } },
     });
 
     expect(result.usedFallback).toBe(false);
@@ -22,7 +25,7 @@ describe("resolveRunWorkspaceDir", () => {
   it("recognizes an explicitly supplied configured workspace as canonical", () => {
     const workspaceDir = path.join(process.cwd(), "tmp", "workspace-run-canonical");
     const cfg = {
-      agents: { defaults: { workspace: workspaceDir } },
+      agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
     } satisfies OpenClawConfig;
 
     const result = resolveRunWorkspaceDir({
@@ -41,7 +44,7 @@ describe("resolveRunWorkspaceDir", () => {
     const cfg = {
       agents: {
         defaults: { workspace: defaultWorkspace },
-        list: [{ id: "research", workspace: researchWorkspace }],
+        list: [{ id: "research", workspace: researchWorkspace, default: true }],
       },
     } satisfies OpenClawConfig;
 
@@ -63,6 +66,7 @@ describe("resolveRunWorkspaceDir", () => {
     const cfg = {
       agents: {
         defaults: { workspace: defaultWorkspace },
+        list: [{ id: "main", default: true }],
       },
     } satisfies OpenClawConfig;
 
@@ -78,19 +82,16 @@ describe("resolveRunWorkspaceDir", () => {
     expect(result.workspaceDir).toBe(path.resolve(defaultWorkspace));
   });
 
-  it("falls back to built-in main workspace when config is unavailable", () => {
+  it("refuses to invent an agent when config is unavailable", () => {
     const workspaceDir = path.join(path.sep, "srv", "openclaw-workspace");
-    const result = resolveRunWorkspaceDir({
-      workspaceDir: null,
-      sessionKey: "agent:main:subagent:test",
-      config: undefined,
-      env: { ...process.env, OPENCLAW_WORKSPACE_DIR: workspaceDir },
-    });
-
-    expect(result.usedFallback).toBe(true);
-    expect(result.fallbackReason).toBe("missing");
-    expect(result.agentId).toBe("main");
-    expect(result.workspaceDir).toBe(path.resolve(workspaceDir));
+    expect(() =>
+      resolveRunWorkspaceDir({
+        workspaceDir: null,
+        sessionKey: "custom-main-key",
+        config: undefined,
+        env: { ...process.env, OPENCLAW_WORKSPACE_DIR: workspaceDir },
+      }),
+    ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
   });
 
   it("throws for malformed agent session keys", () => {
@@ -103,24 +104,46 @@ describe("resolveRunWorkspaceDir", () => {
     ).toThrow("Malformed agent session key");
   });
 
-  it("uses explicit agent id for per-agent fallback when config is unavailable", () => {
+  it("requires roster config for per-agent fallback", () => {
     const env = {
       ...process.env,
       HOME: "/home/runner",
       OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
     } satisfies NodeJS.ProcessEnv;
-    const result = resolveRunWorkspaceDir({
-      workspaceDir: undefined,
-      sessionKey: "definitely-not-a-valid-session-key",
-      agentId: "research",
-      config: undefined,
-      env,
-    });
+    expect(() =>
+      resolveRunWorkspaceDir({
+        workspaceDir: undefined,
+        sessionKey: "definitely-not-a-valid-session-key",
+        agentId: "research",
+        config: undefined,
+        env,
+      }),
+    ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
+  });
 
-    expect(result.agentId).toBe("research");
-    expect(result.agentIdSource).toBe("explicit");
-    expect(result.workspaceDir).toBe(path.resolve("/tmp/openclaw-state", "workspace-research"));
+  it("rejects an explicit agent when the supplied config has no roster", () => {
+    expect(() =>
+      resolveRunWorkspaceDir({
+        workspaceDir: undefined,
+        agentId: "research",
+        config: {},
+      }),
+    ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
+  });
+
+  it.each([
+    { agentId: "research", sessionKey: undefined },
+    { agentId: undefined, sessionKey: "agent:research:subagent:test" },
+  ])("rejects an unconfigured workspace owner for $sessionKey", ({ agentId, sessionKey }) => {
+    expect(() =>
+      resolveRunWorkspaceDir({
+        workspaceDir: undefined,
+        agentId,
+        sessionKey,
+        config: { agents: { entries: { ops: { default: true } } } },
+      }),
+    ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_AGENT_NOT_CONFIGURED" }));
   });
 
   it("throws for malformed agent session keys even when config has a default agent", () => {
@@ -152,6 +175,7 @@ describe("resolveRunWorkspaceDir", () => {
     const cfg = {
       agents: {
         defaults: { workspace: fallbackWorkspace },
+        list: [{ id: "main", default: true }],
       },
     } satisfies OpenClawConfig;
 

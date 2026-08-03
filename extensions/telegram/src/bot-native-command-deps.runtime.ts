@@ -1,3 +1,4 @@
+import { dispatchChannelInboundTurn } from "openclaw/plugin-sdk/channel-inbound";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
 // Telegram plugin module implements bot native command deps behavior.
@@ -5,7 +6,6 @@ import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
-import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -14,26 +14,28 @@ import { loadTelegramSendModule } from "./send-runtime.js";
 
 export type TelegramNativeCommandDeps = Pick<
   TelegramBotDeps,
-  | "dispatchReplyWithBufferedBlockDispatcher"
   | "editMessageTelegram"
   | "getRuntimeConfig"
   | "listSkillCommandsForAgents"
   | "readChannelAllowFromStore"
   | "syncTelegramMenuCommands"
 > & {
+  dispatchChannelInboundTurn?: typeof dispatchChannelInboundTurn;
   getPluginCommandSpecs?: typeof getPluginCommandSpecs;
   runModelsAuthLoginFlow?: (opts: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
 };
 
-export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps = {
+export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps & {
+  dispatchChannelInboundTurn: typeof dispatchChannelInboundTurn;
+} = {
   get getRuntimeConfig() {
     return getRuntimeConfig;
   },
   get readChannelAllowFromStore() {
     return readChannelAllowFromStore;
   },
-  get dispatchReplyWithBufferedBlockDispatcher() {
-    return dispatchReplyWithBufferedBlockDispatcher;
+  get dispatchChannelInboundTurn() {
+    return dispatchChannelInboundTurn;
   },
   get listSkillCommandsForAgents() {
     return listSkillCommandsForAgents;

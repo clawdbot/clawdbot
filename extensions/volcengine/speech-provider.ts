@@ -64,12 +64,12 @@ function normalizeVolcengineProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.volcengine.apiKey",
+      path: "tts.providers.volcengine.apiKey",
     }),
     appId: trimToUndefined(raw?.appId),
     token: normalizeResolvedSecretInputString({
       value: raw?.token,
-      path: "messages.tts.providers.volcengine.token",
+      path: "tts.providers.volcengine.token",
     }),
     voice:
       trimToUndefined(raw?.voice) ??
@@ -117,7 +117,7 @@ function readProviderConfig(config: SpeechProviderConfig): VolcengineTtsProvider
     apiKey:
       normalizeResolvedSecretInputString({
         value: config.apiKey,
-        path: "messages.tts.providers.volcengine.apiKey",
+        path: "tts.providers.volcengine.apiKey",
       }) ?? normalized.apiKey,
     appId: trimToUndefined(config.appId) ?? normalized.appId,
     token: trimToUndefined(config.token) ?? normalized.token,

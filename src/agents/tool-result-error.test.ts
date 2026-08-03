@@ -1,8 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
+  isToolResultError,
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
 } from "./tool-result-error.js";
+
+describe("isToolResultError", () => {
+  it("keeps completed results with nonzero exit codes nonfatal", () => {
+    expect(isToolResultError({ details: { status: "completed", exitCode: 1 } })).toBe(false);
+    expect(isToolResultError({ details: { status: "completed", exitCode: 2 } })).toBe(false);
+    expect(isToolResultError({ details: { status: "completed", exitCode: 0 } })).toBe(false);
+  });
+
+  it("keeps real failures fatal even with a completed status", () => {
+    expect(isToolResultError({ details: { status: "completed", timedOut: true } })).toBe(true);
+    expect(isToolResultError({ details: { status: "completed", error: "spawn failed" } })).toBe(
+      true,
+    );
+    expect(isToolResultError({ details: { ok: false, status: "completed" } })).toBe(true);
+  });
+
+  it("keeps failure statuses and statusless nonzero exits fatal", () => {
+    expect(isToolResultError({ details: { status: "failed", exitCode: 1 } })).toBe(true);
+    expect(isToolResultError({ details: { status: "failed", exitCode: 127 } })).toBe(true);
+    expect(isToolResultError({ details: { status: "killed", exitCode: 137 } })).toBe(true);
+    expect(isToolResultError({ details: { exitCode: 1 } })).toBe(true);
+  });
+});
 
 describe("resolveToolExecutionErrorKind", () => {
   it("recognizes structured timeout identities", () => {
@@ -52,5 +76,14 @@ describe("resolveToolResultFailureKind", () => {
 
     expect(resolveToolResultFailureKind({ details: hostileDetails })).toBeUndefined();
     expect(resolveToolResultFailureKind(hostileResult)).toBeUndefined();
+  });
+
+  it("does not classify completed nonzero exits as failures", () => {
+    expect(
+      resolveToolResultFailureKind({ details: { status: "completed", exitCode: 1 } }),
+    ).toBeUndefined();
+    expect(resolveToolResultFailureKind({ details: { status: "failed", exitCode: 1 } })).toBe(
+      "failed",
+    );
   });
 });

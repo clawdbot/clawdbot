@@ -179,16 +179,9 @@ describe("scanOpenRouterModels", () => {
 
   it("applies the scan timeout before the OpenRouter catalog responds", async () => {
     vi.useFakeTimers();
-    const fetchImpl: typeof fetch = async (_input, init) =>
-      await new Promise<Response>((_resolve, reject) => {
-        const signal = typeof init === "object" && init ? init.signal : undefined;
-        if (signal?.aborted) {
-          reject(new Error("catalog aborted"));
-          return;
-        }
-        signal?.addEventListener("abort", () => reject(new Error("catalog aborted")), {
-          once: true,
-        });
+    const fetchImpl: typeof fetch = async () =>
+      await new Promise<Response>(() => {
+        // Deliberately ignore cancellation to prove the timeout race settles independently.
       });
 
     const scan = expect(
@@ -197,7 +190,7 @@ describe("scanOpenRouterModels", () => {
         probe: false,
         timeoutMs: 1,
       }),
-    ).rejects.toThrow(/catalog aborted/);
+    ).rejects.toThrow(/OpenRouter model scan timed out/);
 
     await vi.advanceTimersByTimeAsync(1);
     await scan;
@@ -253,7 +246,7 @@ describe("scanOpenRouterModels", () => {
 
     const scan = expect(
       scanOpenRouterModels({ fetchImpl, probe: false, timeoutMs }),
-    ).rejects.toThrow(/aborted/i);
+    ).rejects.toThrow(/timed out/i);
 
     await vi.advanceTimersByTimeAsync(timeoutMs - 1);
     expect(chunkCount).toBe(3);

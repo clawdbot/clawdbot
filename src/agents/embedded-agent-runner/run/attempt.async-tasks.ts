@@ -2,6 +2,7 @@
  * Waits for completion-required async tasks before finalizing an attempt.
  */
 import { createAbortError as createNamedAbortError } from "../../../infra/abort-signal.js";
+import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
@@ -33,7 +34,7 @@ const COMPLETION_REQUIRED_TASK_KINDS = new Set([
 ]);
 
 function resolveAsyncTaskPollIntervalMs(): number {
-  return process.env.OPENCLAW_TEST_FAST === "1" ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS;
+  return isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS;
 }
 
 function sleep(ms: number): Promise<void> {

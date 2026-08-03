@@ -20,6 +20,7 @@ import type { TypingSignaler } from "./typing-mode.js";
 type RunEntryParams = Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0];
 type RunEntryResult = Awaited<ReturnType<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>>;
 type RunEntryDelegate = (params: RunEntryParams) => Promise<RunEntryResult>;
+type RunCliAgent = typeof import("../../agents/cli-runner.js").runCliAgent;
 
 export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
@@ -81,8 +82,11 @@ vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
 
-vi.mock("../../agents/model-fallback.js", () => ({
+vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
+}));
+
+vi.mock("../../agents/model-fallback-attempt.js", () => ({
   isFallbackSummaryError: (err: unknown) =>
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&
@@ -99,7 +103,10 @@ vi.mock("../../agents/model-selection.js", async () => {
   };
 });
 
-vi.mock("../../agents/bootstrap-budget.js", () => ({
+vi.mock("../../agents/bootstrap-budget.js", async () => ({
+  ...(await vi.importActual<typeof import("../../agents/bootstrap-budget.js")>(
+    "../../agents/bootstrap-budget.js",
+  )),
   resolveBootstrapWarningSignaturesSeen: () => [],
 }));
 
@@ -108,6 +115,7 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
     "../../agents/embedded-agent-helpers.js",
   );
   return {
+    ...actual,
     BILLING_ERROR_USER_MESSAGE: "billing",
     formatBillingErrorMessage: actual.formatBillingErrorMessage,
     formatRateLimitOrOverloadedErrorCopy: (message: string) => {
@@ -141,7 +149,8 @@ vi.mock("../../config/sessions.js", () => ({
   updateSessionStore: state.updateSessionStoreMock,
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../globals.js", async () => ({
+  ...(await vi.importActual<typeof import("../../globals.js")>("../../globals.js")),
   logVerbose: vi.fn(),
 }));
 
@@ -159,6 +168,16 @@ vi.mock("../../infra/agent-events.js", async () => {
     registerAgentRunContext: vi.fn(),
   };
 });
+vi.mock("../../infra/agent-run-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
+    "../../infra/agent-run-registry.js",
+  );
+  return {
+    ...actual,
+    clearAgentRunContext: vi.fn(),
+    registerAgentRunContext: vi.fn(),
+  };
+});
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
@@ -166,7 +185,10 @@ vi.mock("../../runtime.js", () => ({
   },
 }));
 
-vi.mock("../../utils/message-channel.js", () => ({
+vi.mock("../../utils/message-channel.js", async () => ({
+  ...(await vi.importActual<typeof import("../../utils/message-channel.js")>(
+    "../../utils/message-channel.js",
+  )),
   isMarkdownCapableMessageChannel: () => true,
   resolveMessageChannel: () => "whatsapp",
   isInternalMessageChannel: (value: unknown) => state.isInternalMessageChannelMock(value),
@@ -253,8 +275,38 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: () => (payload: unknown) => payload,
 }));
 
-export async function getRunAgentTurnWithFallback() {
-  return (await import("./agent-runner-execution.js")).runAgentTurnWithFallback;
+export async function getExecuteAgentTurnForTest() {
+  const execute = (await import("./agent-runner-execution.js")).executeAgentTurn;
+  return async (...args: Parameters<typeof execute>) => {
+    const execution = await execute(...args);
+    const outcome = execution.outcome;
+    if (outcome.kind === "settled") {
+      return {
+        kind: "success" as const,
+        runId: execution.runId,
+        runResult: outcome.result,
+        fallbackProvider: outcome.resolved.provider,
+        fallbackModel: outcome.resolved.model,
+        ...(outcome.fallback.exhausted ? { fallbackExhausted: true as const } : {}),
+        fallbackAttempts: outcome.fallback.attempts,
+        didLogHeartbeatStrip: outcome.didLogHeartbeatStrip,
+        autoCompactionCount: outcome.autoCompactionCount,
+        directlySentBlockKeys: outcome.directlySentBlockKeys,
+        directlySentBlockPayloads: outcome.directlySentBlockPayloads,
+        terminalFailurePayload: outcome.terminalFailurePayload,
+      };
+    }
+    if (outcome.kind === "rejected") {
+      return { kind: "final" as const, payload: outcome.payload };
+    }
+    return { kind: "final" as const, payload: { text: "NO_REPLY" } };
+  };
+}
+
+export async function loadActualRunCliAgentForTest(): Promise<RunCliAgent> {
+  return (
+    await vi.importActual<typeof import("../../agents/cli-runner.js")>("../../agents/cli-runner.js")
+  ).runCliAgent;
 }
 
 export type FallbackRunnerParams = {
@@ -301,6 +353,7 @@ export type EmbeddedAgentParams = {
     toolCallId?: string;
     itemId?: string;
   }) => void;
+  onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
@@ -406,6 +459,7 @@ export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }
       key: "main",
       sessionId: "session",
       abortSignal: options?.abortSignal ?? new AbortController().signal,
+      staleExpiryReason: undefined,
       resetTriggered: false,
       terminalRecovery: false,
       acceptedSteeredInboundAudio: false,
@@ -418,6 +472,8 @@ export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }
       setPhase: vi.fn(),
       markWaitingForDeferredMaintenance: vi.fn(),
       markDeferredMaintenanceWaitEnded: vi.fn(),
+      markWaitingForGlobalLane: vi.fn(),
+      markGlobalLaneWaitEnded: vi.fn(),
       updateSessionId: updateSessionIdMock,
       updateSessionKey: vi.fn(),
       attachBackend: vi.fn(),

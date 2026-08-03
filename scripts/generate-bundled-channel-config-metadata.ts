@@ -348,7 +348,7 @@ if (import.meta.url === new URL(process.argv[1] ?? "", "file://").href) {
     process.exitCode = 0;
   } else if (check) {
     console.error(
-      `[bundled-channel-config-metadata] stale generated output at ${path.relative(process.cwd(), result.outputPath)}`,
+      `[bundled-channel-config-metadata] stale generated output at ${path.relative(process.cwd(), result.outputPath)}; run "pnpm config:channels:gen" and commit the result`,
     );
     process.exitCode = 1;
   } else {

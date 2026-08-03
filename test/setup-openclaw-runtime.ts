@@ -25,7 +25,7 @@ type WorkerPluginRuntimeHelpers = {
   setActivePluginRegistry: typeof import("../src/plugins/runtime.js").setActivePluginRegistry;
 };
 type WorkerCleanupHelpers = {
-  clearSessionStoreCaches: typeof import("../src/config/sessions/store-cache.js").clearSessionStoreCaches;
+  clearSessionStoreCacheForTest: typeof import("../src/config/sessions/store-writer-state.js").clearSessionStoreCacheForTest;
   drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
   drainSessionStoreWriterQueuesForTest: typeof import("../src/config/sessions/store-writer-state.js").drainSessionStoreWriterQueuesForTest;
   drainSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").drainSessionWriteLockStateForTest;
@@ -81,7 +81,6 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       modelsConfigState,
       preparedModelRuntime,
       sessionWriteLockTestSupport,
-      sessionStoreCache,
       sessionStoreWriterState,
       fileLock,
     ] = await Promise.all([
@@ -97,16 +96,13 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       vi.importActual<typeof import("../src/agents/session-write-lock.test-support.js")>(
         "../src/agents/session-write-lock.test-support.js",
       ),
-      vi.importActual<typeof import("../src/config/sessions/store-cache.js")>(
-        "../src/config/sessions/store-cache.js",
-      ),
       vi.importActual<typeof import("../src/config/sessions/store-writer-state.js")>(
         "../src/config/sessions/store-writer-state.js",
       ),
       vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
     ]);
     return {
-      clearSessionStoreCaches: sessionStoreCache.clearSessionStoreCaches,
+      clearSessionStoreCacheForTest: sessionStoreWriterState.clearSessionStoreCacheForTest,
       drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
       drainSessionStoreWriterQueuesForTest:
         sessionStoreWriterState.drainSessionStoreWriterQueuesForTest,
@@ -384,7 +380,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
   const {
-    clearSessionStoreCaches,
+    clearSessionStoreCacheForTest,
     drainFileLockStateForTest,
     drainSessionStoreWriterQueuesForTest,
     drainSessionWriteLockStateForTest,
@@ -395,7 +391,7 @@ afterEach(async () => {
     resetSessionWriteLockStateForTest,
   } = await loadWorkerCleanupHelpers();
   await drainSessionStoreWriterQueuesForTest();
-  clearSessionStoreCaches();
+  clearSessionStoreCacheForTest();
   await drainFileLockStateForTest();
   await drainSessionWriteLockStateForTest();
   resetFileLockStateForTest();
@@ -407,9 +403,12 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const { clearSessionStoreCaches, drainFileLockStateForTest, drainSessionWriteLockStateForTest } =
-    await loadWorkerCleanupHelpers();
-  clearSessionStoreCaches();
+  const {
+    clearSessionStoreCacheForTest,
+    drainFileLockStateForTest,
+    drainSessionWriteLockStateForTest,
+  } = await loadWorkerCleanupHelpers();
+  clearSessionStoreCacheForTest();
   await drainFileLockStateForTest();
   await drainSessionWriteLockStateForTest();
 });

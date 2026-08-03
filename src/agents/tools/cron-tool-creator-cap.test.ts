@@ -24,10 +24,11 @@ describe("cron tool creator cap", () => {
     capCronJobToolsAllowOnCreate(triggerJob, ["read", "cron"]);
     capCronJobToolsAllowOnCreate(plainJob, ["read", "cron"]);
 
+    // Legacy "cron" creator allowlists normalize to the canonical tool id.
     expect(triggerJob.payload).toEqual({
       kind: "systemEvent",
       text: "wake",
-      toolsAllow: ["read", "cron"],
+      toolsAllow: ["read", "automations"],
       toolsAllowIsDefault: true,
     });
     expect(plainJob.payload).toEqual({ kind: "systemEvent", text: "wake" });
@@ -53,10 +54,19 @@ describe("cron tool creator cap", () => {
     });
   });
 
-  it("requests current state before deriving an implicit cap", () => {
+  it("preserves non-policy patches without loading or synthesizing authority", () => {
     expect(
       planCronJobUpdatePatch({
         patch: { enabled: false },
+        creatorToolAllowlist: ["read", "cron"],
+      }),
+    ).toEqual({ kind: "ready", patch: { enabled: false } });
+  });
+
+  it("requests current state before deriving an implicit cap for a payload edit", () => {
+    expect(
+      planCronJobUpdatePatch({
+        patch: { payload: { message: "updated" } },
         creatorToolAllowlist: ["read", "cron"],
       }),
     ).toEqual({ kind: "needs-current-job" });
@@ -65,7 +75,7 @@ describe("cron tool creator cap", () => {
   it("preserves explicit narrower caps and re-derives stored defaults", () => {
     const narrower = readReadyPatch(
       planCronJobUpdatePatch({
-        patch: { enabled: false },
+        patch: { payload: { message: "updated" } },
         creatorToolAllowlist: ["read", "exec", "cron"],
         currentJob: {
           payload: { kind: "agentTurn", message: "work", toolsAllow: ["read"] },
@@ -74,7 +84,7 @@ describe("cron tool creator cap", () => {
     );
     const storedDefault = readReadyPatch(
       planCronJobUpdatePatch({
-        patch: { enabled: false },
+        patch: { payload: { message: "updated" } },
         creatorToolAllowlist: ["read", "cron"],
         currentJob: {
           payload: {
@@ -88,14 +98,13 @@ describe("cron tool creator cap", () => {
     );
 
     expect(narrower).toEqual({
-      enabled: false,
-      payload: { kind: "agentTurn", toolsAllow: ["read"] },
+      payload: { kind: "agentTurn", message: "updated", toolsAllow: ["read"] },
     });
     expect(storedDefault).toEqual({
-      enabled: false,
       payload: {
         kind: "agentTurn",
-        toolsAllow: ["read", "cron"],
+        message: "updated",
+        toolsAllow: ["read", "automations"],
         toolsAllowIsDefault: true,
       },
     });

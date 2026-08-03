@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { msteamsPlugin } from "./channel.js";
+import { msteamsSetupPlugin } from "./channel.setup.js";
 
 function createConfiguredMSTeamsCfg(): OpenClawConfig {
   return {
@@ -18,6 +19,58 @@ function createConfiguredMSTeamsCfg(): OpenClawConfig {
 }
 
 describe("msteamsPlugin", () => {
+  it("shares account and metadata contracts with the lightweight setup plugin", () => {
+    expect(msteamsSetupPlugin.meta).toEqual(msteamsPlugin.meta);
+
+    for (const key of [
+      "listAccountIds",
+      "resolveAccount",
+      "defaultAccountId",
+      "setAccountEnabled",
+      "deleteAccount",
+      "resolveAllowFrom",
+      "formatAllowFrom",
+      "resolveDefaultTo",
+    ] as const) {
+      expect(msteamsSetupPlugin.config[key]).toBe(msteamsPlugin.config[key]);
+    }
+  });
+
+  it("preserves the default account and allowlist across runtime and setup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          ...createConfiguredMSTeamsCfg().channels?.msteams,
+          allowFrom: ["OWNER", "  Team.Member  "],
+          defaultTo: "19:team@thread.tacv2",
+        },
+      },
+    };
+
+    for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
+      expect(plugin.config.defaultAccountId?.(cfg)).toBe("default");
+      expect(plugin.config.resolveAccount(cfg, "ignored")).toEqual({
+        accountId: "default",
+        enabled: true,
+        configured: true,
+      });
+      expect(plugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+        "OWNER",
+        "  Team.Member  ",
+      ]);
+      expect(
+        plugin.config.formatAllowFrom?.({
+          cfg,
+          accountId: "default",
+          allowFrom: ["OWNER", "  Team.Member  "],
+        }),
+      ).toEqual(["owner", "team.member"]);
+      expect(plugin.config.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe(
+        "19:team@thread.tacv2",
+      );
+    }
+  });
+
   it("exposes approval auth through approvalCapability", () => {
     expect(msteamsPlugin.approvalCapability).toBe(msTeamsApprovalAuth);
   });
@@ -54,6 +107,26 @@ describe("msteamsPlugin", () => {
     expect(looksLikeId?.("29:1a2b3c4d5e6f")).toBe(true);
     expect(looksLikeId?.("a:1bfPersonalChat")).toBe(true);
     expect(looksLikeId?.("user:Jane Doe")).toBe(false);
+  });
+
+  it("recognizes provider-prefixed explicit targets without claiming display names", () => {
+    const messaging = msteamsPlugin.messaging;
+    const aadUserId = "40a1a0ed-4ff2-4164-a219-55518990c197";
+
+    expect(
+      ["teams", "msteams"].map((provider) => {
+        const target = `${provider}:user:${aadUserId}`;
+        return {
+          explicit: messaging?.targetResolver?.looksLikeId?.(target),
+          normalized: messaging?.normalizeTarget?.(target),
+        };
+      }),
+    ).toEqual([
+      { explicit: true, normalized: `user:${aadUserId}` },
+      { explicit: true, normalized: `user:${aadUserId}` },
+    ]);
+    expect(messaging?.targetResolver?.looksLikeId?.("teams:user:Jane Doe")).toBe(false);
+    expect(messaging?.targetResolver?.looksLikeId?.("msteams:user:Jane Doe")).toBe(false);
   });
 });
 

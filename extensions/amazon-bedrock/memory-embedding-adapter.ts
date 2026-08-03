@@ -28,7 +28,7 @@ export const bedrockMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapt
           "AWS credentials are not available. " +
           "Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, AWS_PROFILE, or AWS_BEARER_TOKEN_BEDROCK, " +
           "configure an EC2/ECS/EKS role, " +
-          "or set agents.defaults.memorySearch.provider to another provider.",
+          "or set memory.search.provider to another provider.",
       );
     }
     const { provider, client } = await createBedrockEmbeddingProvider({

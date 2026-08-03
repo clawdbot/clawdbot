@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { fingerprint } from "../protocol/index.js";
 import {
@@ -37,7 +38,7 @@ type Prompt = {
   }): Promise<T>;
 };
 
-export const reefSetupAdapter = {
+const reefSetupAdapter = {
   applyAccountConfig: ({
     cfg,
     input,
@@ -54,6 +55,11 @@ export const reefSetupAdapter = {
       },
     }) as OpenClawConfig,
 };
+
+export const reefSetupContract = defineChannelSetupContract({
+  fields: {},
+  adapter: reefSetupAdapter,
+});
 
 export const reefSetupWizard = {
   channel: "reef",

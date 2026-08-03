@@ -131,7 +131,7 @@ stop_gateway() {
 }
 
 cleanup_wizard_case() {
-  exec 3>&- 2>/dev/null || true
+  { exec 3>&-; } 2>/dev/null || true
   openclaw_e2e_stop_process "${wizard_pid:-}"
   stop_gateway "${gw_pid:-}"
   rm -rf "${input_fifo_dir:-}"
@@ -261,7 +261,7 @@ run_case_local_basic() {
   sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"
 
   openclaw_e2e_assert_dir "$sessions_dir"
-  for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md TOOLS.md USER.md; do
+  for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md USER.md; do
     openclaw_e2e_assert_file "$workspace_dir/$file"
   done
 

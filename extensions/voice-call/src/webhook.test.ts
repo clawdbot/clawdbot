@@ -198,11 +198,51 @@ function expectWebhookUrl(url: string, expectedPath: string) {
 
 function expectNoTwilioStreamState(providerLocal: TwilioProvider) {
   const state = providerLocal as unknown as {
+    callStreamMap: Map<string, string>;
     streamAuthTokens: Map<string, string>;
     activeStreamCalls: Set<string>;
   };
+  expect(state.callStreamMap.size).toBe(0);
   expect(state.streamAuthTokens.size).toBe(0);
   expect(state.activeStreamCalls.size).toBe(0);
+}
+
+function expectTwilioCallStateReleased(
+  providerLocal: TwilioProvider,
+  params: { callId: string; providerCallId: string },
+) {
+  const state = providerLocal as unknown as {
+    callWebhookUrls: Map<string, string>;
+    callStreamMap: Map<string, string>;
+    streamAuthTokens: Map<string, string>;
+    twimlStorage: Map<string, string>;
+    notifyCalls: Set<string>;
+    activeStreamCalls: Set<string>;
+  };
+  expect(state.callWebhookUrls.has(params.providerCallId)).toBe(false);
+  expect(state.callStreamMap.has(params.providerCallId)).toBe(false);
+  expect(state.streamAuthTokens.has(params.providerCallId)).toBe(false);
+  expect(state.twimlStorage.has(params.callId)).toBe(false);
+  expect(state.notifyCalls.has(params.callId)).toBe(false);
+  expect(state.activeStreamCalls.has(params.providerCallId)).toBe(false);
+}
+
+function expectPlivoCallStateReleased(
+  providerLocal: PlivoProvider,
+  params: { callId: string; requestUuid: string; callUuid: string },
+) {
+  const state = providerLocal as unknown as {
+    requestUuidToCallUuid: Map<string, string>;
+    callIdToWebhookUrl: Map<string, string>;
+    callUuidToWebhookUrl: Map<string, string>;
+    pendingSpeakByCallId: Map<string, unknown>;
+    pendingListenByCallId: Map<string, unknown>;
+  };
+  expect(state.requestUuidToCallUuid.has(params.requestUuid)).toBe(false);
+  expect(state.callIdToWebhookUrl.has(params.callId)).toBe(false);
+  expect(state.callUuidToWebhookUrl.has(params.callUuid)).toBe(false);
+  expect(state.pendingSpeakByCallId.has(params.callId)).toBe(false);
+  expect(state.pendingListenByCallId.has(params.callId)).toBe(false);
 }
 
 async function expectTwilioReplayTwiML(response: Response) {
@@ -741,6 +781,7 @@ describe("VoiceCallWebhookServer realtime WebSocket routing", () => {
         headers: { "Content-Type": "text/xml" },
         body: "<Response />",
       }),
+      close: async () => {},
       getStreamPathPattern: () => streamPathPattern,
       handleWebSocketUpgrade,
       registerToolHandler: () => {},
@@ -923,6 +964,154 @@ describe("VoiceCallWebhookServer path matching", () => {
 });
 
 describe("VoiceCallWebhookServer replay handling", () => {
+  it("releases Twilio provider state through a terminal webhook before replay ack", async () => {
+    const callId = "call-webhook-terminal-twilio";
+    const providerCallId = "CA-webhook-terminal-twilio";
+    const twilioProvider = new TwilioProvider(
+      { accountSid: "AC123", authToken: "secret" },
+      {
+        publicUrl: "https://example.test/voice/webhook",
+        streamPath: "/voice/stream",
+        skipVerification: true,
+      },
+    );
+    const state = twilioProvider as unknown as {
+      callWebhookUrls: Map<string, string>;
+      callStreamMap: Map<string, string>;
+      streamAuthTokens: Map<string, string>;
+      twimlStorage: Map<string, string>;
+      notifyCalls: Set<string>;
+      activeStreamCalls: Set<string>;
+    };
+    state.callWebhookUrls.set(
+      providerCallId,
+      `https://example.test/voice/webhook?callId=${callId}`,
+    );
+    state.callStreamMap.set(providerCallId, "MZ-webhook-terminal");
+    state.streamAuthTokens.set(providerCallId, "stream-token");
+    state.twimlStorage.set(callId, "<Response><Say>Hello</Say></Response>");
+    state.notifyCalls.add(callId);
+    state.activeStreamCalls.add(providerCallId);
+
+    const parseWebhookEvent = vi.spyOn(twilioProvider, "parseWebhookEvent");
+    const { manager, processEvent } = createManager([]);
+    const config = createConfig({
+      provider: "twilio",
+      skipSignatureVerification: true,
+      twilio: { accountSid: "AC123", authToken: "secret" },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const requestUrl = requireBoundRequestUrl(server, baseUrl);
+      requestUrl.searchParams.set("callId", callId);
+      requestUrl.searchParams.set("type", "status");
+      const body = `CallSid=${providerCallId}&CallStatus=completed&Direction=outbound-api`;
+
+      const first = await fetch(requestUrl.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      expect(first.status).toBe(200);
+      expect(await first.text()).toBe(
+        '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+      );
+      expectTwilioCallStateReleased(twilioProvider, { callId, providerCallId });
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
+      expect(processEvent).toHaveBeenCalledTimes(1);
+
+      const replay = await fetch(requestUrl.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      await expectTwilioReplayTwiML(replay);
+      expectTwilioCallStateReleased(twilioProvider, { callId, providerCallId });
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
+      expect(processEvent).toHaveBeenCalledTimes(1);
+    } finally {
+      parseWebhookEvent.mockRestore();
+      await server.stop();
+    }
+  });
+
+  it("releases Plivo provider state through a terminal webhook before replay ack", async () => {
+    const callId = "call-webhook-terminal-plivo";
+    const requestUuid = "request-webhook-terminal-plivo";
+    const callUuid = "call-uuid-webhook-terminal-plivo";
+    const plivoProvider = new PlivoProvider(
+      {
+        authId: "MA000000000000000000",
+        authToken: "test-token",
+      },
+      { skipVerification: true },
+    );
+    const state = plivoProvider as unknown as {
+      requestUuidToCallUuid: Map<string, string>;
+      callIdToWebhookUrl: Map<string, string>;
+      callUuidToWebhookUrl: Map<string, string>;
+      pendingSpeakByCallId: Map<string, unknown>;
+      pendingListenByCallId: Map<string, unknown>;
+    };
+    state.requestUuidToCallUuid.set(requestUuid, callUuid);
+    state.callIdToWebhookUrl.set(callId, "https://example.test/voice/webhook");
+    state.callUuidToWebhookUrl.set(callUuid, "https://example.test/voice/webhook");
+    state.pendingSpeakByCallId.set(callId, { text: "Hello" });
+    state.pendingListenByCallId.set(callId, { language: "en-US" });
+
+    const parseWebhookEvent = vi.spyOn(plivoProvider, "parseWebhookEvent");
+    const { manager, processEvent } = createManager([]);
+    const config = createConfig({
+      provider: "plivo",
+      skipSignatureVerification: true,
+      plivo: {
+        authId: "MA000000000000000000",
+        authToken: "test-token",
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, plivoProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const requestUrl = requireBoundRequestUrl(server, baseUrl);
+      requestUrl.searchParams.set("provider", "plivo");
+      requestUrl.searchParams.set("flow", "hangup");
+      requestUrl.searchParams.set("callId", callId);
+      const body = `CallUUID=${callUuid}&RequestUUID=${requestUuid}&CallStatus=completed&Direction=outbound`;
+
+      const first = await fetch(requestUrl.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      expect(first.status).toBe(200);
+      expect(await first.text()).toBe(
+        '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+      );
+      expectPlivoCallStateReleased(plivoProvider, { callId, requestUuid, callUuid });
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
+      expect(processEvent).toHaveBeenCalledTimes(1);
+
+      const replay = await fetch(requestUrl.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      expect(replay.status).toBe(200);
+      expect(await replay.text()).toBe(
+        '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+      );
+      expectPlivoCallStateReleased(plivoProvider, { callId, requestUuid, callUuid });
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
+      expect(processEvent).toHaveBeenCalledTimes(1);
+    } finally {
+      parseWebhookEvent.mockRestore();
+      await server.stop();
+    }
+  });
+
   it("acknowledges replayed webhook requests and skips event side effects", async () => {
     const parseWebhookEvent = vi.fn(() => ({
       events: [
@@ -1084,6 +1273,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
     server.setRealtimeHandler({
       buildTwiMLPayload,
+      close: async () => {},
       getStreamPathPattern: () => "/voice/stream/realtime",
       handleWebSocketUpgrade: () => {},
       registerToolHandler: () => {},
@@ -1139,6 +1329,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
       server.setRealtimeHandler({
         buildTwiMLPayload,
+        close: async () => {},
         getStreamPathPattern: () => "/voice/stream/realtime",
         handleWebSocketUpgrade: () => {},
         registerToolHandler: () => {},
@@ -1200,6 +1391,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
       server.setRealtimeHandler({
         buildTwiMLPayload,
+        close: async () => {},
         getStreamPathPattern: () => "/voice/stream/realtime",
         handleWebSocketUpgrade: () => {},
         registerToolHandler: () => {},
@@ -1256,6 +1448,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
     server.setRealtimeHandler({
       buildTwiMLPayload,
+      close: async () => {},
       getStreamPathPattern: () => "/voice/stream/realtime",
       handleWebSocketUpgrade: () => {},
       registerToolHandler: () => {},
@@ -1320,6 +1513,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
     server.setRealtimeHandler({
       buildTwiMLPayload,
+      close: async () => {},
       getStreamPathPattern: () => "/voice/stream/realtime",
       handleWebSocketUpgrade: () => {},
       registerToolHandler: () => {},
@@ -1379,6 +1573,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
     server.setRealtimeHandler({
       buildTwiMLPayload,
+      close: async () => {},
       getStreamPathPattern: () => "/voice/stream/realtime",
       handleWebSocketUpgrade: () => {},
       registerToolHandler: () => {},
@@ -1431,6 +1626,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
     server.setRealtimeHandler({
       buildTwiMLPayload,
+      close: async () => {},
       getStreamPathPattern: () => "/voice/stream/realtime",
       handleWebSocketUpgrade: () => {},
       registerToolHandler: () => {},

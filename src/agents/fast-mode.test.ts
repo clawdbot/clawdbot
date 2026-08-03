@@ -76,53 +76,6 @@ describe("resolveFastModeState", () => {
     expect(state.source).toBe("config");
   });
 
-  it("uses OpenAI model config for the Codex app-server runtime provider", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai-codex",
-      model: "gpt-5.5",
-    });
-
-    expect(state.mode).toBe("auto");
-    expect(state.enabled).toBe(true);
-    expect(state.source).toBe("config");
-    expect(state.fastAutoOnSeconds).toBe(30);
-  });
-
-  it("prefers exact Codex app-server model config over the OpenAI alias", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { params: { fastMode: true, fastAutoOnSeconds: 30 } },
-            "openai-codex/gpt-5.5": { params: { fastMode: false, fastAutoOnSeconds: 45 } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai-codex",
-      model: "gpt-5.5",
-    });
-
-    expect(state.enabled).toBe(false);
-    expect(state.mode).toBe(false);
-    expect(state.source).toBe("config");
-    expect(state.fastAutoOnSeconds).toBe(45);
-  });
-
   it("formats auto mode with the default threshold", () => {
     expect(formatFastModeAutoLabel()).toBe("auto (60 sec)");
     expect(formatFastModeStatusValue({ mode: "auto" })).toBe("auto (60 sec)");

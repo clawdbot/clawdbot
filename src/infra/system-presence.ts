@@ -285,6 +285,20 @@ export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
   entries.set(normalizedKey, merged);
 }
 
+/** Renews an existing connection-owned presence row without recreating expired metadata. */
+export function touchPresence(key: string): boolean {
+  const normalizedKey = normalizePresenceKey(key);
+  if (!normalizedKey) {
+    return false;
+  }
+  const existing = entries.get(normalizedKey);
+  if (!existing) {
+    return false;
+  }
+  entries.set(normalizedKey, { ...existing, ts: Date.now() });
+  return true;
+}
+
 export function listSystemPresence(): SystemPresence[] {
   ensureSelfPresence();
   // prune expired

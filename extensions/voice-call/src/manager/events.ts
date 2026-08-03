@@ -11,6 +11,12 @@ import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
 import { endCall } from "./outbound.js";
+import {
+  appendCallReplayKey,
+  releaseRejectedProviderCall,
+  rememberManagerReplayKey,
+  reserveRejectedProviderCall,
+} from "./replay-keys.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
 import {
@@ -182,11 +188,11 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
         );
         return { kind: "ignored" };
       }
-      ctx.processedEventIds.add(dedupeKey);
-      if (ctx.rejectedProviderCallIds.has(pid)) {
+      rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
+      const rejectionReservation = reserveRejectedProviderCall(ctx.rejectedProviderCallIds, pid);
+      if (rejectionReservation === undefined) {
         return { kind: "ignored" };
       }
-      ctx.rejectedProviderCallIds.add(pid);
       const callId = event.callId ?? pid;
       persistRejectedInboundCall({ ctx, event, dedupeKey, providerCallId: pid });
       log.info(`Rejecting inbound call by policy: ${pid}`);
@@ -197,7 +203,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
           reason: "hangup-bot",
         })
         .catch((err: unknown) => {
-          ctx.rejectedProviderCallIds.delete(pid);
+          releaseRejectedProviderCall(ctx.rejectedProviderCallIds, pid, rejectionReservation);
           const message = formatErrorMessage(err);
           log.warn(`Failed to reject inbound call ${pid}: ${message}`);
         });
@@ -234,8 +240,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
 
   const shouldCommitReplayKey = !(event.type === "call.error" && event.retryable);
   if (shouldCommitReplayKey) {
-    ctx.processedEventIds.add(dedupeKey);
-    call.processedEventIds.push(dedupeKey);
+    rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
+    appendCallReplayKey(call.processedEventIds, dedupeKey);
   }
 
   let result: ProcessEventResult = { kind: "processed" };

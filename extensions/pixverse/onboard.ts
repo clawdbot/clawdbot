@@ -100,7 +100,7 @@ function applyPixVerseConfig(
   options?: { resetBaseUrl?: boolean },
 ): OpenClawConfig {
   const next = applyPixVerseProviderConfig(cfg, region, options);
-  if (next.agents?.defaults?.videoGenerationModel) {
+  if (next.agents?.defaults?.mediaModels?.video) {
     return next;
   }
   return {
@@ -109,8 +109,9 @@ function applyPixVerseConfig(
       ...next.agents,
       defaults: {
         ...next.agents?.defaults,
-        videoGenerationModel: {
-          primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
+        mediaModels: {
+          ...next.agents?.defaults?.mediaModels,
+          video: { primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF },
         },
       },
     },

@@ -31,6 +31,7 @@ const DOCKER_E2E_IMAGE_HELPER = "scripts/lib/docker-e2e-image.sh";
 type WorkflowInput = {
   default?: boolean | number | string;
   options?: string[];
+  required?: boolean;
   type?: string;
 };
 
@@ -50,6 +51,7 @@ type WorkflowJob = {
   needs?: string | string[];
   outputs?: Record<string, string>;
   permissions?: PermissionMap;
+  secrets?: Record<string, string> | "inherit";
   steps?: WorkflowStep[];
   uses?: string;
   with?: Record<string, boolean | number | string>;
@@ -58,9 +60,11 @@ type WorkflowJob = {
 type Workflow = {
   jobs?: Record<string, WorkflowJob>;
   on?: {
+    push?: unknown;
     workflow_call?: {
       inputs?: Record<string, WorkflowInput>;
       outputs?: Record<string, { description?: string; value?: string }>;
+      secrets?: Record<string, { required?: boolean }>;
     };
     workflow_dispatch?: { inputs?: Record<string, WorkflowInput> };
   };
@@ -195,8 +199,8 @@ describe("release validation no-push transport", () => {
       "validate_docker_lanes",
       "validate_docker_openwebui",
     ]) {
-      const job = workflow.jobs?.[jobName];
-      const runStep = job?.steps?.find((candidate) =>
+      const workflowJob = workflow.jobs?.[jobName];
+      const runStep = workflowJob?.steps?.find((candidate) =>
         candidate.run?.includes("test-live-build-docker.sh"),
       );
 
@@ -362,7 +366,8 @@ describe("release validation no-push transport", () => {
 
     expect(fullText).toContain("dispatch_and_wait plugin-prerelease.yml");
     expect(fullText).toContain("dispatch_and_wait openclaw-release-checks.yml");
-    expect(fullText).toContain("gh workflow run openclaw-performance.yml");
+    expect(fullText).toContain("dispatch_and_wait openclaw-performance.yml");
+    expect(fullText).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"');
 
     const preparePackage = job(release, "prepare_release_package");
     const live = job(release, "live_repo_e2e_release_checks");
@@ -666,6 +671,19 @@ describe("release validation no-push transport", () => {
     );
     expect(packDockerArtifact.run).toContain("archive_sha256=");
     const validatePackage = step(dockerProducer, "Validate OpenClaw Docker E2E package");
+    expect(step(dockerProducer, "Setup artifact package validation environment")).toMatchObject({
+      if: "steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''",
+      uses: "./.release-harness/.github/actions/setup-pnpm-store-cache",
+      with: {
+        "package-manager-file": ".release-harness/package.json",
+        "use-actions-cache": "false",
+      },
+    });
+    expect(step(dockerProducer, "Install trusted package validation dependencies")).toMatchObject({
+      if: "steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''",
+      "working-directory": ".release-harness",
+      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+    });
     expect(validatePackage.env).toMatchObject({
       EXPECTED_PACKAGE_FILE_NAME: "${{ inputs.package_file_name }}",
       EXPECTED_PACKAGE_SHA256: "${{ inputs.package_sha256 }}",
@@ -678,6 +696,9 @@ describe("release validation no-push transport", () => {
     );
     expect(validatePackage.run).toContain("package/dist/build-info.json");
     expect(validatePackage.run).toContain('[[ "$package_source_sha" == "$SELECTED_SHA" ]]');
+    expect(validatePackage.run).toContain(
+      'validator=".release-harness/scripts/check-openclaw-package-tarball.mjs"',
+    );
     const targetedRun = step(
       job(workflow, "validate_docker_lanes"),
       "Run targeted Docker E2E lanes",
@@ -959,6 +980,78 @@ describe("release validation no-push transport", () => {
       expect(text).not.toContain("create-github-app-token");
       expect(text).not.toContain("git push");
     }
+  });
+
+  it("routes Docker publication through release publish after immutable npm evidence", () => {
+    const dockerRelease = readWorkflow(DOCKER_RELEASE);
+    const releasePublishPath = ".github/workflows/openclaw-release-publish.yml";
+    const releasePublish = readWorkflow(releasePublishPath);
+    const dockerCall = job(releasePublish, "publish_docker");
+
+    expect(dockerRelease.on?.push).toBeUndefined();
+    expect(dockerRelease.on?.workflow_dispatch).toBeUndefined();
+    expect(dockerRelease.on?.workflow_call?.inputs).toMatchObject({
+      tag: { required: true, type: "string" },
+      release_sha: { required: true, type: "string" },
+    });
+    expect(dockerRelease.on?.workflow_call?.secrets).toEqual({
+      DOCKERHUB_USERNAME: { required: true },
+      DOCKERHUB_TOKEN: { required: true },
+    });
+
+    const callers = readdirSync(".github/workflows")
+      .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
+      .filter((name) =>
+        readFileSync(join(".github/workflows", name), "utf8").includes(
+          "uses: ./.github/workflows/docker-release.yml",
+        ),
+      )
+      .toSorted();
+    expect(callers).toEqual(["openclaw-release-publish.yml"]);
+
+    expect(dockerCall.needs).toEqual([
+      "resolve_release_target",
+      "publish",
+      "verify_core_npm_registry",
+    ]);
+    expect(dockerCall.if).toContain("needs.publish.result == 'success'");
+    expect(dockerCall.if).toContain("needs.verify_core_npm_registry.result == 'success'");
+    expect(dockerCall.with).toEqual({
+      tag: "${{ inputs.tag }}",
+      release_sha: "${{ needs.resolve_release_target.outputs.sha }}",
+    });
+    expect(dockerCall.secrets).toEqual({
+      DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}",
+      DOCKERHUB_TOKEN: "${{ secrets.DOCKERHUB_TOKEN }}",
+    });
+    expect(
+      step(
+        job(releasePublish, "resolve_release_target"),
+        "Validate OpenClaw npm preflight manifest",
+      ).run,
+    ).toContain("Preflight manifest SHA mismatch");
+    expect(
+      step(
+        job(releasePublish, "resolve_release_target"),
+        "Validate full release validation manifest",
+      ).run,
+    ).toContain("Full release validation target SHA mismatch");
+    expect(readFileSync(releasePublishPath, "utf8")).toContain(
+      "kept draft until Docker publication succeeds",
+    );
+    expect(job(releasePublish, "finalize_github_release").needs).toEqual([
+      "publish",
+      "publish_docker",
+    ]);
+
+    const identity = step(
+      job(dockerRelease, "validate_release_identity"),
+      "Verify tag, SHA, and package identity agree",
+    );
+    expect(identity.run).toContain('git rev-parse "refs/tags/${RELEASE_TAG}^{commit}"');
+    expect(identity.run).toContain('"${tag_sha}" != "${RELEASE_SHA}"');
+    expect(identity.run).toContain('"v${package_version}" != "${RELEASE_TAG}"');
+    expect(identity.run).toContain("^v${package_version}-[1-9][0-9]*$");
   });
 
   it("fails a missing required local live image before any registry pull", () => {

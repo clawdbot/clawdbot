@@ -22,6 +22,8 @@ import {
   type RequesterToolPolicySource,
 } from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
+import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "./subagent-announce-handoff.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
   collectExplicitAllowlist,
@@ -81,8 +83,10 @@ export type ConversationCapabilityProfileParams = {
   inheritRuntimeToolAllowlist?: boolean;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   inputProvenance?: InputProvenance;
-  /** Trusted in-process completion handoff; public callers cannot set this fact. */
-  trustedInternalHandoff?: boolean;
+  /** Consumed in-process completion capability; public callers cannot set this fact. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
 export type ResolvedConversationCapabilityProfile = {
@@ -219,14 +223,19 @@ export function resolveConversationCapabilityProfile(
     groupId: trustedGroup.groupId,
     groupChannel: trustedGroupChannel,
     groupSpace: trustedGroupSpace,
-    accountId: params.agentAccountId,
+    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
-    senderPolicyMode: isOwnerInternalSession ? "never" : "always",
+    sessionId: params.sessionId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+    senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
+    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
+    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const profilePolicy = resolveToolProfilePolicy(effective.profile);

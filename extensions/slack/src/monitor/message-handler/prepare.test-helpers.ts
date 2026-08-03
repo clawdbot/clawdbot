@@ -20,6 +20,7 @@ export function createInboundSlackTestContext(params: {
   channelsConfig?: SlackChannelConfigEntries;
   dmHistoryLimit?: number;
   groupDmEnabled?: boolean;
+  groupPolicy?: "open" | "disabled" | "allowlist";
   channelRuntime?: ChannelRuntimeSurface;
 }) {
   return createSlackMonitorContext({
@@ -31,6 +32,7 @@ export function createInboundSlackTestContext(params: {
     channelRuntime: params.channelRuntime ?? createPluginRuntimeMock().channel,
     botUserId: "B1",
     botId: "B1",
+    identityHealth: { lifecycle: "ready", lastError: null },
     teamId: "T1",
     apiAppId: "A1",
     historyLimit: 0,
@@ -45,8 +47,8 @@ export function createInboundSlackTestContext(params: {
     groupDmChannels: [],
     defaultRequireMention: params.defaultRequireMention ?? true,
     channelsConfig: params.channelsConfig,
-    groupPolicy: "open",
-    useAccessGroups: false,
+    groupPolicy: params.groupPolicy ?? "open",
+    useAccessGroups: true,
     reactionMode: "off",
     reactionAllowlist: [],
     replyToMode: params.replyToMode ?? "off",
@@ -62,7 +64,6 @@ export function createInboundSlackTestContext(params: {
     ackReactionScope: "group-mentions",
     typingReaction: "",
     mediaMaxBytes: 1024,
-    removeAckAfterReply: false,
   });
 }
 

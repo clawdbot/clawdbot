@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import Testing
 @testable import OpenClaw
@@ -7,6 +8,48 @@ import Testing
 @MainActor
 struct TalkModeManagerTests {
     private struct CloseError: Error {}
+
+    private static func parse(_ config: [String: Any]) -> TalkModeGatewayConfigState {
+        TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+    }
+
+    private static func resolve(
+        _ parsed: TalkModeGatewayConfigState,
+        providerSelection: TalkModeProviderSelection) -> TalkModeResolvedRouting
+    {
+        TalkModeRoutingResolver.resolve(
+            parsed: parsed,
+            providerSelection: providerSelection,
+            defaultProvider: "elevenlabs",
+            defaultRealtimeModelId: "gpt-realtime-2")
+    }
+
+    private static func parseRealtime(
+        provider: String? = nil,
+        model: String? = nil,
+        voice: String? = nil,
+        providers: [String: [String: String]]? = nil,
+        mode: String? = nil,
+        transport: String? = nil,
+        brain: String? = nil,
+        consultRouting: String? = nil) -> TalkModeGatewayConfigState
+    {
+        var realtime: [String: Any] = [:]
+        if let provider { realtime["provider"] = provider }
+        if let model { realtime["model"] = model }
+        if let voice { realtime["voice"] = voice }
+        if let providers { realtime["providers"] = providers }
+        if let mode { realtime["mode"] = mode }
+        if let transport { realtime["transport"] = transport }
+        if let brain { realtime["brain"] = brain }
+        if let consultRouting { realtime["consultRouting"] = consultRouting }
+        return self.parse(["talk": ["realtime": realtime]])
+    }
 
     @Test func `encodes realtime client voice session identity`() throws {
         let params = TalkRealtimeClientCreateParams(
@@ -166,12 +209,7 @@ struct TalkModeManagerTests {
             ],
         ]
 
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parse(config)
 
         #expect(parsed.activeProvider == "elevenlabs")
         #expect(parsed.executionMode == .realtimeRelay)
@@ -183,26 +221,10 @@ struct TalkModeManagerTests {
     }
 
     @Test func `infers realtime provider when provider map has single entry`() {
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "mode": "realtime",
-                    "transport": "webrtc",
-                    "providers": [
-                        "openai": [
-                            "model": "gpt-realtime-2",
-                        ],
-                    ],
-                ],
-            ],
-        ]
-
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parseRealtime(
+            providers: ["openai": ["model": "gpt-realtime-2"]],
+            mode: "realtime",
+            transport: "webrtc")
 
         #expect(parsed.executionMode == .realtimeWebRTC)
         #expect(parsed.realtimeProvider == "openai")
@@ -223,22 +245,10 @@ struct TalkModeManagerTests {
     }
 
     @Test func `defaults open AI realtime model when provider omits model`() {
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "openai",
-                    "mode": "realtime",
-                    "transport": "gateway-relay",
-                ],
-            ],
-        ]
-
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            mode: "realtime",
+            transport: "gateway-relay")
 
         #expect(parsed.executionMode == .realtimeRelay)
         #expect(parsed.defaultModelId == "eleven_v3")
@@ -319,24 +329,13 @@ struct TalkModeManagerTests {
 
     @Test func `open AI realtime selection clears stale realtime config`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "google",
-                    "model": "gemini-live-2.5-flash-preview",
-                    "voice": "puck",
-                    "mode": "realtime",
-                    "transport": "gateway-relay",
-                    "brain": "agent-consult",
-                ],
-            ],
-        ]
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parseRealtime(
+            provider: "google",
+            model: "gemini-live-2.5-flash-preview",
+            voice: "puck",
+            mode: "realtime",
+            transport: "gateway-relay",
+            brain: "agent-consult")
 
         manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
         manager._test_applyOpenAIRealtimeSelectionDefaults()
@@ -353,24 +352,13 @@ struct TalkModeManagerTests {
         let defaults = UserDefaults.standard
         defaults.set(" Cedar ", forKey: TalkModeRealtimeVoiceSelection.storageKey)
         defer { defaults.removeObject(forKey: TalkModeRealtimeVoiceSelection.storageKey) }
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "google",
-                    "model": "gemini-live-2.5-flash-preview",
-                    "voice": "puck",
-                    "mode": "realtime",
-                    "transport": "gateway-relay",
-                    "brain": "agent-consult",
-                ],
-            ],
-        ]
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parseRealtime(
+            provider: "google",
+            model: "gemini-live-2.5-flash-preview",
+            voice: "puck",
+            mode: "realtime",
+            transport: "gateway-relay",
+            brain: "agent-consult")
 
         manager._test_applyLoadedTalkConfig(parsed, providerSelection: .openAIRealtime)
 
@@ -381,23 +369,12 @@ struct TalkModeManagerTests {
 
     @Test func `open AI selection preserves configured voice for case insensitive provider`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": " OpenAI ",
-                    "voice": "marin",
-                    "mode": "realtime",
-                    "transport": "webrtc",
-                    "brain": "agent-consult",
-                ],
-            ],
-        ]
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parseRealtime(
+            provider: " OpenAI ",
+            voice: "marin",
+            mode: "realtime",
+            transport: "webrtc",
+            brain: "agent-consult")
 
         manager._test_applyLoadedTalkConfig(parsed, providerSelection: .openAIRealtime)
 
@@ -618,24 +595,45 @@ struct TalkModeManagerTests {
     }
 
     @Test func `maps web RTC realtime transport to native web RTC on IOS`() {
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "openai",
-                    "mode": "realtime",
-                    "transport": "webrtc",
-                ],
-            ],
-        ]
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            mode: "realtime",
+            transport: "webrtc")
 
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let routing = Self.resolve(parsed, providerSelection: .openAIRealtime)
 
         #expect(parsed.executionMode == .realtimeWebRTC)
+        #expect(routing.route == .realtimeWebRTC)
+    }
+
+    @Test func `routes forced agent consultation through gateway relay`() {
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            mode: "realtime",
+            brain: "agent-consult",
+            consultRouting: "force-agent-consult")
+
+        let gatewayDefaultRouting = Self.resolve(parsed, providerSelection: .gatewayDefault)
+        let openAIRouting = Self.resolve(parsed, providerSelection: .openAIRealtime)
+
+        #expect(parsed.requiresGatewayRealtimeTransport)
+        #expect(parsed.openAIRequiresGatewayRealtimeTransport)
+        #expect(parsed.executionMode == .realtimeRelay)
+        #expect(gatewayDefaultRouting.route == .realtimeRelay)
+        #expect(openAIRouting.route == .realtimeRelay)
+    }
+
+    @Test func `routes forced agent consultation through gateway relay without mode or brain`() {
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            consultRouting: "force-agent-consult")
+
+        let routing = Self.resolve(parsed, providerSelection: .openAIRealtime)
+
+        #expect(parsed.requiresGatewayRealtimeTransport)
+        #expect(parsed.openAIRequiresGatewayRealtimeTransport)
+        #expect(routing.executionMode == .realtimeRelay)
+        #expect(routing.route == .realtimeRelay)
     }
 
     @Test func `keeps Azure open AI realtime on gateway relay`() {
@@ -643,28 +641,13 @@ struct TalkModeManagerTests {
             ["azureEndpoint": "https://example.openai.azure.com"],
             ["azureDeployment": "realtime-prod"],
         ] {
-            let config: [String: Any] = [
-                "talk": [
-                    "realtime": [
-                        "provider": "openai",
-                        "providers": ["openai": providerConfig],
-                        "mode": "realtime",
-                        "transport": "webrtc",
-                        "brain": "agent-consult",
-                    ],
-                ],
-            ]
-            let parsed = TalkModeGatewayConfigParser.parse(
-                config: config,
-                defaultProvider: "elevenlabs",
-                defaultModelIdFallback: "eleven_v3",
-                defaultRealtimeModelIdFallback: "gpt-realtime-2",
-                defaultSilenceTimeoutMs: 900)
-            let routing = TalkModeRoutingResolver.resolve(
-                parsed: parsed,
-                providerSelection: .openAIRealtime,
-                defaultProvider: "elevenlabs",
-                defaultRealtimeModelId: "gpt-realtime-2")
+            let parsed = Self.parseRealtime(
+                provider: "openai",
+                providers: ["openai": providerConfig],
+                mode: "realtime",
+                transport: "webrtc",
+                brain: "agent-consult")
+            let routing = Self.resolve(parsed, providerSelection: .openAIRealtime)
 
             #expect(parsed.executionMode == .realtimeRelay)
             #expect(routing.route == .realtimeRelay)
@@ -672,31 +655,16 @@ struct TalkModeManagerTests {
     }
 
     @Test func `open AI selection keeps its Azure config on gateway relay`() {
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "google",
-                    "providers": [
-                        "google": ["model": "gemini-live"],
-                        "OpenAI": ["azureDeployment": "realtime-prod"],
-                    ],
-                    "mode": "realtime",
-                    "transport": "webrtc",
-                    "brain": "agent-consult",
-                ],
+        let parsed = Self.parseRealtime(
+            provider: "google",
+            providers: [
+                "google": ["model": "gemini-live"],
+                "OpenAI": ["azureDeployment": "realtime-prod"],
             ],
-        ]
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
-        let routing = TalkModeRoutingResolver.resolve(
-            parsed: parsed,
-            providerSelection: .openAIRealtime,
-            defaultProvider: "elevenlabs",
-            defaultRealtimeModelId: "gpt-realtime-2")
+            mode: "realtime",
+            transport: "webrtc",
+            brain: "agent-consult")
+        let routing = Self.resolve(parsed, providerSelection: .openAIRealtime)
 
         #expect(parsed.realtimeProvider == "google")
         #expect(routing.route == .realtimeRelay)
@@ -746,117 +714,54 @@ struct TalkModeManagerTests {
     }
 
     @Test func `keeps provider web socket realtime transport on gateway relay`() {
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "google",
-                    "mode": "realtime",
-                    "transport": "provider-websocket",
-                    "brain": "agent-consult",
-                ],
-            ],
-        ]
-
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parseRealtime(
+            provider: "google",
+            mode: "realtime",
+            transport: "provider-websocket",
+            brain: "agent-consult")
 
         #expect(parsed.executionMode == .realtimeRelay)
     }
 
     @Test(arguments: ["direct-tools", "none"])
     func `leaves native mode for unsupported realtime brain`(brain: String) {
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "google",
-                    "mode": "realtime",
-                    "transport": "gateway-relay",
-                    "brain": brain,
-                ],
-            ],
-        ]
-
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parseRealtime(
+            provider: "google",
+            mode: "realtime",
+            transport: "gateway-relay",
+            brain: brain)
 
         #expect(parsed.executionMode == .native)
     }
 
     @Test func `keeps non open AI realtime default transport on gateway relay`() {
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "google",
-                    "mode": "realtime",
-                    "brain": "agent-consult",
-                ],
-            ],
-        ]
-
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parseRealtime(
+            provider: "google",
+            mode: "realtime",
+            brain: "agent-consult")
 
         #expect(parsed.executionMode == .realtimeRelay)
     }
 
     @Test func `keeps non open AI web RTC transport on gateway relay`() {
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "google",
-                    "model": "gemini-live-2.5-flash-preview",
-                    "mode": "realtime",
-                    "transport": "webrtc",
-                    "brain": "agent-consult",
-                ],
-            ],
-        ]
-
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parseRealtime(
+            provider: "google",
+            model: "gemini-live-2.5-flash-preview",
+            mode: "realtime",
+            transport: "webrtc",
+            brain: "agent-consult")
 
         #expect(parsed.executionMode == .realtimeRelay)
     }
 
     @Test func `open AI selection overrides non open AI web RTC provider`() {
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "google",
-                    "mode": "realtime",
-                    "transport": "webrtc",
-                    "brain": "agent-consult",
-                ],
-            ],
-        ]
+        let parsed = Self.parseRealtime(
+            provider: "google",
+            mode: "realtime",
+            transport: "webrtc",
+            brain: "agent-consult")
 
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
-        let routing = TalkModeRoutingResolver.resolve(
-            parsed: parsed,
-            providerSelection: .openAIRealtime,
-            defaultProvider: "elevenlabs",
-            defaultRealtimeModelId: "gpt-realtime-2")
+        let routing = Self.resolve(parsed, providerSelection: .openAIRealtime)
 
         #expect(routing.activeProvider == "openai")
         #expect(routing.realtimeProvider == "openai")
@@ -867,27 +772,12 @@ struct TalkModeManagerTests {
 
     @Test func `open AI selection preserves explicit gateway owned transport`() {
         for transport in ["gateway-relay", "provider-websocket"] {
-            let config: [String: Any] = [
-                "talk": [
-                    "realtime": [
-                        "provider": "google",
-                        "mode": "realtime",
-                        "transport": transport,
-                        "brain": "agent-consult",
-                    ],
-                ],
-            ]
-            let parsed = TalkModeGatewayConfigParser.parse(
-                config: config,
-                defaultProvider: "elevenlabs",
-                defaultModelIdFallback: "eleven_v3",
-                defaultRealtimeModelIdFallback: "gpt-realtime-2",
-                defaultSilenceTimeoutMs: 900)
-            let routing = TalkModeRoutingResolver.resolve(
-                parsed: parsed,
-                providerSelection: .openAIRealtime,
-                defaultProvider: "elevenlabs",
-                defaultRealtimeModelId: "gpt-realtime-2")
+            let parsed = Self.parseRealtime(
+                provider: "google",
+                mode: "realtime",
+                transport: transport,
+                brain: "agent-consult")
+            let routing = Self.resolve(parsed, providerSelection: .openAIRealtime)
 
             #expect(routing.realtimeProvider == "openai")
             #expect(routing.executionMode == .realtimeRelay)
@@ -935,22 +825,10 @@ struct TalkModeManagerTests {
     }
 
     @Test func `maps open AI realtime default transport to native web RTC`() {
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "openai",
-                    "mode": "realtime",
-                    "brain": "agent-consult",
-                ],
-            ],
-        ]
-
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            mode: "realtime",
+            brain: "agent-consult")
 
         #expect(parsed.executionMode == .realtimeWebRTC)
     }
@@ -988,12 +866,7 @@ struct TalkModeManagerTests {
             ],
         ]
 
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parse(config)
 
         #expect(parsed.activeProvider == "elevenlabs")
         #expect(parsed.executionMode == .realtimeWebRTC)
@@ -1004,22 +877,10 @@ struct TalkModeManagerTests {
     }
 
     @Test func `leaves native mode for managed room realtime transport`() {
-        let config: [String: Any] = [
-            "talk": [
-                "realtime": [
-                    "provider": "openai",
-                    "mode": "realtime",
-                    "transport": "managed-room",
-                ],
-            ],
-        ]
-
-        let parsed = TalkModeGatewayConfigParser.parse(
-            config: config,
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            mode: "realtime",
+            transport: "managed-room")
 
         #expect(parsed.executionMode == .native)
     }
@@ -1062,6 +923,26 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_latestAssistantText(
             messages: messages,
             runId: "missing-run") == nil)
+    }
+
+    @Test func `native Talk chat request inherits thinking policy`() {
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "agent:main:main",
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: "hello",
+            thinking: TalkModeManager.chatThinkingOverride,
+            idempotencyKey: "talk-1",
+            attachments: [],
+            runTimeoutMs: 30000)
+
+        #expect(TalkModeManager.chatThinkingOverride == nil)
+        #expect(request.method == "chat.send")
+        #expect(request.params["message"]?.value as? String == "hello")
+        #expect(request.params["sessionKey"]?.value as? String == "agent:main:main")
+        #expect(request.params["idempotencyKey"]?.value as? String == "talk-1")
+        #expect(request.params["thinking"] == nil)
+        #expect(request.params["timeoutMs"]?.value as? Int == 30000)
     }
 
     @Test func `subscribes before sending chat completion request`() throws {

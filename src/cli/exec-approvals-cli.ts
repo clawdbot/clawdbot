@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
@@ -180,10 +181,6 @@ function isNativeApprovalsSnapshot(
   snapshot: ExecApprovalsSnapshot,
 ): snapshot is NativeExecApprovalsSnapshot {
   return "enabled" in snapshot;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseNativeAction(value: unknown, label: string): NativeExecApprovalAction {
@@ -760,7 +757,7 @@ function buildEffectivePolicyReport(params: {
       scopes: [],
       note: params.nativePolicy
         ? "This node enforces a host-native exec policy; OpenClaw approvals-file policy math does not apply."
-        : "Approvals file unavailable.",
+        : "Host approvals policy unavailable.",
     };
   }
   if (params.source === "node") {
@@ -787,7 +784,7 @@ function buildEffectivePolicyReport(params: {
         hostDefaultSource: "node-reported resolved defaults",
       }),
       note:
-        "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy. " +
+        "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy. " +
         SESSION_EXEC_OVERRIDES_NOTE,
     };
   }
@@ -804,7 +801,7 @@ function buildEffectivePolicyReport(params: {
       hostPath: params.hostPath,
     }),
     note:
-      "Effective exec policy is the host approvals file intersected with requested tools.exec policy. " +
+      "Effective exec policy is the host approvals policy intersected with requested tools.exec policy. " +
       SESSION_EXEC_OVERRIDES_NOTE,
   };
 }
@@ -890,7 +887,10 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   const summaryRows = [
     { Field: "Target", Value: targetLabel },
     { Field: "Path", Value: snapshot.path },
-    { Field: "Exists", Value: snapshot.exists ? "yes" : "no" },
+    {
+      Field: "State",
+      Value: snapshot.exists ? "stored" : "defaults (no stored overrides)",
+    },
     { Field: "Hash", Value: snapshot.hash },
     { Field: "Version", Value: String(file.version ?? 1) },
     { Field: "Socket", Value: file.socket?.path ?? "default" },

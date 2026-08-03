@@ -16,6 +16,7 @@ import os from "node:os";
 import path, { dirname, join, resolve } from "node:path";
 import pMap from "p-map";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
@@ -23,7 +24,7 @@ import {
 } from "./vitest-process-group.mjs";
 
 const require = createRequire(import.meta.url);
-const repoRoot = resolve(import.meta.dirname, "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const tscBin = require.resolve("typescript/bin/tsc");
 const nativePreviewPackageJsonPath = require.resolve("@typescript/native-preview/package.json");
 const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8"));

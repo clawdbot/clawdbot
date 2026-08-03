@@ -85,7 +85,7 @@ async function readExaSearchResults(
       new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),
   });
   try {
-    return normalizeExaResults(JSON.parse(new TextDecoder().decode(bytes)));
+    return normalizeExaResults(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
   } catch (cause) {
     throw new Error("Exa API returned malformed JSON", { cause });
   }

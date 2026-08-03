@@ -10,6 +10,7 @@ import {
 } from "./dispatch-from-config.abort.js";
 import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
 import { shouldLetSlackRoutedThreadBypassBusyReplyOperation } from "./dispatch-from-config.context.js";
+import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -417,12 +418,21 @@ export function createDispatchReplyOperationCoordinator(params: {
     }
   };
 
+  const turnLedger = createReplyTurnLedger(params.dispatcher);
   return {
     completeDispatchReplyOperation,
+    // Hook-queued payloads must settle through the turn ledger too, or a
+    // hook-delivered visible reply could trigger the no-visible-reply fallback.
     dispatchHookDispatcher: createAbortAwareDispatcher({
-      dispatcher: params.dispatcher,
+      dispatcher: {
+        ...params.dispatcher,
+        sendToolResult: (payload) => turnLedger.sendQueued("tool", payload).queued,
+        sendBlockReply: (payload) => turnLedger.sendQueued("block", payload).queued,
+        sendFinalReply: (payload) => turnLedger.sendQueued("final", payload).queued,
+      },
       isAborted: isPreDispatchOperationAborted,
     }),
+    turnLedger,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
     getDispatchAbortOperation: () => dispatchAbortOperation,

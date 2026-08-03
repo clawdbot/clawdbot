@@ -7,7 +7,7 @@ export function isTerminalAvailable(
   terminalEnabled: boolean,
 ): boolean {
   return (
-    (snapshot.connected ?? false) &&
+    snapshot.phase === "connected" &&
     terminalEnabled &&
     hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
     (isGatewayMethodAdvertised(snapshot, "terminal.open") ?? false)

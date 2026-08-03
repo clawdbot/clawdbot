@@ -2,15 +2,13 @@
  * Resolves workspace bootstrap files for agent runs and converts them into
  * bounded context files.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { readRecentSessionTranscriptActiveEvents } from "../config/sessions/session-accessor.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveAgentConfig } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
@@ -20,9 +18,8 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "./embedded-agent-helpers.js";
-import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-system-prompt.js";
+import type { AgentRunSessionTarget } from "./run-session-target.js";
 import {
-  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   filterBootstrapFilesForSession,
   isWorkspaceSetupCompleted,
@@ -32,7 +29,6 @@ import {
 
 export type BootstrapContextMode = "full" | "lightweight";
 
-const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
 const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
@@ -69,78 +65,30 @@ export function resolveContextInjectionMode(
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
 
-/** Checks whether the session transcript still has a valid full-bootstrap marker. */
-export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {
-  if (parseSqliteSessionFileMarker(sessionFile)) {
+/** Checks the active SQLite transcript branch for a valid full-bootstrap marker. */
+export async function hasCompletedBootstrapTurn(
+  sessionTarget?: AgentRunSessionTarget,
+): Promise<boolean> {
+  const { agentId, sessionId, sessionKey, storePath } = sessionTarget ?? {};
+  if (!agentId || !sessionId || !sessionKey || !storePath) {
     return false;
   }
   try {
-    const stat = await fs.lstat(sessionFile);
-    if (stat.isSymbolicLink()) {
-      return false;
-    }
-
-    const fh = await fs.open(sessionFile, "r");
-    try {
-      const bytesToRead = Math.min(stat.size, CONTINUATION_SCAN_MAX_TAIL_BYTES);
-      if (bytesToRead <= 0) {
+    const records = readRecentSessionTranscriptActiveEvents(
+      { agentId, sessionId, sessionKey, storePath },
+      CONTINUATION_SCAN_MAX_RECORDS,
+    );
+    for (const entry of records.toReversed()) {
+      const record = entry as { type?: string; customType?: string } | null | undefined;
+      // Context before compaction/reset is not reusable on the active branch.
+      if (record?.type === "compaction" || record?.type === "reset") {
         return false;
       }
-      const start = stat.size - bytesToRead;
-      const buffer = Buffer.allocUnsafe(bytesToRead);
-      const bytesRead = await readFileWindowFully(fh, buffer, start);
-      let text = buffer.toString("utf-8", 0, bytesRead);
-      if (start > 0) {
-        const firstNewline = text.indexOf("\n");
-        if (firstNewline === -1) {
-          return false;
-        }
-        text = text.slice(firstNewline + 1);
+      if (record?.type === "custom" && record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE) {
+        return true;
       }
-
-      const records = text
-        .split(/\r?\n/u)
-        .filter((line) => line.trim().length > 0)
-        .slice(-CONTINUATION_SCAN_MAX_RECORDS);
-      let compactedAfterLatestAssistant = false;
-
-      for (let i = records.length - 1; i >= 0; i--) {
-        // Only the tail matters: compaction after the marker makes earlier
-        // bootstrap context unreliable for continuation prompts.
-        const line = records[i];
-        if (!line) {
-          continue;
-        }
-        let entry: unknown;
-        try {
-          entry = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        const record = entry as
-          | {
-              type?: string;
-              customType?: string;
-              message?: { role?: string };
-            }
-          | null
-          | undefined;
-        if (record?.type === "compaction") {
-          compactedAfterLatestAssistant = true;
-          continue;
-        }
-        if (
-          record?.type === "custom" &&
-          record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE
-        ) {
-          return !compactedAfterLatestAssistant;
-        }
-      }
-
-      return false;
-    } finally {
-      await fh.close();
     }
+    return false;
   } catch {
     return false;
   }
@@ -203,53 +151,12 @@ function applyContextModeFilter(params: {
   runKind?: BootstrapContextRunKind;
 }): WorkspaceBootstrapFile[] {
   const contextMode = params.contextMode ?? "full";
-  const runKind = params.runKind ?? "default";
   if (contextMode !== "lightweight") {
     return params.files;
   }
-  if (runKind === "heartbeat") {
-    return params.files.filter((file) => file.name === "HEARTBEAT.md");
-  }
-  // cron/default lightweight mode keeps bootstrap context empty on purpose.
+  // Heartbeat scratch is injected by the heartbeat runner, not bootstrap files.
+  // Cron/default lightweight mode also keeps bootstrap context empty on purpose.
   return [];
-}
-
-function shouldExcludeHeartbeatBootstrapFile(params: {
-  config?: OpenClawConfig;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  runKind?: BootstrapContextRunKind;
-}): boolean {
-  if (params.runKind === "commitment-only") {
-    return true;
-  }
-  if (!params.config || params.runKind === "heartbeat") {
-    return false;
-  }
-  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey ?? params.sessionId,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  if (sessionAgentId !== defaultAgentId) {
-    return false;
-  }
-  return !shouldIncludeHeartbeatGuidanceForSystemPrompt({
-    config: params.config,
-    agentId: sessionAgentId,
-    defaultAgentId,
-  });
-}
-
-function filterHeartbeatBootstrapFile(
-  files: WorkspaceBootstrapFile[],
-  excludeHeartbeatBootstrapFile: boolean,
-): WorkspaceBootstrapFile[] {
-  if (!excludeHeartbeatBootstrapFile) {
-    return files;
-  }
-  return files.filter((file) => file.name !== DEFAULT_HEARTBEAT_FILENAME);
 }
 
 function filterCompletedWorkspaceBootstrapFile(
@@ -298,7 +205,6 @@ export async function resolveBootstrapFilesForRun(params: {
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
 }): Promise<WorkspaceBootstrapFile[]> {
-  const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
   const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(params.workspaceDir);
   const rawFiles = params.sessionKey
@@ -330,11 +236,7 @@ export async function resolveBootstrapFilesForRun(params: {
     workspaceSetupCompleted,
     params.workspaceDir,
   );
-  return sanitizeBootstrapFiles(
-    filterHeartbeatBootstrapFile(filteredUpdated, excludeHeartbeatBootstrapFile),
-    params.workspaceDir,
-    params.warn,
-  );
+  return sanitizeBootstrapFiles(filteredUpdated, params.workspaceDir, params.warn);
 }
 
 /** Resolves both raw bootstrap metadata and bounded context files for a run. */

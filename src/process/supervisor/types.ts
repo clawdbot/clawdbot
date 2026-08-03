@@ -58,6 +58,11 @@ export type ManagedRunStdin = {
   writableFinished?: boolean;
 };
 
+export type SpawnSecretInput = {
+  fd: number;
+  createData: () => Buffer;
+};
+
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
   stdin?: ManagedRunStdin;
@@ -97,6 +102,7 @@ type SpawnChildInput = SpawnBaseInput & {
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+  secretInput?: SpawnSecretInput;
 };
 
 type SpawnPtyInput = SpawnBaseInput & {

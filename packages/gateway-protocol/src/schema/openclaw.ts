@@ -3,7 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { WizardStartResultSchema } from "./wizard.js";
+import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
 /**
  * OpenClaw chat lets clients (macOS app onboarding, future UIs) hold the
@@ -13,13 +13,26 @@ import { WizardStartResultSchema } from "./wizard.js";
  */
 export const SystemAgentChatParamsSchema = closedObject({
   sessionId: NonEmptyString,
+  /** Free-text input for conversational and text-only clients. */
   message: Type.Optional(Type.String()),
+  /** Typed answer from a client rendering the current `WizardStep`. */
+  wizardAnswer: Type.Optional(WizardAnswerSchema),
   /** Seeds a purpose-specific first greeting for a fresh conversation. */
   welcomeVariant: Type.Optional(
     Type.Union([Type.Literal("onboarding"), Type.Literal("new-agent")]),
   ),
   /** Drop any in-flight approval/wizard state and start the session over. */
   reset: Type.Optional(Type.Boolean()),
+  /** Ephemeral Control UI location hint for interpreting the current user turn. */
+  context: Type.Optional(
+    closedObject({
+      page: Type.String({
+        minLength: 1,
+        maxLength: 64,
+        pattern: "^[A-Za-z0-9/_-]{1,64}$",
+      }),
+    }),
+  ),
   /** Host-only regular-agent delegation context. Never model-authored. */
   delegation: Type.Optional(
     closedObject({
@@ -80,6 +93,11 @@ export const SystemAgentChatResultSchema = closedObject({
   needsApproval: Type.Optional(Type.Boolean()),
   proposalId: Type.Optional(NonEmptyString),
   question: Type.Optional(SystemAgentChatQuestionSchema),
+  /**
+   * The awaited wizard step in full. `question` above is a lossy card projection
+   * of the same step, so control-capable clients render this instead.
+   */
+  step: Type.Optional(WizardStepSchema),
 });
 
 export const SystemAgentChatHistoryParamsSchema = closedObject({
@@ -187,6 +205,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
   candidates: Type.Array(
     closedObject({
       kind: SetupInferenceKind,
+      /** Canonical provider identity for clients with bundled brand artwork. */
+      brandId: Type.Optional(NonEmptyString),
       label: NonEmptyString,
       detail: Type.String(),
       modelRef: NonEmptyString,
@@ -201,9 +221,15 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     Type.Array(
       closedObject({
         id: NonEmptyString,
+        /** Canonical provider identity for clients with bundled brand artwork. */
+        brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
         detail: Type.String(),
         reason: NonEmptyString,
+        authOptionId: Type.Optional(NonEmptyString),
+        manualProviderId: Type.Optional(NonEmptyString),
+        icon: Type.Optional(SetupInferenceHttpsUrl),
+        website: Type.Optional(SetupInferenceHttpsUrl),
       }),
     ),
   ),
@@ -212,6 +238,10 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     closedObject({
       /** Opaque provider-auth choice sent back during activation. */
       id: NonEmptyString,
+      /** Canonical provider identity for clients with bundled brand artwork. */
+      brandId: Type.Optional(NonEmptyString),
+      /** Provider family shown above the specific credential method. */
+      groupLabel: Type.Optional(NonEmptyString),
       label: NonEmptyString,
       hint: Type.Optional(Type.String()),
       icon: Type.Optional(SetupInferenceHttpsUrl),
@@ -223,6 +253,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     Type.Array(
       closedObject({
         id: NonEmptyString,
+        /** Canonical provider identity for clients with bundled brand artwork. */
+        brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
         hint: Type.Optional(Type.String()),
         groupLabel: Type.Optional(Type.String()),
@@ -233,10 +265,27 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       }),
     ),
   ),
+  /** Provider-owned app-guided local model setup methods. */
+  prepareOptions: Type.Optional(
+    Type.Array(
+      closedObject({
+        id: NonEmptyString,
+        /** Canonical provider identity for clients with bundled brand artwork. */
+        brandId: Type.Optional(NonEmptyString),
+        label: NonEmptyString,
+        hint: Type.Optional(Type.String()),
+        actionLabel: Type.Optional(NonEmptyString),
+        icon: Type.Optional(SetupInferenceHttpsUrl),
+        website: Type.Optional(SetupInferenceHttpsUrl),
+      }),
+    ),
+  ),
   recommendedInstalls: Type.Optional(
     Type.Array(
       closedObject({
         id: NonEmptyString,
+        /** Canonical provider or tool identity for bundled client artwork. */
+        brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
         hint: NonEmptyString,
         website: SetupInferenceHttpsUrl,

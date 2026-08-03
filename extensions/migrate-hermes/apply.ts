@@ -19,6 +19,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { applyAuthItem } from "./auth.js";
 import { applyConfigItem, applyManualItem } from "./config.js";
@@ -77,8 +78,7 @@ async function archiveHermesItem(item: MigrationItem, reportDir: string): Promis
       { rootDir: resolvePreferredOpenClawTmpDir(), prefix: HERMES_SQLITE_SNAPSHOT_PREFIX },
       async ({ dir: tempDir }) => {
         const snapshotPath = path.join(tempDir, path.basename(sourcePath));
-        const { DatabaseSync } = await import("node:sqlite");
-        const source = new DatabaseSync(sourcePath, { readOnly: true });
+        const source = openNodeSqliteDatabase(sourcePath, { readOnly: true });
         try {
           source.exec("PRAGMA busy_timeout = 30000;");
           source.prepare("VACUUM INTO ?").run(snapshotPath);

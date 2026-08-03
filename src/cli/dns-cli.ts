@@ -15,12 +15,18 @@ import {
 } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
 
-type RunOpts = { allowFailure?: boolean; inherit?: boolean };
+type RunOpts = { allowFailure?: boolean; inherit?: boolean; timeoutMs?: number };
 
 function run(cmd: string, args: string[], opts?: RunOpts): string {
   const res = spawnSync(cmd, args, {
     encoding: "utf-8",
     stdio: opts?.inherit ? "inherit" : "pipe",
+    // Timeout stays opt-in: install/restart/sudo-write steps may legitimately run
+    // long, so only fast probes pass a deadline. SIGKILL guarantees a
+    // signal-resistant hung probe still dies at the deadline.
+    ...(opts?.timeoutMs === undefined
+      ? {}
+      : { timeout: opts.timeoutMs, killSignal: "SIGKILL" as const }),
   });
   if (res.error) {
     throw res.error;
@@ -87,7 +93,8 @@ function zoneFileNeedsBootstrap(zonePath: string): boolean {
 }
 
 function detectBrewPrefix(): string {
-  const out = run("brew", ["--prefix"]);
+  // A hung brew shim can block setup indefinitely; bound only this fast probe.
+  const out = run("brew", ["--prefix"], { timeoutMs: 15_000 });
   const prefix = out.trim();
   if (!prefix) {
     throw new Error("failed to resolve Homebrew prefix");
@@ -258,11 +265,11 @@ export function registerDnsCli(program: Command) {
         inherit: true,
       });
 
-      if (cfg.discovery?.wideArea?.enabled !== true) {
+      if (!cfg.discovery?.wideArea?.domain?.trim()) {
         defaultRuntime.log("");
         defaultRuntime.log(
           theme.muted(
-            "Note: enable discovery.wideArea.enabled in the active OpenClaw config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json) on the gateway and restart the gateway so it writes the DNS-SD zone.",
+            "Note: set discovery.wideArea.domain in the active OpenClaw config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json) on the gateway and restart the gateway so it writes the DNS-SD zone.",
           ),
         );
       }

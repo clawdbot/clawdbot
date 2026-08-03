@@ -56,9 +56,8 @@ const config = {
       timeoutSeconds,
       sandbox: { mode: "off" },
     },
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         default: true,
         model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
         models: {
@@ -68,7 +67,7 @@ const config = {
         },
         workspace: workspaceDir,
       },
-    ],
+    },
   },
   skills: { allowBundled: [] },
 };

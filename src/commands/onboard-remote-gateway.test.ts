@@ -56,6 +56,7 @@ function detectResult() {
     candidates: [
       {
         kind: "claude-cli",
+        brandId: "claude",
         label: "Claude Code",
         detail: "logged in",
         modelRef: "claude-cli/opus",
@@ -64,6 +65,7 @@ function detectResult() {
       },
       {
         kind: "codex-cli",
+        brandId: "openai",
         label: "Codex",
         detail: "logged in",
         modelRef: "openai/gpt-5.5",
@@ -97,9 +99,15 @@ function exerciseGuidedAdapters(): RunGuidedOnboarding {
     if (detection.unavailableCandidates[0]?.id !== "antigravity-cli") {
       throw new Error("remote detection dropped unavailable integration metadata");
     }
+    if (detection.prepareOptions !== undefined) {
+      throw new Error("remote detection replaced an omitted prepare-options field");
+    }
     const selected = detection.candidates[0];
     if (!selected) {
       throw new Error("remote detection returned no candidate");
+    }
+    if (selected.brandId !== "claude") {
+      throw new Error("remote detection dropped bundled brand identity");
     }
     const activation = await guidedDeps.activate({
       kind: selected.kind,

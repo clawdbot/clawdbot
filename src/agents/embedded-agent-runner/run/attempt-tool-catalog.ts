@@ -4,28 +4,22 @@
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import {
-  applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
   createCodeModeTools,
 } from "../../code-mode.js";
-import {
-  filterLocalModelLeanTools,
-  shouldCatalogToolForLocalModelLean,
-} from "../../local-model-lean.js";
+import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
 import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
-  applyToolSchemaDirectoryCatalog,
-  applyToolSearchCatalog,
-  estimateToolSchemaDirectoryToolNames,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
+import { applyAgentToolSurfaceCatalog } from "../../tool-surface-plan.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
@@ -55,7 +49,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   const { attempt, preparedToolBase } = input;
   const {
     codeModeControlsEnabledForRun,
-    localModelLeanEnabled,
+    codeModeSkills,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolSearchConfig,
@@ -94,67 +88,27 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         abortSignal: input.abortSignal,
         forceRestartSafeTools: attempt.forceRestartSafeTools,
         executeTool: input.executeCodeModeTool,
+        codeModeSkills,
       })
     : [];
-  const directoryRequiredToolNames =
-    attempt.forceMessageTool === true || attempt.sourceReplyDeliveryMode === "message_tool_only"
-      ? ["message"]
-      : [];
-  const directoryHydratedToolNames =
-    toolSearchControlsEnabledForRun && toolSearchConfig.mode === "directory"
-      ? (() => {
-          try {
-            return estimateToolSchemaDirectoryToolNames({
-              tools: effectiveTools,
-              query: attempt.prompt,
-              maxTools: 4,
-              requiredToolNames: directoryRequiredToolNames,
-            });
-          } catch (err) {
-            log.warn(
-              `tool-search: directory schema estimation failed; continuing with deferred schemas only (${String(err)})`,
-            );
-            return directoryRequiredToolNames;
-          }
-        })()
-      : [];
-  const toolSearch = codeModeControlsEnabledForRun
-    ? applyCodeModeCatalog({
-        tools: [...codeModeTools, ...effectiveTools],
-        config: attempt.config,
-        sessionId: attempt.sessionId,
-        sessionKey: input.sandboxSessionKey,
-        agentId: input.sessionAgentId,
-        runId: attempt.runId,
-        catalogRef: preparedToolBase.toolSearchCatalogRef,
-        toolHookContext: catalogToolHookContext,
-      })
-    : toolSearchConfig.mode === "directory"
-      ? applyToolSchemaDirectoryCatalog({
-          tools: effectiveTools,
-          config: toolSearchRuntimeConfig,
-          sessionId: attempt.sessionId,
-          sessionKey: input.sandboxSessionKey,
-          agentId: input.sessionAgentId,
-          runId: attempt.runId,
-          catalogRef: preparedToolBase.toolSearchCatalogRef,
-          toolHookContext: catalogToolHookContext,
-          hydrateToolNames: directoryHydratedToolNames,
-        })
-      : applyToolSearchCatalog({
-          tools: effectiveTools,
-          config: toolSearchRuntimeConfig,
-          sessionId: attempt.sessionId,
-          sessionKey: input.sandboxSessionKey,
-          agentId: input.sessionAgentId,
-          runId: attempt.runId,
-          catalogRef: preparedToolBase.toolSearchCatalogRef,
-          toolHookContext: catalogToolHookContext,
-          shouldCatalogTool:
-            localModelLeanEnabled && toolSearchConfig.mode === "tools"
-              ? shouldCatalogToolForLocalModelLean
-              : undefined,
-        });
+  const toolSearch = applyAgentToolSurfaceCatalog({
+    // `codeModeTools` is empty unless code-mode controls are on, so this stays
+    // exactly `effectiveTools` for the tool-search branches.
+    tools: [...codeModeTools, ...effectiveTools],
+    config: attempt.config,
+    toolSearchRuntimeConfig,
+    codeModeControlsEnabled: codeModeControlsEnabledForRun,
+    toolSearchConfig,
+    forceDirectMessageTool: preparedToolBase.forceDirectMessageTool,
+    forceCodeModeControls: attempt.forceCodeModeTools,
+    sessionId: attempt.sessionId,
+    sessionKey: input.sandboxSessionKey,
+    agentId: input.sessionAgentId,
+    runId: attempt.runId,
+    catalogRef: preparedToolBase.toolSearchCatalogRef,
+    toolHookContext: catalogToolHookContext,
+    codeModeSkills,
+  });
   const projectedToolSearchTools = filterLocalModelLeanTools({
     tools: toolSearch.tools,
     config: attempt.config,
@@ -216,6 +170,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
         toolsEnabled,
         disableTools: attempt.disableTools,
+        toolsAllowExplicitlyEmpty: preparedToolBase.effectiveToolsAllow?.length === 0,
       });
   logAgentRuntimeToolDiagnostics({
     runtimePlan: attempt.runtimePlan,

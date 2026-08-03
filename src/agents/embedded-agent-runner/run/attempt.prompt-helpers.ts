@@ -8,6 +8,7 @@ import type {
   ContextEngineRuntimeContext,
   ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
+import { pruneMapToMaxSize } from "../../../infra/map-size.js";
 import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
 import type {
@@ -72,10 +73,7 @@ function rememberDrainedInjections(
   if (promptBuildDrainCache.has(runId)) {
     promptBuildDrainCache.delete(runId);
   } else if (promptBuildDrainCache.size >= PROMPT_BUILD_DRAIN_CACHE_MAX) {
-    const oldest = promptBuildDrainCache.keys().next().value;
-    if (oldest !== undefined) {
-      promptBuildDrainCache.delete(oldest);
-    }
+    pruneMapToMaxSize(promptBuildDrainCache, PROMPT_BUILD_DRAIN_CACHE_MAX - 1);
   }
   promptBuildDrainCache.set(runId, injections);
 }
@@ -178,6 +176,9 @@ export async function resolvePromptBuildHookResult(params: {
     : undefined;
   return {
     systemPrompt: promptBuildResult?.systemPrompt,
+    ...(promptBuildResult?.toolsAllow !== undefined
+      ? { toolsAllow: promptBuildResult.toolsAllow }
+      : {}),
     prependContext: joinPresentTextSegments([
       queuedContext.prependContext,
       turnPrepareResult?.prependContext,

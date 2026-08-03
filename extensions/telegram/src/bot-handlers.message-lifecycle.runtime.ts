@@ -129,10 +129,16 @@ export function createTelegramMessageLifecycleRuntime({
     participants.length > 0 ? { spooledReplay: true } : {};
   const claimMessageDispatchDedupe = async (
     msg: Message,
+    botUserId: number,
   ): Promise<
     { process: true; claims: TelegramMessageDispatchReplayClaim[] } | { process: false }
   > => {
-    const claim = await claimTelegramMessageDispatchReplay({ guard: replayGuard, accountId, msg });
+    const claim = await claimTelegramMessageDispatchReplay({
+      guard: replayGuard,
+      accountId,
+      botUserId,
+      msg,
+    });
     if (claim.kind === "duplicate") {
       logVerbose(`telegram dispatch dedupe: skipped message ${msg.chat.id}:${msg.message_id}`);
       return { process: false };
@@ -142,6 +148,7 @@ export function createTelegramMessageLifecycleRuntime({
   const buildSyntheticTextMessage = (params: {
     base: Message;
     text: string;
+    entities?: Message["entities"];
     date?: number;
     from?: Message["from"];
   }): Message => ({
@@ -150,7 +157,7 @@ export function createTelegramMessageLifecycleRuntime({
     text: params.text,
     caption: undefined,
     caption_entities: undefined,
-    entities: undefined,
+    entities: params.entities?.length ? params.entities : undefined,
     ...(params.date != null ? { date: params.date } : {}),
   });
   const buildSyntheticContext = (

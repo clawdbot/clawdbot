@@ -29,6 +29,16 @@ EOF
   return 1
 }
 
+ensure_full_pr_worktree_checkout() {
+  local sparse_checkout
+  sparse_checkout=$(git config --bool core.sparseCheckout 2>/dev/null || true)
+  if [ "$sparse_checkout" = "true" ]; then
+    # Prepare gates build the whole repository. Inherited sparse settings can
+    # omit tracked transitive inputs and turn healthy PRs into false failures.
+    git sparse-checkout disable
+  fi
+}
+
 enter_worktree() {
   local pr="$1"
   local reset_to_main="${2:-false}"
@@ -43,61 +53,111 @@ enter_worktree() {
 
   cd "$root"
   ensure_gh_api_auth
-  git fetch origin main
+  git -C "$root" fetch origin main
 
-  local dir=".worktrees/pr-$pr"
-  if [ -d "$dir" ]; then
-    cd "$dir"
-    git fetch origin main
-    if [ "$reset_to_main" = "true" ]; then
-      git checkout -B "temp/pr-$pr" origin/main
-    fi
-  else
-    local resolved_parent=""
-    resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")" 2>/dev/null || true)
-    local resolved_dir=""
-    if [ -n "$resolved_parent" ]; then
-      resolved_dir="$resolved_parent/$(basename "$dir")"
-    fi
-    if [ ! -e "$dir" ] && [ -n "$resolved_dir" ] && worktree_is_registered "$resolved_dir"; then
-      echo "Pruning stale worktree registration for $dir"
-      git worktree prune
+  # Resolve through the parent, never through the leaf: a missing directory has
+  # no real path of its own, and resolving a leaf symlink would silently adopt
+  # whichever worktree it aliases.
+  local dir="$root/.worktrees/pr-$pr"
+  local resolved_parent resolved_dir=""
+  resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")" 2>/dev/null || true)
+  [ -z "$resolved_parent" ] || resolved_dir="$resolved_parent/pr-$pr"
+
+  if [ ! -d "$dir" ] || [ -z "$resolved_dir" ] || ! worktree_is_registered "$resolved_dir"; then
+    if [ -e "$dir" ] || { [ -n "$resolved_dir" ] && worktree_is_registered "$resolved_dir"; }; then
+      echo "Pruning stale worktree registration for .worktrees/pr-$pr"
+      git -C "$root" worktree prune
+      remove_worktree_if_present "$dir"
+      [ ! -e "$dir" ] || {
+        echo "Refusing scripts/pr operation for PR #$pr: $dir is not a registered worktree and could not be cleared; scripts/pr refuses to mutate the shared canonical checkout." >&2
+        return 1
+      }
     fi
     # Per-PR locking makes resetting this script-owned branch namespace safe.
-    git worktree add "$dir" -B "temp/pr-$pr" origin/main
-    cd "$dir"
+    git -C "$root" worktree add "$dir" -B "temp/pr-$pr" origin/main
+    resolved_dir="$(resolve_existing_dir_path "$(dirname "$dir")")/pr-$pr"
   fi
 
+  cd "$resolved_dir"
+
+  # Containment, not repair: every mutation below runs against ambient cwd, so
+  # prove Git resolves it to this worktree before any branch moves. A directory
+  # that is not a worktree lets discovery escape up into the shared canonical
+  # checkout, where a sibling session's branch would be clobbered.
+  local actual_toplevel
+  actual_toplevel=$(resolve_existing_dir_path "$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null)" 2>/dev/null || true)
+  if [ "$actual_toplevel" != "$resolved_dir" ]; then
+    echo "Refusing scripts/pr operation for PR #$pr: expected worktree $resolved_dir, Git resolved ${actual_toplevel:-no repository}; scripts/pr refuses to mutate the shared canonical checkout." >&2
+    return 1
+  fi
+
+  ensure_full_pr_worktree_checkout
+  git fetch origin main
+  if [ "$reset_to_main" = "true" ]; then
+    git checkout -B "temp/pr-$pr" origin/main
+  fi
   mkdir -p .local
 }
 
 pr_meta_json() {
   local pr="$1"
   local metadata files expected_file_count actual_file_count head_before head_after
-  metadata=$(gh pr view "$pr" --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,reviewRequests,changedFiles,additions,deletions,statusCheckRollup)
+  metadata=$(gh pr view "$pr" --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,reviewRequests,changedFiles,additions,deletions,statusCheckRollup,files)
   head_before=$(printf '%s\n' "$metadata" | jq -r .headRefOid)
+  expected_file_count=$(printf '%s\n' "$metadata" | jq -r .changedFiles)
 
-  # Raw `gh pr view --json files` stops at 100 entries. Paginate REST so
-  # review guards see every path, then fail closed on head or API drift.
-  if ! files=$(
-    set -o pipefail
-    gh api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
-      jq -cs '
-        add
-        | map({
-            path: .filename,
+  # `gh pr view --json files` is cacheable but stops at 100 entries. Use it
+  # when complete; only large or incomplete responses spend uncached REST quota.
+  files='[]'
+  if [ "$expected_file_count" -le 100 ]; then
+    files=$(printf '%s\n' "$metadata" | jq -c '
+      .files
+      | if type == "array"
+          and all(.[];
+            (.path | type == "string")
+            and (.additions | type == "number")
+            and (.deletions | type == "number")
+            and (.changeType | type == "string" and length > 0)
+          )
+        then map({
+            path: .path,
             additions: .additions,
             deletions: .deletions,
             changeType: (
-              if .status == "removed" then "DELETED"
-              else (.status | ascii_upcase)
+              if (.changeType | ascii_downcase) == "removed"
+                or (.changeType | ascii_downcase) == "deleted"
+              then "DELETED"
+              else (.changeType | ascii_upcase)
               end
             )
           })
-      '
-  ); then
-    echo "Failed to collect paginated PR file metadata for #$pr." >&2
-    return 1
+        else []
+        end
+    ' 2>/dev/null || printf '[]')
+  fi
+
+  actual_file_count=$(printf '%s\n' "$files" | jq -r 'length')
+  if [ "$actual_file_count" -ne "$expected_file_count" ]; then
+    if ! files=$(
+      set -o pipefail
+      gh api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
+        jq -cs '
+          add
+          | map({
+              path: .filename,
+              additions: .additions,
+              deletions: .deletions,
+              changeType: (
+                if .status == "removed" then "DELETED"
+                else (.status | ascii_upcase)
+                end
+              )
+            })
+        '
+    ); then
+      echo "Failed to collect paginated PR file metadata for #$pr." >&2
+      return 1
+    fi
   fi
 
   head_after=$(gh pr view "$pr" --json headRefOid | jq -r .headRefOid)
@@ -106,7 +166,6 @@ pr_meta_json() {
     return 1
   fi
 
-  expected_file_count=$(printf '%s\n' "$metadata" | jq -r .changedFiles)
   if ! actual_file_count=$(
     printf '%s\n' "$files" |
       jq -er 'if type == "array" then length else error("expected an array") end'

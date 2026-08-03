@@ -1165,12 +1165,6 @@ describe("handlePendingApprovalRequest", () => {
         clientId: "client-owner",
         scopes: ["operator.approvals"],
       }),
-      resolvedEventName: "exec.approval.resolved",
-      buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
-        id: approvalId,
-        decision,
-        request: snapshot.request,
-      }),
     });
 
     expect(respond).toHaveBeenCalledWith(
@@ -1418,12 +1412,6 @@ describe("handlePendingApprovalRequest", () => {
         clientId: GATEWAY_CLIENT_IDS.IOS_APP,
         scopes: ["operator.approvals"],
       }),
-      resolvedEventName: "exec.approval.resolved",
-      buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
-        id: approvalId,
-        decision,
-        request: snapshot.request,
-      }),
     });
 
     expect(respond).toHaveBeenCalledWith(
@@ -1476,12 +1464,6 @@ describe("handlePendingApprovalRequest", () => {
         connId: "conn-mobile-approval",
         clientId: GATEWAY_CLIENT_IDS.IOS_APP,
         scopes: ["operator.approvals"],
-      }),
-      resolvedEventName: "exec.approval.resolved",
-      buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
-        id: approvalId,
-        decision,
-        request: snapshot.request,
       }),
     });
 
@@ -1539,12 +1521,6 @@ describe("handlePendingApprovalRequest", () => {
         deviceId: "device-mobile",
         scopes: ["operator.approvals"],
       }),
-      resolvedEventName: "exec.approval.resolved",
-      buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
-        id: approvalId,
-        decision,
-        request: snapshot.request,
-      }),
     });
 
     expect(respond).toHaveBeenCalledWith(
@@ -1601,12 +1577,6 @@ describe("handlePendingApprovalRequest", () => {
         scopes: ["operator.approvals"],
         approvalRuntime: true,
       }),
-      resolvedEventName: "exec.approval.resolved",
-      buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
-        id: approvalId,
-        decision,
-        request: snapshot.request,
-      }),
     });
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
@@ -1657,12 +1627,6 @@ describe("handlePendingApprovalRequest", () => {
         connId: "conn-owner-approval",
         clientId: "client-owner",
         deviceId: "device-owner",
-      }),
-      resolvedEventName: "exec.approval.resolved",
-      buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
-        id: approvalId,
-        decision,
-        request: snapshot.request,
       }),
     });
 
@@ -1800,12 +1764,6 @@ describe("handlePendingApprovalRequest", () => {
           logGateway: { error: logError },
         } as unknown as GatewayRequestContext,
         client: null,
-        resolvedEventName: "exec.approval.resolved",
-        buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
-          id: approvalId,
-          decision,
-          request: snapshot.request,
-        }),
       });
 
       expect(respond).toHaveBeenCalledWith(

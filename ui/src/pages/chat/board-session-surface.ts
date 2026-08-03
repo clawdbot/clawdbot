@@ -1,6 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
@@ -8,11 +7,14 @@ import { t } from "../../i18n/index.ts";
 import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
-import type { BoardViewSnapshot, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import type {
+  BoardObserverContext,
+  BoardViewSnapshot,
+  BoardWidgetFrameUrl,
+} from "../../lib/board/view-types.ts";
 
 export type BoardChatDockSize = {
   height: number;
-  width: number;
 };
 
 export type WorkboardCardChipProps = {
@@ -23,7 +25,7 @@ export type WorkboardCardChipProps = {
 
 type BoardSessionSurfaceProps = {
   snapshot: BoardViewSnapshot;
-  sessions: readonly GatewaySessionRow[];
+  observer?: BoardObserverContext;
   activeTabId: string;
   dock: BoardTab["chatDock"];
   reopenDock: BoardVisibleChatDock;
@@ -165,7 +167,7 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
         .activeTabId=${props.activeTabId}
         .widgetFrameUrl=${props.widgetFrameUrl}
         .callbacks=${props.callbacks}
-        .sessions=${props.sessions}
+        .observer=${props.observer}
         .canMutate=${props.canMutate}
         .canGrant=${props.canGrant}
       ></openclaw-board-view>
@@ -173,17 +175,17 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
   `;
 }
 
-function renderChatDock(props: BoardSessionSurfaceProps, dock: BoardVisibleChatDock) {
-  const style =
-    dock === "bottom" ? `height: ${props.dockSize.height}px` : `width: ${props.dockSize.width}px`;
-  return html`<div class="board-session-surface__chat" style=${style}>${props.chat}</div>`;
+function renderChatDock(props: BoardSessionSurfaceProps) {
+  return html`<div class="board-session-surface__chat" style="height: ${props.dockSize.height}px">
+    ${props.chat}
+  </div>`;
 }
 
 export function renderBoardSessionSurface(props: BoardSessionSurfaceProps) {
-  const layoutDock = props.dock === "hidden" ? props.reopenDock : props.dock;
   return html`
     <div class="board-session-surface board-session-surface--dock-${props.dock}">
-      ${renderBoardView(props)} ${props.divider} ${renderChatDock(props, layoutDock)}
+      ${renderBoardView(props)}
+      ${props.dock === "bottom" ? html`${props.divider}${renderChatDock(props)}` : nothing}
       <button
         type="button"
         class="board-session-surface__reopen board-session-surface__reopen--${props.reopenDock}"

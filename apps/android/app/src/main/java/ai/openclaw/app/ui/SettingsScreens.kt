@@ -6,8 +6,6 @@ import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.CronEditorDraftState
 import ai.openclaw.app.GatewayAgentSummary
-import ai.openclaw.app.GatewayConnectionDisplay
-import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronActionState
 import ai.openclaw.app.GatewayCronJobDetail
 import ai.openclaw.app.GatewayCronJobDetailState
@@ -185,6 +183,7 @@ internal enum class SettingsRoute {
   Usage,
   Skills,
   SkillWorkshop,
+  SystemAgent,
   NodesDevices,
   Channels,
   Dreaming,
@@ -219,6 +218,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.SkillWorkshop -> SkillWorkshopSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.SystemAgent -> SystemAgentSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -1491,6 +1491,9 @@ private fun PhoneCapabilitiesScreen(
           SettingsToggleRow(nativeString("Canvas Status"), nativeString("Show screen-sharing debug state."), Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
     )
+    if (SensitiveFeatureConfig.accessibilityControlEnabled) {
+      FlavorPhoneCapabilitiesSettings(viewModel)
+    }
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = nativeString("Location"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -2098,29 +2101,6 @@ private val LocationMode.displayLabel: String
       LocationMode.Always -> nativeString("Always")
     }
 
-/** Converts raw gateway connection text into stable settings metric labels. */
-internal fun gatewayStatusLabel(
-  statusText: String,
-  isConnected: Boolean,
-  gatewayConnectionProblem: GatewayConnectionProblem? = null,
-): String {
-  if (isConnected) return nativeString("Ready")
-  val status = statusText.trim().lowercase()
-  return when {
-    status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")
-    status.contains("pair") -> nativeString("Pairing needed")
-    status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
-    status.contains("fingerprint verification timed out") -> nativeString("TLS timed out")
-    status.contains("no tls endpoint") -> nativeString("No TLS endpoint")
-    status.contains("certificate") || status.contains("tls") -> nativeString("Certificate review needed")
-    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> nativeString("Cannot reach gateway")
-    status.isBlank() -> nativeString("Not connected")
-    else -> nativeString("Not connected")
-  }
-}
-
-internal fun gatewayStatusLabel(display: GatewayConnectionDisplay): String = gatewayStatusLabel(display.statusText, display.isConnected, display.problem)
-
 @Composable
 private fun AboutSettingsScreen(
   viewModel: MainViewModel,
@@ -2393,7 +2373,7 @@ internal fun SettingsDetailFrame(
 /**
  * Toggle row model reused by settings sections that render simple on/off controls.
  */
-private data class SettingsToggleRow(
+internal data class SettingsToggleRow(
   val title: String,
   val subtitle: String,
   val icon: ImageVector,
@@ -3096,7 +3076,7 @@ internal fun formatCronTimestamp(timeMs: Long?): String {
 }
 
 @Composable
-private fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
+internal fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
       SettingsToggleListRow(row)

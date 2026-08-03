@@ -39,7 +39,7 @@ one OpenCode setup.
       </Step>
       <Step title="Set a Zen model as the default">
         ```bash
-        openclaw config set agents.defaults.model.primary "opencode/claude-opus-4-6"
+        openclaw config set agents.defaults.model.primary "opencode/gpt-5.6-sol"
         ```
       </Step>
       <Step title="Verify models are available">
@@ -55,6 +55,12 @@ one OpenCode setup.
     **Best for:** the OpenCode-hosted Kimi, GLM, MiniMax, Qwen, and DeepSeek lineup.
 
     <Steps>
+      <Step title="Install the Go catalog plugin">
+        ```bash
+        openclaw plugins install @openclaw/opencode-go-provider
+        openclaw gateway restart
+        ```
+      </Step>
       <Step title="Run onboarding">
         ```bash
         openclaw onboard --auth-choice opencode-go
@@ -86,22 +92,24 @@ one OpenCode setup.
 ```json5
 {
   env: { OPENCODE_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "opencode/claude-opus-4-6" } } },
+  agents: { defaults: { model: { primary: "opencode/gpt-5.6-sol" } } },
 }
 ```
 
-## Built-in catalogs
+## Provider catalogs
 
 ### Zen
 
-| Property         | Value                                                                                         |
-| ---------------- | --------------------------------------------------------------------------------------------- |
-| Runtime provider | `opencode`                                                                                    |
-| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.5`, `opencode/gemini-3.1-pro`, `opencode/glm-5.2` |
+| Property         | Value                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| Runtime provider | `opencode`                                                                                        |
+| Example models   | `opencode/gpt-5.6-sol`, `opencode/gemini-3.6-flash`, `opencode/minimax-m3`, `opencode/big-pickle` |
 
 Run `openclaw models list --provider opencode` for the full current list, which
-also includes free-tier rows such as `opencode/big-pickle` and
-`opencode/deepseek-v4-flash-free`.
+also includes the currently promoted free-tier rows `opencode/big-pickle`,
+`opencode/deepseek-v4-flash-free`, `opencode/laguna-s-2.1-free`,
+`opencode/ling-3.0-flash-free`, `opencode/mimo-v2.5-free`,
+`opencode/nemotron-3-ultra-free`, and `opencode/north-mini-code-free`.
 
 ### Go
 

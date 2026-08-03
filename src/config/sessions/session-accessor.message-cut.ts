@@ -1,9 +1,11 @@
 import {
   forkSqliteSessionAtMessage,
   listSqliteSessionBranches,
+  resolveSessionTranscriptActiveLeafEntryId as resolveSqliteSessionTranscriptActiveLeafEntryId,
   rewindSqliteSessionToMessage,
   switchSqliteSessionBranch,
 } from "./session-accessor.sqlite.js";
+import type { TranscriptEvent } from "./session-accessor.types.js";
 import type {
   SessionBranchListParams,
   SessionBranchListResult,
@@ -17,6 +19,12 @@ export async function listSessionBranches(
   params: SessionBranchListParams,
 ): Promise<SessionBranchListResult> {
   return await listSqliteSessionBranches(params);
+}
+
+export function resolveSessionTranscriptActiveLeafEntryId(
+  events: readonly TranscriptEvent[],
+): string | undefined {
+  return resolveSqliteSessionTranscriptActiveLeafEntryId(events);
 }
 
 export async function rewindSessionToMessage(

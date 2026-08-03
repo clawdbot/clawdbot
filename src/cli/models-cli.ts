@@ -2,6 +2,8 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { isModelsStatusJsonOutput } from "./models-output-mode.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
 
 type ModelsCliRuntime = typeof import("./models-cli.runtime.js");
 
@@ -40,6 +42,7 @@ export function registerModelsCli(program: Command) {
   const models = program
     .command("models")
     .description("Model discovery, scanning, and configuration")
+    .option("--json", "Output JSON (alias for `models status --json`)", false)
     .option("--status-json", "Output JSON (alias for `models status --json`)", false)
     .option("--status-plain", "Plain output (alias for `models status --plain`)", false)
     .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
@@ -48,6 +51,9 @@ export function registerModelsCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/models", "docs.openclaw.ai/cli/models")}\n`,
     );
+  const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
+    Boolean(opts?.json || models.opts<{ json?: boolean }>().json);
+  setCommandJsonMode(models, "output", ({ argv }) => isModelsStatusJsonOutput(argv));
 
   models
     .command("list")
@@ -60,7 +66,7 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await withModelsRuntime(async ({ defaultRuntime }) => {
         const { modelsListCommand } = await import("../commands/models/list.list-command.js");
-        await modelsListCommand(opts, defaultRuntime);
+        await modelsListCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
       });
     });
 
@@ -95,7 +101,7 @@ export function registerModelsCli(program: Command) {
         const { modelsStatusCommand } = await loadModelsStatusCommands();
         await modelsStatusCommand(
           {
-            json: Boolean(opts.json),
+            json: hasJsonOutput(opts),
             plain: Boolean(opts.plain),
             check: Boolean(opts.check),
             probe: Boolean(opts.probe),
@@ -108,6 +114,17 @@ export function registerModelsCli(program: Command) {
           },
           defaultRuntime,
         );
+      });
+    });
+
+  models
+    .command("refresh")
+    .description("Refresh the hosted model catalog")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await withModelsRuntime(async ({ defaultRuntime }) => {
+        const { modelsRefreshCommand } = await import("../commands/models/refresh.js");
+        await modelsRefreshCommand({ json: hasJsonOutput(opts) }, defaultRuntime);
       });
     });
 
@@ -147,7 +164,7 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await withModelsRuntime(async ({ defaultRuntime }) => {
         const { modelsAliasesListCommand } = await loadModelsAliasesCommands();
-        await modelsAliasesListCommand(opts, defaultRuntime);
+        await modelsAliasesListCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
       });
     });
 
@@ -184,7 +201,7 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await withModelsRuntime(async ({ defaultRuntime }) => {
         const { modelsFallbacksListCommand } = await loadModelsFallbacksCommands();
-        await modelsFallbacksListCommand(opts, defaultRuntime);
+        await modelsFallbacksListCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
       });
     });
 
@@ -232,7 +249,10 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await withModelsRuntime(async ({ defaultRuntime }) => {
         const { modelsImageFallbacksListCommand } = await loadModelsImageFallbacksCommands();
-        await modelsImageFallbacksListCommand(opts, defaultRuntime);
+        await modelsImageFallbacksListCommand(
+          { ...opts, json: hasJsonOutput(opts) },
+          defaultRuntime,
+        );
       });
     });
 
@@ -286,7 +306,7 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await withModelsRuntime(async ({ defaultRuntime }) => {
         const { modelsScanCommand } = await import("../commands/models/scan.js");
-        await modelsScanCommand(opts, defaultRuntime);
+        await modelsScanCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
       });
     });
 
@@ -295,7 +315,7 @@ export function registerModelsCli(program: Command) {
       const { modelsStatusCommand } = await loadModelsStatusCommands();
       await modelsStatusCommand(
         {
-          json: Boolean(opts?.statusJson),
+          json: Boolean(opts?.json || opts?.statusJson),
           plain: Boolean(opts?.statusPlain),
           agent: opts?.agent as string | undefined,
         },
@@ -324,7 +344,7 @@ export function registerModelsCli(program: Command) {
           {
             provider: opts.provider as string | undefined,
             agent,
-            json: Boolean(opts.json),
+            json: hasJsonOutput(opts),
           },
           defaultRuntime,
         );
@@ -339,6 +359,27 @@ export function registerModelsCli(program: Command) {
         const agent = resolveModelAgentOption(command) ?? resolveModelAgentOption(auth);
         const { modelsAuthAddCommand } = await loadModelsAuthCommands();
         await modelsAuthAddCommand({ agent }, defaultRuntime);
+      });
+    });
+
+  auth
+    .command("logout")
+    .description("Remove a saved auth profile (see `models auth list` for ids)")
+    .argument("<profileId>", "Auth profile id (e.g. openai:manual)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--yes", "Skip the confirmation prompt", false)
+    .action(async (profileId: string, opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
+        const { modelsAuthLogoutCommand } = await import("../commands/models/auth-logout.js");
+        await modelsAuthLogoutCommand(
+          {
+            profileId,
+            agent,
+            yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
       });
     });
 
@@ -479,7 +520,7 @@ export function registerModelsCli(program: Command) {
           {
             provider: opts.provider as string,
             agent,
-            json: Boolean(opts.json),
+            json: hasJsonOutput(opts),
           },
           defaultRuntime,
         );

@@ -78,6 +78,20 @@ describe("opencode-go provider plugin", () => {
     clearLiveCatalogCacheForTests();
   });
 
+  it("registers only the Go auth choice from its own provider manifest", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.id).toBe("opencode-go");
+    expect(provider.envVars).toEqual(["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]);
+    expect(provider.auth.map((method) => method.id)).toEqual(["api-key"]);
+    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual(["opencode-go"]);
+    expect(provider.auth[0]?.wizard).toMatchObject({
+      choiceLabel: "OpenCode Go catalog",
+      groupId: "opencode",
+      groupHint: "Shared API key for Zen + Go catalogs",
+    });
+  });
+
   it("registers image media understanding through the OpenCode Go plugin", async () => {
     const { mediaProviders } = await registerProviderPlugin({
       plugin,

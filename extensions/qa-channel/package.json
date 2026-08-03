@@ -11,7 +11,7 @@
     "./test-api.js": "./test-api.ts"
   },
   "dependencies": {
-    "typebox": "1.3.3",
+    "typebox": "1.3.6",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -46,12 +46,11 @@
         "setup": false,
         "docs": false
       },
-      "cliAddOptions": [
-        {
-          "flags": "--base-url <url>",
-          "description": "Channel base URL"
-        }
-      ]
+      "setup": { "fields": [
+        { "key": "baseUrl", "kind": "string", "cli": { "flags": "--base-url <url>", "description": "QA channel base URL" } },
+        { "key": "botUserId", "kind": "string", "cli": { "flags": "--bot-user-id <id>", "description": "QA channel bot user id" } },
+        { "key": "botDisplayName", "kind": "string", "cli": { "flags": "--bot-display-name <name>", "description": "QA channel bot display name" } }
+      ] }
     }
   }
 }

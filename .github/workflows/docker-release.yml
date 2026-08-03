@@ -1,26 +1,28 @@
 name: Docker Release
 
 on:
-  push:
-    tags:
-      - "v*"
-      - "!v*-alpha.*"
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
-      - "**/*.mdx"
-      - ".agents/**"
-      - "skills/**"
-  workflow_dispatch:
+  workflow_call:
     inputs:
       tag:
-        description: Existing stable or beta release tag to backfill (for example v2026.3.22 or v2026.3.22-beta.1)
+        description: Immutable stable, extended-stable, or beta release tag
         required: true
         type: string
+      release_sha:
+        description: Full immutable commit SHA resolved from tag
+        required: true
+        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('docker-release-manual-{0}', inputs.tag) || format('docker-release-push-{0}', github.run_id) }}
+  # Alias promotion checks are read-then-write; serialize every Docker publish
+  # so an older stable run cannot overwrite a newer latest/main promotion.
+  group: docker-release-publish
   cancel-in-progress: false
+  queue: max
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -30,44 +32,108 @@ env:
   DOCKERHUB_IMAGE_NAME: openclaw/openclaw
 
 jobs:
-  validate_manual_backfill:
-    if: github.event_name == 'workflow_dispatch'
+  validate_release_identity:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
-      - name: Validate tag input format
+      - name: Validate immutable tag and SHA inputs
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
         run: |
           set -euo pipefail
           if [[ "${RELEASE_TAG}" == *"-alpha."* ]]; then
             echo "Docker alpha image publishing is disabled."
             exit 1
           fi
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-beta\.[1-9][0-9]*)?$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-(beta\.)?[1-9][0-9]*)?$ ]]; then
             echo "Invalid release tag: ${RELEASE_TAG}"
             exit 1
           fi
+          if [[ ! "${RELEASE_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "Release SHA must be a full lowercase commit SHA."
+            exit 1
+          fi
 
-      - name: Checkout selected tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Checkout immutable release tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
+          persist-credentials: false
 
-  approve_manual_backfill:
-    if: github.event_name == 'workflow_dispatch'
-    needs: validate_manual_backfill
-    # WARNING: KEEP MANUAL BACKFILLS GATED BY THE docker-release ENVIRONMENT.
+      - name: Verify tag, SHA, and package identity agree
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          tag_sha="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          checkout_sha="$(git rev-parse HEAD)"
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "${tag_sha}" != "${RELEASE_SHA}" || "${checkout_sha}" != "${RELEASE_SHA}" ]]; then
+            echo "Release tag ${RELEASE_TAG} must resolve to supplied SHA ${RELEASE_SHA}; got ${tag_sha}." >&2
+            exit 1
+          fi
+          if [[ "v${package_version}" != "${RELEASE_TAG}" && ! "${RELEASE_TAG}" =~ ^v${package_version}-[1-9][0-9]*$ ]]; then
+            echo "Release tag ${RELEASE_TAG} does not match package.json version ${package_version} or its correction-tag form." >&2
+            exit 1
+          fi
+
+  resolve_release_policy:
+    needs: validate_release_identity
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.policy.outputs.version }}
+      channel: ${{ steps.policy.outputs.channel }}
+    steps:
+      - name: Checkout trusted workflow helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          path: workflow-source
+          persist-credentials: false
+
+      - name: Resolve release channel policy
+        id: policy
+        shell: bash
+        env:
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
+        run: |
+          set -euo pipefail
+          if [[ "${SOURCE_REF}" != refs/tags/v* ]]; then
+            echo "::error::Docker releases require a v-prefixed release tag; got ${SOURCE_REF}."
+            exit 1
+          fi
+          version="${SOURCE_REF#refs/tags/v}"
+          policy="$(node workflow-source/scripts/lib/docker-release-policy.mjs "${version}")"
+          channel="$(jq -r '.channel' <<< "${policy}")"
+          {
+            echo "version=${version}"
+            echo "channel=${channel}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Docker release policy"
+            echo "- Version: ${version}"
+            echo "- Channel: ${channel}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  approve_docker_publish:
+    name: Approve Docker publication ${{ inputs.tag }}
+    needs: [validate_release_identity, resolve_release_policy]
+    # Docker publication remains protected even though only release orchestration can call it.
     runs-on: ubuntu-24.04
     environment: docker-release
     permissions: {}
     steps:
-      - name: Approve Docker backfill
+      - name: Approve Docker publication
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-        run: echo "Approved Docker backfill for $RELEASE_TAG"
+        run: |
+          echo "Approved immutable Docker image publication for ${RELEASE_TAG}"
 
   validate_publish_config:
     runs-on: ubuntu-24.04
@@ -88,8 +154,8 @@ jobs:
           echo "Docker Hub publishing configured for ${DOCKERHUB_IMAGE}."
 
   resolve_build_provenance:
-    needs: [approve_manual_backfill, validate_publish_config]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    needs: [approve_docker_publish, resolve_release_policy, validate_publish_config]
+    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.resolve_release_policy.result == 'success' && needs.validate_publish_config.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -98,9 +164,9 @@ jobs:
       source_sha: ${{ steps.build_provenance.outputs.source_sha }}
     steps:
       - name: Checkout selected source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+          ref: ${{ inputs.release_sha }}
           fetch-depth: 0
 
       - name: Resolve shared build provenance
@@ -115,8 +181,8 @@ jobs:
   # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
   # Build amd64 image. Default and slim tags point to the same slim runtime.
   build-amd64:
-    needs: [approve_manual_backfill, validate_publish_config, resolve_build_provenance]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    needs: [approve_docker_publish, validate_publish_config, resolve_build_provenance]
+    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04
     permissions:
@@ -127,7 +193,7 @@ jobs:
       browser_digest: ${{ steps.build-browser.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 0
@@ -153,17 +219,17 @@ jobs:
           done
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.DOCKERHUB_REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -175,7 +241,7 @@ jobs:
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           tags=()
@@ -215,7 +281,7 @@ jobs:
         env:
           BUILD_TIMESTAMP: ${{ needs.resolve_build_provenance.outputs.built_at }}
           SOURCE_SHA: ${{ needs.resolve_build_provenance.outputs.source_sha }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           source_sha="${SOURCE_SHA}"
@@ -238,7 +304,7 @@ jobs:
       - name: Build and push amd64 image
         id: build
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: linux/amd64
@@ -258,7 +324,7 @@ jobs:
         id: build-browser
         if: steps.tags.outputs.browser != ''
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: linux/amd64
@@ -315,7 +381,6 @@ jobs:
               cat "${temp_root}/out.log"
               exit 1
             fi
-            test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"
             if [ "${status}" -ne 0 ]; then
               cat "${temp_root}/out.log"
             fi
@@ -343,8 +408,8 @@ jobs:
 
   # Build arm64 image. Default and slim tags point to the same slim runtime.
   build-arm64:
-    needs: [approve_manual_backfill, validate_publish_config, resolve_build_provenance]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    needs: [approve_docker_publish, validate_publish_config, resolve_build_provenance]
+    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04-arm
     permissions:
@@ -355,24 +420,24 @@ jobs:
       browser_digest: ${{ steps.build-browser.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 0
 
       - *buildkit_prepull_step
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.DOCKERHUB_REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -384,7 +449,7 @@ jobs:
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           tags=()
@@ -424,7 +489,7 @@ jobs:
         env:
           BUILD_TIMESTAMP: ${{ needs.resolve_build_provenance.outputs.built_at }}
           SOURCE_SHA: ${{ needs.resolve_build_provenance.outputs.source_sha }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           source_sha="${SOURCE_SHA}"
@@ -447,7 +512,7 @@ jobs:
       - name: Build and push arm64 image
         id: build
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: linux/arm64
@@ -467,7 +532,7 @@ jobs:
         id: build-browser
         if: steps.tags.outputs.browser != ''
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: linux/arm64
@@ -524,7 +589,6 @@ jobs:
               cat "${temp_root}/out.log"
               exit 1
             fi
-            test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"
             if [ "${status}" -ne 0 ]; then
               cat "${temp_root}/out.log"
             fi
@@ -554,13 +618,14 @@ jobs:
   create-manifest:
     needs:
       [
-        approve_manual_backfill,
+        approve_docker_publish,
+        resolve_release_policy,
         validate_publish_config,
         resolve_build_provenance,
         build-amd64,
         build-arm64,
       ]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.validate_publish_config.result == 'success' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04
     permissions:
@@ -568,20 +633,20 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.DOCKERHUB_REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -593,8 +658,7 @@ jobs:
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
-          IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           tags=()
@@ -616,18 +680,6 @@ jobs:
             if [[ "${browser_supported}" == "1" ]]; then
               browser_tags+=("${GHCR_IMAGE}:${version}-browser")
               dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:${version}-browser")
-            fi
-            # Beta releases and manual backfills publish only immutable version tags;
-            # do not advance latest/main aliases from those flows.
-            if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
-              tags+=("${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:main")
-              slim_tags+=("${GHCR_IMAGE}:slim" "${GHCR_IMAGE}:main-slim")
-              dockerhub_tags+=("${DOCKERHUB_IMAGE}:latest" "${DOCKERHUB_IMAGE}:main")
-              dockerhub_slim_tags+=("${DOCKERHUB_IMAGE}:slim" "${DOCKERHUB_IMAGE}:main-slim")
-              if [[ "${browser_supported}" == "1" ]]; then
-                browser_tags+=("${GHCR_IMAGE}:latest-browser" "${GHCR_IMAGE}:main-browser")
-                dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:latest-browser" "${DOCKERHUB_IMAGE}:main-browser")
-              fi
             fi
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
@@ -653,7 +705,7 @@ jobs:
         shell: bash
         env:
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
           TAGS: ${{ steps.tags.outputs.value }}
           BROWSER_TAGS: ${{ steps.tags.outputs.browser }}
           DOCKERHUB_TAGS: ${{ steps.tags.outputs.dockerhub }}
@@ -697,32 +749,33 @@ jobs:
           fi
 
   verify-attestations:
-    needs: [resolve_build_provenance, create-manifest]
+    name: Verify attestations and promote channel
+    needs: [resolve_release_policy, resolve_build_provenance, create-manifest]
     if: ${{ always() && needs.create-manifest.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      packages: read
+      packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 1
 
       - *buildkit_prepull_step
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.DOCKERHUB_REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -734,8 +787,7 @@ jobs:
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
-          IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           multi_refs=()
@@ -783,18 +835,6 @@ jobs:
               dockerhub_amd64_refs+=("${DOCKERHUB_IMAGE}:${version}-browser-amd64")
               arm64_refs+=("${GHCR_IMAGE}:${version}-browser-arm64")
               dockerhub_arm64_refs+=("${DOCKERHUB_IMAGE}:${version}-browser-arm64")
-            fi
-            # Beta releases and manual backfills publish only immutable version tags;
-            # do not advance latest/main aliases from those flows.
-            if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
-              multi_refs+=("${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:main")
-              slim_multi_refs+=("${GHCR_IMAGE}:slim" "${GHCR_IMAGE}:main-slim")
-              dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:latest" "${DOCKERHUB_IMAGE}:main")
-              dockerhub_slim_multi_refs+=("${DOCKERHUB_IMAGE}:slim" "${DOCKERHUB_IMAGE}:main-slim")
-              if [[ "${browser_supported}" == "1" ]]; then
-                multi_refs+=("${GHCR_IMAGE}:latest-browser" "${GHCR_IMAGE}:main-browser")
-                dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:latest-browser" "${DOCKERHUB_IMAGE}:main-browser")
-              fi
             fi
           fi
           if [[ ${#multi_refs[@]} -eq 0 || ${#amd64_refs[@]} -eq 0 || ${#arm64_refs[@]} -eq 0 || ${#dockerhub_multi_refs[@]} -eq 0 || ${#dockerhub_amd64_refs[@]} -eq 0 || ${#dockerhub_arm64_refs[@]} -eq 0 ]]; then
@@ -860,3 +900,15 @@ jobs:
           node scripts/verify-docker-attestations.mjs \
             --platform linux/arm64 \
             "${dockerhub_arm64_refs[@]}"
+
+      - name: Promote and verify channel aliases
+        if: ${{ needs.resolve_release_policy.outputs.channel != 'beta' }}
+        env:
+          VERSION: ${{ needs.resolve_release_policy.outputs.version }}
+          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
+        run: |
+          node scripts/docker-channel-promote.mjs \
+            --version "${VERSION}" \
+            --image "${GHCR_IMAGE}" \
+            --image "${DOCKERHUB_IMAGE}"

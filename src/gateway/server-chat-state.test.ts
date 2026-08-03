@@ -1,5 +1,116 @@
 import { describe, expect, it } from "vitest";
-import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import {
+  createChatAbortMarker,
+  createChatRunState,
+  createSessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
+
+describe("createChatRunState", () => {
+  it("clears transient projection state without dropping run ownership or abort tombstones", () => {
+    const state = createChatRunState();
+    state.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
+    state.toolEventRecipients.add("run-1", "conn-1");
+    const run = state.getOrCreate("run-1");
+    Object.assign(run, {
+      rawBuffer: "raw",
+      buffer: "projected",
+      planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
+      bufferUpdatedAt: 1,
+      deltaSentAt: 2,
+      deltaLastBroadcastLen: 9,
+      deltaLastBroadcastText: "projected",
+      agentText: { assistant: { lastSentAt: 3 } },
+      abortMarker: createChatAbortMarker(4),
+    });
+    state.recordProgressEvent("run-1", {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: 1,
+      data: { kind: "preamble", progressText: "Inspecting" },
+    });
+
+    state.clearRun("run-1");
+
+    expect(state.registry.peek("run-1")?.clientRunId).toBe("client-1");
+    expect(state.toolEventRecipients.get("run-1")).toEqual(new Set(["conn-1"]));
+    expect(state.runs.get("run-1")).toEqual({
+      registrations: expect.any(Array),
+      abortMarker: expect.any(Object),
+      toolRecipient: expect.any(Object),
+    });
+  });
+
+  it("keeps first-registration and first-record iteration order stable across updates", () => {
+    const state = createChatRunState();
+    state.registry.add("run-b", { sessionKey: "session-b", clientRunId: "client-b-1" });
+    state.registry.add("run-a", { sessionKey: "session-a", clientRunId: "client-a" });
+    state.registry.add("run-b", { sessionKey: "session-b", clientRunId: "client-b-2" });
+    state.getOrCreate("run-b").buffer = "updated";
+
+    expect([...state.runs.keys()]).toEqual(["run-b", "run-a"]);
+    expect(state.registry.shift("run-b")?.clientRunId).toBe("client-b-1");
+    expect(state.registry.shift("run-b")?.clientRunId).toBe("client-b-2");
+  });
+
+  it("keeps bounded active progress ordered and removes completed tools", () => {
+    const state = createChatRunState();
+    const event = (seq: number, stream: "item" | "tool", data: Record<string, unknown>) =>
+      state.recordProgressEvent("run-1", {
+        runId: "run-1",
+        seq,
+        stream,
+        ts: 1_000 + seq,
+        sessionKey: "main",
+        data,
+      });
+
+    event(1, "item", { kind: "preamble", itemId: "p-1", progressText: "Inspecting" });
+    event(2, "tool", {
+      phase: "start",
+      name: "read",
+      toolCallId: "active",
+      args: { path: "a" },
+    });
+    event(3, "tool", {
+      phase: "update",
+      name: "read",
+      toolCallId: "active",
+      partialResult: "halfway",
+    });
+    event(4, "tool", { phase: "start", name: "exec", toolCallId: "done", args: {} });
+    event(5, "tool", {
+      phase: "result",
+      name: "exec",
+      toolCallId: "done",
+      result: "x".repeat(256_000),
+    });
+    event(3, "tool", { phase: "result", name: "read", toolCallId: "active" });
+
+    expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
+      { seq: 1, stream: "item", data: { itemId: "p-1", progressText: "Inspecting" } },
+      { seq: 2, stream: "tool", data: { phase: "start", toolCallId: "active" } },
+      { seq: 3, stream: "tool", data: { phase: "update", toolCallId: "active" } },
+    ]);
+
+    for (let seq = 6; seq <= 70; seq += 1) {
+      event(seq, "tool", {
+        phase: "start",
+        name: "read",
+        toolCallId: `tool-${seq}`,
+        args: { payload: "y".repeat(80_000) },
+      });
+    }
+    const snapshot = state.runs.get("run-1")?.progressSnapshot;
+    expect(snapshot?.events).toHaveLength(50);
+    expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
+    expect(snapshot?.events.at(-1)?.data).toEqual({
+      phase: "start",
+      name: "read",
+      toolCallId: "tool-70",
+    });
+  });
+});
 
 describe("createSessionMessageSubscriberRegistry", () => {
   it("keeps approval delivery opt-in and updates it on resubscribe", () => {

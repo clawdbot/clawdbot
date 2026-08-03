@@ -1,4 +1,5 @@
 /** Persists hosted official external plugin catalog snapshots in OpenClaw state. */
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   executeSqliteQuerySync,
@@ -13,6 +14,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
+  HostedCatalogSignedFeedMonotonicityError,
   type HostedOfficialExternalPluginCatalogMetadata,
   type HostedOfficialExternalPluginCatalogSnapshot,
   type HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
@@ -51,6 +53,7 @@ type HostedCatalogSnapshotDatabase = Pick<
 type StoredHostedCatalogMonotonicState = {
   sequence: number;
   generatedAt?: string;
+  payloadSha256: string;
 };
 
 function resolveStoreEnv(
@@ -117,9 +120,11 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
       sequence?: unknown;
       generatedAt?: unknown;
     };
+    const payload =
+      typeof document.payload === "string" ? decodeBase64Payload(document.payload) : body;
     const feed =
       typeof document.payload === "string"
-        ? (JSON.parse(decodeBase64Payload(document.payload)) as {
+        ? (JSON.parse(payload) as {
             sequence?: unknown;
             generatedAt?: unknown;
           })
@@ -131,11 +136,15 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
       typeof feed.generatedAt !== "string" ||
       parseOfficialExternalPluginCatalogTimestamp(feed.generatedAt) === undefined
     ) {
-      return { sequence: feed.sequence };
+      return {
+        sequence: feed.sequence,
+        payloadSha256: createHash("sha256").update(payload).digest("hex"),
+      };
     }
     return {
       sequence: feed.sequence,
       generatedAt: feed.generatedAt,
+      payloadSha256: createHash("sha256").update(payload).digest("hex"),
     };
   } catch {
     return undefined;
@@ -152,7 +161,7 @@ function isMonotonicRollback(params: {
   if (params.candidate.sequence > params.current.sequence) {
     return false;
   }
-  if (params.current.generatedAt === undefined) {
+  if (params.candidate.generatedAt === undefined || params.current.generatedAt === undefined) {
     return false;
   }
   return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
@@ -160,6 +169,7 @@ function isMonotonicRollback(params: {
 
 function assertSignedSnapshotWriteIsMonotonic(params: {
   candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState | undefined;
+  candidateBody: string;
   current: HostedCatalogSnapshotRow | undefined;
 }): void {
   if (params.candidate?.mode !== "signed-feed" || params.current?.trust_mode !== "signed") {
@@ -170,7 +180,21 @@ function assertSignedSnapshotWriteIsMonotonic(params: {
     return;
   }
   if (isMonotonicRollback({ candidate: params.candidate, current })) {
-    throw new Error("hosted catalog signed feed sequence is older than current snapshot");
+    throw new HostedCatalogSignedFeedMonotonicityError(
+      "hosted catalog signed feed sequence is older than current snapshot",
+    );
+  }
+  if (params.candidate.sequence !== current.sequence || current.generatedAt === undefined) {
+    return;
+  }
+  const candidate = readMonotonicStateFromBody(params.candidateBody);
+  if (
+    candidate?.sequence === params.candidate.sequence &&
+    candidate.payloadSha256 !== current.payloadSha256
+  ) {
+    throw new HostedCatalogSignedFeedMonotonicityError(
+      "hosted catalog signed feed payload changed without a sequence increment",
+    );
   }
 }
 
@@ -188,11 +212,20 @@ function rowToSnapshot(
     ...(row.last_modified ? { lastModified: row.last_modified } : {}),
   };
   const trust = rowToTrustState(row);
+  const storedMonotonic = trust ? readMonotonicStateFromBody(row.body) : undefined;
+  const monotonic = storedMonotonic
+    ? {
+        mode: "signed-feed" as const,
+        sequence: storedMonotonic.sequence,
+        ...(storedMonotonic.generatedAt ? { generatedAt: storedMonotonic.generatedAt } : {}),
+      }
+    : undefined;
   return {
     body: row.body,
     metadata,
     savedAt: row.saved_at,
     ...(trust ? { trust } : {}),
+    ...(monotonic ? { monotonic } : {}),
   };
 }
 
@@ -256,6 +289,7 @@ export function createSqliteHostedOfficialExternalPluginCatalogSnapshotStore(
         ) as HostedCatalogSnapshotRow | undefined;
         assertSignedSnapshotWriteIsMonotonic({
           candidate: snapshot.monotonic,
+          candidateBody: snapshot.body,
           current,
         });
         executeSqliteQuerySync(

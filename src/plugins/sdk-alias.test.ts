@@ -9,7 +9,7 @@ import {
   bundledPluginRoot,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   buildPluginLoaderAliasMap,
   createPluginLoaderModuleCacheKey,
@@ -17,7 +17,6 @@ import {
   resolvePluginLoaderModuleConfig,
   resolvePluginLoaderTryNative,
   resolvePluginRuntimeModulePathWithDiagnostics,
-  shouldPreferNativeModuleLoad,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 import {
@@ -153,6 +152,46 @@ function writeWorkspacePackageEntry(params: {
   fs.writeFileSync(srcFile, "export {};\n", "utf-8");
   fs.writeFileSync(distFile, "export {};\n", "utf-8");
   return { srcFile, distFile };
+}
+
+type WorkspaceAliasFixture = readonly [
+  alias: `@openclaw/${string}`,
+  packageDir: string,
+  entryStem: string,
+  rootDistFile?: string,
+  assert?: boolean,
+];
+
+function writeWorkspaceAliasFixtures(root: string, fixtures: readonly WorkspaceAliasFixture[]) {
+  return fixtures.map(([alias, packageDir, entryStem, rootDistFile, assert]) => {
+    const files = writeWorkspacePackageEntry({
+      root,
+      packageDir,
+      srcFile: `${entryStem}.ts`,
+      distFile: `${entryStem}.mjs`,
+    });
+    const expectedDistFile = rootDistFile ? path.join(root, rootDistFile) : files.distFile;
+    if (rootDistFile) {
+      mkdirSafeDir(path.dirname(expectedDistFile));
+      fs.writeFileSync(expectedDistFile, "export {};\n", "utf-8");
+    }
+    return { alias, assert, ...files, expectedDistFile };
+  });
+}
+
+function expectWorkspaceAliasTargets(
+  aliases: Record<string, string | undefined>,
+  fixtures: ReturnType<typeof writeWorkspaceAliasFixtures>,
+  target: "srcFile" | "expectedDistFile",
+) {
+  for (const fixture of fixtures) {
+    if (fixture.assert === false) {
+      continue;
+    }
+    expect(fs.realpathSync(aliases[fixture.alias] ?? ""), fixture.alias).toBe(
+      fs.realpathSync(fixture[target]),
+    );
+  }
 }
 
 function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?: string }) {
@@ -524,7 +563,7 @@ describe("plugin sdk alias helpers", () => {
     expect(aliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
   });
 
-  it("adds non-QA private Codex helper subpaths only for trusted Codex plugins", () => {
+  it("adds the non-QA private Codex helper subpath only for trusted Codex plugins", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
@@ -538,11 +577,6 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(
       path.join(fixture.root, "src", "plugin-sdk", "codex-mcp-projection.ts"),
       "export const codexMcpProjection = true;\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(fixture.root, "src", "plugin-sdk", "codex-native-task-runtime.ts"),
-      "export const codexNativeTaskRuntime = true;\n",
       "utf-8",
     );
     fs.writeFileSync(
@@ -613,12 +647,8 @@ describe("plugin sdk alias helpers", () => {
       ),
     );
 
-    expect(codexSubpaths).toEqual(["codex-mcp-projection", "codex-native-task-runtime", "core"]);
-    expect(installedCodexSubpaths).toEqual([
-      "codex-mcp-projection",
-      "codex-native-task-runtime",
-      "core",
-    ]);
+    expect(codexSubpaths).toEqual(["codex-mcp-projection", "core"]);
+    expect(installedCodexSubpaths).toEqual(["codex-mcp-projection", "core"]);
     expect(otherSubpaths).toEqual(["core"]);
     expect(installedOtherSubpaths).toEqual(["core"]);
     expect(shadowCodexSubpaths).toEqual(["core"]);
@@ -798,23 +828,11 @@ describe("plugin sdk alias helpers", () => {
       "plugin-sdk",
       "codex-mcp-projection.ts",
     );
-    const sourceCodexNativeTaskRuntimePath = path.join(
-      fixture.root,
-      "src",
-      "plugin-sdk",
-      "codex-native-task-runtime.ts",
-    );
     const distCodexMcpProjectionPath = path.join(
       fixture.root,
       "dist",
       "plugin-sdk",
       "codex-mcp-projection.js",
-    );
-    const distCodexNativeTaskRuntimePath = path.join(
-      fixture.root,
-      "dist",
-      "plugin-sdk",
-      "codex-native-task-runtime.js",
     );
     const sourceQaRuntimePath = path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts");
     fs.rmSync(
@@ -827,18 +845,8 @@ describe("plugin sdk alias helpers", () => {
       "utf-8",
     );
     fs.writeFileSync(
-      sourceCodexNativeTaskRuntimePath,
-      "export const codexNativeTaskRuntime = true;\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
       distCodexMcpProjectionPath,
       "export const codexMcpProjection = true;\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      distCodexNativeTaskRuntimePath,
-      "export const codexNativeTaskRuntime = true;\n",
       "utf-8",
     );
     fs.writeFileSync(sourceQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
@@ -865,21 +873,10 @@ describe("plugin sdk alias helpers", () => {
       "plugin-sdk",
       "codex-mcp-projection.js",
     );
-    const devCodexNativeTaskRuntimePath = path.join(
-      devFixture.root,
-      "dist",
-      "plugin-sdk",
-      "codex-native-task-runtime.js",
-    );
     mkdirSafeDir(path.join(devFixture.root, "extensions"));
     fs.writeFileSync(
       devCodexMcpProjectionPath,
       "export const devCodexMcpProjection = true;\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      devCodexNativeTaskRuntimePath,
-      "export const devCodexNativeTaskRuntime = true;\n",
       "utf-8",
     );
     const { packageRoot: installedCodexRoot, pluginEntry: installedCodexEntry } =
@@ -955,28 +952,16 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/codex-mcp-projection"] ?? "")).toBe(
       fs.realpathSync(sourceCodexMcpProjectionPath),
     );
-    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/codex-native-task-runtime"] ?? "")).toBe(
-      fs.realpathSync(sourceCodexNativeTaskRuntimePath),
-    );
     expect(
       fs.realpathSync(installedAliases["openclaw/plugin-sdk/codex-mcp-projection"] ?? ""),
     ).toBe(fs.realpathSync(distCodexMcpProjectionPath));
-    expect(
-      fs.realpathSync(installedAliases["openclaw/plugin-sdk/codex-native-task-runtime"] ?? ""),
-    ).toBe(fs.realpathSync(distCodexNativeTaskRuntimePath));
     expect(fs.realpathSync(devRootAliases["openclaw/plugin-sdk/codex-mcp-projection"] ?? "")).toBe(
       fs.realpathSync(devCodexMcpProjectionPath),
     );
-    expect(
-      fs.realpathSync(devRootAliases["openclaw/plugin-sdk/codex-native-task-runtime"] ?? ""),
-    ).toBe(fs.realpathSync(devCodexNativeTaskRuntimePath));
     expect(aliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
     expect(otherAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
-    expect(otherAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
     expect(installedOtherAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
-    expect(installedOtherAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
     expect(shadowCodexAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
-    expect(shadowCodexAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
   });
 
   it("aliases the SSRF internal helper only for bundled local IPC owner plugins", async () => {
@@ -1001,91 +986,94 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(path.join(fixture.root, "scripts"), { force: true, recursive: true });
     fs.writeFileSync(sourceSsrFInternalPath, "export const ssrfInternal = true;\n", "utf-8");
     fs.writeFileSync(distSsrFInternalPath, "export const ssrfInternal = true;\n", "utf-8");
-    const sourceOllamaEntry = writePluginEntry(
-      fixture.root,
-      bundledPluginFile("ollama", "index.ts"),
-    );
-    const sourceBrowserEntry = writePluginEntry(
-      fixture.root,
-      bundledPluginFile("browser", "index.ts"),
-    );
+    const ssrfInternalSpecifier = "openclaw/plugin-sdk/ssrf-runtime-internal";
+    const entryBody = [
+      `import { ssrfInternal } from "${ssrfInternalSpecifier}";`,
+      "export const loadedSsrFInternal = ssrfInternal;",
+      "",
+    ].join("\n");
+    const ownerCases = [
+      {
+        entryPath: bundledPluginFile("ollama", "index.ts"),
+        expectedAliasTarget: sourceSsrFInternalPath,
+        resolution: undefined,
+        tryNative: false,
+      },
+      {
+        entryPath: bundledPluginFile("browser", "index.ts"),
+        expectedAliasTarget: sourceSsrFInternalPath,
+        resolution: undefined,
+        tryNative: false,
+      },
+      {
+        entryPath: bundledDistPluginFile("ollama", "index.js"),
+        expectedAliasTarget: distSsrFInternalPath,
+        resolution: "dist",
+        tryNative: true,
+      },
+      {
+        entryPath: bundledDistPluginFile("browser", "index.js"),
+        expectedAliasTarget: distSsrFInternalPath,
+        resolution: "dist",
+        tryNative: true,
+      },
+      {
+        entryPath: path.join("dist-runtime", "extensions", "ollama", "index.js"),
+        expectedAliasTarget: distSsrFInternalPath,
+        resolution: "dist",
+        tryNative: true,
+      },
+      {
+        entryPath: path.join("dist-runtime", "extensions", "browser", "index.js"),
+        expectedAliasTarget: distSsrFInternalPath,
+        resolution: "dist",
+        tryNative: true,
+      },
+    ] as const;
+    const owners = ownerCases.map((owner) => {
+      const entry = writePluginEntry(fixture.root, owner.entryPath);
+      fs.writeFileSync(entry, entryBody, "utf-8");
+      return {
+        entry,
+        entryPath: owner.entryPath,
+        expectedAliasTarget: owner.expectedAliasTarget,
+        resolution: owner.resolution,
+        tryNative: owner.tryNative,
+      };
+    });
     const sourceOtherPluginEntry = writePluginEntry(
       fixture.root,
       bundledPluginFile("demo", "index.ts"),
     );
-    const entryBody = [
-      'import { ssrfInternal } from "openclaw/plugin-sdk/ssrf-runtime-internal";',
-      "export const loadedSsrFInternal = ssrfInternal;",
-      "",
-    ].join("\n");
-    fs.writeFileSync(sourceOllamaEntry, entryBody, "utf-8");
-    fs.writeFileSync(sourceBrowserEntry, entryBody, "utf-8");
     fs.writeFileSync(sourceOtherPluginEntry, entryBody, "utf-8");
-    const distOllamaEntry = writePluginEntry(
-      fixture.root,
-      bundledDistPluginFile("ollama", "index.js"),
-    );
-    const distBrowserEntry = writePluginEntry(
-      fixture.root,
-      bundledDistPluginFile("browser", "index.js"),
-    );
-    const distRuntimeOllamaEntry = writePluginEntry(
-      fixture.root,
-      path.join("dist-runtime", "extensions", "ollama", "index.js"),
-    );
-    const distRuntimeBrowserEntry = writePluginEntry(
-      fixture.root,
-      path.join("dist-runtime", "extensions", "browser", "index.js"),
-    );
-    fs.writeFileSync(distOllamaEntry, entryBody, "utf-8");
-    fs.writeFileSync(distBrowserEntry, entryBody, "utf-8");
-    fs.writeFileSync(distRuntimeOllamaEntry, entryBody, "utf-8");
-    fs.writeFileSync(distRuntimeBrowserEntry, entryBody, "utf-8");
     const { packageRoot: installedOllamaRoot, pluginEntry: installedOllamaEntry } =
       writeInstalledPluginEntry({
         installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
         packageName: "@openclaw/ollama",
       });
 
-    const sourceSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
-      listPluginSdkExportedSubpaths({
-        modulePath: sourceOllamaEntry,
-      }),
-    );
-    const sourceBrowserSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
-      listPluginSdkExportedSubpaths({
-        modulePath: sourceBrowserEntry,
-      }),
-    );
+    for (const owner of owners.filter(({ resolution }) => resolution === undefined)) {
+      const sourceSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
+        listPluginSdkExportedSubpaths({ modulePath: owner.entry }),
+      );
+      expect(sourceSubpaths).toEqual(["core", "ssrf-runtime-internal"]);
+    }
     const privateQaOtherSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
       listPluginSdkExportedSubpaths({
         modulePath: sourceOtherPluginEntry,
       }),
     );
-    const sourceAliases = withEnv(
-      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
-      () => buildPluginLoaderAliasMap(sourceOllamaEntry),
-    );
-    const sourceBrowserAliases = withEnv(
-      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
-      () => buildPluginLoaderAliasMap(sourceBrowserEntry),
-    );
-    const distAliases = withEnv(
-      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
-      () => buildPluginLoaderAliasMap(distOllamaEntry, undefined, undefined, "dist"),
-    );
-    const distBrowserAliases = withEnv(
-      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
-      () => buildPluginLoaderAliasMap(distBrowserEntry, undefined, undefined, "dist"),
-    );
-    const distRuntimeAliases = withEnv(
-      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
-      () => buildPluginLoaderAliasMap(distRuntimeOllamaEntry, undefined, undefined, "dist"),
-    );
-    const distRuntimeBrowserAliases = withEnv(
-      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
-      () => buildPluginLoaderAliasMap(distRuntimeBrowserEntry, undefined, undefined, "dist"),
-    );
+    const ownersWithAliases = owners.map((owner) => ({
+      aliases: withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
+        owner.resolution === "dist"
+          ? buildPluginLoaderAliasMap(owner.entry, undefined, undefined, "dist")
+          : buildPluginLoaderAliasMap(owner.entry),
+      ),
+      entry: owner.entry,
+      entryPath: owner.entryPath,
+      expectedAliasTarget: owner.expectedAliasTarget,
+      tryNative: owner.tryNative,
+    }));
     const otherAliases = withEnv(
       { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
       () => buildPluginLoaderAliasMap(sourceOtherPluginEntry),
@@ -1105,81 +1093,28 @@ describe("plugin sdk alias helpers", () => {
       ),
     );
 
-    expect(sourceSubpaths).toEqual(["core", "ssrf-runtime-internal"]);
-    expect(sourceBrowserSubpaths).toEqual(["core", "ssrf-runtime-internal"]);
     expect(privateQaOtherSubpaths).toEqual(["core"]);
-    expect(fs.realpathSync(sourceAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? "")).toBe(
-      fs.realpathSync(sourceSsrFInternalPath),
-    );
-    expect(
-      fs.realpathSync(sourceBrowserAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? ""),
-    ).toBe(fs.realpathSync(sourceSsrFInternalPath));
-    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? "")).toBe(
-      fs.realpathSync(distSsrFInternalPath),
-    );
-    expect(
-      fs.realpathSync(distBrowserAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? ""),
-    ).toBe(fs.realpathSync(distSsrFInternalPath));
-    expect(
-      fs.realpathSync(distRuntimeAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? ""),
-    ).toBe(fs.realpathSync(distSsrFInternalPath));
-    expect(
-      fs.realpathSync(distRuntimeBrowserAliases["openclaw/plugin-sdk/ssrf-runtime-internal"] ?? ""),
-    ).toBe(fs.realpathSync(distSsrFInternalPath));
-    expect(otherAliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
-    expect(privateQaOtherAliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
-    expect(installedAliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
+    for (const owner of ownersWithAliases) {
+      expect(fs.realpathSync(owner.aliases[ssrfInternalSpecifier] ?? ""), owner.entryPath).toBe(
+        fs.realpathSync(owner.expectedAliasTarget),
+      );
+    }
+    expect(otherAliases[ssrfInternalSpecifier]).toBeUndefined();
+    expect(privateQaOtherAliases[ssrfInternalSpecifier]).toBeUndefined();
+    expect(installedAliases[ssrfInternalSpecifier]).toBeUndefined();
 
     const createJiti = await getCreateJiti();
     const sourceLoaderBaseUrl = pathToFileURL(
       path.join(fixture.root, "src", "plugins", "loader.ts"),
     ).href;
-    const ollamaLoader = createJiti(sourceLoaderBaseUrl, {
-      ...buildPluginLoaderJitiOptions(sourceAliases),
-      tryNative: false,
-    });
-    const loadedOllama = ollamaLoader(sourceOllamaEntry) as { loadedSsrFInternal?: unknown };
-    expect(loadedOllama.loadedSsrFInternal).toBe(true);
-    const browserLoader = createJiti(sourceLoaderBaseUrl, {
-      ...buildPluginLoaderJitiOptions(sourceBrowserAliases),
-      tryNative: false,
-    });
-    const loadedBrowser = browserLoader(sourceBrowserEntry) as { loadedSsrFInternal?: unknown };
-    expect(loadedBrowser.loadedSsrFInternal).toBe(true);
-
-    const distLoader = createJiti(sourceLoaderBaseUrl, {
-      ...buildPluginLoaderJitiOptions(distAliases),
-      tryNative: true,
-    });
-    const loadedDistOllama = distLoader(distOllamaEntry) as {
-      loadedSsrFInternal?: unknown;
-    };
-    expect(loadedDistOllama.loadedSsrFInternal).toBe(true);
-    const distBrowserLoader = createJiti(sourceLoaderBaseUrl, {
-      ...buildPluginLoaderJitiOptions(distBrowserAliases),
-      tryNative: true,
-    });
-    const loadedDistBrowser = distBrowserLoader(distBrowserEntry) as {
-      loadedSsrFInternal?: unknown;
-    };
-    expect(loadedDistBrowser.loadedSsrFInternal).toBe(true);
-
-    const distRuntimeLoader = createJiti(sourceLoaderBaseUrl, {
-      ...buildPluginLoaderJitiOptions(distRuntimeAliases),
-      tryNative: true,
-    });
-    const loadedDistRuntimeOllama = distRuntimeLoader(distRuntimeOllamaEntry) as {
-      loadedSsrFInternal?: unknown;
-    };
-    expect(loadedDistRuntimeOllama.loadedSsrFInternal).toBe(true);
-    const distRuntimeBrowserLoader = createJiti(sourceLoaderBaseUrl, {
-      ...buildPluginLoaderJitiOptions(distRuntimeBrowserAliases),
-      tryNative: true,
-    });
-    const loadedDistRuntimeBrowser = distRuntimeBrowserLoader(distRuntimeBrowserEntry) as {
-      loadedSsrFInternal?: unknown;
-    };
-    expect(loadedDistRuntimeBrowser.loadedSsrFInternal).toBe(true);
+    for (const owner of ownersWithAliases) {
+      const loader = createJiti(sourceLoaderBaseUrl, {
+        ...buildPluginLoaderJitiOptions(owner.aliases),
+        tryNative: owner.tryNative,
+      });
+      const loaded = loader(owner.entry) as { loadedSsrFInternal?: unknown };
+      expect(loaded.loadedSsrFInternal, owner.entryPath).toBe(true);
+    }
 
     const otherLoader = createJiti(sourceLoaderBaseUrl, {
       ...buildPluginLoaderJitiOptions(privateQaOtherAliases),
@@ -1213,181 +1148,36 @@ describe("plugin sdk alias helpers", () => {
 
   it("aliases workspace packages to source when dist artifacts are missing", () => {
     const fixture = createPluginSdkAliasFixture();
-    const gatewayClient = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "gateway-client",
-      srcFile: "index.ts",
-      distFile: "index.mjs",
-    });
-    const gatewayClientTimeouts = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "gateway-client",
-      srcFile: "timeouts.ts",
-      distFile: "timeouts.mjs",
-    });
-    const gatewayProtocol = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "gateway-protocol",
-      srcFile: "index.ts",
-      distFile: "index.mjs",
-    });
-    const gatewayProtocolSchema = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "gateway-protocol",
-      srcFile: "schema.ts",
-      distFile: "schema.mjs",
-    });
-    const gatewayProtocolFrameGuards = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "gateway-protocol",
-      srcFile: "frame-guards.ts",
-      distFile: "frame-guards.mjs",
-    });
-    const netPolicy = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "net-policy",
-      srcFile: "index.ts",
-      distFile: "index.mjs",
-    });
-    const mediaGenerationCore = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "media-generation-core",
-      srcFile: "index.ts",
-      distFile: "index.mjs",
-    });
-    const mediaCore = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "media-core",
-      srcFile: "index.ts",
-      distFile: "index.mjs",
-    });
-    const mediaCoreMime = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "media-core",
-      srcFile: "mime.ts",
-      distFile: "mime.mjs",
-    });
-    const acpCore = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "acp-core",
-      srcFile: "index.ts",
-      distFile: "index.mjs",
-    });
-    const acpCoreRuntimeTypes = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "acp-core",
-      srcFile: path.join("runtime", "types.ts"),
-      distFile: path.join("runtime", "types.mjs"),
-    });
-    const normalizationCore = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "normalization-core",
-      srcFile: "index.ts",
-      distFile: "index.mjs",
-    });
-    const normalizationBooleanCoercion = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "normalization-core",
-      srcFile: "boolean-coercion.ts",
-      distFile: "boolean-coercion.mjs",
-    });
-    const normalizationResult = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "normalization-core",
-      srcFile: "result.ts",
-      distFile: "result.mjs",
-    });
-    const normalizationAgentId = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "normalization-core",
-      srcFile: "agent-id.ts",
-      distFile: "agent-id.mjs",
-    });
-    const normalizationStringCoerce = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "normalization-core",
-      srcFile: "string-coerce.ts",
-      distFile: "string-coerce.mjs",
-    });
-    const retry = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "retry",
-      srcFile: "index.ts",
-      distFile: "index.mjs",
-    });
-    const markdownCore = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "markdown-core",
-      srcFile: "index.ts",
-      distFile: "index.mjs",
-    });
-    const markdownCoreTables = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "markdown-core",
-      srcFile: "tables.ts",
-      distFile: "tables.mjs",
-    });
-    const mediaGenerationModelRef = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "media-generation-core",
-      srcFile: "model-ref.ts",
-      distFile: "model-ref.mjs",
-    });
-    const terminalCore = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "terminal-core",
-      srcFile: "index.ts",
-      distFile: "index.mjs",
-    });
-    const terminalCoreTheme = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "terminal-core",
-      srcFile: "theme.ts",
-      distFile: "theme.mjs",
-    });
-    const netPolicyIp = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "net-policy",
-      srcFile: "ip.ts",
-      distFile: "ip.mjs",
-    });
-    const netPolicyUrlProtocol = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "net-policy",
-      srcFile: "url-protocol.ts",
-      distFile: "url-protocol.mjs",
-    });
-    const modelCatalogProviderId = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "model-catalog-core",
-      srcFile: "provider-id.ts",
-      distFile: "provider-id.mjs",
-    });
-    fs.rmSync(gatewayClient.distFile);
-    fs.rmSync(gatewayClientTimeouts.distFile);
-    fs.rmSync(gatewayProtocol.distFile);
-    fs.rmSync(gatewayProtocolSchema.distFile);
-    fs.rmSync(gatewayProtocolFrameGuards.distFile);
-    fs.rmSync(markdownCore.distFile);
-    fs.rmSync(markdownCoreTables.distFile);
-    fs.rmSync(mediaGenerationCore.distFile);
-    fs.rmSync(mediaGenerationModelRef.distFile);
-    fs.rmSync(mediaCore.distFile);
-    fs.rmSync(mediaCoreMime.distFile);
-    fs.rmSync(acpCore.distFile);
-    fs.rmSync(acpCoreRuntimeTypes.distFile);
-    fs.rmSync(normalizationCore.distFile);
-    fs.rmSync(normalizationBooleanCoercion.distFile);
-    fs.rmSync(normalizationResult.distFile);
-    fs.rmSync(normalizationAgentId.distFile);
-    fs.rmSync(normalizationStringCoerce.distFile);
-    fs.rmSync(retry.distFile);
-    fs.rmSync(terminalCore.distFile);
-    fs.rmSync(terminalCoreTheme.distFile);
-    fs.rmSync(netPolicy.distFile);
-    fs.rmSync(netPolicyIp.distFile);
-    fs.rmSync(netPolicyUrlProtocol.distFile);
-    fs.rmSync(modelCatalogProviderId.distFile);
+    const workspaceAliases = writeWorkspaceAliasFixtures(fixture.root, [
+      ["@openclaw/gateway-client", "gateway-client", "index"],
+      ["@openclaw/gateway-client/timeouts", "gateway-client", "timeouts"],
+      ["@openclaw/gateway-protocol", "gateway-protocol", "index"],
+      ["@openclaw/gateway-protocol/schema", "gateway-protocol", "schema"],
+      ["@openclaw/gateway-protocol/frame-guards", "gateway-protocol", "frame-guards"],
+      ["@openclaw/markdown-core", "markdown-core", "index"],
+      ["@openclaw/markdown-core/tables", "markdown-core", "tables"],
+      ["@openclaw/media-generation-core", "media-generation-core", "index"],
+      ["@openclaw/media-generation-core/model-ref", "media-generation-core", "model-ref"],
+      ["@openclaw/media-core", "media-core", "index"],
+      ["@openclaw/media-core/mime", "media-core", "mime"],
+      ["@openclaw/acp-core", "acp-core", "index"],
+      ["@openclaw/acp-core/runtime/types", "acp-core", "runtime/types"],
+      ["@openclaw/normalization-core", "normalization-core", "index"],
+      ["@openclaw/normalization-core/boolean-coercion", "normalization-core", "boolean-coercion"],
+      ["@openclaw/normalization-core/result", "normalization-core", "result"],
+      ["@openclaw/normalization-core/agent-id", "normalization-core", "agent-id"],
+      ["@openclaw/normalization-core/string-coerce", "normalization-core", "string-coerce"],
+      ["@openclaw/retry", "retry", "index"],
+      ["@openclaw/terminal-core", "terminal-core", "index"],
+      ["@openclaw/terminal-core/theme", "terminal-core", "theme"],
+      ["@openclaw/net-policy", "net-policy", "index"],
+      ["@openclaw/net-policy/ip", "net-policy", "ip"],
+      ["@openclaw/net-policy/url-protocol", "net-policy", "url-protocol"],
+      ["@openclaw/model-catalog-core/provider-id", "model-catalog-core", "provider-id"],
+    ]);
+    for (const entry of workspaceAliases) {
+      fs.rmSync(entry.distFile);
+    }
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
       bundledPluginFile("demo", "src/index.ts"),
@@ -1397,167 +1187,43 @@ describe("plugin sdk alias helpers", () => {
       buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
     );
 
-    expect(fs.realpathSync(aliases["@openclaw/gateway-client"] ?? "")).toBe(
-      fs.realpathSync(gatewayClient.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/gateway-client/timeouts"] ?? "")).toBe(
-      fs.realpathSync(gatewayClientTimeouts.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol"] ?? "")).toBe(
-      fs.realpathSync(gatewayProtocol.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/schema"] ?? "")).toBe(
-      fs.realpathSync(gatewayProtocolSchema.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/frame-guards"] ?? "")).toBe(
-      fs.realpathSync(gatewayProtocolFrameGuards.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/markdown-core"] ?? "")).toBe(
-      fs.realpathSync(markdownCore.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/markdown-core/tables"] ?? "")).toBe(
-      fs.realpathSync(markdownCoreTables.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/media-generation-core"] ?? "")).toBe(
-      fs.realpathSync(mediaGenerationCore.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/media-generation-core/model-ref"] ?? "")).toBe(
-      fs.realpathSync(mediaGenerationModelRef.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/media-core"] ?? "")).toBe(
-      fs.realpathSync(mediaCore.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/media-core/mime"] ?? "")).toBe(
-      fs.realpathSync(mediaCoreMime.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/acp-core"] ?? "")).toBe(
-      fs.realpathSync(acpCore.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/acp-core/runtime/types"] ?? "")).toBe(
-      fs.realpathSync(acpCoreRuntimeTypes.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/normalization-core"] ?? "")).toBe(
-      fs.realpathSync(normalizationCore.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/normalization-core/boolean-coercion"] ?? "")).toBe(
-      fs.realpathSync(normalizationBooleanCoercion.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/normalization-core/result"] ?? "")).toBe(
-      fs.realpathSync(normalizationResult.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/normalization-core/agent-id"] ?? "")).toBe(
-      fs.realpathSync(normalizationAgentId.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/normalization-core/string-coerce"] ?? "")).toBe(
-      fs.realpathSync(normalizationStringCoerce.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/retry"] ?? "")).toBe(fs.realpathSync(retry.srcFile));
-    expect(fs.realpathSync(aliases["@openclaw/terminal-core"] ?? "")).toBe(
-      fs.realpathSync(terminalCore.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/terminal-core/theme"] ?? "")).toBe(
-      fs.realpathSync(terminalCoreTheme.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/net-policy"] ?? "")).toBe(
-      fs.realpathSync(netPolicy.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/net-policy/ip"] ?? "")).toBe(
-      fs.realpathSync(netPolicyIp.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/net-policy/url-protocol"] ?? "")).toBe(
-      fs.realpathSync(netPolicyUrlProtocol.srcFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/model-catalog-core/provider-id"] ?? "")).toBe(
-      fs.realpathSync(modelCatalogProviderId.srcFile),
-    );
+    expectWorkspaceAliasTargets(aliases, workspaceAliases, "srcFile");
   });
 
   it("aliases workspace package subpaths to dist when available", () => {
     const fixture = createPluginSdkAliasFixture();
-    const gatewayClient = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "gateway-client",
-      srcFile: "readiness.ts",
-      distFile: "readiness.mjs",
-    });
-    const gatewayProtocol = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "gateway-protocol",
-      srcFile: "connect-error-details.ts",
-      distFile: "connect-error-details.mjs",
-    });
-    const gatewayProtocolFrameGuards = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "gateway-protocol",
-      srcFile: "frame-guards.ts",
-      distFile: "frame-guards.mjs",
-    });
-    const mediaGenerationCore = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "media-generation-core",
-      srcFile: "catalog.ts",
-      distFile: "catalog.mjs",
-    });
-    writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "acp-core",
-      srcFile: "normalize-text.ts",
-      distFile: "normalize-text.mjs",
-    });
-    const acpCoreRootDistFile = path.join(fixture.root, "dist", "acp-core", "normalize-text.js");
-    mkdirSafeDir(path.dirname(acpCoreRootDistFile));
-    fs.writeFileSync(acpCoreRootDistFile, "export {};\n", "utf-8");
-    writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "normalization-core",
-      srcFile: "record-coerce.ts",
-      distFile: "record-coerce.mjs",
-    });
-    const normalizationCoreRootDistFile = path.join(
-      fixture.root,
-      "dist",
-      "normalization-core",
-      "record-coerce.js",
-    );
-    mkdirSafeDir(path.dirname(normalizationCoreRootDistFile));
-    fs.writeFileSync(normalizationCoreRootDistFile, "export {};\n", "utf-8");
-    writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "retry",
-      srcFile: "index.ts",
-      distFile: "index.mjs",
-    });
-    const retryRootDistFile = path.join(fixture.root, "dist", "retry", "index.js");
-    mkdirSafeDir(path.dirname(retryRootDistFile));
-    fs.writeFileSync(retryRootDistFile, "export {};\n", "utf-8");
-    const markdownCore = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "markdown-core",
-      srcFile: "render.ts",
-      distFile: "render.mjs",
-    });
-    const ignoredTerminalCore = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "terminal-core",
-      srcFile: "links.ts",
-      distFile: "links.mjs",
-    });
-    void ignoredTerminalCore;
-    const terminalCoreRootDistFile = path.join(fixture.root, "dist", "terminal-core", "links.js");
-    mkdirSafeDir(path.dirname(terminalCoreRootDistFile));
-    fs.writeFileSync(terminalCoreRootDistFile, "export {};\n", "utf-8");
-    const netPolicy = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "net-policy",
-      srcFile: "url-protocol.ts",
-      distFile: "url-protocol.mjs",
-    });
-    const modelCatalogCore = writeWorkspacePackageEntry({
-      root: fixture.root,
-      packageDir: "model-catalog-core",
-      srcFile: "provider-model-id-normalize.ts",
-      distFile: "provider-model-id-normalize.mjs",
-    });
+    const workspaceAliases = writeWorkspaceAliasFixtures(fixture.root, [
+      ["@openclaw/gateway-client/readiness", "gateway-client", "readiness"],
+      [
+        "@openclaw/gateway-protocol/connect-error-details",
+        "gateway-protocol",
+        "connect-error-details",
+      ],
+      ["@openclaw/gateway-protocol/frame-guards", "gateway-protocol", "frame-guards"],
+      ["@openclaw/markdown-core/render", "markdown-core", "render"],
+      ["@openclaw/media-generation-core/catalog", "media-generation-core", "catalog"],
+      [
+        "@openclaw/acp-core/normalize-text",
+        "acp-core",
+        "normalize-text",
+        "dist/acp-core/normalize-text.js",
+        false,
+      ],
+      [
+        "@openclaw/normalization-core/record-coerce",
+        "normalization-core",
+        "record-coerce",
+        "dist/normalization-core/record-coerce.js",
+      ],
+      ["@openclaw/retry", "retry", "index", "dist/retry/index.js"],
+      ["@openclaw/terminal-core/links", "terminal-core", "links", "dist/terminal-core/links.js"],
+      ["@openclaw/net-policy/url-protocol", "net-policy", "url-protocol"],
+      [
+        "@openclaw/model-catalog-core/provider-model-id-normalize",
+        "model-catalog-core",
+        "provider-model-id-normalize",
+      ],
+    ]);
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
       bundledPluginFile("demo", "src/index.ts"),
@@ -1567,39 +1233,7 @@ describe("plugin sdk alias helpers", () => {
       buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
     );
 
-    expect(fs.realpathSync(aliases["@openclaw/gateway-client/readiness"] ?? "")).toBe(
-      fs.realpathSync(gatewayClient.distFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/connect-error-details"] ?? "")).toBe(
-      fs.realpathSync(gatewayProtocol.distFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/frame-guards"] ?? "")).toBe(
-      fs.realpathSync(gatewayProtocolFrameGuards.distFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/markdown-core/render"] ?? "")).toBe(
-      fs.realpathSync(markdownCore.distFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/media-generation-core/catalog"] ?? "")).toBe(
-      fs.realpathSync(mediaGenerationCore.distFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/acp-core/normalize-text"] ?? "")).toBe(
-      fs.realpathSync(acpCoreRootDistFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/normalization-core/record-coerce"] ?? "")).toBe(
-      fs.realpathSync(normalizationCoreRootDistFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/retry"] ?? "")).toBe(
-      fs.realpathSync(retryRootDistFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/terminal-core/links"] ?? "")).toBe(
-      fs.realpathSync(terminalCoreRootDistFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/net-policy/url-protocol"] ?? "")).toBe(
-      fs.realpathSync(netPolicy.distFile),
-    );
-    expect(
-      fs.realpathSync(aliases["@openclaw/model-catalog-core/provider-model-id-normalize"] ?? ""),
-    ).toBe(fs.realpathSync(modelCatalogCore.distFile));
+    expectWorkspaceAliasTargets(aliases, workspaceAliases, "expectedDistFile");
   });
 
   it("derives workspace aliases from packaged root dist when package metadata is absent", () => {
@@ -1845,9 +1479,9 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("uses transpiled module loads for source TypeScript plugin entries", () => {
-    expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(true);
+    expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(true);
     expect(
-      shouldPreferNativeModuleLoad(
+      resolvePluginLoaderTryNative(
         `/repo/${bundledPluginFile("discord", "src/channel.runtime.ts")}`,
       ),
     ).toBe(false);
@@ -1864,9 +1498,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(false);
       expect(
-        shouldPreferNativeModuleLoad(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
+        resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
       ).toBe(false);
     } finally {
       Object.defineProperty(process, "versions", {
@@ -1884,9 +1518,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(true);
+      expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(true);
       expect(
-        shouldPreferNativeModuleLoad(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
+        resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
       ).toBe(true);
     } finally {
       Object.defineProperty(process, "platform", {
@@ -1924,8 +1558,7 @@ describe("plugin sdk alias helpers", () => {
 
   it("prefers native module loading for bundled plugin dist .js modules, keeps .ts on aliased path", () => {
     // Built .js/.mjs/.cjs files under dist/extensions/ should now delegate
-    // to shouldPreferNativeModuleLoad() — which returns true on Node for
-    // compiled artifacts, avoiding the slow jiti transform path.
+    // to native loading on Node for compiled artifacts, avoiding the slow jiti transform path.
     expect(
       resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
         preferBuiltDist: true,
@@ -2295,6 +1928,14 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(aliasA).not.toBe(aliasB);
   });
 
+  it("reuses one merged map for plugin entrypoints with the same effective SDK surface", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const entryA = writePluginEntry(fixture.root, bundledPluginFile("a", "src/index.ts"));
+    const entryB = writePluginEntry(fixture.root, bundledPluginFile("b", "src/index.ts"));
+
+    expect(buildPluginLoaderAliasMap(entryB)).toBe(buildPluginLoaderAliasMap(entryA));
+  });
+
   it("returns different references when pluginSdkResolution differs", () => {
     const fixture = createPluginSdkAliasFixture();
     const entry = writePluginEntry(fixture.root, bundledPluginFile("res", "src/index.ts"));
@@ -2305,14 +1946,24 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(auto).not.toBe(dist);
   });
 
-  it("returns different references when argv1 differs", () => {
+  it("reuses one merged map when resolution modes have the same effective order", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const entry = writePluginEntry(fixture.root, bundledPluginFile("same-order", "src/index.ts"));
+
+    const auto = buildPluginLoaderAliasMap(entry, undefined, undefined, "auto");
+    const source = buildPluginLoaderAliasMap(entry, undefined, undefined, "src");
+
+    expect(source).toBe(auto);
+  });
+
+  it("reuses a merged map when different argv hints resolve the same SDK surface", () => {
     const fixture = createPluginSdkAliasFixture();
     const entry = writePluginEntry(fixture.root, bundledPluginFile("argv", "src/index.ts"));
 
     const a = buildPluginLoaderAliasMap(entry, "/path/to/cli-a.mjs");
     const b = buildPluginLoaderAliasMap(entry, "/path/to/cli-b.mjs");
 
-    expect(a).not.toBe(b);
+    expect(a).toBe(b);
   });
 
   it("returns different references when an explicit dev source root differs", () => {
@@ -2391,18 +2042,121 @@ describe("buildPluginLoaderAliasMap memoization", () => {
 });
 
 describe("buildPluginLoaderJitiOptions", () => {
-  it("adds the versioned fs cache directory to plugin loader jiti options", () => {
+  it("scopes the jiti cache to the durable user cache and OpenClaw install", () => {
     const root = createTrustedOpenClawPackageFixture("2.0.0");
     const tmpDir = path.join(root, "tmp");
+    const cacheRoot = path.join(root, "cache");
 
-    const options = withEnv({ TMPDIR: tmpDir }, () =>
+    const options = withEnv({ TMPDIR: tmpDir, XDG_CACHE_HOME: `  ${cacheRoot}  ` }, () =>
       buildPluginLoaderJitiOptions(
         { "openclaw/plugin-sdk/core": path.join(root, "dist", "plugin-sdk", "core.js") },
         { modulePath: path.join(root, "dist", "plugins", "loader.js") },
       ),
     );
 
-    expect(options.fsCache).toContain(path.join(tmpDir, "jiti", "openclaw", "2.0.0"));
+    expect(options.fsCache).toContain(path.join(cacheRoot, "openclaw", "jiti", "2.0.0"));
+    expect(options.fsCache).not.toContain(tmpDir);
+  });
+
+  it.each(["", "   ", "relative/cache"])(
+    "ignores non-absolute XDG cache roots (%j)",
+    (xdgCacheHome) => {
+      const root = createTrustedOpenClawPackageFixture("2.0.0");
+      const homeDir = path.join(root, "home");
+      const options = withEnv(
+        {
+          XDG_CACHE_HOME: xdgCacheHome,
+          LOCALAPPDATA: undefined,
+          OPENCLAW_HOME: homeDir,
+        },
+        () => buildPluginLoaderJitiOptions({}, { modulePath: path.join(root, "dist", "plugins") }),
+      );
+      const platformCacheRoot =
+        process.platform === "win32"
+          ? path.join(homeDir, "AppData", "Local")
+          : process.platform === "darwin"
+            ? path.join(homeDir, "Library", "Caches")
+            : path.join(homeDir, ".cache");
+
+      expect(options.fsCache).toContain(path.join(platformCacheRoot, "openclaw", "jiti", "2.0.0"));
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "uses an absolute Windows local application-data cache root",
+    () => {
+      const root = createTrustedOpenClawPackageFixture("2.0.0");
+      const localAppData = path.join(root, "local-app-data");
+      const options = withEnv(
+        {
+          XDG_CACHE_HOME: undefined,
+          LOCALAPPDATA: `  ${localAppData}  `,
+          OPENCLAW_HOME: path.join(root, "home"),
+        },
+        () => buildPluginLoaderJitiOptions({}, { modulePath: path.join(root, "dist", "plugins") }),
+      );
+
+      expect(options.fsCache).toContain(path.join(localAppData, "openclaw", "jiti", "2.0.0"));
+    },
+  );
+
+  it.each(["JITI_FS_CACHE", "JITI_CACHE"])("honors the %s filesystem-cache opt-out", (envKey) => {
+    const root = createTrustedOpenClawPackageFixture("2.0.0");
+    const options = withEnv(
+      {
+        JITI_FS_CACHE: envKey === "JITI_FS_CACHE" ? "false" : undefined,
+        JITI_CACHE: envKey === "JITI_CACHE" ? "false" : undefined,
+        XDG_CACHE_HOME: path.join(root, "cache"),
+      },
+      () => buildPluginLoaderJitiOptions({}, { modulePath: path.join(root, "dist", "plugins") }),
+    );
+
+    expect(options.fsCache).toBe(false);
+  });
+
+  it("keeps deferred jiti imports working after the temporary directory is deleted", async () => {
+    const root = createTrustedOpenClawPackageFixture("2.0.0");
+    const transientTmpRoot = path.join(root, "tmp");
+    const durableCacheRoot = path.join(root, "cache");
+    const sourceRoot = path.join(root, "source");
+    const parentModulePath = path.join(sourceRoot, "parent.ts");
+    const childModulePath = path.join(sourceRoot, "child.ts");
+    mkdirSafeDir(sourceRoot);
+    mkdirSafeDir(transientTmpRoot);
+    fs.writeFileSync(
+      parentModulePath,
+      'export const loadChild = () => import("./child.ts");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(childModulePath, 'export const marker = "still-delivered";\n', "utf-8");
+    const createJiti = await getCreateJiti();
+
+    await withEnvAsync(
+      {
+        TMPDIR: transientTmpRoot,
+        XDG_CACHE_HOME: durableCacheRoot,
+        JITI_FS_CACHE: undefined,
+        JITI_CACHE: undefined,
+      },
+      async () => {
+        const options = buildPluginLoaderJitiOptions({}, { modulePath: parentModulePath });
+        const loadSourceModule = createJiti(parentModulePath, {
+          ...options,
+          tryNative: false,
+        });
+        const parent = loadSourceModule(parentModulePath) as {
+          loadChild: () => Promise<{ marker: string }>;
+        };
+
+        fs.rmSync(transientTmpRoot, { recursive: true, force: true });
+
+        await expect(parent.loadChild()).resolves.toMatchObject({ marker: "still-delivered" });
+        expect(String(options.fsCache)).toContain(path.join(durableCacheRoot, "openclaw", "jiti"));
+        expect(fs.readdirSync(String(options.fsCache)).some((file) => file.includes("child"))).toBe(
+          true,
+        );
+      },
+    );
   });
 
   it("pre-normalizes and marks alias maps for source transforms", () => {

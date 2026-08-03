@@ -7,6 +7,7 @@ import {
   BoardWidgetAppViewResultSchema,
   BoardWidgetGrantParamsSchema,
   BoardWidgetPutParamsSchema,
+  BoardWidgetPutResultSchema,
   BoardWidgetResizeOpSchema,
 } from "./board.js";
 
@@ -128,6 +129,31 @@ describe("BoardSnapshotSchema", () => {
 });
 
 describe("BoardWidgetPutParamsSchema", () => {
+  it("accepts bounded plugin widget input shapes", () => {
+    const pluginWidget = {
+      sessionKey: "agent:main:main",
+      name: "work-item",
+      content: {
+        kind: "plugin",
+        pluginKind: "workboard:card",
+        props: { cardId: "card-123" },
+      },
+    };
+    expect(Value.Check(BoardWidgetPutParamsSchema, pluginWidget)).toBe(true);
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        ...pluginWidget,
+        content: { ...pluginWidget.content, pluginKind: "missing-separator" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        ...pluginWidget,
+        content: { ...pluginWidget.content, props: ["not", "an", "object"] },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts a gateway-resolved canvas document source", () => {
     expect(
       Value.Check(BoardWidgetPutParamsSchema, {
@@ -136,6 +162,55 @@ describe("BoardWidgetPutParamsSchema", () => {
         content: { kind: "canvas-doc", docId: "cv_status" },
         presentation: "full-bleed",
         heightMode: "auto",
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts bounded generated widget identity metadata", () => {
+    const pin = {
+      sessionKey: "agent:main:main",
+      name: "status",
+      content: { kind: "html", html: "<p>ok</p>" },
+      generatedIdentity: {
+        source: "show_widget",
+        key: "a".repeat(64),
+        fallbackName: "status-aaaaaaaa",
+      },
+    };
+    expect(Value.Check(BoardWidgetPutParamsSchema, pin)).toBe(true);
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        ...pin,
+        generatedIdentity: { ...pin.generatedIdentity, source: "canvas" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        ...pin,
+        generatedIdentity: { ...pin.generatedIdentity, key: "short" },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns the committed widget name with the board snapshot", () => {
+    expect(
+      Value.Check(BoardWidgetPutResultSchema, {
+        sessionKey: "agent:main:main",
+        revision: 1,
+        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+        widgets: [
+          {
+            name: "status-aaaaaaaa",
+            tabId: "main",
+            contentKind: "html",
+            sizeW: 6,
+            sizeH: 4,
+            position: 0,
+            grantState: "none",
+            revision: 1,
+          },
+        ],
+        resolvedWidgetName: "status-aaaaaaaa",
       }),
     ).toBe(true);
   });

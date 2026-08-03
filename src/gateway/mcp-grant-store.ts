@@ -1,12 +1,14 @@
 import crypto from "node:crypto";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
@@ -14,6 +16,9 @@ export type McpLoopbackRequestContext = {
   agentId?: string;
   sessionId?: string;
   runId?: string;
+  /** Server-selected roots for mediated coding tools in this CLI run. */
+  workspaceDir?: string;
+  cwd?: string;
   modelProvider?: string;
   modelId?: string;
   messageProvider?: string;
@@ -25,6 +30,8 @@ export type McpLoopbackRequestContext = {
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Immutable completion-only authority; never sourced from MCP request headers. */
+  sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   /**
@@ -35,6 +42,7 @@ export type McpLoopbackRequestContext = {
    * hard enforcement. Unset keeps the full session-scoped surface.
    */
   toolsAllow?: string[];
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   senderIsOwner: boolean;
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;
@@ -79,8 +87,14 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1h
 const MAX_TTL_MS = 12 * 60 * 60 * 1000;
 
-const grantsByToken = new Map<string, McpAttachGrant>();
-const clientGrantsByToken = new Map<string, StoredMcpLoopbackClientGrant>();
+const grantsByToken = resolveGlobalMap<string, McpAttachGrant>(
+  Symbol.for("openclaw.mcpAttachGrants"),
+  "close-and-restart",
+);
+const clientGrantsByToken = resolveGlobalMap<string, StoredMcpLoopbackClientGrant>(
+  Symbol.for("openclaw.mcpLoopbackClientGrants"),
+  "close-and-restart",
+);
 
 function clampTtlMs(ttlMs: number | undefined): number {
   if (!Number.isFinite(ttlMs) || (ttlMs as number) <= 0) {

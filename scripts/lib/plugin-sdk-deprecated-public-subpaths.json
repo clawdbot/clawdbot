@@ -1,4 +1,5 @@
 [
+  "agent-media-payload",
   "agent-config-primitives",
   "channel-lifecycle",
   "channel-logging",

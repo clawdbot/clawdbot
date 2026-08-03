@@ -16,14 +16,18 @@ import {
   maxAsk,
   minSecurity,
   normalizeExecAsk,
+  normalizeExecMode,
   normalizeExecSecurity,
   normalizeExecTarget,
   readExecApprovalsSnapshot,
+  resolveExecModeFromPolicy,
+  resolveExecModePolicy,
   resolveExecApprovalsFromFile,
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
   type ExecApprovalsFile,
   type ExecAsk,
+  type ExecMode,
   type ExecSecurity,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
@@ -174,6 +178,7 @@ function applyConfigExecPolicy(draft: Record<string, unknown>, policy: ExecPolic
     tools?: {
       exec?: {
         host?: ExecTarget;
+        mode?: ExecMode;
         security?: ExecSecurity;
         ask?: ExecAsk;
       };
@@ -184,11 +189,23 @@ function applyConfigExecPolicy(draft: Record<string, unknown>, policy: ExecPolic
   if (policy.host !== undefined) {
     root.tools.exec.host = policy.host;
   }
-  if (policy.security !== undefined) {
-    root.tools.exec.security = policy.security;
-  }
-  if (policy.ask !== undefined) {
-    root.tools.exec.ask = policy.ask;
+  if (policy.security !== undefined || policy.ask !== undefined) {
+    const currentPolicy = resolveExecModePolicy({
+      mode: normalizeExecMode(root.tools.exec.mode),
+      security: root.tools.exec.security ?? "full",
+      ask: root.tools.exec.ask ?? "off",
+    });
+    const security = policy.security ?? currentPolicy.security;
+    const ask = policy.ask ?? currentPolicy.ask;
+    if (ask === "always" || (security === "full" && ask === "on-miss")) {
+      delete root.tools.exec.mode;
+      root.tools.exec.security = security;
+      root.tools.exec.ask = ask;
+    } else {
+      root.tools.exec.mode = resolveExecModeFromPolicy({ security, ask });
+      delete root.tools.exec.security;
+      delete root.tools.exec.ask;
+    }
   }
 }
 
@@ -270,7 +287,7 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
   );
   const baseNote = hasNodeRuntimeScope
     ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
-    : "Effective exec policy is the host approvals file intersected with requested tools.exec policy.";
+    : "Effective exec policy is the host approvals policy intersected with requested tools.exec policy.";
   return {
     configPath: configSnapshot.path,
     approvalsPath: approvalsSnapshot.path,
@@ -332,8 +349,10 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
         { Field: "Config", Value: sanitizeExecPolicyTableCell(payload.configPath) },
         { Field: "Approvals", Value: sanitizeExecPolicyTableCell(payload.approvalsPath) },
         {
-          Field: "Approvals File",
-          Value: sanitizeExecPolicyTableCell(payload.approvalsExists ? "present" : "missing"),
+          Field: "Approvals State",
+          Value: sanitizeExecPolicyTableCell(
+            payload.approvalsExists ? "stored" : "defaults (no stored overrides)",
+          ),
         },
       ],
     }).trimEnd(),

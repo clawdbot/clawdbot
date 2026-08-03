@@ -36,12 +36,12 @@ The lists below are generated from the source target registry and checked agains
 - `models.providers.*.request.tls.key`
 - `models.providers.*.request.tls.passphrase`
 - `skills.entries.*.apiKey`
-- `agents.defaults.memorySearch.remote.apiKey`
-- `agents.list[].tts.providers.*.apiKey`
-- `agents.list[].memorySearch.remote.apiKey`
+- `memory.search.remote.apiKey`
+- `agents.entries.*.tts.providers.*.apiKey`
+- `agents.entries.*.memory.search.remote.apiKey`
 - `talk.providers.*.apiKey`
 - `talk.realtime.providers.*.apiKey`
-- `messages.tts.providers.*.apiKey`
+- `tts.providers.*.apiKey`
 - `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.codex.config.appServer.authToken`
@@ -50,6 +50,7 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.firecrawl.config.webFetch.apiKey`
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
+- `plugins.entries.google.config.webSearch.headers.*`
 - `plugins.entries.xai.config.webSearch.apiKey`
 - `plugins.entries.moonshot.config.webSearch.apiKey`
 - `plugins.entries.perplexity.config.webSearch.apiKey`
@@ -83,6 +84,8 @@ The lists below are generated from the source target registry and checked agains
 - `channels.slack.accounts.*.signingSecret`
 - `channels.sms.authToken`
 - `channels.sms.accounts.*.authToken`
+- `channels.buzz.authTag`
+- `channels.buzz.privateKey`
 - `channels.clickclack.token`
 - `channels.clickclack.accounts.*.token`
 - `channels.discord.token`
@@ -144,7 +147,6 @@ These credentials are minted, rotated, session-bearing, or OAuth-durable classes
 
 [//]: # "secretref-unsupported-list-start"
 
-- `commands.ownerDisplaySecret`
 - `hooks.token`
 - `hooks.gmail.pushToken`
 - `hooks.mappings[].sessionKey`

@@ -155,6 +155,26 @@ describe("session reference shape detection", () => {
 });
 
 describe("resolved session visibility checks", () => {
+  it("rejects incognito targets even when the requester is the same session", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-private";
+
+    await expect(
+      resolveVisibleSessionReference({
+        action: "history",
+        resolvedSession: {
+          ok: true,
+          key: sessionKey,
+          displayKey: sessionKey,
+          resolvedViaSessionId: false,
+        },
+        requesterSessionKey: sessionKey,
+        restrictToSpawned: false,
+        visibilitySessionKey: sessionKey,
+      }),
+    ).resolves.toMatchObject({ ok: false, status: "forbidden" });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("requires spawned-session verification only for sandboxed key-based cross-session access", async () => {
     const cases = [
       {

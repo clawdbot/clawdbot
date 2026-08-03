@@ -99,6 +99,13 @@ export function buildMSTeamsGraphMessageUrl(params: {
   return `${GRAPH_ROOT}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`;
 }
 
+async function releaseGraphResponse(response: Response, release: () => Promise<void>) {
+  if (!response.bodyUsed) {
+    void response.body?.cancel().catch(() => undefined); // Awaiting capture tees can deadlock.
+  }
+  await release();
+}
+
 async function fetchGraphCollection(params: {
   url: string;
   accessToken: string;
@@ -133,7 +140,7 @@ async function fetchGraphCollection(params: {
       return { status, items: [] };
     }
   } finally {
-    await release();
+    await releaseGraphResponse(response, release);
   }
 }
 
@@ -228,7 +235,7 @@ async function downloadGraphHostedContent(params: {
           sourceId: item.id,
         });
       } finally {
-        await release();
+        await releaseGraphResponse(valRes, release);
       }
     } catch (err) {
       out.push(createGraphHostedContentFact(item));
@@ -337,7 +344,7 @@ export async function downloadMSTeamsGraphMedia(params: {
         });
       }
     } finally {
-      await release();
+      await releaseGraphResponse(msgRes, release);
     }
   } catch (err) {
     params.logger?.debug?.("graph media message fetch failed", {
@@ -367,6 +374,9 @@ export async function downloadMSTeamsGraphMedia(params: {
       continue;
     }
 
+    // This pass owns reference attachments even when their download fails; the
+    // generic attachment pass must not emit a second unavailable fact.
+    downloadedReferenceUrls.add(shareUrl);
     try {
       const sharesUrl = `${GRAPH_ROOT}/shares/${encodeGraphShareId(shareUrl)}/driveItem/content`;
       if (!isUrlAllowed(sharesUrl, policy.allowHosts)) {
@@ -410,7 +420,6 @@ export async function downloadMSTeamsGraphMedia(params: {
         },
       });
       sharePointMedia.push(sourceId ? { ...media, sourceId } : media);
-      downloadedReferenceUrls.add(shareUrl);
     } catch (err) {
       sharePointMedia.push(unavailableMedia);
       params.logger?.warn?.("msteams SharePoint reference download failed", {

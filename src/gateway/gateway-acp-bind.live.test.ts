@@ -7,19 +7,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-} from "../config/config.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
-import {
-  pinActivePluginChannelRegistry,
-  releasePinnedPluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-} from "../plugins/runtime.js";
+import { getActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { setTestEnvValue } from "../test-utils/env.js";
@@ -595,9 +587,6 @@ describeLive("gateway live (ACP bind)", () => {
       const memoryToken = createAcpProbePhrase("quiet cedar", randomBytes(4).toString("hex"));
       let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
       let client: GatewayClient | undefined;
-      let pinnedChannelRegistry:
-        | ReturnType<typeof createSlackCurrentConversationBindingRegistry>
-        | undefined;
 
       clearRuntimeConfigSnapshot();
       setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
@@ -611,7 +600,7 @@ describeLive("gateway live (ACP bind)", () => {
         await prepareCodexHomeForLiveBindTest(tempRoot);
       }
 
-      const cfg = getRuntimeConfig();
+      const cfg = await readLiveTestConfig();
       const acpxEntry = cfg.plugins?.entries?.acpx;
       const existingAgentOverrides: Record<string, { command?: string }> =
         typeof acpxEntry?.config === "object" &&
@@ -685,7 +674,6 @@ describeLive("gateway live (ACP bind)", () => {
         cron: {
           ...cfg.cron,
           enabled: true,
-          store: path.join(tempRoot, "cron.json"),
         },
       };
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
@@ -712,9 +700,11 @@ describeLive("gateway live (ACP bind)", () => {
           timeoutMs: CONNECT_TIMEOUT_MS,
         });
         logLiveStep("gateway websocket connected");
-        const channelRegistry = createSlackCurrentConversationBindingRegistry();
-        pinActivePluginChannelRegistry(channelRegistry);
-        pinnedChannelRegistry = channelRegistry;
+        const activeRegistry = getActivePluginRegistry();
+        if (!activeRegistry) {
+          throw new Error("expected gateway root plugin registry");
+        }
+        activeRegistry.channels.push(...createSlackCurrentConversationBindingRegistry().channels);
 
         const bindResult = await bindConversationAndWait({
           client,
@@ -1078,9 +1068,6 @@ describeLive("gateway live (ACP bind)", () => {
         logLiveStep("bound session created cron via MCP and CLI verification passed");
       } finally {
         try {
-          if (pinnedChannelRegistry) {
-            releasePinnedPluginChannelRegistry(pinnedChannelRegistry);
-          }
           clearConfigCache();
           clearRuntimeConfigSnapshot();
           await client?.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});

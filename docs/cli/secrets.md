@@ -36,7 +36,7 @@ Exit codes for CI/gates:
 - `audit --check` returns `1` on findings.
 - Unresolved refs return `2` (regardless of `--check`).
 
-Related: [Secrets Management](/gateway/secrets) · [SecretRef Credential Surface](/reference/secretref-credential-surface) · [Security](/gateway/security)
+Related: [Secrets Management](/gateway/secrets) · [1Password plugin](/plugins/onepassword) · [SecretRef Credential Surface](/reference/secretref-credential-surface) · [Security](/gateway/security)
 
 ## Reload runtime snapshot
 
@@ -161,3 +161,4 @@ If `audit --check` still reports plaintext findings, update the remaining report
 - [CLI reference](/cli)
 - [Secrets management](/gateway/secrets)
 - [Vault SecretRefs](/plugins/vault)
+- [1Password plugin](/plugins/onepassword)

@@ -85,6 +85,7 @@ struct SettingsProTab: View {
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
+    @State var systemAgentChatStore = IOSSystemAgentChatStore()
     @State private var navigationPath: [SettingsRoute] = []
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
@@ -191,6 +192,9 @@ struct SettingsProTab: View {
                     self.applyPendingLocationModeIfAvailable()
                     self.refreshNotificationSettings()
                 }
+            }
+            .onChange(of: self.appModel.locationAuthorizationSnapshot) { _, _ in
+                self.refreshLocationPermissionSummary()
             }
             .onChange(of: self.locationModeRaw) { _, newValue in
                 self.handleLocationModeChange(newValue)
@@ -322,10 +326,12 @@ struct SettingsProTab: View {
                             self.pendingForgetGateway = nil
                         }
                     }),
-                titleVisibility: .visible)
-            {
+                titleVisibility: .visible,
+                // The action only schedules Task; dismissal clears state before that task resumes.
+                presenting: self.pendingForgetGateway)
+            { entry in
                 Button(role: .destructive) {
-                    Task { await self.forgetPendingGateway() }
+                    Task { await self.forgetGateway(entry) }
                 } label: {
                     Text("Forget Gateway")
                         .font(OpenClawType.subheadSemiBold)
@@ -336,7 +342,7 @@ struct SettingsProTab: View {
                     Text("Cancel")
                         .font(OpenClawType.subheadSemiBold)
                 }
-            } message: {
+            } message: { _ in
                 // Keep the extraction key contiguous for the native localization inventory.
                 Text(
                     String(

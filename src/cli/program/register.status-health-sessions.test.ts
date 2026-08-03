@@ -412,6 +412,17 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it.each([
+    { flag: "--active", value: "5" },
+    { flag: "--limit", value: "1" },
+  ])("rejects inherited $flag before running session cleanup", async ({ flag, value }) => {
+    await runCli(["sessions", flag, value, "cleanup", "--enforce"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(flag));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsCleanupCommand).not.toHaveBeenCalled();
+  });
+
   it("runs sessions tail with forwarded progress options", async () => {
     await runCli([
       "sessions",
@@ -435,6 +446,14 @@ describe("registerStatusHealthSessionsCommands", () => {
       follow: true,
       tail: "5",
     });
+  });
+
+  it("rejects inherited JSON mode for human-readable session tail", async () => {
+    await runCli(["sessions", "--json", "tail"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--json"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsTailCommand).not.toHaveBeenCalled();
   });
 
   it("runs sessions export-trajectory with owner-routable export options", async () => {
@@ -474,6 +493,20 @@ describe("registerStatusHealthSessionsCommands", () => {
       requestJsonBase64: "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ",
       json: true,
     });
+  });
+
+  it("rejects inherited all-agent scope for single-session trajectory exports", async () => {
+    await runCli([
+      "sessions",
+      "--all-agents",
+      "export-trajectory",
+      "--session-key",
+      "agent:main:main",
+    ]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(exportTrajectoryCommand).not.toHaveBeenCalled();
   });
 
   it("runs tasks list from the parent command", async () => {

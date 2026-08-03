@@ -56,7 +56,58 @@ function createOpenRouterDoneStreamWithoutGeneration() {
   return stream;
 }
 
+async function captureOpenRouterWrappedPayload(params: {
+  modelId: string;
+  thinkingLevel: string;
+  payload: Record<string, unknown>;
+  baseUrl?: string;
+  forwardPayload?: boolean;
+}) {
+  const provider = await registerSingleProviderPlugin(openrouterPlugin);
+  let capturedPayload: Record<string, unknown> | undefined;
+  const baseStreamFn = vi.fn(
+    (
+      ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
+    ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
+      void args[2]?.onPayload?.(params.payload, args[0]);
+      if (!params.forwardPayload) {
+        capturedPayload = params.payload;
+      }
+      return { async *[Symbol.asyncIterator]() {} } as never;
+    },
+  );
+  const wrapped = provider.wrapStreamFn?.({
+    provider: "openrouter",
+    modelId: params.modelId,
+    streamFn: baseStreamFn,
+    thinkingLevel: params.thinkingLevel,
+  } as never);
+  void wrapped?.(
+    {
+      provider: "openrouter",
+      api: "openai-completions",
+      id: params.modelId,
+      ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
+      compat: {},
+    } as never,
+    { messages: [] } as never,
+    (params.forwardPayload
+      ? {
+          onPayload: (payload: unknown) => {
+            capturedPayload = payload as Record<string, unknown>;
+            return payload;
+          },
+        }
+      : {}) as never,
+  );
+  expect(baseStreamFn).toHaveBeenCalledOnce();
+  return capturedPayload;
+}
+
 type OpenRouterManifest = {
+  modelCatalog?: {
+    discovery?: Record<string, string>;
+  };
   providerAuthChoices?: Array<{
     provider?: string;
     method?: string;
@@ -76,6 +127,10 @@ function readManifest(): OpenRouterManifest {
 }
 
 describe("openrouter provider hooks", () => {
+  it("declares runtime text catalog discovery", () => {
+    expect(readManifest().modelCatalog?.discovery).toEqual({ openrouter: "runtime" });
+  });
+
   it("registers OpenRouter speech alongside model, media, and catalog providers", async () => {
     const {
       providers,
@@ -89,7 +144,14 @@ describe("openrouter provider hooks", () => {
       id: "openrouter",
       name: "OpenRouter Provider",
     });
-    const modelCatalogProvider = expectUnifiedModelCatalogProviderRegistration({
+    const textModelCatalogProvider = expectUnifiedModelCatalogProviderRegistration({
+      plugin: openrouterPlugin,
+      pluginId: "openrouter",
+      pluginName: "OpenRouter Provider",
+      provider: "openrouter",
+      kind: "text",
+    });
+    const videoModelCatalogProvider = expectUnifiedModelCatalogProviderRegistration({
       plugin: openrouterPlugin,
       pluginId: "openrouter",
       pluginName: "OpenRouter Provider",
@@ -107,7 +169,9 @@ describe("openrouter provider hooks", () => {
     expect(imageProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(musicProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(videoProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
-    expect(modelCatalogProvider.liveCatalog).toBeTypeOf("function");
+    expect(textModelCatalogProvider.staticCatalog).toBeTypeOf("function");
+    expect(textModelCatalogProvider.liveCatalog).toBeTypeOf("function");
+    expect(videoModelCatalogProvider.liveCatalog).toBeTypeOf("function");
   });
 
   it("registers OAuth and API-key auth methods", async () => {
@@ -830,84 +894,29 @@ describe("openrouter provider hooks", () => {
   });
 
   it("does not inject OpenRouter reasoning for Hunter Alpha", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn = vi.fn(
-      (
-        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
-      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
-        void args[2]?.onPayload?.({}, args[0]);
-        return { async *[Symbol.asyncIterator]() {} } as never;
-      },
-    );
-
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "openrouter",
+    const capturedPayload = await captureOpenRouterWrappedPayload({
       modelId: "openrouter/hunter-alpha",
-      streamFn: baseStreamFn,
       thinkingLevel: "high",
-    } as never);
-
-    void wrapped?.(
-      {
-        provider: "openrouter",
-        api: "openai-completions",
-        id: "openrouter/hunter-alpha",
-        compat: {},
-      } as never,
-      { messages: [] } as never,
-      {
-        onPayload: (payload: unknown) => {
-          capturedPayload = payload as Record<string, unknown>;
-          return payload;
-        },
-      } as never,
-    );
-
+      payload: {},
+      forwardPayload: true,
+    });
     expect(capturedPayload).toStrictEqual({});
-    expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
   it("uses OpenRouter reasoning for DeepSeek V4 replay turns", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn = vi.fn(
-      (
-        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
-      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
-        const payload = {
-          messages: [
-            { role: "user", content: "read file" },
-            { role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] },
-            { role: "tool", content: "ok" },
-            { role: "assistant", content: "done" },
-          ],
-        };
-        void args[2]?.onPayload?.(payload, args[0]);
-        capturedPayload = payload;
-        return { async *[Symbol.asyncIterator]() {} } as never;
-      },
-    );
-
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "openrouter",
+    const capturedPayload = await captureOpenRouterWrappedPayload({
       modelId: "deepseek/deepseek-v4-flash",
-      streamFn: baseStreamFn,
       thinkingLevel: "xhigh",
-    } as never);
-
-    void wrapped?.(
-      {
-        provider: "openrouter",
-        api: "openai-completions",
-        id: "deepseek/deepseek-v4-flash",
-        baseUrl: "https://openrouter.ai/api/v1",
-        compat: {},
-      } as never,
-      { messages: [] } as never,
-      {},
-    );
-
+      baseUrl: "https://openrouter.ai/api/v1",
+      payload: {
+        messages: [
+          { role: "user", content: "read file" },
+          { role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] },
+          { role: "tool", content: "ok" },
+          { role: "assistant", content: "done" },
+        ],
+      },
+    });
     expect(capturedPayload?.reasoning).toEqual({ effort: "xhigh" });
     expect(capturedPayload).not.toHaveProperty("thinking");
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
@@ -920,7 +929,6 @@ describe("openrouter provider hooks", () => {
       { role: "tool", content: "ok" },
       { role: "assistant", content: "done", reasoning_content: "" },
     ]);
-    expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
   it("clamps OpenRouter DeepSeek V4 reasoning.effort to supported OpenRouter values", async () => {
@@ -972,45 +980,19 @@ describe("openrouter provider hooks", () => {
   });
 
   it("strips disabled OpenRouter DeepSeek V4 reasoning replay fields", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn = vi.fn(
-      (
-        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
-      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
-        const payload = {
-          reasoning: { effort: "high" },
-          messages: [{ role: "assistant", content: "done", reasoning_content: "" }],
-        };
-        void args[2]?.onPayload?.(payload, args[0]);
-        capturedPayload = payload;
-        return { async *[Symbol.asyncIterator]() {} } as never;
-      },
-    );
-
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "openrouter",
+    const capturedPayload = await captureOpenRouterWrappedPayload({
       modelId: "openrouter/deepseek/deepseek-v4-pro",
-      streamFn: baseStreamFn,
       thinkingLevel: "off",
-    } as never);
-    void wrapped?.(
-      {
-        provider: "openrouter",
-        api: "openai-completions",
-        id: "openrouter/deepseek/deepseek-v4-pro",
-        baseUrl: "https://openrouter.ai/api/v1",
-        compat: {},
-      } as never,
-      { messages: [] } as never,
-      {},
-    );
-
+      baseUrl: "https://openrouter.ai/api/v1",
+      payload: {
+        reasoning: { effort: "high" },
+        messages: [{ role: "assistant", content: "done", reasoning_content: "" }],
+      },
+    });
     expect(capturedPayload).not.toHaveProperty("reasoning");
     expect(capturedPayload).not.toHaveProperty("thinking");
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
     expect(capturedPayload?.messages).toEqual([{ role: "assistant", content: "done" }]);
-    expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
   it("recognizes full OpenRouter DeepSeek V4 refs but skips custom proxy routes", async () => {
@@ -1077,51 +1059,22 @@ describe("openrouter provider hooks", () => {
   });
 
   it("strips OpenRouter-routed Anthropic assistant prefill when reasoning is enabled", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn = vi.fn(
-      (
-        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
-      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
-        const payload = {
-          messages: [
-            { role: "user", content: "Return JSON." },
-            { role: "assistant", content: "{" },
-          ],
-        };
-        void args[2]?.onPayload?.(payload, args[0]);
-        capturedPayload = payload;
-        return { async *[Symbol.asyncIterator]() {} } as never;
-      },
-    );
-
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "openrouter",
+    const capturedPayload = await captureOpenRouterWrappedPayload({
       modelId: "anthropic/claude-opus-4.6",
-      streamFn: baseStreamFn,
       thinkingLevel: "high",
-    } as never);
-
-    void wrapped?.(
-      {
-        provider: "openrouter",
-        api: "openai-completions",
-        id: "anthropic/claude-opus-4.6",
-        baseUrl: "https://openrouter.ai/api/v1",
-        compat: {},
-      } as never,
-      { messages: [] } as never,
-      {},
-    );
-
+      baseUrl: "https://openrouter.ai/api/v1",
+      payload: {
+        messages: [
+          { role: "user", content: "Return JSON." },
+          { role: "assistant", content: "{" },
+        ],
+      },
+    });
     expect(capturedPayload?.messages).toEqual([{ role: "user", content: "Return JSON." }]);
     expect(capturedPayload?.reasoning).toEqual({ effort: "high" });
-    expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
   it("keeps OpenRouter-routed Anthropic tool-use assistant messages when reasoning is enabled", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    let capturedPayload: Record<string, unknown> | undefined;
     const messages = [
       { role: "user", content: "Use the tool." },
       {
@@ -1129,39 +1082,14 @@ describe("openrouter provider hooks", () => {
         content: [{ type: "tool_use", id: "toolu_1", name: "lookup", input: {} }],
       },
     ];
-    const baseStreamFn = vi.fn(
-      (
-        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
-      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
-        const payload = { messages: [...messages] };
-        void args[2]?.onPayload?.(payload, args[0]);
-        capturedPayload = payload;
-        return { async *[Symbol.asyncIterator]() {} } as never;
-      },
-    );
-
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "openrouter",
+    const capturedPayload = await captureOpenRouterWrappedPayload({
       modelId: "anthropic/claude-opus-4.6",
-      streamFn: baseStreamFn,
       thinkingLevel: "high",
-    } as never);
-
-    void wrapped?.(
-      {
-        provider: "openrouter",
-        api: "openai-completions",
-        id: "anthropic/claude-opus-4.6",
-        baseUrl: "https://openrouter.ai/api/v1",
-        compat: {},
-      } as never,
-      { messages: [] } as never,
-      {},
-    );
-
+      baseUrl: "https://openrouter.ai/api/v1",
+      payload: { messages: [...messages] },
+    });
     expect(capturedPayload?.messages).toEqual(messages);
     expect(capturedPayload?.reasoning).toEqual({ effort: "high" });
-    expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
   it("keeps OpenRouter Anthropic prefill when reasoning is disabled or the route is custom", async () => {

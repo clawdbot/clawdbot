@@ -21,6 +21,7 @@ export type ClickClackDiscussionBinding = {
   section: string;
   archived: boolean;
   label: string;
+  displayTitle?: string;
 };
 
 export function bindingMatchesSessionIncarnation(

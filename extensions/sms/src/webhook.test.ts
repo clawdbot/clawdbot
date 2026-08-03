@@ -160,6 +160,7 @@ describe("createSmsWebhookHandler", () => {
     await handler(createRequest(body, signature), res);
 
     expect(res.statusCode).toBe(200);
+    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
     expect(enqueueSmsIngress).toHaveBeenCalledWith(parseTestTwilioForm(body));
   });
 
@@ -178,6 +179,53 @@ describe("createSmsWebhookHandler", () => {
     );
 
     expect(res.endMock).not.toHaveBeenCalled();
+    expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+  });
+
+  it("acknowledges only after the durable enqueue resolves", async () => {
+    const { body, signature } = createSignedSmsPayload(createMessageSid(3));
+    let releaseAdmission: (() => void) | undefined;
+    enqueueSmsIngress.mockImplementationOnce(
+      async () =>
+        await new Promise<{ kind: "accepted"; duplicate: boolean }>((resolve) => {
+          releaseAdmission = () => resolve({ kind: "accepted", duplicate: false });
+        }),
+    );
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+    const res = createResponse();
+
+    const handling = handler(createRequest(body, signature), res);
+    await vi.waitFor(() => expect(enqueueSmsIngress).toHaveBeenCalledTimes(1));
+    expect(res.endMock).not.toHaveBeenCalled();
+    if (!releaseAdmission) {
+      throw new Error("expected pending SMS durable admission");
+    }
+    releaseAdmission();
+    await handling;
+
+    expect(res.statusCode).toBe(200);
+    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+    expect(res.endMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still acks durable when the enqueue reports a replayed duplicate", async () => {
+    const { body, signature } = createSignedSmsPayload(createMessageSid(4));
+    enqueueSmsIngress.mockResolvedValueOnce({ kind: "accepted", duplicate: true });
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+    const res = createResponse();
+
+    await handler(createRequest(body, signature), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
   });
 
   it("rejects a signed webhook without a stable MessageSid", async () => {
@@ -361,6 +409,146 @@ describe("createSmsWebhookHandler", () => {
     expect(defaultRes.statusCode).toBe(200);
   });
 
+  it("meters the validated dispatch quota per sender, not per shared egress address", async () => {
+    const warn = vi.fn();
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+      log: { warn },
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      const { body, signature } = createSignedSmsPayload(createMessageSid(500 + i));
+      const res = createResponse();
+      await handler(createRequest(body, signature, { remoteAddress: "203.0.113.30" }), res);
+      expect(res.statusCode).toBe(200);
+    }
+    // Equivalent Twilio RCS address syntax canonicalizes into the same sender bucket.
+    const overQuota = createSignedSmsPayload(createMessageSid(530), {
+      from: "RCS:+1 (555) 123-4567",
+    });
+    const overQuotaRes = createResponse();
+    await handler(
+      createRequest(overQuota.body, overQuota.signature, { remoteAddress: "203.0.113.30" }),
+      overQuotaRes,
+    );
+    expect(overQuotaRes.statusCode).toBe(429);
+    expect(enqueueSmsIngress).toHaveBeenCalledTimes(30);
+    expect(warn).toHaveBeenCalledWith("SMS webhook callback rate limit exceeded");
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("+15551234567"));
+
+    // Same Twilio egress address, different validated sender: must still dispatch.
+    const otherSender = createSignedSmsPayload(createMessageSid(531), { from: "+15559998888" });
+    const otherSenderRes = createResponse();
+    await handler(
+      createRequest(otherSender.body, otherSender.signature, { remoteAddress: "203.0.113.30" }),
+      otherSenderRes,
+    );
+    expect(otherSenderRes.statusCode).toBe(200);
+    expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
+
+    // Changing Twilio egress addresses cannot widen the sender-scoped budget.
+    const stillLimited = createSignedSmsPayload(createMessageSid(532));
+    const stillLimitedRes = createResponse();
+    await handler(
+      createRequest(stillLimited.body, stillLimited.signature, { remoteAddress: "203.0.113.31" }),
+      stillLimitedRes,
+    );
+    expect(stillLimitedRes.statusCode).toBe(429);
+    expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
+  });
+
+  it("bounds aggregate validated callback fan-out across distinct senders", async () => {
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+
+    for (let i = 0; i < 300; i += 1) {
+      const distinctSender = `+1555${i.toString().padStart(7, "0")}`;
+      const { body, signature } = createSignedSmsPayload(createMessageSid(900 + i), {
+        from: distinctSender,
+      });
+      const res = createResponse();
+      await handler(createRequest(body, signature), res);
+      expect(res.statusCode).toBe(200);
+    }
+
+    const overAggregate = createSignedSmsPayload(createMessageSid(1_200), {
+      from: "+15559999999",
+    });
+    const overAggregateRes = createResponse();
+    await handler(createRequest(overAggregate.body, overAggregate.signature), overAggregateRes);
+
+    expect(overAggregateRes.statusCode).toBe(429);
+    expect(enqueueSmsIngress).toHaveBeenCalledTimes(300);
+  });
+
+  it("restores a rate limited sender after the fixed dispatch window expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const handler = createSmsWebhookHandler({
+        cfg: {},
+        account: createAccount(),
+        ingress: createIngress(),
+      });
+
+      for (let i = 0; i < 30; i += 1) {
+        const { body, signature } = createSignedSmsPayload(createMessageSid(600 + i));
+        await handler(createRequest(body, signature), createResponse());
+      }
+      const throttled = createSignedSmsPayload(createMessageSid(630));
+      const throttledRes = createResponse();
+      await handler(createRequest(throttled.body, throttled.signature), throttledRes);
+      expect(throttledRes.statusCode).toBe(429);
+
+      vi.setSystemTime(Date.now() + 60_001);
+      const recovered = createSignedSmsPayload(createMessageSid(631));
+      const recoveredRes = createResponse();
+      await handler(createRequest(recovered.body, recovered.signature), recoveredRes);
+
+      expect(recoveredRes.statusCode).toBe(200);
+      expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares one quota for invalid signed senders without throttling a valid sender", async () => {
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      const invalidSender = createSignedSmsPayload(createMessageSid(800 + i), {
+        from: "not-a-phone",
+      });
+      const res = createResponse();
+      await handler(createRequest(invalidSender.body, invalidSender.signature), res);
+      expect(res.statusCode).toBe(200);
+    }
+
+    const invalidOverQuota = createSignedSmsPayload(createMessageSid(830), {
+      from: "still-not-a-phone",
+    });
+    const invalidOverQuotaRes = createResponse();
+    await handler(
+      createRequest(invalidOverQuota.body, invalidOverQuota.signature),
+      invalidOverQuotaRes,
+    );
+    expect(invalidOverQuotaRes.statusCode).toBe(429);
+
+    const validSender = createSignedSmsPayload(createMessageSid(831));
+    const validSenderRes = createResponse();
+    await handler(createRequest(validSender.body, validSender.signature), validSenderRes);
+    expect(validSenderRes.statusCode).toBe(200);
+    expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
+  });
+
   it("keeps validation-disabled webhook dispatches on the stricter callback budget", async () => {
     const account = createAccount({ dangerouslyDisableSignatureValidation: true });
     const handler = createSmsWebhookHandler({
@@ -370,13 +558,14 @@ describe("createSmsWebhookHandler", () => {
     });
 
     for (let i = 0; i < 30; i += 1) {
-      const valid = createSignedBody({
-        account,
-        messageSid: `SM-disabled-${i}`,
+      // Rotate From: without signature validation it is unauthenticated input and
+      // must not widen the address-keyed budget.
+      const { body } = createSignedSmsPayload(createMessageSid(700 + i), {
+        from: `+1555000${1000 + i}`,
       });
       const res = createResponse();
       await handler(
-        createRequest(valid.body, "unused-signature", {
+        createRequest(body, "unused-signature", {
           headers: { "x-forwarded-for": "203.0.113.20" },
         }),
         res,
@@ -384,10 +573,7 @@ describe("createSmsWebhookHandler", () => {
       expect(res.statusCode).toBe(200);
     }
 
-    const overBudget = createSignedBody({
-      account,
-      messageSid: "SM-disabled-over-budget",
-    });
+    const overBudget = createSignedSmsPayload(createMessageSid(760), { from: "+15550009999" });
     const overBudgetRes = createResponse();
     await handler(
       createRequest(overBudget.body, "unused-signature", {

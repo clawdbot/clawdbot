@@ -107,7 +107,7 @@ describe("buildTelegramMessageContext media carriers", () => {
     });
 
     expect(context?.ctxPayload.ReplyToBody).toBe("<media:image>");
-    expect(context?.ctxPayload.MediaTypes).toEqual(["image"]);
+    expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
   });
 
   it("keeps primary media bodies empty while recording formatted group history", async () => {
@@ -127,7 +127,7 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.BodyForAgent).toBe("");
     expect(context?.ctxPayload.CommandBody).toBe("");
     expect(context?.ctxPayload.CommandSource).toBeUndefined();
-    expect(context?.ctxPayload.MediaTypes).toEqual(["image"]);
+    expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
     expect([...groupHistories.values()].flat().at(-1)?.body).toBe("<media:image>");
   });
 
@@ -151,7 +151,7 @@ describe("buildTelegramMessageContext media carriers", () => {
 
     expect(context?.ctxPayload.RawBody).toBe("");
     expect(context?.ctxPayload.BodyForAgent).toBe("");
-    expect(context?.ctxPayload.MediaTypes).toEqual(["sticker"]);
+    expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["sticker"]);
     expect(context?.ctxPayload.StickerMediaIncluded).toBeUndefined();
   });
 

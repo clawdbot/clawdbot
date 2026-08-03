@@ -22,6 +22,39 @@ type SessionsListCliOptions = {
   limit?: string;
 };
 
+const SESSIONS_PARENT_OPTION_FLAGS = {
+  json: "--json",
+  verbose: "--verbose",
+  store: "--store",
+  agent: "--agent",
+  allAgents: "--all-agents",
+  active: "--active",
+  limit: "--limit",
+} satisfies Record<keyof SessionsListCliOptions, string>;
+
+function rejectUnsupportedSessionsParentOptions(
+  subcommand: string,
+  parentOpts: SessionsListCliOptions | undefined,
+  unsupportedOptions: readonly (keyof SessionsListCliOptions)[],
+  reason: string,
+): boolean {
+  const unsupportedFlags = unsupportedOptions
+    .filter((option) => {
+      const value = parentOpts?.[option];
+      return typeof value === "boolean" ? value : value !== undefined;
+    })
+    .map((option) => SESSIONS_PARENT_OPTION_FLAGS[option]);
+  if (unsupportedFlags.length === 0) {
+    return false;
+  }
+  const plural = unsupportedFlags.length > 1 ? "options" : "option";
+  defaultRuntime.error(
+    `\`sessions ${subcommand}\` does not support the parent \`sessions\` ${plural} ${unsupportedFlags.join(", ")}; ${reason}.`,
+  );
+  defaultRuntime.exit(1);
+  return true;
+}
+
 function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
   let promise: Promise<T> | undefined;
   return () => (promise ??= load());
@@ -261,14 +294,17 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         ])}`,
     )
     .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as
-        | {
-            store?: string;
-            agent?: string;
-            allAgents?: boolean;
-            json?: boolean;
-          }
-        | undefined;
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
+      if (
+        rejectUnsupportedSessionsParentOptions(
+          "cleanup",
+          parentOpts,
+          ["active", "limit", "verbose"],
+          "session-list filters cannot scope session maintenance",
+        )
+      ) {
+        return;
+      }
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { sessionsCleanupCommand } = await import("../../commands/sessions-cleanup.js");
         await sessionsCleanupCommand(
@@ -298,13 +334,17 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as
-        | {
-            store?: string;
-            agent?: string;
-            allAgents?: boolean;
-          }
-        | undefined;
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
+      if (
+        rejectUnsupportedSessionsParentOptions(
+          "tail",
+          parentOpts,
+          ["json", "active", "limit", "verbose"],
+          "trajectory tail emits human-readable progress and selects sessions separately",
+        )
+      ) {
+        return;
+      }
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { sessionsTailCommand } = await import("../../commands/sessions-tail.js");
         await sessionsTailCommand(
@@ -332,13 +372,17 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--request-json-base64 <payload>", "Base64url-encoded export request")
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as
-        | {
-            store?: string;
-            agent?: string;
-            json?: boolean;
-          }
-        | undefined;
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
+      if (
+        rejectUnsupportedSessionsParentOptions(
+          "export-trajectory",
+          parentOpts,
+          ["allAgents", "active", "limit", "verbose"],
+          "trajectory export targets one session and cannot apply session-list filters",
+        )
+      ) {
+        return;
+      }
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { exportTrajectoryCommand } = await import("../../commands/export-trajectory.js");
         await exportTrajectoryCommand(
@@ -403,30 +447,15 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       // Silently dropping `--store` is the dangerous case — the user could
       // believe they targeted one store while the gateway compacts another — so
       // reject any unsupported inherited option instead of ignoring it.
-      const parentOpts = command.parent?.opts() as
-        | {
-            agent?: string;
-            json?: boolean;
-            store?: string;
-            allAgents?: boolean;
-            active?: string;
-            limit?: string;
-            verbose?: boolean;
-          }
-        | undefined;
-      const unsupportedParentOptions = [
-        parentOpts?.store !== undefined ? "--store" : undefined,
-        parentOpts?.allAgents ? "--all-agents" : undefined,
-        parentOpts?.active !== undefined ? "--active" : undefined,
-        parentOpts?.limit !== undefined ? "--limit" : undefined,
-        parentOpts?.verbose ? "--verbose" : undefined,
-      ].filter((flag): flag is string => flag !== undefined);
-      if (unsupportedParentOptions.length > 0) {
-        const plural = unsupportedParentOptions.length > 1 ? "options" : "option";
-        defaultRuntime.error(
-          `\`sessions compact\` does not support the parent \`sessions\` ${plural} ${unsupportedParentOptions.join(", ")}; the gateway resolves the target store from <key> and --agent.`,
-        );
-        defaultRuntime.exit(1);
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
+      if (
+        rejectUnsupportedSessionsParentOptions(
+          "compact",
+          parentOpts,
+          ["store", "allAgents", "active", "limit", "verbose"],
+          "the gateway resolves the target store from <key> and --agent",
+        )
+      ) {
         return;
       }
       const maxLines = parseStrictPositiveIntOrUndefined(opts.maxLines);
@@ -701,6 +730,26 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           },
           defaultRuntime,
         );
+      });
+    });
+
+  tasksCmd
+    .command("retry <lookups...>")
+    .description("Retry delivery for up to 10 blocked subagent completions")
+    .action(async (lookups: string[]) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksRetryCommand } = await loadTasksCommands();
+        await tasksRetryCommand({ lookups }, defaultRuntime);
+      });
+    });
+
+  tasksCmd
+    .command("dismiss <lookups...>")
+    .description("Dismiss delivery for up to 10 blocked subagent completions")
+    .action(async (lookups: string[]) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksDismissCommand } = await loadTasksCommands();
+        await tasksDismissCommand({ lookups }, defaultRuntime);
       });
     });
 

@@ -29,7 +29,6 @@ import {
 } from "../gateway/call.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
-import { isLoopbackHost } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -133,11 +132,13 @@ export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
+  private pendingConnectError?: Error;
   readonly connection: ResolvedGatewayConnection;
   hello?: HelloOk;
 
   onEvent?: (evt: GatewayEvent) => void;
   onConnected?: () => void;
+  onConnectError?: (error: Error) => void;
   onDisconnected?: (reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 
@@ -159,6 +160,7 @@ export class GatewayChatClient implements TuiBackend {
       clientVersion: VERSION,
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
+      scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
       deviceIdentity: connection.allowInsecureLocalOperatorUi ? null : undefined,
       caps: [
         GATEWAY_CLIENT_CAPS.AGENT_KIND,
@@ -170,6 +172,7 @@ export class GatewayChatClient implements TuiBackend {
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       onHelloOk: (hello) => {
+        this.pendingConnectError = undefined;
         this.hello = hello;
         this.resolveReady?.();
         this.onConnected?.();
@@ -186,8 +189,12 @@ export class GatewayChatClient implements TuiBackend {
         this.readyPromise = new Promise((resolve) => {
           this.resolveReady = resolve;
         });
+        if (this.pendingConnectError && this.onConnectError) {
+          return;
+        }
         this.onDisconnected?.(reason);
       },
+      onConnectError: (error) => this.notifyConnectError(error),
       onGap: (info) => {
         this.onGap?.(info);
       },
@@ -212,12 +219,28 @@ export class GatewayChatClient implements TuiBackend {
     })
       .then((readiness) => {
         if (!readiness.ready && !readiness.aborted) {
-          this.onDisconnected?.("gateway event loop readiness timeout");
+          this.notifyUnclosedConnectError(new Error("gateway event loop readiness timeout"));
         }
       })
       .catch((err: unknown) => {
-        this.onDisconnected?.(err instanceof Error ? err.message : String(err));
+        this.notifyUnclosedConnectError(err instanceof Error ? err : new Error(String(err)));
       });
+  }
+
+  private notifyConnectError(error: Error) {
+    if (this.pendingConnectError) {
+      return;
+    }
+    this.pendingConnectError = error;
+    this.onConnectError?.(error);
+  }
+
+  private notifyUnclosedConnectError(error: Error) {
+    const hasStructuredHandler = Boolean(this.onConnectError);
+    this.notifyConnectError(error);
+    if (!hasStructuredHandler) {
+      this.onDisconnected?.(error.message);
+    }
   }
 
   stop() {
@@ -482,16 +505,7 @@ async function resolveGatewayConnection(
     ...(urlOverride ? { url: urlOverride } : {}),
     ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
   }).url;
-  const allowInsecureLocalOperatorUi = (() => {
-    if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
-      return false;
-    }
-    try {
-      return isLoopbackHost(new URL(url).hostname);
-    } catch {
-      return false;
-    }
-  })();
+  const allowInsecureLocalOperatorUi = false;
 
   if (urlOverride) {
     return {

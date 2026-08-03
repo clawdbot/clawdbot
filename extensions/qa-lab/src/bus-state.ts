@@ -36,6 +36,15 @@ import type {
 const DEFAULT_BOT_ID = "openclaw";
 const DEFAULT_BOT_NAME = "OpenClaw QA";
 
+function normalizeInboundConversation(conversation: QaBusConversation): QaBusConversation {
+  const rawKind = (conversation as { kind?: unknown }).kind;
+  const kind = rawKind === "dm" ? "direct" : rawKind;
+  if (kind !== "direct" && kind !== "channel" && kind !== "group") {
+    throw new Error(`invalid qa-channel conversation kind: ${String(rawKind)}`);
+  }
+  return kind === conversation.kind ? conversation : { ...conversation, kind };
+}
+
 type QaBusEventSeed =
   | {
       kind: "inbound-message";
@@ -113,6 +122,16 @@ export function createQaBusState() {
     return created;
   };
 
+  const requireActiveMessageForAccount = (
+    input: Pick<QaBusReadMessageInput, "accountId" | "messageId">,
+  ): QaBusMessage => {
+    const message = requireQaBusMessageForAccount({ messages, input });
+    if (message.deleted) {
+      throw new Error(`qa-bus message was deleted: ${input.messageId}`);
+    }
+    return message;
+  };
+
   const createMessage = (params: {
     direction: QaBusMessage["direction"];
     accountId: string;
@@ -128,6 +147,17 @@ export function createQaBusState() {
     nativeCommand?: QaBusInboundMessageInput["nativeCommand"];
     toolCalls?: QaBusToolCall[];
   }): QaBusMessage => {
+    const thread = params.threadId ? threads.get(params.threadId) : undefined;
+    if (
+      thread &&
+      (thread.accountId !== params.accountId ||
+        thread.conversationId !== params.conversation.id ||
+        params.conversation.kind !== "channel")
+    ) {
+      // Unknown ids can represent externally observed threads; owned records
+      // must never cross account, conversation, or channel-kind boundaries.
+      throw new Error("qa-bus thread not found in selected account and conversation");
+    }
     const storedConversation = ensureConversation(params.accountId, params.conversation);
     const toolCalls = sanitizeQaBusToolCalls(params.toolCalls);
     const message: QaBusMessage = {
@@ -179,7 +209,10 @@ export function createQaBusState() {
       const message = createMessage({
         direction: "inbound",
         accountId,
-        conversation: input.conversation,
+        // `dm:` is the canonical target spelling and is also used by manual
+        // QA-bus clients. Normalize its matching ingress alias before routing
+        // so a DM can never silently acquire group/channel privacy semantics.
+        conversation: normalizeInboundConversation(input.conversation),
         senderId: input.senderId,
         senderName: input.senderName,
         text: input.text,
@@ -245,12 +278,20 @@ export function createQaBusState() {
     },
     reactToMessage(input: QaBusReactToMessageInput) {
       const accountId = normalizeAccountId(input.accountId);
-      const message = requireQaBusMessageForAccount({ messages, input });
+      const message = requireActiveMessageForAccount(input);
       const reaction = {
         emoji: input.emoji,
         senderId: input.senderId?.trim() || DEFAULT_BOT_ID,
         timestamp: input.timestamp ?? Date.now(),
       };
+      if (
+        message.reactions.some(
+          (existing) =>
+            existing.emoji === reaction.emoji && existing.senderId === reaction.senderId,
+        )
+      ) {
+        return cloneMessage(message);
+      }
       message.reactions.push(reaction);
       pushEvent({
         kind: "reaction-added",
@@ -263,7 +304,7 @@ export function createQaBusState() {
     },
     editMessage(input: QaBusEditMessageInput) {
       const accountId = normalizeAccountId(input.accountId);
-      const message = requireQaBusMessageForAccount({ messages, input });
+      const message = requireActiveMessageForAccount(input);
       message.text = input.text;
       message.editedAt = input.timestamp ?? Date.now();
       pushEvent({
@@ -275,7 +316,7 @@ export function createQaBusState() {
     },
     deleteMessage(input: QaBusDeleteMessageInput) {
       const accountId = normalizeAccountId(input.accountId);
-      const message = requireQaBusMessageForAccount({ messages, input });
+      const message = requireActiveMessageForAccount(input);
       message.deleted = true;
       pushEvent({
         kind: "message-deleted",

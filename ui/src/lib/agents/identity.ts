@@ -1,9 +1,10 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 
 type AgentIdentityGatewaySnapshot = {
   client: GatewayBrowserClient | null;
-  connected: boolean;
+  phase: ApplicationGatewayPhase;
 };
 
 type AgentIdentityGateway = {
@@ -23,7 +24,7 @@ export function createAgentIdentityCapability(
   gateway: AgentIdentityGateway,
 ): AgentIdentityCapability {
   let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
-  let cachedConnected = gateway.snapshot.connected;
+  let cachedConnected = gateway.snapshot.phase === "connected";
   let connectionGeneration = 0;
   const identities = new Map<string, AgentIdentityResult>();
   const inFlight = new Map<string, Promise<AgentIdentityResult | null>>();
@@ -37,12 +38,13 @@ export function createAgentIdentityCapability(
   };
 
   const resetForGateway = (snapshot: AgentIdentityGatewaySnapshot) => {
-    if (snapshot.client === cachedClient && snapshot.connected === cachedConnected) {
+    const connected = snapshot.phase === "connected";
+    if (snapshot.client === cachedClient && connected === cachedConnected) {
       return;
     }
     const hadIdentities = identities.size > 0;
     cachedClient = snapshot.client;
-    cachedConnected = snapshot.connected;
+    cachedConnected = connected;
     connectionGeneration += 1;
     identities.clear();
     inFlight.clear();
@@ -94,7 +96,7 @@ export function createAgentIdentityCapability(
       const snapshot = gateway.snapshot;
       resetForGateway(snapshot);
       const client = snapshot.client;
-      if (!client || !snapshot.connected) {
+      if (!client || snapshot.phase !== "connected") {
         return;
       }
       const generation = connectionGeneration;
@@ -111,7 +113,7 @@ export function createAgentIdentityCapability(
       if (
         connectionGeneration !== generation ||
         gateway.snapshot.client !== client ||
-        !gateway.snapshot.connected
+        gateway.snapshot.phase !== "connected"
       ) {
         return;
       }

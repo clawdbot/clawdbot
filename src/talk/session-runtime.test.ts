@@ -343,6 +343,167 @@ describe("realtime voice bridge session runtime", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it("permanently closes once while preserving synchronous transcript flush", async () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const close = vi.fn(() => {
+      callbacks?.onTranscript?.("assistant", "final transcript", true);
+    });
+    const connect = vi.fn(async () => {});
+    const sendProviderAudio = vi.fn();
+    const sendSinkAudio = vi.fn();
+    const onTranscript = vi.fn();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        return makeBridge({ close, connect, sendAudio: sendProviderAudio });
+      },
+    };
+    const session = createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: sendSinkAudio },
+      onTranscript,
+    });
+
+    session.close();
+    session.close();
+    session.sendAudio(Buffer.from("late-input"));
+    callbacks?.onAudio(Buffer.from("late-output"));
+    await expect(session.connect()).rejects.toThrow("Realtime voice session is closed");
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(connect).not.toHaveBeenCalled();
+    expect(sendProviderAudio).not.toHaveBeenCalled();
+    expect(sendSinkAudio).not.toHaveBeenCalled();
+    expect(onTranscript).toHaveBeenCalledExactlyOnceWith("assistant", "final transcript", true);
+  });
+
+  it("stops audio admission after provider close and still closes the provider once", () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const close = vi.fn();
+    const sendProviderAudio = vi.fn();
+    const sendSinkAudio = vi.fn();
+    const onClose = vi.fn();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        return makeBridge({ close, sendAudio: sendProviderAudio });
+      },
+    };
+    const session = createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: sendSinkAudio },
+      onClose,
+    });
+
+    callbacks?.onClose?.("completed");
+    callbacks?.onClose?.("completed");
+    session.sendAudio(Buffer.from("late-input"));
+    callbacks?.onAudio(Buffer.from("late-output"));
+    session.close();
+    session.close();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(sendProviderAudio).not.toHaveBeenCalled();
+    expect(sendSinkAudio).not.toHaveBeenCalled();
+  });
+
+  it("reopens audio and close reporting for an explicit connection generation", async () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const connect = vi.fn(async () => {});
+    const sendProviderAudio = vi.fn();
+    const sendSinkAudio = vi.fn();
+    const onClose = vi.fn();
+    const onReady = vi.fn();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        request.onClose?.("error");
+        return makeBridge({ connect, sendAudio: sendProviderAudio });
+      },
+    };
+    const session = createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: sendSinkAudio },
+      onClose,
+      onReady,
+    });
+
+    session.sendAudio(Buffer.from("closed-input"));
+    callbacks?.onAudio(Buffer.from("closed-output"));
+    callbacks?.onClose?.("error");
+    callbacks?.onReady?.();
+    expect(onReady).not.toHaveBeenCalled();
+
+    await session.connect();
+    callbacks?.onReady?.();
+    session.sendAudio(Buffer.from("next-input"));
+    callbacks?.onAudio(Buffer.from("next-output"));
+    callbacks?.onClose?.("completed");
+    callbacks?.onClose?.("completed");
+    await expect(session.connect()).rejects.toThrow("Realtime voice connection is closed");
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(onReady).toHaveBeenCalledWith(session);
+    expect(onClose).toHaveBeenNthCalledWith(1, "error");
+    expect(onClose).toHaveBeenNthCalledWith(2, "completed");
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(sendProviderAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from("next-input"));
+    expect(sendSinkAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from("next-output"));
+  });
+
+  it("rejects reconnect and ignores tool failures after an established provider close", async () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    let rejectToolCall: ((error: Error) => void) | undefined;
+    const connect = vi.fn(async () => {});
+    const onError = vi.fn();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        return makeBridge({ connect });
+      },
+    };
+    const session = createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+      onToolCall: () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectToolCall = reject;
+        }),
+      onError,
+    });
+
+    callbacks?.onToolCall?.({
+      itemId: "item-1",
+      callId: "call-1",
+      name: "lookup",
+      args: {},
+    });
+    callbacks?.onClose?.("error");
+    await expect(session.connect()).rejects.toThrow("Realtime voice connection is closed");
+    rejectToolCall?.(new Error("late tool callback failure"));
+    await Promise.resolve();
+
+    expect(connect).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("forwards tool result continuation options and async acceptance to the provider bridge", () => {
     const acceptance = Promise.resolve();
     const submitToolResult = vi.fn(() => acceptance);

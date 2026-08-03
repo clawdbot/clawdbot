@@ -219,11 +219,11 @@ export async function requestDiscord<T>(
               ),
           },
         );
-        const text = new TextDecoder().decode(responseBody);
-        if (!text.trim()) {
-          return undefined as T;
-        }
         try {
+          const text = new TextDecoder("utf-8", { fatal: true }).decode(responseBody);
+          if (!text.trim()) {
+            return undefined as T;
+          }
           return JSON.parse(text) as T;
         } catch {
           throw new DiscordApiError(`Discord API ${path} returned malformed JSON`, 0);

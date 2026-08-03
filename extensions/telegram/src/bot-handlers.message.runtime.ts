@@ -73,16 +73,13 @@ export function createTelegramHandlerMessageRuntime({
     buildReplyChainForMessage,
     toReplyChainEntry,
     buildPromptContextForMessage,
-  } = createTelegramMessageContextRuntime(
-    {
-      cfg,
-      accountId,
-      opts,
-      telegramCfg,
-      telegramDeps,
-    },
-    sessionRuntime,
-  );
+  } = createTelegramMessageContextRuntime({
+    cfg,
+    accountId,
+    opts,
+    telegramCfg,
+    telegramDeps,
+  });
   const {
     normalizePromptContextMinTimestampMs,
     promptContextBoundaryOptions,

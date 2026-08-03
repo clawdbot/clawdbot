@@ -28,6 +28,7 @@ import {
   hasRuntimeAvailableProviderAuth,
   resolveProviderEntryApiKeyProfileReference,
   resolveEnvApiKey,
+  type RuntimeProviderAuthLookup,
 } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 
@@ -69,12 +70,14 @@ export function hasAuthForProvider(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean {
   // Env-key resolution is config/workspace aware: plugin-provider env candidates
   // come from the metadata snapshot resolved for this config. Non-bundled or
   // config-scoped provider plugins are invisible without it, so a config-blind
   // lookup would wrongly report "no auth" for env-key providers.
   if (
+    !params.runtimeLookup &&
     resolveEnvApiKey(params.provider, undefined, {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
@@ -131,6 +134,7 @@ export function hasProviderAuthForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean {
   if (
     hasRuntimeAvailableProviderAuth({
@@ -138,22 +142,19 @@ export function hasProviderAuthForTool(params: {
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       allowPluginSyntheticAuth: false,
+      runtimeLookup: params.runtimeLookup,
     })
   ) {
     return true;
   }
-  if (
-    hasAuthForProvider({
-      provider: params.provider,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-    })
-  ) {
-    return true;
-  }
-  return false;
+  return hasAuthForProvider({
+    provider: params.provider,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    authStore: params.authStore,
+    runtimeLookup: params.runtimeLookup,
+  });
 }
 
 function formatProviderModelRef(provider: string, model: string): string {

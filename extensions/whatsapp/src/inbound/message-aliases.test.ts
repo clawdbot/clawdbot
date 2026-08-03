@@ -1,15 +1,25 @@
 // WhatsApp tests cover inbound message alias compatibility.
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
-  normalizeWebInboundMessage,
+  normalizeAdmittedWebInboundMessage,
   withDeprecatedWebInboundMessageFlatAliases,
 } from "./message-aliases.js";
 import type { monitorWebInbox } from "./monitor.js";
 import { createAcceptedWhatsAppSendResult } from "./send-result.test-helper.js";
-import { createTestWhatsAppInboundAdmission } from "./test-message.test-helper.js";
-import type { LegacyFlatWebInboundMessage, WebInboundCallbackMessage } from "./types.js";
+import {
+  createTestLegacyFlatWebInboundMessage,
+  createTestWhatsAppInboundAdmission,
+} from "./test-message.test-helper.js";
+import type {
+  LegacyFlatWebInboundMessage,
+  WebInboundCallbackMessage,
+  WebInboundMessageInput,
+} from "./types.js";
 
 type MonitorWebInboxMessage = Parameters<Parameters<typeof monitorWebInbox>[0]["onMessage"]>[0];
+type MonitorWebChannel = typeof import("../auto-reply/monitor.js").monitorWebChannel;
+type ListenerFactory = NonNullable<Parameters<MonitorWebChannel>[1]>;
+type ListenerFactoryMessage = Parameters<Parameters<ListenerFactory>[0]["onMessage"]>[0];
 
 function createCanonicalMessage(overrides: Partial<WebInboundCallbackMessage> = {}) {
   return withDeprecatedWebInboundMessageFlatAliases({
@@ -26,7 +36,7 @@ function createCanonicalMessage(overrides: Partial<WebInboundCallbackMessage> = 
         fileName: "image.jpg",
         url: "https://example.com/image.jpg",
       },
-      untrustedStructuredContext: [
+      channelStructuredContext: [
         {
           label: "WhatsApp contact",
           source: "whatsapp",
@@ -106,6 +116,16 @@ describe("WhatsApp inbound flat aliases", () => {
     }>();
   });
 
+  it("keeps deprecated flat inputs at both WhatsApp listener boundaries", () => {
+    expectTypeOf<WebInboundMessageInput>().toMatchTypeOf<ListenerFactoryMessage>();
+
+    const admitted = normalizeAdmittedWebInboundMessage(createTestLegacyFlatWebInboundMessage());
+    expect(admitted.admission.ingress).toMatchObject({
+      admission: "dispatch",
+      decisiveGateId: "legacy-flat-compat",
+    });
+  });
+
   it("keeps deprecated flat aliases live against canonical contexts", async () => {
     const msg = createCanonicalMessage();
     const nextReply = vi.fn(async () => createAcceptedWhatsAppSendResult("text", "reply-2"));
@@ -144,6 +164,62 @@ describe("WhatsApp inbound flat aliases", () => {
 
     expect(Object.keys(msg)).toContain("body");
     expect(Object.keys(msg)).toContain("chatId");
+  });
+
+  it("keeps the deprecated structured-context alias live in both directions", () => {
+    const msg = createCanonicalMessage();
+    const legacyValue = [
+      {
+        label: "Legacy metadata",
+        payload: { value: "legacy" },
+      },
+    ];
+
+    expect(msg.untrustedStructuredContext).toEqual(msg.payload.channelStructuredContext);
+    msg.untrustedStructuredContext = legacyValue;
+    expect(msg.payload.channelStructuredContext).toEqual(legacyValue);
+
+    const currentValue = [
+      {
+        label: "Current metadata",
+        payload: { value: "current" },
+      },
+    ];
+    msg.payload.channelStructuredContext = currentValue;
+    expect(msg.untrustedStructuredContext).toEqual(currentValue);
+  });
+
+  it("normalizes the shipped nested structured-context key with new-name precedence", () => {
+    const deprecatedValue = [
+      {
+        label: "Deprecated nested metadata",
+        payload: { value: "deprecated" },
+      },
+    ];
+    const currentValue = [
+      {
+        label: "Current nested metadata",
+        payload: { value: "current" },
+      },
+    ];
+    const deprecatedOnly = createCanonicalMessage({
+      payload: {
+        body: "hello",
+        untrustedStructuredContext: deprecatedValue,
+      },
+    });
+    const msg = createCanonicalMessage({
+      payload: {
+        body: "hello",
+        channelStructuredContext: currentValue,
+        untrustedStructuredContext: deprecatedValue,
+      },
+    });
+
+    expect(deprecatedOnly.payload.channelStructuredContext).toEqual(deprecatedValue);
+    expect(deprecatedOnly.payload.untrustedStructuredContext).toEqual(deprecatedValue);
+    expect(msg.payload.channelStructuredContext).toEqual(currentValue);
+    expect(msg.payload.untrustedStructuredContext).toEqual(currentValue);
   });
 
   it("keeps deprecated admission top-level fields aligned with admission", () => {
@@ -204,42 +280,33 @@ describe("WhatsApp inbound flat aliases", () => {
     expect(msg.accessControlPassed).toBe(true);
   });
 
-  it("normalizes canonical messages without admission without rebuilding admission facts", () => {
-    const normalized = normalizeWebInboundMessage({
-      event: {
-        id: "group-no-admission",
-        timestamp: 1_700_000_456,
-      },
-      payload: {
-        body: "hello group",
-      },
-      platform: {
-        chatJid: "123@g.us",
-        recipientJid: "+15550000001",
-        senderJid: "15550000002@s.whatsapp.net",
-        senderE164: "+15550000002",
-        senderName: "Alice",
-        sendComposing: vi.fn(async () => undefined),
-        reply: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "reply-group")),
-        sendMedia: vi.fn(async () => createAcceptedWhatsAppSendResult("media", "media-group")),
-      },
-      from: "123@g.us",
-      conversationId: "123@g.us",
-      accountId: "work",
-      accessControlPassed: true,
-      chatType: "group",
-    });
-
-    expect(normalized.admission).toBeUndefined();
-    expect(normalized.from).toBe("123@g.us");
-    expect(normalized.conversationId).toBe("123@g.us");
-    expect(normalized.accountId).toBe("work");
-    expect(normalized.chatType).toBe("group");
-
-    normalized.conversationId = "456@g.us";
-    expect(normalized.admission).toBeUndefined();
-    expect(normalized.from).toBe("456@g.us");
-    expect(normalized.conversationId).toBe("456@g.us");
+  it("rejects canonical messages without admission at the listener boundary", () => {
+    expect(() =>
+      normalizeAdmittedWebInboundMessage({
+        event: {
+          id: "group-no-admission",
+          timestamp: 1_700_000_456,
+        },
+        payload: {
+          body: "hello group",
+        },
+        platform: {
+          chatJid: "123@g.us",
+          recipientJid: "+15550000001",
+          senderJid: "15550000002@s.whatsapp.net",
+          senderE164: "+15550000002",
+          senderName: "Alice",
+          sendComposing: vi.fn(async () => undefined),
+          reply: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "reply-group")),
+          sendMedia: vi.fn(async () => createAcceptedWhatsAppSendResult("media", "media-group")),
+        },
+        from: "123@g.us",
+        conversationId: "123@g.us",
+        accountId: "work",
+        accessControlPassed: true,
+        chatType: "group",
+      }),
+    ).toThrow("WhatsApp inbound message is missing admission facts");
   });
 
   it("normalizes legacy flat messages into canonical contexts with live aliases", () => {
@@ -265,10 +332,16 @@ describe("WhatsApp inbound flat aliases", () => {
       sendMedia: vi.fn(async () => createAcceptedWhatsAppSendResult("media", "media-legacy")),
       mediaPath: "/tmp/legacy.jpg",
       mediaType: "image/jpeg",
+      untrustedStructuredContext: [
+        {
+          label: "Legacy metadata",
+          payload: { value: "legacy" },
+        },
+      ],
       isBatched: true,
     };
 
-    const normalized = normalizeWebInboundMessage(legacy);
+    const normalized = normalizeAdmittedWebInboundMessage(legacy);
 
     expect(normalized.event).toMatchObject({
       id: "legacy-1",
@@ -280,6 +353,15 @@ describe("WhatsApp inbound flat aliases", () => {
       path: "/tmp/legacy.jpg",
       type: "image/jpeg",
     });
+    expect(normalized.payload.channelStructuredContext).toEqual([
+      {
+        label: "Legacy metadata",
+        payload: { value: "legacy" },
+      },
+    ]);
+    expect(normalized.untrustedStructuredContext).toEqual(
+      normalized.payload.channelStructuredContext,
+    );
     expect(normalized.platform).toMatchObject({
       chatJid: "15550000002@s.whatsapp.net",
       recipientJid: "+15550000001",
@@ -290,7 +372,7 @@ describe("WhatsApp inbound flat aliases", () => {
       decisiveGateId: "legacy-flat-compat",
       reasonCode: "dm_policy_allowlisted",
     });
-    expect(normalized.accessControlPassed).toBe(true);
+    expect(normalized.accessControlPassed).toBeUndefined();
     expect(normalized.quote).toMatchObject({
       id: "quote-legacy",
       body: "legacy quoted",
@@ -313,7 +395,7 @@ describe("WhatsApp inbound flat aliases", () => {
   });
 
   it("normalizes blocked legacy flat admission fields through the compatibility seam", () => {
-    const normalized = normalizeWebInboundMessage({
+    const normalized = normalizeAdmittedWebInboundMessage({
       id: "legacy-blocked",
       from: "+15550000002",
       conversationId: "+15550000002",
@@ -342,5 +424,17 @@ describe("WhatsApp inbound flat aliases", () => {
       },
     });
     expect(normalized.accessControlPassed).toBe(false);
+  });
+
+  it("preserves explicit legacy access proof through normalization", () => {
+    const normalized = normalizeAdmittedWebInboundMessage({
+      ...createTestLegacyFlatWebInboundMessage(),
+      accessControlPassed: true,
+    });
+
+    expect(normalized.admission?.ingress.decisiveGateId).toBe("legacy-flat-compat");
+    expect(normalized.accessControlPassed).toBe(true);
+    normalized.accessControlPassed = false;
+    expect(normalized.accessControlPassed).toBe(true);
   });
 });

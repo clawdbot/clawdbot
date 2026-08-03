@@ -34,41 +34,31 @@ const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
   message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
 };
 
+const CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE: LegacyConfigRule = {
+  path: ["gateway", "controlUi", "dangerouslyDisableDeviceAuth"],
+  message:
+    'gateway.controlUi.dangerouslyDisableDeviceAuth is retired. OpenClaw will preserve authenticated, pairing-only access for remediation, remove the legacy key, and prompt you to reopen the Control UI over HTTPS or localhost before clicking Secure this browser. Run "openclaw doctor --fix".',
+  match: (value) => typeof value === "boolean",
+};
+
+const LEGACY_GATEWAY_BIND_HOST_ALIASES = new Map<string, "lan" | "loopback">([
+  ["0.0.0.0", "lan"],
+  ["::", "lan"],
+  ["[::]", "lan"],
+  ["*", "lan"],
+  ["127.0.0.1", "loopback"],
+  ["localhost", "loopback"],
+  ["::1", "loopback"],
+  ["[::1]", "loopback"],
+]);
+
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   return normalizeLegacyGatewayBindHostAlias(value) !== null;
 }
 
 function normalizeLegacyGatewayBindHostAlias(value: unknown): "lan" | "loopback" | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return null;
-  }
-  if (
-    normalized === "auto" ||
-    normalized === "loopback" ||
-    normalized === "lan" ||
-    normalized === "tailnet" ||
-    normalized === "custom"
-  ) {
-    return null;
-  }
-  if (
-    normalized === "0.0.0.0" ||
-    normalized === "::" ||
-    normalized === "[::]" ||
-    normalized === "*"
-  ) {
-    return "lan";
-  }
-  if (
-    normalized === "127.0.0.1" ||
-    normalized === "localhost" ||
-    normalized === "::1" ||
-    normalized === "[::1]"
-  ) {
-    return "loopback";
-  }
-  return null;
+  return normalized ? (LEGACY_GATEWAY_BIND_HOST_ALIASES.get(normalized) ?? null) : null;
 }
 
 function escapeControlForLog(value: string): string {
@@ -77,6 +67,25 @@ function escapeControlForLog(value: string): string {
 
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.control-ui-device-auth-bypass->pairing-migration",
+    describe: "Convert the retired Control UI device-auth bypass into explicit pairing",
+    legacyRules: [CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const controlUi = getRecord(gateway?.controlUi);
+      if (!controlUi || !Object.hasOwn(controlUi, "dangerouslyDisableDeviceAuth")) {
+        return;
+      }
+      const migrationRequired = controlUi.dangerouslyDisableDeviceAuth === true;
+      delete controlUi.dangerouslyDisableDeviceAuth;
+      changes.push(
+        migrationRequired
+          ? "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser."
+          : "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
+      );
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.webchat-remove",
     describe: "Remove retired WebChat gateway config",

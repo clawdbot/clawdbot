@@ -101,7 +101,7 @@ jobs:
           exit 1
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
@@ -185,9 +185,20 @@ jobs:
         id: preflight_cache_key
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # setup-node-env may restore a broader build-all snapshot. Clear every
+      # preflight cache output first so actions/cache cannot overlay stale or
+      # private-QA artifacts that are absent from this release build.
+      - name: Clean preflight build outputs before cache restore
+        run: |
+          set -euo pipefail
+          rm -rf -- dist dist-runtime packages/*/dist
+          find extensions -type f -path '*/src/host/*' \
+            \( -name '.bundle.hash' -o -name '*.bundle.js' \) \
+            -delete
+
       - name: Restore preflight build outputs
         id: dist_build_cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             dist/
@@ -199,6 +210,8 @@ jobs:
 
       - name: Build
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
+        env:
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
         run: pnpm build
 
       - name: Pack publishable core packages
@@ -244,12 +257,14 @@ jobs:
 
       - name: Build Control UI
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
+        env:
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
         run: pnpm ui:build
 
       - name: Save preflight build outputs
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             dist/
@@ -395,7 +410,6 @@ jobs:
                 exit 1
               fi
               AI_TARBALL_PATH="${AI_TARBALLS[0]}"
-              node --import tsx scripts/prepare-openclaw-npm-shrinkwrap.ts "$AI_TARBALL_PATH"
             elif [[ "${#AI_TARBALLS[@]}" -ne 0 ]]; then
               echo "Frozen target without an @openclaw/ai dependency contains unexpected AI runtime artifacts." >&2
               exit 1
@@ -693,7 +707,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
           filter: blob:none
@@ -836,7 +850,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: refs/tags/${{ inputs.tag }}
           # Frozen preflight evidence already binds the exact release SHA and

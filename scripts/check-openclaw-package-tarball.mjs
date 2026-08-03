@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { gte as semverGte, valid as validSemver } from "semver";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mjs";
 import {
   collectPackageDistImports,
@@ -323,12 +324,17 @@ const normalized = entries.map((entry) => entry.replace(/^package\//u, ""));
 const entrySet = new Set(normalized);
 const errors = [];
 const warnings = [];
+const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
+const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
 const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
 const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
-const LEGACY_SHRINKWRAP_COMPAT_MAX = { year: 2026, month: 5, day: 20 };
+const LEGACY_SHRINKWRAP_OMISSION_COMPAT_MAX = { year: 2026, month: 5, day: 20 };
+// 2026.7.2-beta.4 is the last published artifact known to ship shrinkwrap.
+// The whole 2026.7.2 train is transitional; later trains must be lockless.
+const NPM_SHRINKWRAP_TRANSITION_TRAIN = { year: 2026, month: 7, day: 2 };
 // 2026.7.1 shipped before the guard existed. Historical inspection may still check it.
 const LEGACY_INSTALL_GUARD_COMPAT_MAX = { year: 2026, month: 7, day: 1 };
 const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
@@ -393,14 +399,19 @@ function isLegacyLocalBuildMetadataCompatVersion(version) {
   return parsed ? compareCalver(parsed, LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX) <= 0 : false;
 }
 
-function isLegacyShrinkwrapCompatVersion(version) {
-  const parsed = parseCalver(version);
-  return parsed ? compareCalver(parsed, LEGACY_SHRINKWRAP_COMPAT_MAX) <= 0 : false;
-}
-
 function isLegacyInstallGuardCompatVersion(version) {
   const parsed = parseCalver(version);
   return parsed ? compareCalver(parsed, LEGACY_INSTALL_GUARD_COMPAT_MAX) <= 0 : false;
+}
+
+function isLegacyShrinkwrapOmissionCompatVersion(version) {
+  const parsed = parseCalver(version);
+  return parsed ? compareCalver(parsed, LEGACY_SHRINKWRAP_OMISSION_COMPAT_MAX) <= 0 : false;
+}
+
+function compareNpmShrinkwrapTransitionTrain(version) {
+  const parsed = parseCalver(version);
+  return parsed ? compareCalver(parsed, NPM_SHRINKWRAP_TRANSITION_TRAIN) : null;
 }
 
 function readTarEntry(entryPath) {
@@ -445,9 +456,10 @@ for (const requiredPrefix of REQUIRED_TARBALL_ENTRY_PREFIXES) {
   }
 }
 let packageVersion = "";
+let packageJson = null;
 if (entrySet.has("package.json")) {
   try {
-    const packageJson = JSON.parse(readTarEntry("package.json"));
+    packageJson = JSON.parse(readTarEntry("package.json"));
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
     errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
     if (cliArgs.requireBundledWorkspaceDeps) {
@@ -465,23 +477,39 @@ if (entrySet.has("package.json")) {
     packageVersion = "";
   }
 }
+const validPackageVersion = validSemver(packageVersion);
+const requiresCodeModeWorker =
+  validPackageVersion !== null && semverGte(validPackageVersion, FIRST_CODE_MODE_WORKER_VERSION);
+if (requiresCodeModeWorker && !entrySet.has(CODE_MODE_WORKER_PATH)) {
+  errors.push(`missing required tar entry ${CODE_MODE_WORKER_PATH}`);
+}
 if (entrySet.has("package-lock.json")) {
-  errors.push("package tarball must ship npm-shrinkwrap.json, not package-lock.json");
+  errors.push("package tarball must not contain package-lock.json");
 }
-if (!entrySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
-  if (isLegacyInstallGuardCompatVersion(packageVersion)) {
-    warnings.push("legacy package omits the preinstall completion guard");
-  } else {
-    errors.push(`missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
+const shrinkwrapTransitionComparison = compareNpmShrinkwrapTransitionTrain(packageVersion);
+const hasShrinkwrap = entrySet.has("npm-shrinkwrap.json");
+let shouldValidateShrinkwrap = false;
+if (shrinkwrapTransitionComparison !== null && shrinkwrapTransitionComparison > 0) {
+  if (hasShrinkwrap) {
+    errors.push("package tarball must not contain npm-shrinkwrap.json");
   }
-}
-if (!entrySet.has("npm-shrinkwrap.json")) {
-  if (isLegacyShrinkwrapCompatVersion(packageVersion)) {
+} else if (shrinkwrapTransitionComparison === 0) {
+  if (hasShrinkwrap) {
+    warnings.push(
+      "2026.7.2 transition package contains npm-shrinkwrap.json from the published beta train",
+    );
+    shouldValidateShrinkwrap = true;
+  }
+} else if (!hasShrinkwrap) {
+  if (isLegacyShrinkwrapOmissionCompatVersion(packageVersion)) {
     warnings.push("legacy package omits npm-shrinkwrap.json");
   } else {
-    errors.push("missing required tar entry npm-shrinkwrap.json");
+    errors.push("legacy package is missing required tar entry npm-shrinkwrap.json");
   }
 } else {
+  shouldValidateShrinkwrap = true;
+}
+if (shouldValidateShrinkwrap) {
   try {
     const shrinkwrap = JSON.parse(readTarEntry("npm-shrinkwrap.json"));
     const rootPackage = shrinkwrap.packages?.[""];
@@ -521,6 +549,13 @@ if (!entrySet.has("npm-shrinkwrap.json")) {
     );
   }
 }
+if (!entrySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
+  if (isLegacyInstallGuardCompatVersion(packageVersion)) {
+    warnings.push("legacy package omits the preinstall completion guard");
+  } else {
+    errors.push(`missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
+  }
+}
 for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
   if (entrySet.has(forbiddenEntry)) {
     if (isLegacyLocalBuildMetadataCompatVersion(packageVersion)) {
@@ -544,10 +579,30 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
     } else {
       const normalizedInventory = inventory.map((entry) => entry.replace(/\\/gu, "/"));
       const normalizedInventorySet = new Set(normalizedInventory);
+      if (requiresCodeModeWorker && !normalizedInventorySet.has(CODE_MODE_WORKER_PATH)) {
+        errors.push(`postinstall inventory omits ${CODE_MODE_WORKER_PATH}`);
+      }
       if (normalizedInventorySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
         errors.push(
           `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
         );
+      }
+      if (typeof packageJson?.scripts?.postinstall === "string") {
+        // Postinstall prunes every uninventoried dist file, including dashboard
+        // assets that cannot be recovered from the JavaScript import graph.
+        const requiredControlUiInventoryEntries = new Set([
+          ...REQUIRED_TARBALL_ENTRIES.filter((entry) => entry.startsWith("dist/")),
+          ...normalized.filter(
+            (entry) =>
+              REQUIRED_TARBALL_ENTRY_PREFIXES.some((prefix) => entry.startsWith(prefix)) &&
+              fs.statSync(path.join(extractedPackageRoot, entry)).isFile(),
+          ),
+        ]);
+        for (const requiredEntry of requiredControlUiInventoryEntries) {
+          if (!normalizedInventorySet.has(requiredEntry)) {
+            errors.push(`postinstall inventory omits Control UI file ${requiredEntry}`);
+          }
+        }
       }
       packageDistImports = runPhase("dist import graph", () =>
         collectPackageDistImports({

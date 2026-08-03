@@ -1,10 +1,12 @@
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import type { normalizeUsage } from "../../usage.js";
 import { log } from "../logger.js";
+import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./attempt-dispatch-preparation.js";
@@ -21,6 +23,7 @@ import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
+import { isEmbeddedRunTerminalInterrupted } from "./terminal-outcome.js";
 import { recoverEmbeddedRunTimeout } from "./timeout-context-recovery.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
@@ -50,7 +53,6 @@ export async function recoverEmbeddedRunAttempt(input: {
   armPostCompactionGuard: () => void;
   usageAccumulator: ReturnType<typeof createUsageAccumulator>;
   lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-  lastTurnTotal: number | undefined;
   runtimeAuthRetry: boolean;
   codexAppServerRecoveryRetryAvailable: boolean;
   codexAppServerRecoveryRetries: number;
@@ -85,6 +87,18 @@ export async function recoverEmbeddedRunAttempt(input: {
   const runtime = preparedRuntime.snapshot();
   const {
     attempt,
+    sessionIdUsed,
+    attemptAssistant,
+    currentAttemptCompletedAssistant,
+    terminalState,
+    setTerminalLifecycleMeta,
+    attemptCompactionCount,
+    activeErrorContext,
+    resolveReplayInvalidForAttempt,
+    assistantErrorText,
+    canRestartForLiveSwitch,
+  } = normalizedAttempt;
+  const {
     aborted,
     externalAbort,
     promptError,
@@ -93,18 +107,9 @@ export async function recoverEmbeddedRunAttempt(input: {
     timedOutDuringCompaction,
     timedOutDuringToolExecution,
     timedOutByRunBudget,
-    sessionIdUsed,
-    attemptAssistant,
-    currentAttemptCompletedAssistant,
-    terminalInterrupted,
-    signalOwnedInterruption,
-    setTerminalLifecycleMeta,
-    attemptCompactionCount,
-    activeErrorContext,
-    resolveReplayInvalidForAttempt,
-    assistantErrorText,
-    canRestartForLiveSwitch,
-  } = normalizedAttempt;
+  } = projectAgentRunAttemptTerminal(attempt.terminal);
+  const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
+  const { signalOwnedInterruption } = terminalState;
   const assistantOverflowCandidate =
     currentAttemptCompletedAssistant !== undefined
       ? currentAttemptCompletedAssistant.stopReason === "error" ||
@@ -171,6 +176,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     contextTokenBudget: runtime.contextTokenBudget,
     genericCompactionRecoveryAllowed: preparedRuntime.genericCompactionRecoveryAllowed,
     attempt,
+    toolResultPromptProjectionState: getEmbeddedSessionPromptState(params.sessionId).toolResults,
     runtimeAuthPlan: runtimePlan.auth,
     resolvedSessionKey: runInput.resolvedSessionKey,
     sessionAgentId: input.sessionAgentId,
@@ -238,7 +244,6 @@ export async function recoverEmbeddedRunAttempt(input: {
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage: input.lastRunPromptUsage,
           lastAssistant: attemptAssistant,
-          lastTurnTotal: input.lastTurnTotal,
         }),
         attempt,
         replayInvalid,
@@ -266,7 +271,6 @@ export async function recoverEmbeddedRunAttempt(input: {
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage: input.lastRunPromptUsage,
           lastAssistant: attemptAssistant,
-          lastTurnTotal: input.lastTurnTotal,
         }),
         attempt,
         replayInvalid,
@@ -292,7 +296,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       return retry({ codexAppServerRecoveryRetries: input.codexAppServerRecoveryRetries + 1 });
     }
     shouldSurfaceCodexCompletionTimeout =
-      attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" && attempt.timedOut;
+      attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" &&
+      projectAgentRunAttemptTerminal(attempt.terminal).timedOut;
     if (
       attempt.codexAppServerFailure &&
       !hasRecoverableCodexAppServerTimeoutOutcome &&
@@ -337,7 +342,6 @@ export async function recoverEmbeddedRunAttempt(input: {
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage: input.lastRunPromptUsage,
           lastAssistant: attemptAssistant,
-          lastTurnTotal: input.lastTurnTotal,
         }),
       startedAtMs: runInput.startedAtMs,
       fallbackConfigured: runInput.fallbackConfigured,

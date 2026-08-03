@@ -7,6 +7,7 @@ import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
 } from "./bundled-plugin-build-entries.mjs";
+import { assertRealOutputRoot } from "./output-root-guard.mjs";
 import {
   listMissingPackageStaticAssetSources,
   runPackageAssetBuild,
@@ -217,9 +218,6 @@ function resolvePluginNpmRuntimePackageFiles(plan) {
   if (packageRelativePathExists(plan.packageDir, "openclaw.plugin.json")) {
     merged.add("openclaw.plugin.json");
   }
-  if (packageRelativePathExists(plan.packageDir, "npm-shrinkwrap.json")) {
-    merged.add("npm-shrinkwrap.json");
-  }
   if (packageRelativePathExists(plan.packageDir, "README.md")) {
     merged.add("README.md");
   }
@@ -355,6 +353,7 @@ export async function buildPluginNpmRuntime(params) {
     return null;
   }
 
+  assertRealOutputRoot(plan.outDir);
   fs.rmSync(plan.outDir, { recursive: true, force: true });
   await build({
     clean: false,

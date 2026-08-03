@@ -273,6 +273,7 @@ describe("ask_user execution", () => {
     const tool = createAskUserTool({
       agentId: "main",
       sessionKey: "agent:main:main",
+      runId: "run-main",
       gatewayCall: gateway.call,
     });
 
@@ -294,6 +295,7 @@ describe("ask_user execution", () => {
         id: questionId,
         agentId: "main",
         sessionKey: "agent:main:main",
+        runId: "run-main",
         timeoutMs: 900_000,
       }),
       undefined,

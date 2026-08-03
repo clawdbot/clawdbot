@@ -358,6 +358,13 @@ openclaw plugins validate --entry ./dist/index.js
 npm test
 ```
 
+OpenClaw SDK compatibility fields carry TypeScript `@deprecated` annotations,
+which editors surface as migration warnings. To enforce them in CI, enable a
+type-aware rule such as
+[`@typescript-eslint/no-deprecated`](https://typescript-eslint.io/rules/no-deprecated/).
+Oxlint is not type-aware, so it cannot enforce these annotations. The generated
+`plugins init` scaffold therefore does not add a deprecation lint config.
+
 `plugins validate` checks that:
 
 - `openclaw.plugin.json` exists and passes the normal manifest loader.

@@ -55,6 +55,7 @@ struct DashboardWindowSmokeTests {
         controller.show()
         #expect(controller.window?.styleMask.contains(.titled) == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
+        #expect(controller.window?.isRestorable == false)
         #expect(controller.window?.contentViewController != nil)
         #expect(controller.window?.standardWindowButton(.closeButton) != nil)
         // The empty unified toolbar is what grows the titlebar to 52pt so the
@@ -464,6 +465,7 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserWebViewIdentity == nil)
         #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
         #expect(!controller._testCanOpenWindowsAutomatically)
+        #expect(controller._testAllWebViewsEnableTabNavigation)
         #expect(controller._testLinkBrowserNavigationObservationCount == 0)
         #expect(controller._testLinkBrowserTabBarIsHidden)
         #expect(controller._testLinkBrowserTabBarHeight == 0)
@@ -478,6 +480,7 @@ struct DashboardWindowSmokeTests {
         #expect(!controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserRepresentedURL == urlA)
         #expect(!controller._testCanOpenWindowsAutomatically)
+        #expect(controller._testAllWebViewsEnableTabNavigation)
         #expect(controller._testLinkBrowserTabBarIsHidden)
         #expect(controller._testLinkBrowserTabBarHeight == 0)
         #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)

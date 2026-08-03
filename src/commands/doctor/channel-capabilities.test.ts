@@ -33,6 +33,15 @@ describe("doctor channel capabilities", () => {
     });
   });
 
+  it("returns Slack route semantics without loading its channel plugin", () => {
+    expect(getDoctorChannelCapabilities("slack")).toEqual({
+      dmAllowFromMode: "topOnly",
+      groupModel: "route",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: false,
+    });
+  });
+
   it("returns capability overrides from matrix plugin metadata", () => {
     expect(getDoctorChannelCapabilities("matrix")).toEqual({
       dmAllowFromMode: "nestedOnly",

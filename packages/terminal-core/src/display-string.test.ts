@@ -44,4 +44,11 @@ describe("displayString", () => {
     expect(displayString(`${openclawHome}/state`)).toBe("$OPENCLAW_HOME/state");
     expect(displayString(`${openclawHome}2/state`)).toBe(`${openclawHome}2/state`);
   });
+
+  it.each(["$&", "$`", "$'", "$$"])("keeps %s literal when expanding OPENCLAW_HOME", (pattern) => {
+    const home = path.resolve("test-home", `${pattern}user`);
+    stubHome(home, "~/state");
+
+    expect(displayString(`${home}/state/project`)).toBe("$OPENCLAW_HOME/project");
+  });
 });

@@ -14,11 +14,30 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
 
 Install a current stable Rust toolchain with `rustup`.
 
-## Develop and build
+## Media codecs
 
-The frontend is static HTML, CSS, and JavaScript. It has no package install or build step.
+The companion uses GStreamer plugins for audio and video playback.
+WebM/VP9, Opus, Vorbis, and WAV normally work through `plugins-good`.
+H.264/MP4, AAC, and MP3 require the `libav` and/or `plugins-bad` packages.
+The `.deb` uses the host's plugins and declares all three packages as
+dependencies. The AppImage bundles the GStreamer media framework and the
+plugins available on its Ubuntu build host. For a source build or when
+rebuilding either Linux bundle, install the packages explicitly:
 
 ```bash
+sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+```
+
+The released AppImage therefore carries the codecs installed by the release
+workflow instead of relying on GStreamer packages from the user's system.
+
+## Develop and build
+
+The companion frontend is static HTML, CSS, and JavaScript. The shared Canvas A2UI renderer is
+generated from the Canvas plugin, so install repository dependencies once before building:
+
+```bash
+pnpm install
 cd apps/linux/src-tauri
 cargo run
 cargo build
@@ -38,7 +57,10 @@ The companion checks the latest GitHub release shortly after launch and from **C
 
 The running app gives the headless `openclaw node run` host a single Canvas WebView. The bundled `linux-canvas` plugin advertises `canvas.*` only while the app socket exists. The app listens at `$XDG_RUNTIME_DIR/openclaw-canvas.sock` (or `/tmp/openclaw-canvas-$UID.sock`) with mode `0600`; a headless Linux node without the app does not advertise Canvas.
 
-The plugin-generated A2UI renderer in `extensions/canvas/src/host/a2ui/` remains the source of truth. The app embeds its committed, synced OpenClawKit mirror from `apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/`. Run `node scripts/sync-native-a2ui.mjs --check` from the repository root after changing those assets.
+The Canvas plugin sources remain the source of truth for the A2UI renderer. Each native build
+generates `index.html` and `a2ui.bundle.js` into its isolated build output before compiling. Run
+`node scripts/sync-native-a2ui.mjs --check` from the repository root to verify fresh bundles are
+byte-identical and every native build owner is wired.
 
 ## Quick Chat widgets
 
@@ -63,7 +85,16 @@ rsvg-convert -w 128 -h 128 icon-tile.svg -o 128x128.png
 rsvg-convert -w 256 -h 256 icon-tile.svg -o 128x128@2x.png
 rsvg-convert -w 512 -h 512 icon-tile.svg -o icon.png
 magick icon.png -define icon:auto-resize=256,128,64,48,32,16 icon.ico
+rsvg-convert -w 36 -h 36 tray-template.svg -o tray-template.png
 ```
+
+macOS gets its own tray asset, `icons/tray-template.svg`. AppKit template images
+are drawn from the alpha channel alone, so a colored or edge-to-edge opaque icon
+arrives in the menu bar as a featureless blob; the template source is a
+silhouette with the eyes knocked back out of it. Its geometry mirrors the native
+macOS app's `CritterIconRenderer` at rest so both clients wear the same face, and
+the 36px render is the 2× backing store for the 18pt slot `tray-icon` scales
+menu bar images into. Non-Apple platforms keep the full-color `32x32.png`.
 
 ## Packaging
 

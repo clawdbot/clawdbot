@@ -1,5 +1,7 @@
 // Channel contract suites provide reusable expectations for channel plugin test coverage.
 import { expect, it } from "vitest";
+import { resolveChannelSetupExecutionAdapter } from "../../channels/plugins/setup-contract.js";
+import type { ChannelSetupDmPolicy } from "../../channels/plugins/setup-wizard-types.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
@@ -111,11 +113,11 @@ export function installChannelActionsContractSuite(params: {
   }
 }
 
-type ChannelSetupContractCase<ResolvedAccount> = {
+type ChannelSetupContractCase<ResolvedAccount, SetupInput extends ChannelSetupInput> = {
   name: string;
   cfg: OpenClawConfig;
   accountId?: string;
-  input: ChannelSetupInput;
+  input: SetupInput;
   expectedAccountId?: string;
   expectedValidation?: string | null;
   beforeTest?: () => void;
@@ -123,13 +125,18 @@ type ChannelSetupContractCase<ResolvedAccount> = {
   assertResolvedAccount?: (account: ResolvedAccount, cfg: OpenClawConfig) => void;
 };
 
-export function installChannelSetupContractSuite<ResolvedAccount>(params: {
+export function installChannelSetupContractSuite<
+  ResolvedAccount,
+  SetupInput extends ChannelSetupInput = ChannelSetupInput,
+>(params: {
   plugin: Pick<ChannelPlugin<ResolvedAccount>, "id" | "config" | "setup">;
-  cases: readonly ChannelSetupContractCase<ResolvedAccount>[];
+  cases: readonly ChannelSetupContractCase<ResolvedAccount, SetupInput>[];
 }) {
+  const setup = resolveChannelSetupExecutionAdapter(
+    params.plugin as Pick<ChannelPlugin<ResolvedAccount>, "setup" | "setupContract">,
+  );
   it("exposes the base setup contract", () => {
-    expect(params.plugin.setup).toBeDefined();
-    expect(typeof params.plugin.setup?.applyAccountConfig).toBe("function");
+    expect(typeof setup?.applyAccountConfig).toBe("function");
   });
 
   for (const testCase of params.cases) {
@@ -137,7 +144,7 @@ export function installChannelSetupContractSuite<ResolvedAccount>(params: {
       testCase.beforeTest?.();
 
       const resolvedAccountId =
-        params.plugin.setup?.resolveAccountId?.({
+        setup?.resolveAccountId?.({
           cfg: testCase.cfg,
           accountId: testCase.accountId,
           input: testCase.input,
@@ -148,14 +155,14 @@ export function installChannelSetupContractSuite<ResolvedAccount>(params: {
       expect(resolvedAccountId).toBe(testCase.expectedAccountId ?? resolvedAccountId);
 
       const validation =
-        params.plugin.setup?.validateInput?.({
+        setup?.validateInput?.({
           cfg: testCase.cfg,
           accountId: resolvedAccountId,
           input: testCase.input,
         }) ?? null;
       expect(validation).toBe(testCase.expectedValidation ?? null);
 
-      const nextCfg = params.plugin.setup?.applyAccountConfig({
+      const nextCfg = setup?.applyAccountConfig({
         cfg: testCase.cfg,
         accountId: resolvedAccountId,
         input: testCase.input,
@@ -166,6 +173,142 @@ export function installChannelSetupContractSuite<ResolvedAccount>(params: {
       testCase.assertPatchedConfig?.(nextCfg!);
       testCase.assertResolvedAccount?.(account, nextCfg!);
     });
+  }
+}
+
+type ChannelDmPolicyConfig = {
+  dmPolicy?: unknown;
+  allowFrom?: unknown;
+  accounts?: Record<string, ChannelDmPolicyConfig | undefined>;
+};
+
+type ChannelDmPolicyContractCase = {
+  name: string;
+  channel: string;
+  accountId: string;
+  accountConfig: Record<string, unknown>;
+  inheritedAllowFrom: ReadonlyArray<string | number>;
+  defaultAccount?: {
+    rootAllowFrom?: ReadonlyArray<string | number>;
+    accountAllowFrom?: ReadonlyArray<string | number>;
+  };
+};
+
+function createDmPolicyContractConfig(params: {
+  testCase: ChannelDmPolicyContractCase;
+  mode: "read" | "write" | "default";
+}): OpenClawConfig {
+  const { testCase } = params;
+  const defaultAccount = params.mode === "default" ? testCase.defaultAccount : undefined;
+  const account = {
+    ...testCase.accountConfig,
+    ...(params.mode === "write" ? {} : { dmPolicy: "allowlist" }),
+    ...(defaultAccount?.accountAllowFrom
+      ? { allowFrom: [...defaultAccount.accountAllowFrom] }
+      : {}),
+  };
+  const rootAllowFrom =
+    params.mode === "write" ? testCase.inheritedAllowFrom : defaultAccount?.rootAllowFrom;
+  return {
+    channels: {
+      [testCase.channel]: {
+        ...(params.mode === "write" ? {} : { dmPolicy: "disabled" }),
+        ...(params.mode === "default" ? { defaultAccount: testCase.accountId } : {}),
+        ...(rootAllowFrom ? { allowFrom: [...rootAllowFrom] } : {}),
+        accounts: { [testCase.accountId]: account },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function addExpectedWildcard(values: ReadonlyArray<string | number> | undefined) {
+  return values?.includes("*") ? [...values] : [...(values ?? []), "*"];
+}
+
+function resolveDmPolicyConfig(
+  cfg: OpenClawConfig,
+  channel: string,
+  accountId: string,
+): { channel: ChannelDmPolicyConfig; account: ChannelDmPolicyConfig } {
+  const channels = cfg.channels as Record<string, ChannelDmPolicyConfig | undefined> | undefined;
+  const channelConfig = channels?.[channel];
+  const accountConfig = channelConfig?.accounts?.[accountId];
+  expect(channelConfig).toBeDefined();
+  expect(accountConfig).toBeDefined();
+  return { channel: channelConfig!, account: accountConfig! };
+}
+
+function expectOpenDmPolicyPatch(params: {
+  dmPolicy: ChannelSetupDmPolicy;
+  cfg: OpenClawConfig;
+  channel: string;
+  accountId?: string;
+  resolvedAccountId: string;
+  expectedAllowFrom: readonly unknown[];
+}) {
+  const before = resolveDmPolicyConfig(params.cfg, params.channel, params.resolvedAccountId);
+  const beforeRootPolicy = before.channel.dmPolicy;
+  const beforeRootAllowFrom = Array.isArray(before.channel.allowFrom)
+    ? [...before.channel.allowFrom]
+    : before.channel.allowFrom;
+  const next = params.dmPolicy.setPolicy(params.cfg, "open", params.accountId);
+  const after = resolveDmPolicyConfig(next, params.channel, params.resolvedAccountId);
+
+  expect(after.channel.dmPolicy).toBe(beforeRootPolicy);
+  expect(after.channel.allowFrom).toEqual(beforeRootAllowFrom);
+  expect(after.account.dmPolicy).toBe("open");
+  expect(after.account.allowFrom).toEqual(params.expectedAllowFrom);
+}
+
+export function installChannelDmPolicyContractSuite(params: {
+  dmPolicy: ChannelSetupDmPolicy;
+  cases: readonly ChannelDmPolicyContractCase[];
+}) {
+  for (const testCase of params.cases) {
+    it(`dm policy contract: ${testCase.name} reads the named-account policy`, () => {
+      expect(params.dmPolicy.channel).toBe(testCase.channel);
+      const cfg = createDmPolicyContractConfig({ testCase, mode: "read" });
+      expect(params.dmPolicy.getCurrent(cfg, testCase.accountId)).toBe("allowlist");
+    });
+
+    it(`dm policy contract: ${testCase.name} reports account-scoped config keys`, () => {
+      expect(params.dmPolicy.resolveConfigKeys?.({}, testCase.accountId)).toEqual({
+        policyKey: `channels.${testCase.channel}.accounts.${testCase.accountId}.dmPolicy`,
+        allowFromKey: `channels.${testCase.channel}.accounts.${testCase.accountId}.allowFrom`,
+      });
+    });
+
+    it(`dm policy contract: ${testCase.name} writes open policy with inherited allowFrom`, () => {
+      expectOpenDmPolicyPatch({
+        dmPolicy: params.dmPolicy,
+        cfg: createDmPolicyContractConfig({ testCase, mode: "write" }),
+        channel: testCase.channel,
+        accountId: testCase.accountId,
+        resolvedAccountId: testCase.accountId,
+        expectedAllowFrom: addExpectedWildcard(testCase.inheritedAllowFrom),
+      });
+    });
+
+    const defaultAccount = testCase.defaultAccount;
+    if (defaultAccount) {
+      it(`dm policy contract: ${testCase.name} uses defaultAccount when accountId is omitted`, () => {
+        const cfg = createDmPolicyContractConfig({ testCase, mode: "default" });
+        expect(params.dmPolicy.getCurrent(cfg)).toBe("allowlist");
+        expect(params.dmPolicy.resolveConfigKeys?.(cfg)).toEqual({
+          policyKey: `channels.${testCase.channel}.accounts.${testCase.accountId}.dmPolicy`,
+          allowFromKey: `channels.${testCase.channel}.accounts.${testCase.accountId}.allowFrom`,
+        });
+        expectOpenDmPolicyPatch({
+          dmPolicy: params.dmPolicy,
+          cfg,
+          channel: testCase.channel,
+          resolvedAccountId: testCase.accountId,
+          expectedAllowFrom: addExpectedWildcard(
+            defaultAccount.accountAllowFrom ?? defaultAccount.rootAllowFrom,
+          ),
+        });
+      });
+    }
   }
 }
 

@@ -102,6 +102,7 @@ struct RootSidebar: View {
             {
                 self.selectSidebarDestination(.settings)
             }
+            .accessibilityIdentifier("RootTabs.Sidebar.Destination.settings")
 
             if self.isDrawerLayout {
                 OpenClawSidebarControlButton(action: self.dismissAction)
@@ -484,6 +485,7 @@ struct RootSidebar: View {
         .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
             cornerRadius: OpenClawProMetric.controlRadius,
             style: .continuous))
+        .accessibilityIdentifier("RootTabs.Sidebar.Destination.chat")
         .accessibilityValue(mainSession?.unread == true ? String(localized: "Unread") : "")
     }
 
@@ -617,8 +619,11 @@ struct RootSidebar: View {
                         .lineLimit(1)
                     // Web-parity subtitle: the work line (repo/branch) names the
                     // session; recency moves to the trailing metadata slot.
-                    if let workSubtitle = ChatSessionSidebarModel.workSubtitle(for: session) {
-                        Text(verbatim: workSubtitle)
+                    if let subtitle = ChatSessionSidebarModel.subtitle(
+                        for: session,
+                        workSubtitle: ChatSessionSidebarModel.workSubtitle(for: session))
+                    {
+                        Text(verbatim: subtitle)
                             .font(OpenClawType.caption2Medium)
                             .foregroundStyle(OpenClawSidebarPalette.muted)
                             .lineLimit(1)
@@ -707,6 +712,7 @@ struct RootSidebar: View {
         .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
             cornerRadius: OpenClawProMetric.controlRadius,
             style: .continuous))
+        .accessibilityIdentifier("RootTabs.Sidebar.Destination.\(destination.rawValue)")
     }
 
     /// Attention lives on the rows that act on it (prototype parity): pending

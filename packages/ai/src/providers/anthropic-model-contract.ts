@@ -4,10 +4,22 @@ import {
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { Context, Model } from "../types.js";
+import { clampThinkingLevel } from "../model-utils.js";
+import type { AnthropicEffort } from "../provider-options.js";
+import type {
+  Context,
+  Model,
+  ModelThinkingLevel,
+  SimpleStreamOptions,
+  StopReason,
+} from "../types.js";
 export {
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
@@ -15,11 +27,15 @@ export {
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
+
+export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.75";
+export const ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK = `x-anthropic-billing-header: cc_version=${ANTHROPIC_CLAUDE_CODE_VERSION}; cc_entrypoint=sdk-cli;`;
 
 type ReplayModelRef = {
   provider?: string;
@@ -72,6 +88,7 @@ export function usesClaudeStreamingRefusalContract(model: {
   return (
     resolveClaudeFable5ModelIdentity(model) !== undefined ||
     resolveClaudeMythos5ModelIdentity(model) !== undefined ||
+    resolveClaudeOpus5ModelIdentity(model) !== undefined ||
     resolveClaudeSonnet5ModelIdentity(model) !== undefined
   );
 }
@@ -96,13 +113,66 @@ export function defaultsClaudeAdaptiveThinking(model: {
   return (
     requiresClaudeAdaptiveThinking(model) ||
     (normalizeApi(model.api) === "anthropic-messages" &&
-      resolveClaudeSonnet5ModelIdentity(model) !== undefined)
+      (resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+        resolveClaudeSonnet5ModelIdentity(model) !== undefined))
   );
 }
 
-/** Remove Sonnet 5 assistant prefills while preserving completed tool-use turns. */
-export function prepareClaudeSonnet5RequestContext(model: Model, context: Context): Context {
-  if (!resolveClaudeSonnet5ModelIdentity(model)) {
+/** Resolve provider-native effort once for direct and managed Claude requests. */
+export function resolveAnthropicThinkingEffort(
+  model: Model<"anthropic-messages">,
+  level: SimpleStreamOptions["reasoning"],
+): AnthropicEffort {
+  const requestedLevel = level as ModelThinkingLevel | undefined;
+  const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
+  const clampModel = {
+    ...model,
+    ...(typeof model.params?.canonicalModelId === "string" ? { reasoning: true } : {}),
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+  };
+  const resolvedLevel = requestedLevel ? clampThinkingLevel(clampModel, requestedLevel) : undefined;
+  const mapped = resolvedLevel ? thinkingLevelMap?.[resolvedLevel] : undefined;
+  if (typeof mapped === "string") {
+    return mapped as AnthropicEffort;
+  }
+  switch (resolvedLevel) {
+    case "off":
+    case "minimal":
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "xhigh":
+      return supportsClaudeNativeXhighEffort(model) ? "xhigh" : "high";
+    case "max":
+      return supportsClaudeNativeMaxEffort(model) ? "max" : "high";
+    default:
+      return "high";
+  }
+}
+
+/** Normalize Anthropic and Anthropic-compatible terminal reasons identically. */
+export function mapAnthropicStopReason(reason: string | undefined): StopReason {
+  switch (reason) {
+    case "end_turn":
+    case "pause_turn":
+    case "stop_sequence":
+      return "stop";
+    case "max_tokens":
+      return "length";
+    case "tool_use":
+      return "toolUse";
+    case "refusal":
+    case "sensitive":
+      return "error";
+    default:
+      throw new Error(`Unhandled stop reason: ${String(reason)}`);
+  }
+}
+
+/** Remove unsupported assistant prefills while preserving completed tool-use turns. */
+export function prepareClaudeNoPrefillRequestContext(model: Model, context: Context): Context {
+  if (!resolveClaudeOpus5ModelIdentity(model) && !resolveClaudeSonnet5ModelIdentity(model)) {
     return context;
   }
 
@@ -133,14 +203,15 @@ export function applyClaudeRequestContract(
   if (normalizeApi(model.api) !== "anthropic-messages") {
     return;
   }
+  const opus5 = resolveClaudeOpus5ModelIdentity(model) !== undefined;
   const sonnet5 = resolveClaudeSonnet5ModelIdentity(model) !== undefined;
-  if (!requiresClaudeDefaultSampling(model) && !sonnet5) {
+  if (!requiresClaudeDefaultSampling(model) && !opus5 && !sonnet5) {
     return;
   }
   delete params.temperature;
   delete params.top_p;
   delete params.top_k;
-  if (sonnet5) {
+  if (opus5 || sonnet5) {
     delete params.service_tier;
   }
 }
@@ -159,6 +230,10 @@ function resolveReplayModelBoundIdentity(ref: ReplayModelRef): string | undefine
   const mythosIdentity = resolveClaudeMythos5ModelIdentity(modelRef);
   if (mythosIdentity) {
     return `mythos:${mythosIdentity}`;
+  }
+  const opusIdentity = resolveClaudeOpus5ModelIdentity(modelRef);
+  if (opusIdentity) {
+    return `opus:${opusIdentity}`;
   }
   const sonnetIdentity = resolveClaudeSonnet5ModelIdentity(modelRef);
   return sonnetIdentity ? `sonnet:${sonnetIdentity}` : undefined;

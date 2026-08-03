@@ -73,7 +73,7 @@ export async function runDoctorStateSqliteCompact(
       }
 
       const compact = compactDoctorSqliteFile({
-        afterMutation: () => {
+        afterSuccess: () => {
           if (!clearOpenClawDatabaseQuarantine(sqlitePath, { env })) {
             throw new Error(
               `OpenClaw state database ${sqlitePath} was compacted, but its persisted quarantine record could not be cleared. Rerun openclaw doctor --fix so the database is not refused again.`,

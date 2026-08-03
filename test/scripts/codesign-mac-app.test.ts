@@ -194,7 +194,9 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(signLines[1]).toContain(`${path.join(app, "Contents", "MacOS", "OpenClaw")}\t`);
     expect(signLines[2]).toContain(`${app}\t`);
     for (const line of signLines) {
-      const [, , entitlementPath, copiedEntitlementsPath] = line.split("\t");
+      const columns = line.split("\t");
+      const entitlementPath = columns[2];
+      const copiedEntitlementsPath = columns[3];
       const entitlementSource = expectDefined(entitlementPath, "codesign entitlement source path");
       const copiedEntitlementSource = expectDefined(
         copiedEntitlementsPath,

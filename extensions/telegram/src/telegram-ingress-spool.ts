@@ -13,10 +13,6 @@ import {
   type TelegramSpooledUpdatePayload,
 } from "./telegram-ingress-spool.payload.js";
 const TELEGRAM_INGRESS_SPOOL_PREFIX = "ingress-spool-";
-export const TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-export const TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES = 1000;
-export const TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-export const TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES = 1000;
 const TELEGRAM_SPOOLED_COMPLETION_RETRY_POLICY: BackoffPolicy = {
   initialMs: 250,
   maxMs: 5_000,

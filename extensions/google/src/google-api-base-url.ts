@@ -75,11 +75,12 @@ export function isGoogleGenerativeAiApi(api?: string | null): boolean {
 }
 
 export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | undefined {
-  if (!baseUrl) {
-    return baseUrl;
+  const raw = normalizeOptionalString(baseUrl);
+  if (!raw) {
+    return undefined;
   }
 
-  const normalized = normalizeGoogleApiBaseUrl(baseUrl);
+  const normalized = normalizeGoogleApiBaseUrl(raw);
   try {
     const url = new URL(normalized);
     stripUrlUserInfo(url);

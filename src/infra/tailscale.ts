@@ -11,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { logVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
+import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
 import { retryAsync } from "./retry.js";
 
@@ -183,14 +184,11 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
 let cachedTailscaleBinary: string | null = null;
 
 function getTestTailscaleBinaryOverride(env: NodeJS.ProcessEnv = process.env): string | null {
-  const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
-  if (!forcedBinary) {
+  if (!isVitestRuntimeEnv(env)) {
     return null;
   }
-  if (env.VITEST || env.NODE_ENV === "test") {
-    return forcedBinary;
-  }
-  return null;
+  const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
+  return forcedBinary || null;
 }
 
 async function getTailscaleBinary(): Promise<string> {

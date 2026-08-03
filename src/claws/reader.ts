@@ -2,11 +2,17 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { isScalar, parseDocument, visit } from "yaml";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
+import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
-import { parseClawManifest } from "./schema.js";
-import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
+import { clawManifestWorkspaceConflictsWithPath, parseClawManifest } from "./schema.js";
+import {
+  MAX_CLAW_MANIFEST_BYTES,
+  MAX_MANAGED_FILE_BYTES,
+  MAX_MANAGED_WORKSPACE_BYTES,
+} from "./source-limits.js";
 import type {
   ClawDiagnostic,
   ClawManifest,
@@ -23,15 +29,17 @@ type PackageJson = {
 
 type ResolvedClawSource = Omit<ClawSourceIdentity, "integrity" | "integrityKind" | "byteLength"> & {
   packageJsonRaw?: Buffer;
+  manifestFormatPath: string;
 };
 
-const MAX_CLAW_MANIFEST_BYTES = 1024 * 1024;
+const CLAW_MARKDOWN_FILENAME = "CLAW.md";
+
 const MAX_CLAW_PACKAGE_JSON_BYTES = 256 * 1024;
 
 async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> {
   const fileRoot = await fsSafeRoot(dirname(path));
   const read = await fileRoot.read(basename(path), {
-    hardlinks: "allow",
+    hardlinks: "reject",
     maxBytes,
     nonBlockingRead: true,
     symlinks: "reject",
@@ -87,6 +95,7 @@ async function buildDevelopmentSnapshot(params: {
   source: ResolvedClawSource;
   manifest: ClawManifest;
   manifestRaw: Buffer;
+  openClawProfile?: { path: string; raw: Buffer };
 }): Promise<
   | {
       ok: true;
@@ -104,6 +113,9 @@ async function buildDevelopmentSnapshot(params: {
   };
   add("canonical-source", Buffer.from(params.source.manifestPath, "utf8"));
   add("manifest", params.manifestRaw);
+  if (params.openClawProfile) {
+    add(`profile:${params.openClawProfile.path.replaceAll("\\", "/")}`, params.openClawProfile.raw);
+  }
 
   if (params.source.kind === "package") {
     const packageJson = params.source.packageJsonRaw;
@@ -271,6 +283,143 @@ async function readJson(
   }
 }
 
+export function parseClawMarkdown(
+  raw: Buffer,
+  path: string,
+): { ok: true; value: unknown; body: Buffer } | { ok: false; diagnostics: ClawDiagnostic[] } {
+  const markdown =
+    raw.length >= 3 && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf
+      ? raw.subarray(3)
+      : raw;
+  const byteText = markdown.toString("latin1");
+  const match = byteText.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) {
+    return {
+      ok: false,
+      diagnostics: [
+        fileDiagnostic(
+          "missing_claw_frontmatter",
+          `${path} must start with a YAML frontmatter block delimited by --- lines.`,
+        ),
+      ],
+    };
+  }
+  const frontmatterBytes = Buffer.from(match[1] ?? "", "latin1");
+  const body = markdown.subarray(match[0].length);
+  let frontmatter: string;
+  try {
+    frontmatter = new TextDecoder("utf-8", { fatal: true }).decode(frontmatterBytes);
+    new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    return {
+      ok: false,
+      diagnostics: [
+        fileDiagnostic("invalid_claw_markdown_utf8", `${path} must contain valid UTF-8.`),
+      ],
+    };
+  }
+  const document = parseDocument(frontmatter, { prettyErrors: false, uniqueKeys: true });
+  if (document.errors.length > 0) {
+    return {
+      ok: false,
+      diagnostics: document.errors.map((error) =>
+        fileDiagnostic("invalid_claw_frontmatter", `Could not parse ${path}: ${error.message}`),
+      ),
+    };
+  }
+  let unsupportedFeature: string | undefined;
+  visit(document, {
+    Alias() {
+      unsupportedFeature ??= "aliases";
+    },
+    Node(_key, node) {
+      if (node.anchor) {
+        unsupportedFeature ??= "anchors";
+      } else if (node.tag) {
+        unsupportedFeature ??= "explicit tags";
+      }
+    },
+    Pair(_key, pair) {
+      if (isScalar(pair.key) && pair.key.value === "<<") {
+        unsupportedFeature ??= "merge keys";
+      }
+    },
+  });
+  if (unsupportedFeature) {
+    return {
+      ok: false,
+      diagnostics: [
+        fileDiagnostic(
+          "unsupported_claw_yaml_feature",
+          `${path} uses ${unsupportedFeature}; CLAW.md frontmatter must map directly to JSON data.`,
+        ),
+      ],
+    };
+  }
+  try {
+    return { ok: true, value: document.toJSON(), body };
+  } catch (error) {
+    return {
+      ok: false,
+      diagnostics: [
+        fileDiagnostic(
+          "invalid_claw_frontmatter",
+          `Could not parse ${path}: ${(error as Error).message}`,
+        ),
+      ],
+    };
+  }
+}
+
+function parseClawManifestDocument(
+  raw: Buffer,
+  path: string,
+): { ok: true; value: unknown; body?: Buffer } | { ok: false; diagnostics: ClawDiagnostic[] } {
+  if (basename(path).toLowerCase() === CLAW_MARKDOWN_FILENAME.toLowerCase()) {
+    return parseClawMarkdown(raw, path);
+  }
+  try {
+    return { ok: true, value: JSON.parse(raw.toString("utf8")) };
+  } catch (error) {
+    return {
+      ok: false,
+      diagnostics: [
+        fileDiagnostic("invalid_json", `Could not parse ${path}: ${(error as Error).message}`),
+      ],
+    };
+  }
+}
+
+async function readClawDocument(
+  path: string,
+  code: string,
+  manifestFormatPath = path,
+): Promise<
+  | { ok: true; raw: Buffer; value: unknown; body?: Buffer }
+  | { ok: false; diagnostics: ClawDiagnostic[] }
+> {
+  let raw: Buffer;
+  try {
+    raw = await readBoundedFile(path, MAX_CLAW_MANIFEST_BYTES);
+  } catch (error) {
+    const tooLarge =
+      error instanceof RangeError || (error instanceof FsSafeError && error.code === "too-large");
+    return {
+      ok: false,
+      diagnostics: [
+        fileDiagnostic(
+          tooLarge ? `${code}_too_large` : code,
+          tooLarge
+            ? `${path} exceeds ${MAX_CLAW_MANIFEST_BYTES} bytes.`
+            : `Could not read ${path}: ${(error as Error).message}`,
+        ),
+      ],
+    };
+  }
+  const parsed = parseClawManifestDocument(raw, manifestFormatPath);
+  return parsed.ok ? { ...parsed, raw } : parsed;
+}
+
 async function resolvePackageSource(
   packageRoot: string,
 ): Promise<
@@ -312,9 +461,8 @@ async function resolvePackageSource(
       ],
     };
   }
-  const manifestPath = await realpath(resolve(packageRootReal, packageJson.openclaw.claw)).catch(
-    () => undefined,
-  );
+  const declaredManifestPath = resolve(packageRootReal, packageJson.openclaw.claw);
+  const manifestPath = await realpath(declaredManifestPath).catch(() => undefined);
   if (!manifestPath || !isContained(packageRootReal, manifestPath)) {
     return {
       ok: false,
@@ -335,6 +483,7 @@ async function resolvePackageSource(
       packageRoot: packageRootReal,
       manifestPath,
       packageJsonRaw: packageJsonResult.raw,
+      manifestFormatPath: declaredManifestPath,
     },
   };
 }
@@ -374,6 +523,7 @@ async function resolveSource(
       version: "0.0.0-development",
       packageRoot,
       manifestPath,
+      manifestFormatPath: inputPath,
     },
   };
 }
@@ -383,10 +533,10 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
   if (!sourceResult.ok) {
     return sourceResult;
   }
-  const manifestResult = await readJson(
+  const manifestResult = await readClawDocument(
     sourceResult.source.manifestPath,
     "read_failed",
-    MAX_CLAW_MANIFEST_BYTES,
+    sourceResult.source.manifestFormatPath,
   );
   if (!manifestResult.ok) {
     return manifestResult;
@@ -395,10 +545,34 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
   if (!parsed.ok) {
     return parsed;
   }
+  const hasMarkdownBody =
+    manifestResult.body !== undefined && manifestResult.body.toString("utf8").trim().length > 0;
+  if (hasMarkdownBody && clawManifestWorkspaceConflictsWithPath(parsed.manifest, "SOUL.md")) {
+    return {
+      ok: false,
+      diagnostics: [
+        fileDiagnostic(
+          "claw_body_soul_conflict",
+          "CLAW.md body content and an explicit SOUL.md workspace declaration cannot both be present.",
+          "$.workspace",
+        ),
+      ],
+    };
+  }
+  const profile = await readClawOpenClawProfile({
+    packageRoot: sourceResult.source.packageRoot,
+    manifest: parsed.manifest,
+  });
+  if (!profile.ok) {
+    return profile;
+  }
   const snapshot = await buildDevelopmentSnapshot({
     source: sourceResult.source,
     manifest: parsed.manifest,
     manifestRaw: manifestResult.raw,
+    ...(profile.raw && profile.path
+      ? { openClawProfile: { path: profile.path, raw: profile.raw } }
+      : {}),
   });
   if (!snapshot.ok) {
     return snapshot;
@@ -417,6 +591,8 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
   return {
     ok: true,
     manifest: parsed.manifest,
+    ...(hasMarkdownBody ? { clawMarkdownBody: manifestResult.body } : {}),
+    ...(profile.profile ? { openClawProfile: profile.profile } : {}),
     source,
     snapshot: { workspaceSources: snapshot.workspaceSources },
     diagnostics: parsed.diagnostics,

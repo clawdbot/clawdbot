@@ -108,6 +108,9 @@ export function isToolResultError(result: unknown): boolean {
   if (timedOut === true || Boolean(error)) {
     return true;
   }
+  if (normalized === "completed") {
+    return false;
+  }
   const exitCode = details ? readToolErrorField(details, "exitCode") : undefined;
   return typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0;
 }

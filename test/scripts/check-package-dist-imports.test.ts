@@ -47,6 +47,69 @@ describe("check-package-dist-imports", () => {
     expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
   });
 
+  it.each([
+    {
+      name: "named imports",
+      source: 'import { value } from "./missing.js";\n',
+    },
+    {
+      name: "multiline named imports",
+      source: 'import {\n  value,\n} from "./missing.js";\n',
+    },
+    {
+      name: "named re-exports",
+      source: 'export { value } from "./missing.js";\n',
+    },
+    {
+      name: "multiline named re-exports",
+      source: 'export {\n  value,\n} from "./missing.js";\n',
+    },
+  ])("rejects missing chunks in $name", ({ source }) => {
+    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+    mkdirSync(join(root, "dist"), { recursive: true });
+    writeFileSync(join(root, "dist", "index.js"), source, "utf8");
+
+    const result = spawnSync("node", [CHECK_SCRIPT, root], { encoding: "utf8" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("dist/index.js imports missing dist/missing.js");
+  });
+
+  it("ignores import-like text inside multiline template literals", () => {
+    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+    mkdirSync(join(root, "dist"), { recursive: true });
+    writeFileSync(
+      join(root, "dist", "index.js"),
+      'const example = `\nimport "./phantom.js"\n`;\n',
+      "utf8",
+    );
+
+    const result = spawnSync("node", [CHECK_SCRIPT, root], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
+  });
+
+  it.each([
+    "../../openclaw.mjs",
+    "../../scripts/run-node.mjs",
+    "../../dist/entry.js",
+    "../../dist/entry.mjs",
+  ])("ignores import.meta.url probes outside packaged dist (%s)", (specifier) => {
+    const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
+    mkdirSync(join(root, "dist"), { recursive: true });
+    writeFileSync(
+      join(root, "dist", "index.js"),
+      `const candidate = new URL(${JSON.stringify(specifier)}, import.meta.url);\n`,
+      "utf8",
+    );
+
+    const result = spawnSync("node", [CHECK_SCRIPT, root], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
+  });
+
   it("rejects missing CommonJS require chunks", () => {
     const root = makeTempDir(tempDirs, "openclaw-package-dist-imports-");
     mkdirSync(join(root, "dist"), { recursive: true });

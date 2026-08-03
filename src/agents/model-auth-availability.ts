@@ -15,15 +15,12 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
-import {
-  isConfiguredAwsSdkAuthProfileForProvider,
-  getRuntimeAuthProfileStoreSnapshot,
-  resolveAuthProfileEligibility,
-} from "./auth-profiles.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
 import {
   type AuthProfileOrderResolution,
+  isConfiguredAwsSdkAuthProfileForProvider,
+  resolveAuthProfileEligibility,
   resolveAuthProfileOrderWithMetadata,
 } from "./auth-profiles/order.js";
 import {
@@ -31,18 +28,22 @@ import {
   resolveSecretRefReadOnlyAvailability,
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
+import { getRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
-import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvAuthLookupMaps,
+} from "./model-auth-env-vars.js";
 import { resolveProviderEnvAuthEvidence } from "./model-auth-env.js";
 import { isKnownEnvApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import {
-  hasUsableCustomProviderApiKey,
-  hasRuntimeAvailableProviderAuth,
   hasSyntheticLocalProviderAuthConfig,
+  hasUsableCustomProviderApiKey,
   resolveProviderEntryApiKeyProfileReference,
   shouldPreferExplicitConfigApiKeyAuth,
-} from "./model-auth.js";
+} from "./model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   createOpenAIModelRoutesResolver,
@@ -88,6 +89,7 @@ export type ModelAuthAvailabilityEvaluation = {
   evidence?: ModelAuthAvailabilityEvidence;
 };
 export type ModelAuthAvailabilityResolver = {
+  providerDiscoveryProviderIds: readonly string[];
   evaluateModelAuth(
     provider: string,
     ref?: ModelAuthAvailabilityRef,
@@ -534,14 +536,8 @@ export function createModelAuthAvailabilityResolver(
       const managed = typeof apiKey === "string" && isSecretRefHeaderValueMarker(apiKey);
       return {
         availability: managed
-          ? hasRuntimeAvailableProviderAuth({
-              provider,
-              modelApi: target.api ?? undefined,
-              cfg: params.cfg,
-              workspaceDir: params.workspaceDir,
-              env,
-              allowPluginSyntheticAuth: false,
-            }) || undefined
+          ? Boolean(resolveManagedSecretRefRuntimeProviderAuth({ provider, cfg: params.cfg })) ||
+            undefined
           : undefined,
         selectedAuthMode: configuredBearerMode,
         evidence: managed ? "runtime" : "synthetic",
@@ -556,14 +552,9 @@ export function createModelAuthAvailabilityResolver(
         };
       }
       const available = resolveSecretRefReadOnlyAvailability(apiKeyRef, params.cfg, env);
-      const runtimeAvailable = hasRuntimeAvailableProviderAuth({
-        provider,
-        modelApi: target.api ?? undefined,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        env,
-        allowPluginSyntheticAuth: false,
-      });
+      const runtimeAvailable = Boolean(
+        resolveManagedSecretRefRuntimeProviderAuth({ provider, cfg: params.cfg }),
+      );
       return {
         availability: runtimeAvailable ? true : available,
         selectedAuthMode: configuredBearerMode,
@@ -1005,7 +996,50 @@ export function createModelAuthAvailabilityResolver(
       selectedRoute,
     };
   };
+  const providerDiscoveryProviderIds = new Set<string>();
+  const addProviderDiscoveryProviderId = (provider: string | undefined) => {
+    if (!provider) {
+      return;
+    }
+    const normalized = normalizeProvider(provider);
+    if (normalized) {
+      providerDiscoveryProviderIds.add(normalized);
+    }
+  };
+  for (const credential of Object.values(store.profiles)) {
+    addProviderDiscoveryProviderId(credential.provider);
+  }
+  for (const profile of Object.values(params.cfg.auth?.profiles ?? {})) {
+    addProviderDiscoveryProviderId(profile.provider);
+  }
+  for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
+    if (envAuth(provider)) {
+      addProviderDiscoveryProviderId(provider);
+    }
+  }
+  for (const plugin of params.metadataSnapshot?.index?.plugins ?? []) {
+    if (
+      !plugin.enabled ||
+      !(plugin.syntheticAuthRefs ?? []).some((ref) =>
+        synthetic.has(normalizeProviderIdForAuth(ref)),
+      )
+    ) {
+      continue;
+    }
+    for (const provider of [
+      ...(plugin.contributions?.providers ?? []),
+      ...(plugin.contributions?.modelCatalogProviders ?? []),
+    ]) {
+      addProviderDiscoveryProviderId(provider);
+    }
+  }
+  if (synthetic.has("codex")) {
+    addProviderDiscoveryProviderId(OPENAI_PROVIDER_ID);
+  }
   return {
+    providerDiscoveryProviderIds: [...providerDiscoveryProviderIds].toSorted((left, right) =>
+      left.localeCompare(right),
+    ),
     evaluateModelAuth,
     resolveProviderAuthAvailability,
     hasSyntheticAuth: (provider) =>

@@ -2,7 +2,6 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   buildAgentMainSessionKey,
-  DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
 } from "../../routing/session-key.js";
@@ -39,7 +38,7 @@ export function resolveSessionKey(
   scope: SessionScope,
   ctx: MsgContext,
   mainKey?: string,
-  agentId: string = DEFAULT_AGENT_ID,
+  agentId?: string,
 ) {
   const explicit = ctx.SessionKey?.trim();
   if (explicit) {
@@ -48,6 +47,9 @@ export function resolveSessionKey(
   const raw = deriveSessionKey(scope, ctx);
   if (scope === "global") {
     return raw;
+  }
+  if (!agentId?.trim()) {
+    throw new Error("Session key resolution requires an explicit configured agent id.");
   }
   const canonicalAgentId = normalizeAgentId(agentId);
   const canonicalMainKey = normalizeMainKey(mainKey);

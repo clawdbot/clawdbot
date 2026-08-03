@@ -1,9 +1,11 @@
+import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
@@ -24,8 +26,10 @@ import {
   verifyNpmProvenanceAttestation,
   verifyNpmRegistrySignatures,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
+import { withEnv } from "../src/test-utils/env.js";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
+const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
 describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
   it("keeps trusted release verification independent from target app dependencies", () => {
@@ -565,6 +569,22 @@ describe("collectInstalledPackageErrors", () => {
     return mkdtempSync(join(tmpdir(), "openclaw-postpublish-package-"));
   }
 
+  function writeExpectedBundledExtensionManifests(
+    packageRoot: string,
+    omittedIds: readonly string[] = [],
+  ): void {
+    const omitted = new Set(omittedIds);
+    for (const relativePath of requiredBundledPluginPackPaths) {
+      const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
+      if (!match || omitted.has(match[1] ?? "")) {
+        continue;
+      }
+      const packageJsonPath = join(packageRoot, relativePath);
+      mkdirSync(dirname(packageJsonPath), { recursive: true });
+      writeFileSync(packageJsonPath, "{}\n", "utf8");
+    }
+  }
+
   it("flags version mismatches", () => {
     const errors = collectInstalledPackageErrors({
       expectedVersion: "2026.3.23-2",
@@ -575,6 +595,156 @@ describe("collectInstalledPackageErrors", () => {
     expect(errors[0]).toBe(
       "installed package version mismatch: expected 2026.3.23-2, found 2026.3.23.",
     );
+  });
+
+  it.each(["ollama", "lmstudio"])(
+    "rejects a missing installed bundled %s provider directory",
+    (providerId) => {
+      const packageRoot = makeInstalledPackageRoot();
+
+      try {
+        writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
+        writeExpectedBundledExtensionManifests(packageRoot, [providerId]);
+
+        const missingManifestPath = join(
+          packageRoot,
+          "dist",
+          "extensions",
+          providerId,
+          "package.json",
+        );
+        const expectedError = `installed bundled extension manifest missing: ${missingManifestPath}.`;
+
+        expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toStrictEqual([
+          expectedError,
+        ]);
+        expect(
+          collectInstalledPackageErrors({
+            expectedVersion: "2026.3.23",
+            installedVersion: "2026.3.23",
+            packageRoot,
+          }),
+        ).toContain(expectedError);
+      } finally {
+        rmSync(packageRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects an installed package without its bundled extension root", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      const errors = collectInstalledBundledExtensionManifestErrors(packageRoot);
+
+      expect(errors).toEqual(
+        expect.arrayContaining(
+          ["ollama", "lmstudio"].map(
+            (providerId) =>
+              `installed bundled extension manifest missing: ${join(
+                packageRoot,
+                "dist",
+                "extensions",
+                providerId,
+                "package.json",
+              )}.`,
+          ),
+        ),
+      );
+      for (const excludedId of ["acpx", "qa-channel", "qa-lab"]) {
+        expect(errors.some((error) => error.includes(join("extensions", excludedId)))).toBe(false);
+      }
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps bundled manifest requirements stable after the build filter changes", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      const expectedErrors = collectInstalledBundledExtensionManifestErrors(packageRoot);
+      const filteredErrors = withEnv({ OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" }, () =>
+        collectInstalledBundledExtensionManifestErrors(packageRoot),
+      );
+
+      expect(filteredErrors).toStrictEqual(expectedErrors);
+      expect(filteredErrors).toEqual(
+        expect.arrayContaining(
+          ["ollama", "lmstudio"].map(
+            (providerId) =>
+              `installed bundled extension manifest missing: ${join(
+                packageRoot,
+                "dist",
+                "extensions",
+                providerId,
+                "package.json",
+              )}.`,
+          ),
+        ),
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("verifies every bundled manifest when the build filter exists before module initialization", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      const probe = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--eval",
+          [
+            'import { collectInstalledBundledExtensionManifestErrors } from "./scripts/openclaw-npm-postpublish-verify.ts";',
+            `process.stdout.write(JSON.stringify(collectInstalledBundledExtensionManifestErrors(${JSON.stringify(packageRoot)})));`,
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" },
+          timeout: 30_000,
+        },
+      );
+
+      expect(probe.error).toBeUndefined();
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(JSON.parse(probe.stdout)).toEqual(
+        expect.arrayContaining(
+          ["ollama", "lmstudio"].map(
+            (providerId) =>
+              `installed bundled extension manifest missing: ${join(
+                packageRoot,
+                "dist",
+                "extensions",
+                providerId,
+                "package.json",
+              )}.`,
+          ),
+        ),
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not require excluded external or private plugin package manifests", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeExpectedBundledExtensionManifests(packageRoot);
+      for (const excludedId of ["acpx", "qa-channel", "qa-lab"]) {
+        mkdirSync(join(packageRoot, "dist", "extensions", excludedId), { recursive: true });
+      }
+
+      expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 
   it("requires runtime sidecars for bundled extensions included in the package", () => {
@@ -611,6 +781,7 @@ describe("collectInstalledPackageErrors", () => {
 
     try {
       writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
+      writeExpectedBundledExtensionManifests(packageRoot);
       mkdirSync(join(packageRoot, "dist", "extensions", "telegram"), { recursive: true });
       writeFileSync(
         join(packageRoot, "dist", "extensions", "telegram", "package.json"),

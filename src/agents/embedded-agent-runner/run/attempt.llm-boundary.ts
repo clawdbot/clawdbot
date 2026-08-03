@@ -5,7 +5,7 @@ import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-me
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
-import { buildLateMediaAttachedText } from "../../../sessions/user-turn-transcript.js";
+import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
@@ -470,7 +470,7 @@ function stripHistoricalInboundMetadataFromUserMessages(
     const content = (message as { content?: unknown }).content;
     const injectMediaText = hasPersistedMedia(message) && !hasNonBlankUserText(content);
     // #111204: restore marked path lines here, never in UI-visible transcript storage.
-    const mediaOnlyText = buildLateMediaAttachedText(message) ?? MEDIA_ONLY_USER_TEXT;
+    const mediaOnlyText = buildLateMediaAttachedProjection(message).text ?? MEDIA_ONLY_USER_TEXT;
     const isActive = index === activeUserMessageIndex;
     const override = options?.currentUserTimestampOverride;
     const runtimeTimestamp = (message as { timestamp?: unknown }).timestamp;

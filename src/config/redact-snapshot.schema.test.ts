@@ -10,38 +10,42 @@ import { buildConfigSchema } from "./schema.js";
 describe("realredactConfigSnapshot_real", () => {
   it("main schema redact works (samples)", () => {
     const snapshot = makeSnapshot({
-      agents: {
-        defaults: {
-          memorySearch: {
-            remote: {
-              apiKey: "1234",
-            },
+      memory: {
+        search: {
+          remote: {
+            apiKey: "1234",
           },
         },
-        list: [
-          {
-            memorySearch: {
-              remote: {
-                apiKey: "6789",
+      },
+
+      agents: {
+        defaults: {},
+        entries: {
+          main: {
+            memory: {
+              search: {
+                remote: {
+                  apiKey: "6789",
+                },
               },
             },
           },
-        ],
+        },
       },
     });
 
     const result = redactConfigSnapshot(snapshot, mainSchemaHints);
     const config = result.config as typeof snapshot.config;
-    expect(config.agents.defaults.memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
+    expect(config.memory.search.remote.apiKey).toBe(REDACTED_SENTINEL);
     expect(
-      expectDefined(config.agents.list[0], "config.agents.list[0] test invariant").memorySearch
-        .remote.apiKey,
+      expectDefined(config.agents.entries.main, "config.agents.entries.main test invariant").memory
+        .search.remote.apiKey,
     ).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config, mainSchemaHints);
-    expect(restored.agents.defaults.memorySearch.remote.apiKey).toBe("1234");
+    expect(restored.memory.search.remote.apiKey).toBe("1234");
     expect(
-      expectDefined(restored.agents.list[0], "restored.agents.list[0] test invariant").memorySearch
-        .remote.apiKey,
+      expectDefined(restored.agents.entries.main, "restored.agents.entries.main test invariant")
+        .memory.search.remote.apiKey,
     ).toBe("6789");
   });
 
@@ -86,5 +90,34 @@ describe("realredactConfigSnapshot_real", () => {
     const discord = expectDefined(channels.discord, "channels.discord test invariant");
     const activities = discord.activities as Record<string, unknown>;
     expect(activities.clientSecret).toBe(REDACTED_SENTINEL);
+  });
+
+  it("redacts and restores web fetch operator headers from generated schema hints", () => {
+    const hints = buildConfigSchema().uiHints;
+    expect(hints["tools.web.fetch.headers.*"]?.sensitive).toBe(true);
+    const snapshot = makeSnapshot({
+      tools: {
+        web: {
+          fetch: {
+            headers: {
+              "X-Routing-Target": "staging-private-route",
+            },
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const tools = expectDefined(result.config.tools, "result.config.tools test invariant");
+    const web = expectDefined(tools.web, "result.config.tools.web test invariant");
+    const fetch = expectDefined(web.fetch, "result.config.tools.web.fetch test invariant");
+    const headers = expectDefined(
+      fetch.headers,
+      "result.config.tools.web.fetch.headers test invariant",
+    );
+    expect(headers["X-Routing-Target"]).toBe(REDACTED_SENTINEL);
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.tools.web.fetch.headers["X-Routing-Target"]).toBe("staging-private-route");
   });
 });

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import type { Plugin, UserConfig } from "vite";
 import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
+import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -223,7 +224,12 @@ export function resolveControlUiBuildInfo(
     normalizeControlUiBuildInfo({ branch: githubBranch }).branch ??
     normalizeControlUiBuildInfo({ branch: (sources.readGitBranch ?? readGitBranch)() }).branch;
   const dirty = (sources.readGitDirty ?? readGitDirty)();
-  const metadata = { version, commit, builtAt };
+  const releaseFlag = env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim();
+  if (releaseFlag && releaseFlag !== "1") {
+    throw new Error("OPENCLAW_CONTROL_UI_RELEASE_BUILD must be 1 when set");
+  }
+  const release = releaseFlag === "1";
+  const metadata = { version, commit, builtAt, release };
   const explicitBuildId = env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
   return {
     ...metadata,
@@ -300,6 +306,7 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
+    sourcePackageAlias("normalization-core", "json-schema"),
     sourcePackageAlias("normalization-core", "number-coercion"),
     sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
@@ -307,6 +314,8 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
+    sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract"),
     sourcePackageAlias("workboard-contract"),
   ];
 }
@@ -374,12 +383,12 @@ export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
   };
 }
 
-function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
+function controlUiServiceWorkerBuildIdPlugin(buildId: string, buildOutDir: string): Plugin {
   return {
     name: "control-ui-service-worker-build-id",
     apply: "build",
     closeBundle() {
-      const swPath = path.join(outDir, "sw.js");
+      const swPath = path.join(buildOutDir, "sw.js");
       const publicSwPath = path.join(here, "public/sw.js");
       const source = fs.readFileSync(publicSwPath, "utf8");
       const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
@@ -387,13 +396,13 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
       if (updated === source) {
         throw new Error(`Control UI service worker build id placeholder missing in ${swPath}`);
       }
-      fs.mkdirSync(outDir, { recursive: true });
+      fs.mkdirSync(buildOutDir, { recursive: true });
       fs.writeFileSync(swPath, updated);
     },
   };
 }
 
-function controlUiPrecompressedAssetsPlugin(): Plugin {
+function controlUiPrecompressedAssetsPlugin(buildOutDir: string): Plugin {
   return {
     name: "control-ui-precompressed-assets",
     apply: "build",
@@ -402,21 +411,22 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
         // Vite's post-build import analysis rewrites lazy preload markers in a
         // later generateBundle hook. Read from disk here so sidecars always
         // encode the exact final bytes that the identity response serves.
-        const source = fs.readFileSync(path.join(outDir, output.fileName));
+        const source = fs.readFileSync(path.join(buildOutDir, output.fileName));
         for (const variant of createControlUiPrecompressedAssetVariants(output.fileName, source)) {
-          fs.writeFileSync(path.join(outDir, variant.fileName), variant.source);
+          fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
         }
       }
     },
   };
 }
 
-export default function controlUiViteConfig(): UserConfig {
+export default function controlUiViteConfig(options: { outDir?: string } = {}): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
   const bootstrapConfigPath =
     base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
   const buildInfo = resolveControlUiBuildInfo();
+  const buildOutDir = options.outDir ?? outDir;
   return {
     base,
     define: {
@@ -440,7 +450,7 @@ export default function controlUiViteConfig(): UserConfig {
       ],
     },
     build: {
-      outDir,
+      outDir: buildOutDir,
       emptyOutDir: true,
       sourcemap: true,
       rolldownOptions: {
@@ -461,9 +471,10 @@ export default function controlUiViteConfig(): UserConfig {
       strictPort: true,
     },
     plugins: [
+      controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
-      controlUiPrecompressedAssetsPlugin(),
-      controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId),
+      controlUiPrecompressedAssetsPlugin(buildOutDir),
+      controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId, buildOutDir),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

@@ -14,12 +14,7 @@ import {
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
-import {
-  formatUserTime,
-  resolveUserTimeFormat,
-  resolveUserTimezone,
-  type ResolvedTimeFormat,
-} from "./date-time.js";
+import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
 
 type RuntimeInfoInput = {
   agentId?: string;
@@ -45,8 +40,7 @@ type RuntimeInfoInput = {
 type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;
   userTimezone: string;
-  userTime?: string;
-  userTimeFormat?: ResolvedTimeFormat;
+  userDate: string;
 };
 
 export function buildSystemPromptParams(params: {
@@ -55,15 +49,13 @@ export function buildSystemPromptParams(params: {
   runtime: Omit<RuntimeInfoInput, "agentId">;
   workspaceDir?: string;
   cwd?: string;
+  preparedRepoRoot?: string | null;
 }): SystemPromptRuntimeParams {
-  const repoRoot = resolveRepoRoot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    cwd: params.cwd,
-  });
+  const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
+    ? (params.preparedRepoRoot ?? undefined)
+    : resolveSystemPromptRepoRoot(params);
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-  const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
-  const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+  const userDate = formatDateStamp(Date.now(), userTimezone);
   return {
     runtimeInfo: {
       agentId: params.agentId,
@@ -73,12 +65,11 @@ export function buildSystemPromptParams(params: {
       repoRoot,
     },
     userTimezone,
-    userTime,
-    userTimeFormat,
+    userDate,
   };
 }
 
-function resolveRepoRoot(params: {
+export function resolveSystemPromptRepoRoot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   cwd?: string;

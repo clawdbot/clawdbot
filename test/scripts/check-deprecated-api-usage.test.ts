@@ -94,7 +94,7 @@ describe("scripts/check-deprecated-api-usage", () => {
     const result = runFacadeImportRule({
       "src/channels/probe.ts": [
         'import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";',
-        'export { runInboundReplyTurn } from "./message/inbound-reply-dispatch.js";',
+        'export { runChannelInboundEvent } from "./message/inbound-reply-dispatch.js";',
         'const facade = await import ("../plugin-sdk/channel-message.js", { with: {} });',
       ].join("\n"),
     });

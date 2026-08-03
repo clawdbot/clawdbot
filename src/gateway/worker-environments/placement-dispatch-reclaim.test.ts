@@ -234,6 +234,45 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
+  it("returns success when a dropped tunnel loses the race to durable teardown", async () => {
+    const harness = createHarness(placementStore, { terminalizeReclaimOnTunnelDrop: true });
+    await harness.service.dispatch(REQUEST);
+
+    const request = {
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+    };
+    const first = harness.service.reclaim(request);
+    const coalesced = harness.service.reclaim(request);
+
+    await expect(Promise.all([first, coalesced])).resolves.toMatchObject([
+      { state: "reclaimed", turnClaim: null },
+      { state: "reclaimed", turnClaim: null },
+    ]);
+
+    expect(harness.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });
+    expect(harness.environments.get(REQUEST.sessionId)).toMatchObject({ state: "destroyed" });
+    expect(harness.log).toContain("teardown:destroy");
+  });
+
+  it("does not hide an unrelated failure after durable teardown", async () => {
+    const harness = createHarness(placementStore, {
+      terminalizeReclaimOnTunnelDrop: true,
+      terminalizedReclaimError: new Error("credential rejected"),
+    });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("credential rejected");
+    expect(harness.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });
+  });
+
   it("releases a failed final-sync claim so reclaim with a retained conflict is retryable", async () => {
     const priorConflict = {
       paths: ["data.txt"],

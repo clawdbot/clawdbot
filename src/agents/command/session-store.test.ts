@@ -24,8 +24,8 @@ import {
 import { resolveSession } from "./session.js";
 
 vi.mock("../model-selection.js", () => ({
-  isCliProvider: (provider: string, cfg?: OpenClawConfig) =>
-    Object.hasOwn(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
+  isCliProvider: (provider: string, _cfg?: OpenClawConfig) =>
+    ["claude-cli", "codex-cli", "google-gemini-cli"].includes(provider.trim().toLowerCase()),
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
@@ -94,7 +94,9 @@ async function withTempSessionStore<T>(
     return await run({ dir, storePath: path.join(dir, "sessions.json") });
   } finally {
     closeOpenClawAgentDatabasesForTest();
-    await fs.rm(dir, { recursive: true, force: true });
+    // SQLite teardown can race fixture removal on loaded CI hosts. Keep the
+    // retries bounded so persistent cleanup failures still surface.
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
   }
 }
 
@@ -322,6 +324,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const sessionStore: Record<string, SessionEntry> = {
         [sessionKey]: {
           sessionId,
+          sessionFile: path.join(path.dirname(storePath), "legacy-predecessor.jsonl"),
           updatedAt: 1,
         },
       };
@@ -394,11 +397,11 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       expect(sessionStore[sessionKey]).toMatchObject({
         sessionId: rotatedSessionId,
-        sessionFile: rotatedSessionFile,
         usageFamilyKey: sessionKey,
         usageFamilySessionIds: [sessionId, rotatedSessionId],
         compactionCount: 1,
       });
+      expect(sessionStore[sessionKey]).not.toHaveProperty("sessionFile");
       expect(sessionStore[sessionKey]?.sessionStartedAt).toBeGreaterThan(1);
     });
   });
@@ -497,11 +500,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as unknown as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-claude-cli-configured-context";
@@ -546,13 +545,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {
-                command: "claude",
-              },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-harness-pin-cli";
@@ -598,13 +591,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {
-                command: "claude",
-              },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-claude-cli";
@@ -664,13 +651,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {
-                command: "claude",
-              },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-clear-unflushed-cli";
@@ -911,11 +892,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           mainKey: "main",
         },
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as never;
 
@@ -1189,11 +1166,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-cli-cumulative-usage";
@@ -1355,11 +1328,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-cli-last-call-usage";
@@ -2218,11 +2187,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-preserve-user-facing-run-state";
@@ -2463,6 +2428,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const replacementEntry: SessionEntry = {
         sessionId: "replacement-session-id",
         updatedAt: 2,
+        delivery: { kind: "none" },
         modelProvider: "openai",
         model: "gpt-5.5",
       };
@@ -2820,17 +2786,15 @@ describe("recordCliCompactionInStore", () => {
     });
   });
 
-  it("persists successor session handles from native CLI compaction", async () => {
-    await withTempSessionStore(async ({ dir, storePath }) => {
+  it("persists successor session ids from native CLI compaction", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-record-cli-compaction-rotate";
       const sessionId = "test-record-cli-compaction-rotate-session";
       const nextSessionId = "test-record-cli-compaction-rotate-next";
-      const nextSessionFile = path.join(dir, `${nextSessionId}.jsonl`);
       const sessionStore: Record<string, SessionEntry> = {
         [sessionKey]: {
           sessionId,
           updatedAt: 1,
-          sessionFile: path.join(dir, `${sessionId}.jsonl`),
         },
       };
       await seedSessionStore(storePath, sessionStore);
@@ -2841,17 +2805,16 @@ describe("recordCliCompactionInStore", () => {
         sessionStore,
         storePath,
         newSessionId: nextSessionId,
-        newSessionFile: nextSessionFile,
       });
 
       expect(sessionStore[sessionKey]?.sessionId).toBe(nextSessionId);
-      expect(sessionStore[sessionKey]?.sessionFile).toBe(nextSessionFile);
       expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
       expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual([sessionId, nextSessionId]);
+      expect(sessionStore[sessionKey]).not.toHaveProperty("sessionFile");
 
       const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.sessionId).toBe(nextSessionId);
-      expect(persisted[sessionKey]?.sessionFile).toBe(nextSessionFile);
+      expect(persisted[sessionKey]).not.toHaveProperty("sessionFile");
     });
   });
 
@@ -2945,6 +2908,7 @@ describe("consumeCliSessionForkInStore", () => {
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "claude-source-session",
+            resumeCheckpointId: "assistant-before-turn",
             forceReuse: true,
             forkNextResume: true,
           },
@@ -2965,12 +2929,17 @@ describe("consumeCliSessionForkInStore", () => {
       });
       expect(consumed?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "claude-source-session",
+        resumeCheckpointId: "assistant-before-turn",
         forceReuse: true,
       });
       expect(consumed?.label).toBe("concurrent update");
       expect(
         loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"],
-      ).toEqual({ sessionId: "claude-source-session", forceReuse: true });
+      ).toEqual({
+        sessionId: "claude-source-session",
+        resumeCheckpointId: "assistant-before-turn",
+        forceReuse: true,
+      });
       await expect(
         consumeCliSessionForkInStore({
           provider: "claude-cli",
@@ -3021,6 +2990,7 @@ describe("consumeCliSessionForkInStore", () => {
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "claude-source-session",
+            resumeCheckpointId: "assistant-before-turn",
             forceReuse: true,
             authProfileId: "claude:work",
             authEpoch: "epoch-1",
@@ -3042,6 +3012,7 @@ describe("consumeCliSessionForkInStore", () => {
 
       expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "claude-fork-session",
+        resumeCheckpointId: "assistant-before-turn",
         forceReuse: true,
         authProfileId: "claude:work",
         authEpoch: "epoch-1",
@@ -3051,6 +3022,7 @@ describe("consumeCliSessionForkInStore", () => {
         loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"],
       ).toEqual({
         sessionId: "claude-fork-session",
+        resumeCheckpointId: "assistant-before-turn",
         forceReuse: true,
         authProfileId: "claude:work",
         authEpoch: "epoch-1",

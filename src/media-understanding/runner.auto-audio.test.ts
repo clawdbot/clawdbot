@@ -381,6 +381,15 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
+            models: [
+              {
+                provider: "openai",
+                model: "whisper-1",
+                prompt: "entry prompt",
+                language: "de",
+                capabilities: ["audio"],
+              },
+            ],
             audio: {
               enabled: false,
             },
@@ -402,9 +411,7 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
-            audio: {
-              models: [{ provider: "openai", model: "whisper-1" }],
-            },
+            models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
           },
         },
       },
@@ -432,14 +439,6 @@ describe("runCapability auto audio entries", () => {
               language: "fr",
               _requestPromptOverride: "Focus on names",
               _requestLanguageOverride: "en",
-              models: [
-                {
-                  provider: "openai",
-                  model: "whisper-1",
-                  prompt: "entry prompt",
-                  language: "de",
-                },
-              ],
             },
           },
         },
@@ -463,10 +462,10 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
+            models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
             audio: {
               enabled: true,
               language: "ru",
-              models: [{ provider: "openai", model: "whisper-1" }],
             },
           },
         },

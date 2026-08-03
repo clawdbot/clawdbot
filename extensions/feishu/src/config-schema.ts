@@ -144,7 +144,6 @@ const FeishuToolsConfigSchema = z
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
     scopes: z.boolean().optional(), // App scopes diagnostic (default: true)
     bitable: z.boolean().optional(), // Bitable/Base operations (default: true)
-    base: z.boolean().optional(), // Alias for bitable tools (default: true)
   })
   .strict()
   .optional();
@@ -211,7 +210,7 @@ const FeishuSharedConfigShape = {
   textChunkLimit: z.number().int().positive().optional(),
   mediaMaxMb: z.number().positive().optional(),
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
-  heartbeat: ChannelHeartbeatVisibilitySchema,
+  heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
   streaming: FeishuStreamingSchema,
   tools: FeishuToolsConfigSchema,

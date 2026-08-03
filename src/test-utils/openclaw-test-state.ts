@@ -7,6 +7,13 @@ import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.j
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/config.js";
+import { isPathInside } from "../infra/path-guards.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  listOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
@@ -357,8 +364,21 @@ export async function createOpenClawTestState(
       }
       cleaned = true;
       await cleanupSessionStateForTest().catch(() => undefined);
+      // Agent close releases leases through shared state; closing shared state first
+      // can reopen it during teardown and leave Windows handles under the fixture root.
+      for (const database of listOpenClawAgentDatabasesForTest()) {
+        if (isPathInside(paths.stateDir, database.path)) {
+          closeOpenClawAgentDatabaseByPath(database.path);
+        }
+      }
+      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
       state.restoreEnv();
-      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 20,
+        retryDelay: 25,
+      });
     },
   };
 

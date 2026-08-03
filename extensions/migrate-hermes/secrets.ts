@@ -368,6 +368,7 @@ export async function applySecretItem(
   let wrote = false;
   const store = await updateAuthProfileStoreWithLock({
     agentDir: targets.agentDir,
+    stateDir: ctx.stateDir,
     updater: (freshStore) => {
       if (!ctx.overwrite && freshStore.profiles[details.profileId]) {
         conflicted = true;

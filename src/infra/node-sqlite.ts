@@ -1,11 +1,33 @@
 // Loads node:sqlite with OpenClaw warning handling.
 import { createRequire } from "node:module";
+import path from "node:path";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
+import { isSqliteLockError } from "./sqlite-transaction.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
 let validatedSqliteModule: typeof import("node:sqlite") | undefined;
+
+type NodeSqliteDatabaseOptions = ConstructorParameters<
+  typeof import("node:sqlite").DatabaseSync
+>[1];
+
+export function resolveSqliteFilesystemPath(pathname: string): string {
+  if (process.platform !== "win32") {
+    return pathname;
+  }
+  // Node's fs APIs normalize long paths, but node:sqlite passes filesystem
+  // names directly to SQLite's Windows VFS.
+  return path.toNamespacedPath(path.resolve(pathname));
+}
+
+export function resolveNodeSqliteLocation(location: string): string {
+  if (location === "" || location === ":memory:" || location.startsWith("file:")) {
+    return location;
+  }
+  return resolveSqliteFilesystemPath(location);
+}
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
   if (isSqliteWalResetSafeVersion(version)) {
@@ -60,4 +82,44 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
       cause: err,
     });
   }
+}
+
+/** Open node:sqlite through OpenClaw's runtime and filesystem-location boundary. */
+export function openNodeSqliteDatabase(
+  location: string,
+  options?: NodeSqliteDatabaseOptions,
+): import("node:sqlite").DatabaseSync {
+  const sqlite = requireNodeSqlite();
+  // Callers may pass file: URIs or already-namespaced paths from specialized
+  // resolvers; location normalization must remain idempotent for those forms.
+  const resolvedLocation = resolveNodeSqliteLocation(location);
+  return options === undefined
+    ? new sqlite.DatabaseSync(resolvedLocation)
+    : new sqlite.DatabaseSync(resolvedLocation, options);
+}
+
+/** Hold a raw exclusive transaction until release for cross-process coordination. */
+export function tryAcquireExclusiveSqliteCoordinator(
+  location: string,
+): { release: () => void } | null {
+  const database = openNodeSqliteDatabase(location);
+  try {
+    // Kysely transaction callbacks cannot own a lock beyond their synchronous commit section.
+    database.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+  } catch (error) {
+    database.close();
+    if (isSqliteLockError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  return {
+    release: () => {
+      try {
+        database.exec("ROLLBACK");
+      } finally {
+        database.close();
+      }
+    },
+  };
 }

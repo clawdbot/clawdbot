@@ -14,7 +14,7 @@ export const BOARD_SIZE_PRESETS = {
 } as const;
 
 export type BoardSize = keyof typeof BOARD_SIZE_PRESETS;
-export type BoardLayout = Pick<BoardSnapshot, "tabs" | "widgets">;
+type BoardLayout = Pick<BoardSnapshot, "tabs" | "widgets">;
 type BoardValidationErrorCode = "conflict" | "invalid_operation" | "not_found";
 
 export class BoardValidationError extends Error {
@@ -44,6 +44,8 @@ function cloneWidget(widget: BoardWidget): BoardWidget {
     contentKind: widget.contentKind,
     ...(widget.presentation !== undefined ? { presentation: widget.presentation } : {}),
     ...(widget.heightMode !== undefined ? { heightMode: widget.heightMode } : {}),
+    ...(widget.pluginKind !== undefined ? { pluginKind: widget.pluginKind } : {}),
+    ...(widget.props !== undefined ? { props: structuredClone(widget.props) } : {}),
     sizeW: widget.sizeW,
     sizeH: widget.sizeH,
     position: widget.position,

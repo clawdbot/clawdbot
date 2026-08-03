@@ -34,10 +34,12 @@ describe("pending final delivery restart proof", () => {
       status: "running",
       startedAt: 10,
       updatedAt: Date.now(),
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "hook reply",
-      pendingFinalDeliveryCreatedAt: 1,
-      pendingFinalDeliveryIntentId: "intent-1",
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "hook reply",
+        createdAt: 1,
+        intentId: "intent-1",
+      },
       restartRecoveryBeforeAgentReplyState: beforeAgentReplyState,
       restartRecoveryForceSafeTools: beforeAgentReplyState === "handled-reply" ? true : undefined,
       restartRecoverySourceIngress: "channel",
@@ -58,8 +60,6 @@ describe("pending final delivery restart proof", () => {
 
       const entry = loadSessionEntry({ sessionKey, storePath });
       expect(entry?.pendingFinalDelivery).toBeUndefined();
-      expect(entry?.pendingFinalDeliveryText).toBeUndefined();
-      expect(entry?.pendingFinalDeliveryIntentId).toBeUndefined();
       expect(entry?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
       expect(entry?.restartRecoveryForceSafeTools).toBeUndefined();
       expect(entry?.restartRecoverySourceIngress).toBeUndefined();
@@ -79,8 +79,11 @@ describe("pending final delivery restart proof", () => {
         status: "running",
         startedAt: 10,
         updatedAt: Date.now(),
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryIntentId: "intent-media",
+        pendingFinalDelivery: {
+          kind: "transport-only",
+          createdAt: Date.now(),
+          intentId: "intent-media",
+        },
         restartRecoveryBeforeAgentReplyState: "handled-unrecoverable",
         restartRecoverySourceIngress: "channel",
       },
@@ -117,9 +120,11 @@ describe("pending final delivery restart proof", () => {
     });
 
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "hook reply",
-      pendingFinalDeliveryIntentId: "intent-1",
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "hook reply",
+        intentId: "intent-1",
+      },
       restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoverySourceIngress: "channel",
     });

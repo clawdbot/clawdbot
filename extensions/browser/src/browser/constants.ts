@@ -26,6 +26,12 @@ export const DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS = 8_000;
 export const DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS = 20_000;
 /** Default timeout for snapshot capture. */
 export const DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS = 20_000;
+/** Default overall budget for page extraction and its one-shot model answer. */
+export const DEFAULT_BROWSER_EXTRACT_TIMEOUT_MS = 60_000;
+/** Minimum accepted extraction budget after clamping. */
+export const MIN_BROWSER_EXTRACT_TIMEOUT_MS = 5_000;
+/** Maximum accepted extraction budget after clamping. */
+export const MAX_BROWSER_EXTRACT_TIMEOUT_MS = 120_000;
 /** Default idle age before session tab cleanup can close tabs. */
 export const DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES = 120;
 /** Default maximum tracked tabs kept per session. */
@@ -45,3 +51,12 @@ export const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 40_000;
 export const DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS = 8_000;
 /** Default maximum AI snapshot depth in efficient mode. */
 export const DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH = 6;
+/**
+ * Keep page extraction below a practical single-completion context budget while
+ * leaving room for the instruction, question, reasoning, and concise answer.
+ */
+export const BROWSER_EXTRACT_MAX_CHARS = 80_000;
+/** Reject unusually large serialized DOMs before transport and Markdown conversion. */
+export const BROWSER_EXTRACT_MAX_HTML_CHARS = 2_000_000;
+/** Visible line appended when page markdown is shortened to the extraction budget. */
+export const BROWSER_EXTRACT_TRUNCATION_MARKER = "[PAGE CONTENT TRUNCATED]";

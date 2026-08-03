@@ -3,7 +3,10 @@
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.js";
 import type { ControlUiBuildInfo } from "./build-info-types.ts";
 
-type ControlUiBuildMetadata = Pick<ControlUiBuildInfo, "version" | "commit" | "builtAt">;
+type ControlUiBuildMetadata = Pick<
+  ControlUiBuildInfo,
+  "version" | "commit" | "builtAt" | "release"
+>;
 
 const FULL_GIT_SHA = /^[0-9a-f]{40}$/u;
 const UTC_BUILD_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u;
@@ -44,7 +47,12 @@ function normalizeControlUiBuildId(value: unknown): string {
 }
 
 function deriveControlUiBuildId(info: ControlUiBuildMetadata): string {
-  const identity = [info.version, info.commit?.slice(0, 12), info.builtAt]
+  const identity = [
+    info.version,
+    info.release ? "release" : null,
+    info.commit?.slice(0, 12),
+    info.builtAt,
+  ]
     .filter((value): value is string => Boolean(value))
     .join("-");
   return normalizeControlUiBuildId(identity);
@@ -57,7 +65,8 @@ export function normalizeControlUiBuildInfo(value: unknown): ControlUiBuildInfo 
   const version = optionalString(record.version);
   const commit = normalizeControlUiCommit(record.commit);
   const builtAt = normalizeControlUiBuildTimestamp(record.builtAt);
-  const metadata = { version, commit, builtAt };
+  const release = record.release === true;
+  const metadata = { version, commit, builtAt, release };
   return {
     ...metadata,
     commitAt: normalizeControlUiBuildTimestamp(record.commitAt),

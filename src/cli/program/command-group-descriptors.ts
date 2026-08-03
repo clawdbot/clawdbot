@@ -1,11 +1,13 @@
 // Descriptor-to-lazy-command-group adapters used by core and sub-CLI registration.
 import type { Command } from "commander";
+import type { MachineOutputResolver } from "../machine-output-argv.js";
 
 /** Descriptor for one root command placeholder. */
 export type NamedCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
+  machineOutput?: MachineOutputResolver;
   hidden?: boolean;
   parentDefaultHelp?: boolean;
 };

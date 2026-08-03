@@ -1,8 +1,14 @@
 // Regression tests: provider auth failures re-prompt instead of killing the wizard.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { runSetupModelAuthStep } from "./setup.model-auth.js";
+
+type ResolveManifestProviderAuthChoice =
+  typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
+type ResolvePluginSetupProvider =
+  typeof import("../plugins/setup-registry.js").resolvePluginSetupProvider;
 
 const applyAuthChoice = vi.hoisted(() => vi.fn());
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn());
@@ -10,6 +16,19 @@ const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn());
 const promptDefaultModel = vi.hoisted(() => vi.fn());
 const applyPrimaryModel = vi.hoisted(() => vi.fn((config: unknown) => config));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
+const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
+const resolveManifestProviderAuthChoice = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoice>(() => ({
+    pluginId: "anthropic",
+    providerId: "anthropic",
+    methodId: "anthropic-cli",
+    choiceId: "anthropic-cli",
+    choiceLabel: "Anthropic CLI",
+  })),
+);
+const resolvePluginSetupProvider = vi.hoisted(() =>
+  vi.fn<ResolvePluginSetupProvider>(() => undefined),
+);
 
 vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice,
@@ -29,7 +48,15 @@ vi.mock("../commands/auth-choice-prompt.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({
-  ensureAuthProfileStore: vi.fn(() => ({ profiles: {} })),
+  ensureAuthProfileStore,
+}));
+
+vi.mock("../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoice,
+}));
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider,
 }));
 
 function createPrompter(): WizardPrompter {
@@ -50,11 +77,111 @@ function createRuntime(): RuntimeEnv {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv;
 }
 
-describe("runSetupModelAuthStep provider failures", () => {
+function createDefaultAgentConfig(): OpenClawConfig {
+  return {
+    agents: {
+      defaults: { workspace: "/tmp/global-workspace" },
+      entries: {
+        ops: {
+          default: true,
+          agentDir: "/tmp/ops-agent",
+          workspace: "/tmp/ops-workspace",
+        },
+      },
+    },
+  };
+}
+
+describe("runSetupModelAuthStep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     promptDefaultModel.mockResolvedValue({});
     warnIfModelConfigLooksOff.mockResolvedValue(undefined);
+  });
+
+  it("targets the configured default agent for auth and model setup", async () => {
+    const config = createDefaultAgentConfig();
+    promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
+    applyAuthChoice.mockResolvedValueOnce({
+      config,
+      authProfiles: [],
+      persistAuthProfiles: async () => {},
+    });
+
+    await runSetupModelAuthStep({
+      config,
+      opts: {},
+      prompter: createPrompter(),
+      runtime: createRuntime(),
+    });
+
+    expect(ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/ops-agent", {
+      allowKeychainPrompt: false,
+      readOnly: true,
+    });
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
+    );
+    expect(applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+        agentDir: "/tmp/ops-agent",
+      }),
+    );
+    expect(promptDefaultModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+        agentDir: "/tmp/ops-agent",
+        workspaceDir: "/tmp/ops-workspace",
+      }),
+    );
+    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      validateCatalog: false,
+    });
+  });
+
+  it("validates an interactive skip against the configured default agent", async () => {
+    const config = createDefaultAgentConfig();
+    promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
+
+    await runSetupModelAuthStep({
+      config,
+      opts: {},
+      prompter: createPrompter(),
+      runtime: createRuntime(),
+    });
+
+    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      validateCatalog: false,
+    });
+  });
+
+  it("applies an interactive model selection to the agent override", async () => {
+    const config = createDefaultAgentConfig();
+    config.agents!.defaults!.model = "openai/global-model";
+    config.agents!.entries!.ops!.model = {
+      primary: "anthropic/old-model",
+      fallbacks: ["openai/fallback-model"],
+    };
+    promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
+    promptDefaultModel.mockResolvedValueOnce({ model: "google/new-model" });
+
+    const result = await runSetupModelAuthStep({
+      config,
+      opts: {},
+      prompter: createPrompter(),
+      runtime: createRuntime(),
+    });
+
+    expect(result.config.agents?.entries?.ops?.model).toEqual({
+      primary: "google/new-model",
+      fallbacks: ["openai/fallback-model"],
+    });
+    expect(result.config.agents?.defaults?.model).toBe("openai/global-model");
   });
 
   it("re-prompts after a provider setup error instead of aborting", async () => {
@@ -69,7 +196,6 @@ describe("runSetupModelAuthStep provider failures", () => {
       opts: {},
       prompter,
       runtime: createRuntime(),
-      workspaceDir: "/tmp/workspace",
     });
 
     expect(result).toEqual({
@@ -95,7 +221,6 @@ describe("runSetupModelAuthStep provider failures", () => {
         opts: { authChoice: "anthropic-cli" },
         prompter: createPrompter(),
         runtime: createRuntime(),
-        workspaceDir: "/tmp/workspace",
       }),
     ).rejects.toThrow("Claude CLI is not authenticated");
   });
@@ -110,7 +235,6 @@ describe("runSetupModelAuthStep provider failures", () => {
         opts: {},
         prompter: createPrompter(),
         runtime: createRuntime(),
-        workspaceDir: "/tmp/workspace",
       }),
     ).rejects.toThrow(WizardCancelledError);
   });

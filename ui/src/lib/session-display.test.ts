@@ -7,6 +7,18 @@ import {
 } from "./session-display.ts";
 
 describe("resolveSessionDisplayName", () => {
+  it("uses the same friendly main-thread name for every agent", () => {
+    for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
+      expect(resolveSessionDisplayName(key)).toBe("Main Thread");
+    }
+
+    expect(resolveSessionDisplayName("agent:research:main", { displayName: "Research desk" })).toBe(
+      "Research desk",
+    );
+    expect(resolveSessionDisplayName("agent:research:dashboard:main")).toBe("New thread");
+    expect(resolveSessionDisplayName("agent:research:main:thread")).toBe("main:thread");
+  });
+
   it("prefers label, then displayName", () => {
     expect(
       resolveSessionDisplayName("agent:main:telegram:direct:42", {
@@ -109,7 +121,16 @@ describe("resolveSessionDisplayName", () => {
           includeSubagentPrefix: false,
         },
       ),
-    ).toBe("Cron: Daily");
+    ).toBe("Automation: Daily");
+  });
+
+  it("strips persisted pre-rename Cron labels instead of double-prefixing", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:cron:daily", { label: "Cron: daily-report" }),
+    ).toBe("Automation: daily-report");
+    expect(resolveSessionDisplayName("agent:main:cron:daily", { label: "Cron Job: nightly" })).toBe(
+      "Automation: nightly",
+    );
   });
 });
 

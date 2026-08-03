@@ -1,5 +1,6 @@
 // Coverage for sanitizing replay messages at the LLM boundary.
 import { describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -16,9 +17,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // Historical envelopes contain untrusted routing metadata that should not be
     // replayed as user instructions.
     const historicalEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram","chatType":"dm"}\n```\n\nSender (untrusted metadata):\n```json\n{"id":"user-1"}\n```\n\nActual historical ask';
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"telegram","chatType":"dm"}\n```\n\nSender: ⟦openclaw:ctx⟧\n```json\n{"id":"user-1"}\n```\n\nActual historical ask';
     const currentEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message: ⟦openclaw:ctx⟧\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
     const input = [
       {
         role: "user",
@@ -48,9 +49,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // blocks preserved for the LLM.
     const currentContent = output[2]?.content;
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(currentContent).toContain("Reply target of current user message: ⟦openclaw:ctx⟧");
     expect(JSON.stringify(input)).toContain("Conversation info");
   });
 
@@ -59,7 +58,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       {
         role: "user",
         content:
-          'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nPlain historical ask',
+          'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"telegram"}\n```\n\nPlain historical ask',
         timestamp: 1,
       },
       {
@@ -110,9 +109,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
     expect(output[0]?.content).toBe(
       [
-        "Conversation info (untrusted metadata):",
+        markInboundContextLabel("Conversation info:"),
         "```json",
-        '{\n  "sender": {\n    "id": "alice-id",\n    "name": "Alice",\n    "username": "alice"\n  }\n}',
+        '{"sender":{"id":"alice-id","name":"Alice","username":"alice"}}',
         "```",
         "",
         "The launch is Friday",
@@ -120,9 +119,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     );
     expect(output[2]?.content).toBe(
       [
-        "Conversation info (untrusted metadata):",
+        markInboundContextLabel("Conversation info:"),
         "```json",
-        '{\n  "sender": {\n    "id": "bob-id",\n    "name": "Bob"\n  }\n}',
+        '{"sender":{"id":"bob-id","name":"Bob"}}',
         "```",
         "",
         "Who said the launch is Friday?",
@@ -200,7 +199,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // `timestamp` using the supplied timezone — so the same message is
     // byte-identical whether sent current or replayed historical.
     const historicalBareWithMeta =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nOld ask';
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"telegram"}\n```\n\nOld ask';
     const input = [
       {
         role: "user",
@@ -244,8 +243,12 @@ describe("normalizeMessagesForLlmBoundary", () => {
       timestamp,
       MediaPath: "/tmp/input.png",
       MediaPaths: ["/tmp/input.png"],
+      __openclaw: {
+        media: [{ path: "/tmp/input.png", contentType: "image/png" }],
+      },
     };
-    const legacy = { ...persisted, content: MEDIA_ONLY_USER_TEXT };
+    const { __openclaw: _canonicalMedia, ...legacyFields } = persisted;
+    const legacy = { ...legacyFields, content: MEDIA_ONLY_USER_TEXT };
     const [normalizedPersisted] = normalizeMessagesForLlmBoundary(
       [persisted] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
@@ -256,7 +259,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     ) as unknown as Array<{ content?: unknown }>;
     const expectedText = `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}${MEDIA_ONLY_USER_TEXT}`;
 
-    expect(normalizedPersisted).toEqual(normalizedLegacy);
+    const { __openclaw: _persistedFacts, ...persistedProviderFields } =
+      normalizedPersisted as Record<string, unknown>;
+    expect(persistedProviderFields).toEqual(normalizedLegacy);
     expect(normalizedPersisted?.content).toBe(expectedText);
 
     const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
@@ -272,17 +277,17 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(normalizedArray?.content).toEqual([{ type: "text", text: expectedText }, image]);
   });
 
-  it("synthesizes marked late-media path lines with legacy-identical string bytes", () => {
+  it("synthesizes marked late-media path lines with reference-identical string bytes", () => {
     const timestamp = 1717570800000;
     const mediaText = "[media attached: /tmp/a.png]\n[media attached: media://inbound/b.jpg]";
     const marked = {
       role: "user",
       content: "",
       timestamp,
-      MediaPath: "/tmp/a.png",
-      MediaPaths: ["/tmp/a.png", ""],
-      MediaUrls: ["", "media://inbound/b.jpg"],
-      __openclaw: { lateMedia: true },
+      __openclaw: {
+        lateMedia: true,
+        media: [{ path: "/tmp/a.png" }, { url: "media://inbound/b.jpg" }],
+      },
     };
     const legacy = { ...marked, content: mediaText, __openclaw: undefined };
     const [normalizedMarked] = normalizeMessagesForLlmBoundary(
@@ -305,8 +310,10 @@ describe("normalizeMessagesForLlmBoundary", () => {
           role: "user",
           content: "",
           timestamp,
-          MediaUrl: "https://example.test/late.png",
-          __openclaw: { lateMedia: true },
+          __openclaw: {
+            lateMedia: true,
+            media: [{ url: "https://example.test/late.png" }],
+          },
         },
       ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
@@ -320,18 +327,13 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const timestamp = 1717570800000;
     const mediaText = "[media attached: /tmp/input.png]";
     const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
-    const fields = {
-      role: "user",
-      timestamp,
-      MediaPath: "/tmp/input.png",
-      MediaPaths: ["/tmp/input.png"],
-    };
+    const fields = { role: "user", timestamp };
     const [normalizedMarked] = normalizeMessagesForLlmBoundary(
       [
         {
           ...fields,
           content: [image],
-          __openclaw: { lateMedia: true },
+          __openclaw: { lateMedia: true, media: [{ path: "/tmp/input.png" }] },
         },
       ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
@@ -375,7 +377,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
   it("does not mutate transcript messages while leaving disabled timestamp output bare", () => {
     const historicalContent =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nStored bare ask';
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"telegram"}\n```\n\nStored bare ask';
     const input = [
       {
         role: "user",
@@ -626,7 +628,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const runtimeMessage = {
       role: "user",
       content:
-        'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nCurrent ask',
+        'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nCurrent ask',
       timestamp: 3,
     } as AgentMessage;
     const transcriptMessage = {
@@ -641,17 +643,17 @@ describe("normalizeMessagesForLlmBoundary", () => {
     }) as unknown as Array<{ content?: string }>;
     const content = output[0]?.content ?? "";
 
-    expect(content.match(/Conversation info \(untrusted metadata\):/g)).toHaveLength(1);
-    expect(content).toContain('"channel": "discord"');
-    expect(content).toContain('"name": "Alice"');
+    expect(content.split(markInboundContextLabel("Conversation info:")).length - 1).toBe(1);
+    expect(content).toContain('"channel":"discord"');
+    expect(content).toContain('"name":"Alice"');
     expect(content).toContain("Current ask");
   });
 
   it("preserves inbound metadata on the current user turn", () => {
     const historicalEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\nOld ask';
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"discord"}\n```\n\nOld ask';
     const currentEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message: ⟦openclaw:ctx⟧\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
     const input = [
       {
         role: "user",
@@ -679,15 +681,13 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // Current: form-canonicalized to plain string; metadata blocks preserved.
     const currentContent = output[2]?.content;
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(currentContent).toContain("Reply target of current user message: ⟦openclaw:ctx⟧");
     expect(currentContent).toContain("quoted status body");
   });
 
   it("preserves current user inbound metadata through tool-result continuation", () => {
     const currentEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message: ⟦openclaw:ctx⟧\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
     const input = [
       {
         role: "user",
@@ -716,9 +716,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // metadata blocks preserved for the LLM.
     const currentContent = output[0]?.content;
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(currentContent).toContain("Reply target of current user message: ⟦openclaw:ctx⟧");
     expect(currentContent).toContain("quoted status body");
   });
 

@@ -14,7 +14,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import "./bridge/bootstrap.js";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { getQQBotApprovalCapability } from "./bridge/approval/capability.js";
-import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./bridge/config-shared.js";
+import { qqbotConfigAdapter, qqbotMeta, qqbotSetupContract } from "./bridge/config-shared.js";
 import {
   applyQQBotAccountConfig,
   DEFAULT_ACCOUNT_ID,
@@ -282,9 +282,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       return Boolean(backup?.appId && backup?.clientSecret);
     },
   },
-  setup: {
-    ...qqbotSetupAdapterShared,
-  },
+  setupContract: qqbotSetupContract,
   approvalCapability: getQQBotApprovalCapability(),
   groups: {
     resolveToolPolicy: resolveQQBotGroupToolPolicy,
@@ -389,6 +387,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
             connected: true,
             lastConnectedAt: Date.now(),
             lastError: null,
+            lifecycle: "ready",
           });
           // Snapshot credentials so we can recover from the next hot
           // upgrade that might wipe openclaw.json mid-flight.
@@ -402,6 +401,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
             connected: true,
             lastConnectedAt: Date.now(),
             lastError: null,
+            lifecycle: "ready",
           });
           persistAccountCredentialSnapshot(account);
         },
@@ -422,6 +422,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           ctx.setStatus({
             ...ctx.getStatus(),
             connected: false,
+            lifecycle: fatal ? "blocked" : "recovering",
             ...(fatal && reason ? { lastError: reason } : {}),
           });
         },
@@ -459,6 +460,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       tokenSource: snapshot.tokenSource ?? "none",
       running: snapshot.running ?? false,
       connected: snapshot.connected ?? false,
+      lifecycle: snapshot.lifecycle ?? undefined,
       lastConnectedAt: snapshot.lastConnectedAt ?? null,
       lastError: snapshot.lastError ?? null,
     }),
@@ -470,6 +472,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       tokenSource: account?.secretSource,
       running: runtime?.running ?? false,
       connected: runtime?.connected ?? false,
+      lifecycle: runtime?.lifecycle,
       lastConnectedAt: runtime?.lastConnectedAt ?? null,
       lastError: runtime?.lastError ?? null,
       lastInboundAt: runtime?.lastInboundAt ?? null,

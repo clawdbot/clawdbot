@@ -15,6 +15,7 @@ import {
   resolveSessionLifecycleTimestamps,
 } from "../../config/sessions/lifecycle.js";
 import {
+  canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
 } from "../../config/sessions/main-session.js";
@@ -29,15 +30,14 @@ import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  buildAgentMainSessionKey,
   classifySessionKeyShape,
-  DEFAULT_AGENT_ID,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   normalizeMainKey,
 } from "../../routing/session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
@@ -90,7 +90,9 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     restartRecoveryTerminalDeliveryEvidence: undefined,
     restartRecoveryTerminalRunIds: undefined,
     sessionStartedAt: undefined,
+    sessionDiffBaseline: undefined,
     lastInteractionAt: undefined,
+    pendingTranscriptRepair: undefined,
   };
   transitionMainSessionRecovery(next, { kind: "clear" });
   clearAllCliSessions(next);
@@ -123,68 +125,6 @@ export function buildExplicitSessionIdSessionKey(params: {
   agentId?: string;
 }): string {
   return `agent:${normalizeAgentId(params.agentId)}:explicit:${params.sessionId.trim()}`;
-}
-
-function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
-  cfg: OpenClawConfig;
-  defaultAgentId: string;
-  mainKey: string;
-  sessionKey?: string;
-  sessionStore: Record<string, SessionEntry>;
-  storePath: string;
-  cloneOnWrite?: boolean;
-}): SessionKeyResolution | undefined {
-  if (opts.defaultAgentId === DEFAULT_AGENT_ID || !opts.sessionKey) {
-    return undefined;
-  }
-  const defaultMainSessionKey = buildAgentMainSessionKey({
-    agentId: opts.defaultAgentId,
-    mainKey: opts.mainKey,
-  });
-  if (opts.sessionKey !== defaultMainSessionKey || opts.sessionStore[opts.sessionKey]) {
-    return undefined;
-  }
-
-  const legacyStorePath = resolveStorePath(opts.cfg.session?.store, {
-    agentId: DEFAULT_AGENT_ID,
-  });
-  const legacyKeys = [
-    buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey: opts.mainKey }),
-    buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey: "main" }),
-  ];
-  if (legacyStorePath === opts.storePath) {
-    for (const legacyKey of legacyKeys) {
-      const legacyEntry = opts.sessionStore[legacyKey];
-      if (legacyEntry) {
-        const sessionStore = opts.cloneOnWrite ? { ...opts.sessionStore } : opts.sessionStore;
-        sessionStore[opts.sessionKey] = { ...legacyEntry };
-        return {
-          sessionKey: opts.sessionKey,
-          sessionStore,
-          storePath: opts.storePath,
-        };
-      }
-    }
-    return undefined;
-  }
-  const legacyStore = loadCommandSessionStore({
-    agentId: DEFAULT_AGENT_ID,
-    storePath: legacyStorePath,
-    ...(opts.cloneOnWrite ? { clone: false } : {}),
-  });
-  for (const legacyKey of legacyKeys) {
-    const legacyEntry = legacyStore[legacyKey];
-    if (legacyEntry) {
-      const sessionStore = opts.cloneOnWrite ? { ...opts.sessionStore } : opts.sessionStore;
-      sessionStore[opts.sessionKey] = { ...legacyEntry };
-      return {
-        sessionKey: opts.sessionKey,
-        sessionStore,
-        storePath: opts.storePath,
-      };
-    }
-  }
-  return undefined;
 }
 
 function collectSessionIdMatchesForRequest(opts: {
@@ -255,13 +195,15 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   agentId?: string;
 }): SessionKeyResolution {
   const sessionId = opts.sessionId.trim();
-  const storeAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
+  const storeAgentId = opts.agentId?.trim()
+    ? normalizeAgentId(opts.agentId)
+    : resolveDefaultAgentId(opts.cfg);
   const storePath = resolveStorePath(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
   const sessionStore = loadCommandSessionStore({
     storePath,
-    ...(storeAgentId ? { agentId: storeAgentId } : {}),
+    agentId: storeAgentId,
   });
   if (!sessionId) {
     return { sessionKey: undefined, sessionStore, storePath };
@@ -310,7 +252,7 @@ export function resolveSessionKeyForRequest(opts: {
   const storeAgentId = explicitSessionKey
     ? isUnscopedSessionKeySentinel(explicitSessionKey)
       ? (requestedAgentId ?? defaultAgentId)
-      : resolveAgentIdFromSessionKey(explicitSessionKey)
+      : resolveAgentIdFromSessionKey(explicitSessionKey, defaultAgentId)
     : (requestedAgentId ?? defaultAgentId);
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
@@ -324,22 +266,16 @@ export function resolveSessionKeyForRequest(opts: {
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
-    explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
+    (explicitSessionKey
+      ? canonicalizeMainSessionAlias({
+          cfg: opts.cfg,
+          agentId: storeAgentId,
+          sessionKey: explicitSessionKey,
+        })
+      : undefined) ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
 
-  if (ctx && !requestedAgentId && !requestedSessionId && !explicitSessionKey) {
-    const legacyMainSession = resolveLegacyMainStoreSessionForDefaultAgent({
-      cfg: opts.cfg,
-      defaultAgentId,
-      mainKey,
-      sessionKey,
-      sessionStore,
-      storePath,
-      cloneOnWrite: opts.clone === false,
-    });
-    if (legacyMainSession) {
-      return legacyMainSession;
-    }
-  }
+  // Entrypoint migration owners canonicalize legacy state before runtime reads. A missing target
+  // row is not evidence that another agent's main session belongs to the configured default agent.
 
   // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was
   // derived. When duplicates exist across agent stores, pick the same deterministic best match used
@@ -406,12 +342,12 @@ export function resolveSession(opts: {
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
   const sessionAgentId = opts.agentId?.trim()
     ? normalizeAgentId(opts.agentId)
-    : resolveAgentIdFromSessionKey(sessionKey);
+    : resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(opts.cfg));
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
-    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel ?? sessionEntry?.origin?.provider,
+    channel: sessionDeliveryChannel(sessionEntry),
   });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,
@@ -442,6 +378,7 @@ export function resolveSession(opts: {
             ...resolveSessionLifecycleTimestamps({
               entry: sessionEntry,
               agentId: sessionAgentId,
+              sessionKey,
               storePath,
             }),
             now,

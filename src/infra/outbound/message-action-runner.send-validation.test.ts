@@ -472,6 +472,39 @@ describe("runMessageAction send validation", () => {
 
     expect(result.kind).toBe("send");
   });
+
+  it.each(["", " \t\n"])(
+    "treats blank shared-schema event location %j as omitted on send",
+    async (location) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: "hello",
+          location,
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      });
+
+      expect(result.kind).toBe("send");
+    },
+  );
+
+  it("keeps rejecting a non-empty event location string on send", async () => {
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: "hello",
+          location: "Main stage",
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow("location must be an object");
+  });
 });
 
 describe("message body alias normalization", () => {
