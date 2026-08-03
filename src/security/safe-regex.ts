@@ -8,6 +8,7 @@ type QuantifierRead = {
 
 type TokenState = {
   containsRepetition: boolean;
+  containsAlternation: boolean;
   hasAmbiguousAlternation: boolean;
   minLength: number;
   maxLength: number;
@@ -20,6 +21,7 @@ type ParseFrame = {
   opaque: boolean;
   lastToken: TokenState | null;
   containsRepetition: boolean;
+  containsAlternation: boolean;
   hasAmbiguousAlternation: boolean;
   hasAlternation: boolean;
   branchMinLength: number;
@@ -50,6 +52,8 @@ const SAFE_REGEX_TEST_WINDOW = 2048;
 // Bound recursive branch expansion; overflow becomes unknown and therefore unsafe
 // when an enclosing repetition needs an overlap verdict.
 const MAX_ALTERNATIVE_PATHS = 64;
+const MAX_ALTERNATIVES = 64;
+const MAX_OVERLAP_PROBES = 4096;
 export type SafeRegexRejectReason = "empty" | "unsafe-nested-repetition" | "invalid-regex";
 
 export type SafeRegexCompileResult =
@@ -74,6 +78,7 @@ function createParseFrame(zeroWidth = false, opaque = false): ParseFrame {
     opaque,
     lastToken: null,
     containsRepetition: false,
+    containsAlternation: false,
     hasAmbiguousAlternation: false,
     hasAlternation: false,
     branchMinLength: 0,
@@ -115,6 +120,29 @@ function recordAlternative(frame: ParseFrame): void {
 
 const ASCII_ATOM_SAMPLES = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code));
 
+function readLegacyOctalEscape(
+  source: string,
+  index: number,
+): { value: string; next: number } | null {
+  const first = source[index + 1];
+  if (!first || !/^[0-7]$/.test(first)) {
+    return null;
+  }
+  // Annex B permits three octal digits only when the first is 0-3;
+  // otherwise the third digit is a separate pattern atom.
+  const maxDigits = /^[0-3]$/.test(first) ? 3 : 2;
+  let next = index + 2;
+  while (
+    next < source.length &&
+    next < index + 1 + maxDigits &&
+    /^[0-7]$/.test(source[next] ?? "")
+  ) {
+    next += 1;
+  }
+  const octal = source.slice(index + 1, next);
+  return { value: String.fromCodePoint(Number.parseInt(octal, 8)), next };
+}
+
 function readEscapedLiteral(source: string, index: number): { value: string; next: number } | null {
   const marker = source[index + 1];
   if (!marker) {
@@ -142,6 +170,15 @@ function readEscapedLiteral(source: string, index: number): { value: string; nex
     return /^[\da-f]{4}$/i.test(hex)
       ? { value: String.fromCodePoint(Number.parseInt(hex, 16)), next: index + 6 }
       : null;
+  }
+  if (marker === "c" && /^[a-z]$/i.test(source[index + 2] ?? "")) {
+    return {
+      value: String.fromCodePoint((source.charCodeAt(index + 2) || 0) % 32),
+      next: index + 3,
+    };
+  }
+  if (/^[0-7]$/.test(marker)) {
+    return readLegacyOctalEscape(source, index);
   }
   if (/^[\\^$.*+?()[\]{}|/-]$/.test(marker)) {
     return { value: marker, next: index + 2 };
@@ -282,24 +319,46 @@ function atomsMayOverlap(left: string, right: string, flags: string): boolean {
   }
 }
 
-function pathsMayOverlap(leftPaths: string[][], rightPaths: string[][], flags: string): boolean {
-  return leftPaths.some((left) =>
-    rightPaths.some((right) =>
-      (left.length <= right.length ? left : right).every((atom, index) =>
-        atomsMayOverlap(
-          atom,
-          expectDefined(
-            (left.length <= right.length ? right : left)[index],
-            "alternative path atom",
-          ),
-          flags,
-        ),
-      ),
-    ),
-  );
+function pathsMayOverlap(
+  leftPaths: string[][],
+  rightPaths: string[][],
+  flags: string,
+  budget: { remaining: number },
+): boolean {
+  for (const left of leftPaths) {
+    for (const right of rightPaths) {
+      const shorter = left.length <= right.length ? left : right;
+      const longer = left.length <= right.length ? right : left;
+      let overlaps = true;
+      for (let index = 0; index < shorter.length; index += 1) {
+        budget.remaining -= 1;
+        if (budget.remaining < 0) {
+          return true;
+        }
+        if (
+          !atomsMayOverlap(
+            expectDefined(shorter[index], "shorter alternative path atom"),
+            expectDefined(longer[index], "longer alternative path atom"),
+            flags,
+          )
+        ) {
+          overlaps = false;
+          break;
+        }
+      }
+      if (overlaps) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function alternativesOverlap(alternatives: Array<string[][] | null>, flags: string): boolean {
+  if (alternatives.length > MAX_ALTERNATIVES) {
+    return true;
+  }
+  const budget = { remaining: MAX_OVERLAP_PROBES };
   for (let leftIndex = 0; leftIndex < alternatives.length; leftIndex += 1) {
     const left = alternatives[leftIndex];
     if (!left) {
@@ -307,7 +366,7 @@ function alternativesOverlap(alternatives: Array<string[][] | null>, flags: stri
     }
     for (let rightIndex = leftIndex + 1; rightIndex < alternatives.length; rightIndex += 1) {
       const right = alternatives[rightIndex];
-      if (!right || pathsMayOverlap(left, right, flags)) {
+      if (!right || pathsMayOverlap(left, right, flags, budget)) {
         return true;
       }
     }
@@ -376,9 +435,48 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
   return { consumed: i - index, minRepeat, maxRepeat };
 }
 
-function vSetHasStringAlternatives(source: string): boolean {
-  return Array.from(source.matchAll(/\\q\{([^}]*)\}/g)).some((match) =>
-    (match[1] ?? "").includes("|"),
+function vSetHasAmbiguousStrings(source: string): boolean {
+  const stringMatches = Array.from(source.matchAll(/\\q\{([^}]*)\}/g));
+  const strings = stringMatches.flatMap((match) => (match[1] ?? "").split("|"));
+  if (strings.length === 0) {
+    return false;
+  }
+  for (let leftIndex = 0; leftIndex < strings.length; leftIndex += 1) {
+    const left = expectDefined(strings[leftIndex], "UnicodeSets string member");
+    for (let rightIndex = leftIndex + 1; rightIndex < strings.length; rightIndex += 1) {
+      const right = expectDefined(strings[rightIndex], "UnicodeSets string member");
+      if (left.startsWith(right) || right.startsWith(left)) {
+        return true;
+      }
+    }
+  }
+
+  let characterSource = source;
+  for (const match of stringMatches) {
+    characterSource = characterSource.replace(match[0], "");
+  }
+  const characters = new Set<string>();
+  for (let index = 1; index < characterSource.length - 1;) {
+    const ch = characterSource[index];
+    if (ch === "\\") {
+      const escaped = readEscapedLiteral(characterSource, index);
+      if (!escaped) {
+        return true;
+      }
+      characters.add(escaped.value);
+      index = escaped.next;
+      continue;
+    }
+    const value = String.fromCodePoint(
+      expectDefined(characterSource.codePointAt(index), "UnicodeSets character"),
+    );
+    index += value.length;
+    if (value !== "[" && value !== "]" && value !== "&" && value !== "-") {
+      characters.add(value);
+    }
+  }
+  return strings.some(
+    (value) => value.length > 1 && Array.from(value).every((ch) => characters.has(ch)),
   );
 }
 
@@ -431,6 +529,12 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
       } else if (source[i + 1] === "k" && source[i + 2] === "<") {
         const closing = source.indexOf(">", i + 3);
         atomEnd = closing < 0 ? atomEnd : closing + 1;
+      } else if (source[i + 1] === "c" && /^[a-z]$/i.test(source[i + 2] ?? "")) {
+        atomEnd = i + 3;
+      } else if (!unicodeAware && /^[0-7]$/.test(source[i + 1] ?? "")) {
+        atomEnd = readLegacyOctalEscape(source, i)?.next ?? i + 2;
+      } else if (/^[1-9]$/.test(source[i + 1] ?? "")) {
+        atomEnd = i + 1 + (source.slice(i + 1).match(/^\d+/)?.[0].length ?? 1);
       }
       const atom = source.slice(i, atomEnd);
       i = atomEnd - 1;
@@ -446,11 +550,17 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
 
     if (ch === "[") {
       const start = i;
+      let depth = 1;
       for (i += 1; i < source.length; i += 1) {
         if (source[i] === "\\") {
           i += 1;
+        } else if (flags.includes("v") && source[i] === "[") {
+          depth += 1;
         } else if (source[i] === "]") {
-          break;
+          depth -= 1;
+          if (depth === 0) {
+            break;
+          }
         }
       }
       const atom = source.slice(start, i + 1);
@@ -463,7 +573,7 @@ function tokenizePattern(source: string, flags: string): PatternToken[] {
           (atom.includes("\\q{") || atom.includes("\\p{") || atom.includes("\\P{")),
         ambiguousWhenRepeated:
           flags.includes("v") &&
-          (vSetHasStringAlternatives(atom) || vPropertyMayContainStrings(atom)),
+          (vSetHasAmbiguousStrings(atom) || vPropertyMayContainStrings(atom)),
       });
       continue;
     }
@@ -539,6 +649,9 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     if (token.containsRepetition) {
       frame.containsRepetition = true;
     }
+    if (token.containsAlternation) {
+      frame.containsAlternation = true;
+    }
     if (token.hasAmbiguousAlternation) {
       frame.hasAmbiguousAlternation = true;
     }
@@ -564,6 +677,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
   ) => {
     emitToken({
       containsRepetition: false,
+      containsAlternation: false,
       hasAmbiguousAlternation: ambiguousWhenRepeated,
       minLength: zeroWidth ? 0 : 1,
       maxLength: zeroWidth ? 0 : 1,
@@ -604,8 +718,10 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
           : frame.branchPaths;
         emitToken({
           containsRepetition: frame.containsRepetition,
+          containsAlternation: frame.containsAlternation,
           hasAmbiguousAlternation:
             frame.hasAmbiguousAlternation ||
+            (frame.opaque && frame.containsAlternation) ||
             (frame.hasAlternation &&
               frame.altMinLength !== null &&
               frame.altMaxLength !== null &&
@@ -626,6 +742,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
     if (token.kind === "alternation") {
       const frame = expectDefined(frames[frames.length - 1], "frames entry at frames.length 1");
       frame.hasAlternation = true;
+      frame.containsAlternation = true;
       recordAlternative(frame);
       frame.branchMinLength = 0;
       frame.branchMaxLength = 0;

@@ -39,9 +39,15 @@ const REGEX_CASES: Array<[pattern: string, expected: RegExpConstructor | null, f
   ["^(\\x{1,2})+!$", null],
   ["^((a|b)|(a|c))*!$", null],
   ["^(?i:a|A)+!$", null],
+  ["^(?i:(a|A))+!$", null],
+  ["^(?s:(.|\\n))+!$", null],
   ["(?:[\\q{ab}]|ab)+!", null, "v"],
   ["(?:\\p{RGI_Emoji}|😀)+!", null, "v"],
   ["^[\\q{a|aa}]+!$", null, "v"],
+  ["^[\\q{aa}a]+!$", null, "v"],
+  ["^[[\\q{a|aa}]]+!$", null, "v"],
+  ["^(?:\\07|\\x07)+!$", null],
+  ["^(?:\\cA|\\x01)+!$", null],
   ["^(?:\\uD83D\\uDE00|😀)+!$", null, "u"],
   ["^(?:[😀]|[😁][😀])+!$", null],
   ["(a|b)*$", RegExp],
@@ -56,6 +62,7 @@ const REGEX_CASES: Array<[pattern: string, expected: RegExpConstructor | null, f
   ["(?:(?=a)a)+", RegExp],
   ["(?i:a)+", RegExp],
   ["^[\\q{ab}]+!$", RegExp, "v"],
+  ["^[\\q{ab}a]+!$", RegExp, "v"],
   ["(?:k|\\P{ASCII})+!", RegExp],
   ["(?:a|b)+!", RegExp, "iu"],
   ["([\\w]|[-.])+@([\\w]|[-.])+\\.\\w+", RegExp, "gi"],
@@ -79,6 +86,13 @@ describe("safe regex", () => {
     const re = expectCompiledRegex("^agent:.*:discord:");
     expect(re.test("agent:main:discord:channel:123")).toBe(true);
     expect(re.test("agent:main:telegram:channel:123")).toBe(false);
+  });
+
+  it("fails closed when alternative overlap analysis exceeds its work budget", () => {
+    const alternatives = Array.from({ length: 65 }, (_, index) =>
+      String.fromCodePoint(0xe000 + index),
+    ).join("|");
+    expect(compileSafeRegex(`^(?:${alternatives})+!$`)).toBeNull();
   });
 
   it("supports explicit flags", () => {
