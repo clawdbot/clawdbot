@@ -92,6 +92,20 @@ type MattermostFileInfo = {
   size?: number | null;
 };
 
+export function parseMattermostApiStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const message = "message" in error && typeof error.message === "string" ? error.message : "";
+  // Read only the provider's status prefix; upstream details can mention other HTTP statuses.
+  const match = /Mattermost API (\d{3})\b/.exec(message);
+  if (!match) {
+    return undefined;
+  }
+  const status = Number(match[1]);
+  return Number.isFinite(status) ? status : undefined;
+}
+
 export function normalizeMattermostBaseUrl(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
