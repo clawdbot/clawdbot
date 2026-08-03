@@ -297,7 +297,7 @@ async function executeWorkerTurn(params: {
   const descriptor = fitLaunchDescriptor(
     (windowedMessages) =>
       parseWorkerLaunchDescriptor({
-        version: 2,
+        version: 3,
         socketPath: tunnel.remoteSocketPath,
         admission: {
           environmentId: placement.environmentId,

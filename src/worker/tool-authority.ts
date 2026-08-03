@@ -1,3 +1,5 @@
+import type { ExecMode } from "../infra/exec-approvals.js";
+
 export const WORKER_LOCAL_TOOL_NAMES = [
   "read",
   "write",
@@ -17,4 +19,5 @@ export function isWorkerLocalToolName(value: unknown): value is WorkerLocalToolN
 
 export type WorkerToolAuthority = {
   allowedToolNames: WorkerLocalToolName[];
+  execMode: ExecMode;
 };

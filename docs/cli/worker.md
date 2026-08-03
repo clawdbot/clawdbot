@@ -22,16 +22,17 @@ admits as the dedicated `worker` role.
 The command reads exactly one bounded JSON launch envelope from standard input.
 The envelope carries the local socket location, minted worker credential, bundle
 and protocol identity, owner epoch, the single assigned session and turn, and the
-exact worker-local tool names authorized for that turn. The Gateway resolves this
-final tool set from current policy before handoff; raw config and scheduled-owner
-identity never enter the worker envelope.
+exact worker-local tool authority for that turn. The authority includes the
+allowed tool names and resolved `exec` mode. The Gateway resolves both from
+current policy before handoff; raw config and scheduled-owner identity never
+enter the worker envelope.
 The credential is never accepted through command-line arguments, and this page
 intentionally provides no credential or hand-authored envelope example.
 
 Admission fails closed if the envelope is invalid, the credential is rejected,
 the bundle or protocol features do not match, or the session and owner epoch are
-no longer current. Missing, duplicate, or unknown tool names also invalidate the
-envelope. Operators should start workers through the cloud worker
+no longer current. Missing, duplicate, or unknown tool names and invalid or
+missing `exec` authority also invalidate the envelope. Operators should start workers through the cloud worker
 orchestrator rather than invoke this entry point directly.
 
 ## Runtime boundary
@@ -40,7 +41,8 @@ The process runs the normal embedded agent loop with a restricted backend:
 
 - The `read`, `write`, `edit`, `apply_patch`, `exec`, and `process` coding tools
   run locally in the worker workspace when present in the Gateway-issued turn
-  authority. An empty authority runs the model with no tools.
+  authority. `exec` also enforces the Gateway-resolved execution mode. An empty
+  authority runs the model with no tools.
 - Model calls use the gateway inference proxy. No local model auth profile is
   loaded.
 - Transcript writes use the gateway transcript-commit RPC.

@@ -25,9 +25,35 @@ function authority(overrides: Partial<SessionPlacementTurnParams> = {}) {
   }).allowedToolNames;
 }
 
+function execMode(overrides: Partial<SessionPlacementTurnParams> = {}) {
+  return resolveWorkerToolAuthority({
+    modelRef: { provider: "openai", model: "gpt-test" },
+    turn: turn(overrides),
+  }).execMode;
+}
+
 describe("resolveWorkerToolAuthority", () => {
   it("keeps the deterministic complete worker surface when no policy narrows it", () => {
     expect(authority()).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
+    expect(execMode()).toBe("full");
+  });
+
+  it("carries the effective exec mode independently of tool visibility", () => {
+    expect(
+      execMode({
+        config: { tools: { exec: { security: "deny" } } },
+      }),
+    ).toBe("deny");
+    expect(
+      execMode({
+        config: { tools: { exec: { security: "full", ask: "always" } } },
+      }),
+    ).toBe("ask");
+    expect(
+      authority({
+        config: { tools: { exec: { security: "deny" } } },
+      }),
+    ).toContain("exec");
   });
 
   it("projects runtime caps with canonical write-to-apply_patch semantics", () => {
@@ -116,6 +142,7 @@ describe("resolveWorkerToolAuthority", () => {
     "exposes no tools for non-tool run mode %#",
     (overrides) => {
       expect(authority(overrides)).toEqual([]);
+      expect(execMode(overrides)).toBe("deny");
     },
   );
 });

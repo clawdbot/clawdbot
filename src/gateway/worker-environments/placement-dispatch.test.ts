@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -458,7 +459,7 @@ describe("worker placement dispatch", () => {
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
-  it("reclaims an active pre-v2 worker instead of adopting its stale launch contract", async () => {
+  it("reclaims an active pre-v3 worker instead of adopting its stale launch contract", async () => {
     const harness = createHarness(placementStore);
     await harness.environments.attachSession({
       environmentId: harness.ready.environmentId,
@@ -466,7 +467,7 @@ describe("worker placement dispatch", () => {
       sessionId: REQUEST.sessionId,
     });
     harness.placements.seedActive(harness.attached.ownerEpoch);
-    harness.markEnvironmentProtocolFeatures([]);
+    harness.markEnvironmentProtocolFeatures([WORKER_LAUNCH_V2_PROTOCOL_FEATURE]);
 
     await harness.service.reconcile();
 
@@ -597,10 +598,10 @@ describe("worker placement dispatch", () => {
     expect(harness.environments.create).not.toHaveBeenCalled();
   });
 
-  it("tears down a starting pre-v2 worker instead of resuming its stale launch contract", async () => {
+  it("tears down a starting pre-v3 worker instead of resuming its stale launch contract", async () => {
     const harness = createHarness(placementStore);
     harness.placements.seedStarting();
-    harness.markEnvironmentProtocolFeatures([]);
+    harness.markEnvironmentProtocolFeatures([WORKER_LAUNCH_V2_PROTOCOL_FEATURE]);
 
     await harness.service.reconcile();
 

@@ -27,7 +27,11 @@ import {
   toAgentMessage,
   toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
-import { WORKER_LOCAL_TOOL_NAMES, type WorkerLocalToolName } from "./tool-authority.js";
+import {
+  WORKER_LOCAL_TOOL_NAMES,
+  type WorkerLocalToolName,
+  type WorkerToolAuthority,
+} from "./tool-authority.js";
 import { toWorkerTranscriptMessage } from "./transcript-message.js";
 
 function toError(value: unknown, fallback: string): Error {
@@ -71,6 +75,7 @@ type RunWorkerEmbeddedTurnParams = {
   systemPrompt?: string;
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerLocalToolName[];
+  execMode: WorkerToolAuthority["execMode"];
   signal?: AbortSignal;
 };
 
@@ -139,7 +144,7 @@ export async function runWorkerEmbeddedTurn(
     modelApi: model.api,
     modelContextWindowTokens: model.contextWindow,
     config: { plugins: { enabled: false } },
-    exec: { host: "gateway", security: "full", ask: "off" },
+    exec: { host: "gateway", mode: params.execMode },
     toolConstructionPlan: {
       includeBaseCodingTools: true,
       includeShellTools: true,

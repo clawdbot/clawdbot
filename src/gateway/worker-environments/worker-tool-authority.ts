@@ -1,6 +1,7 @@
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { logWarn } from "../../logger.js";
@@ -10,13 +11,16 @@ import {
   type WorkerToolAuthority,
 } from "../../worker/tool-authority.js";
 
+function resolveWorkerSandboxSessionKey(turn: SessionPlacementTurnParams): string {
+  return turn.sandboxSessionKey?.trim() || turn.sessionKey?.trim() || turn.sessionId;
+}
+
 function resolveWorkerCapabilityProfile(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
 }) {
   const turn = params.turn;
-  const sandboxSessionKey =
-    turn.sandboxSessionKey?.trim() || turn.sessionKey?.trim() || turn.sessionId;
+  const sandboxSessionKey = resolveWorkerSandboxSessionKey(turn);
   const sandbox = resolveSandboxRuntimeStatus({
     cfg: turn.config,
     sessionKey: sandboxSessionKey,
@@ -74,8 +78,9 @@ export function resolveWorkerToolAuthority(params: {
   turn: SessionPlacementTurnParams;
 }): WorkerToolAuthority {
   const turn = params.turn;
+  const sandboxSessionKey = resolveWorkerSandboxSessionKey(turn);
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
-    return { allowedToolNames: [] };
+    return { allowedToolNames: [], execMode: "deny" };
   }
   const runtimeCappedTools = applyEmbeddedAttemptToolsAllow(
     WORKER_LOCAL_TOOL_NAMES.map((name) => ({ name })),
@@ -86,5 +91,14 @@ export function resolveWorkerToolAuthority(params: {
     toolNames: runtimeCappedTools.map((tool) => tool.name),
     warn: logWarn,
   });
-  return { allowedToolNames: projected };
+  // The worker is the execution host, but the Gateway remains the authority owner.
+  // Carry the resolved mode so reconstruction cannot broaden deny/approval policy.
+  const execMode = resolveExecDefaults({
+    cfg: turn.config,
+    agentId: turn.agentId,
+    sessionKey: sandboxSessionKey,
+    execOverrides: { ...turn.execOverrides, host: "gateway" },
+    sandboxAvailable: false,
+  }).mode;
+  return { allowedToolNames: projected, execMode };
 }

@@ -329,7 +329,7 @@ class ComposedGatewayHarness {
     const epoch = params.epoch ?? this.epoch;
     const credential = params.admissionProof ?? CREDENTIAL;
     const descriptor: WorkerLaunchDescriptor = {
-      version: 2,
+      version: 3,
       socketPath: this.socketPath,
       admission: {
         environmentId: ENVIRONMENT_ID,
@@ -355,6 +355,7 @@ class ComposedGatewayHarness {
         },
         toolAuthority: {
           allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
+          execMode: "full",
         },
       },
     };

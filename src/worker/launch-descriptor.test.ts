@@ -10,7 +10,7 @@ import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-
 
 function launchDescriptor(): WorkerLaunchDescriptor {
   return {
-    version: 2,
+    version: 3,
     socketPath: "/tmp/openclaw-worker/gateway.sock",
     admission: {
       environmentId: "environment-1",
@@ -41,7 +41,7 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       ],
       transcript: { baseLeafId: "leaf-7", nextSeq: 8 },
       liveEvents: { ackedSeq: 12, nextSeq: 13 },
-      toolAuthority: { allowedToolNames: ["read", "exec"] },
+      toolAuthority: { allowedToolNames: ["read", "exec"], execMode: "full" },
     },
   };
 }
@@ -118,20 +118,34 @@ describe("worker launch descriptor", () => {
     const descriptor = launchDescriptor();
     const { toolAuthority: _missing, ...assignmentWithoutAuthority } = descriptor.assignment;
     const cases: unknown[] = [
-      { ...descriptor, version: 1 },
+      { ...descriptor, version: 2 },
       { ...descriptor, assignment: assignmentWithoutAuthority },
       {
         ...descriptor,
         assignment: {
           ...descriptor.assignment,
-          toolAuthority: { allowedToolNames: ["read", "read"] },
+          toolAuthority: { allowedToolNames: ["read", "read"], execMode: "full" },
         },
       },
       {
         ...descriptor,
         assignment: {
           ...descriptor.assignment,
-          toolAuthority: { allowedToolNames: ["read", "gateway"] },
+          toolAuthority: { allowedToolNames: ["read", "gateway"], execMode: "full" },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: { allowedToolNames: ["read", "exec"] },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: { allowedToolNames: ["read", "exec"], execMode: "FULL" },
         },
       },
     ];

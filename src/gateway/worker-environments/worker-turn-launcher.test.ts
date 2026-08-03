@@ -762,7 +762,8 @@ describe("worker turn launcher", () => {
     ).toBe(true);
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
-    expect(descriptor?.version).toBe(2);
+    expect(descriptor?.version).toBe(3);
+    expect(descriptor?.assignment.toolAuthority.execMode).toBe("full");
     expect(descriptor?.assignment.toolAuthority.allowedToolNames).toEqual([
       "read",
       "write",

@@ -133,6 +133,7 @@ export async function runWorkerDescriptor(
           : { systemPrompt: descriptor.assignment.systemPrompt }),
         inferenceOptions: descriptor.assignment.inferenceOptions,
         allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
+        execMode: descriptor.assignment.toolAuthority.execMode,
         inference: { stream },
         transcript: {
           commit: async (messages) => {

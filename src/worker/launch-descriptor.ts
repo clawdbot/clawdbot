@@ -24,10 +24,11 @@ import {
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { normalizeExecMode } from "../infra/exec-approvals.js";
 import { isWorkerLocalToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 
-const LAUNCH_VERSION = 2;
+const LAUNCH_VERSION = 3;
 
 type WorkerLaunchAssignment = {
   runId: string;
@@ -55,7 +56,7 @@ type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
 };
 
 export type WorkerLaunchDescriptor = {
-  version: 2;
+  version: 3;
   socketPath: string;
   admission: WorkerLaunchAdmission;
   assignment: WorkerLaunchAssignment;
@@ -86,16 +87,22 @@ function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
 }
 
 function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
+  const execMode =
+    isRecord(value) && typeof value.execMode === "string"
+      ? normalizeExecMode(value.execMode)
+      : null;
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["allowedToolNames"]) ||
+    !hasExactKeys(value, ["allowedToolNames", "execMode"]) ||
     !Array.isArray(value.allowedToolNames) ||
     !value.allowedToolNames.every(isWorkerLocalToolName) ||
-    new Set(value.allowedToolNames).size !== value.allowedToolNames.length
+    new Set(value.allowedToolNames).size !== value.allowedToolNames.length ||
+    execMode === null ||
+    execMode !== value.execMode
   ) {
     return undefined;
   }
-  return { allowedToolNames: [...value.allowedToolNames] };
+  return { allowedToolNames: [...value.allowedToolNames], execMode };
 }
 
 function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
