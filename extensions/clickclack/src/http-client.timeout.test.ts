@@ -297,6 +297,36 @@ describe("ClickClack HTTP client timeouts", () => {
     });
   });
 
+  it("does not follow redirects after dispatching a recoverable write", async () => {
+    let observedRedirect: RequestRedirect | undefined;
+    const followedHopFailure = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("redirect target refused"), { code: "ECONNREFUSED" }),
+    });
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      observedRedirect = init?.redirect;
+      if (init?.redirect !== "error") {
+        throw followedHopFailure;
+      }
+      throw new TypeError("fetch failed");
+    });
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await expect(
+      client.createActivityMessage({
+        channelId: "activity-channel",
+        body: "working",
+        kind: "agent_commentary",
+      }),
+    ).rejects.toMatchObject({ name: "ClickClackAmbiguousWriteError" });
+
+    expect(observedRedirect).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not impose the response-header deadline on JSON writes", async () => {
     vi.useFakeTimers();
     try {

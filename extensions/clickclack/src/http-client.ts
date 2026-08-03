@@ -227,13 +227,20 @@ export function createClickClackClient(options: ClientOptions) {
     if (init.body && !isUpload) {
       requestHeaders.set("Content-Type", "application/json");
     }
-    const requestInit = { ...init, headers: requestHeaders };
     const method = init.method?.toUpperCase() ?? "GET";
     // A write can time out after the server commits it, and Fetch cannot tell
     // whether its request body is still making progress. Reads and explicitly
     // audited retry-safe writes use the fixed pre-header deadline; multipart
     // uploads retain the existing transport/proxy policy.
     const timeoutRecoverySafe = !isUpload && policy.timeoutRecoverySafe === true;
+    // Redirects can commit the write on the first hop before a later hop fails.
+    // Surface that as an ambiguous outcome instead of following the redirect
+    // and potentially classifying the redirected transport failure as pre-connect.
+    const requestInit = {
+      ...init,
+      headers: requestHeaders,
+      ...(timeoutRecoverySafe ? { redirect: "error" as const } : {}),
+    };
     const useResponseHeaderDeadline =
       !isUpload && (method === "GET" || method === "HEAD" || timeoutRecoverySafe);
     let response: Response;
