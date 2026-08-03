@@ -44,10 +44,28 @@ const NAME_TOKEN_SPLIT = new RegExp(
   "gu",
 );
 
-function wrapDerivedMentionPattern(pattern: string): string {
+type DerivedNameParts = {
+  leading: string;
+  core: string;
+  trailing: string;
+};
+
+function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
   // JavaScript \b is ASCII-oriented. Derived identity names need Unicode word
   // boundaries so a name is neither missed nor matched inside another word.
-  return `(?:@|(?<!${UNICODE_WORD_CHAR}))${pattern}(?!${UNICODE_WORD_CHAR})`;
+  // Edge decoration is optional, so each assertion has to reach across it:
+  // checked next to the tokens instead, the class matches nothing and the
+  // decoration itself satisfies the boundary, letting the name match while
+  // glued to another word.
+  const before = parts.leading
+    ? `(?<!${UNICODE_WORD_CHAR}[${parts.leading}]*)`
+    : `(?<!${UNICODE_WORD_CHAR})`;
+  const after = parts.trailing
+    ? `(?![${parts.trailing}]*${UNICODE_WORD_CHAR})`
+    : `(?!${UNICODE_WORD_CHAR})`;
+  const leading = parts.leading ? `[${parts.leading}]*` : "";
+  const trailing = parts.trailing ? `[${parts.trailing}]*` : "";
+  return `(?:@|${before})${leading}${parts.core}${after}${trailing}`;
 }
 
 function decorationClassBody(gap: string): string {
@@ -62,17 +80,15 @@ function decorationClassBody(gap: string): string {
   return [...bodies].join("");
 }
 
-function deriveNamePattern(name: string): string {
+function deriveNameParts(name: string): DerivedNameParts {
   // Odd indices are captured word tokens; even indices are the gaps around them.
   const segments = name.split(NAME_TOKEN_SPLIT);
   const tokens = segments.filter((_, index) => index % 2 === 1);
   if (tokens.length === 0) {
     // Decoration-only name (e.g. a bare emoji): match it literally.
-    return escapeRegExp(name);
+    return { leading: "", core: escapeRegExp(name), trailing: "" };
   }
-  const leading = decorationClassBody(segments[0] ?? "");
-  const trailing = decorationClassBody(segments[segments.length - 1] ?? "");
-  let pattern = leading ? `[${leading}]*` : "";
+  let core = "";
   for (const [index, token] of tokens.entries()) {
     if (index > 0) {
       const gap = segments[index * 2] ?? "";
@@ -80,20 +96,22 @@ function deriveNamePattern(name: string): string {
       // Plain spacing stays required; decoration-only gaps are optional
       // separators. A gap carrying whitespace keeps a one-separator floor so
       // the bare concatenation of the surrounding words never matches.
-      pattern += decorations
-        ? `[\\s${decorations}]${/\s/u.test(gap) ? "+" : "*"}`
-        : String.raw`\s+`;
+      core += decorations ? `[\\s${decorations}]${/\s/u.test(gap) ? "+" : "*"}` : String.raw`\s+`;
     }
-    pattern += escapeRegExp(token);
+    core += escapeRegExp(token);
   }
-  return trailing ? `${pattern}[${trailing}]*` : pattern;
+  return {
+    leading: decorationClassBody(segments[0] ?? ""),
+    core,
+    trailing: decorationClassBody(segments[segments.length - 1] ?? ""),
+  };
 }
 
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
   const name = normalizeOptionalString(identity?.name);
   if (name) {
-    patterns.push(wrapDerivedMentionPattern(deriveNamePattern(name)));
+    patterns.push(wrapDerivedMentionPattern(deriveNameParts(name)));
   }
   const emoji = normalizeOptionalString(identity?.emoji);
   if (emoji) {

@@ -187,6 +187,36 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("小蝶子好", regexes)).toBe(false);
   });
 
+  it("still rejects a decorated name glued to another word", () => {
+    // Edge decoration is optional, so the boundary has to hold across it: read
+    // next to the tokens instead, the decoration itself satisfies the
+    // assertion and the name matches inside a longer word.
+    expect(
+      matchesMentionPatterns(
+        "小蝶🦋後續說明",
+        buildMentionRegexes(configForName("小蝶🦋"), "decorated-agent"),
+      ),
+    ).toBe(false);
+    expect(
+      matchesMentionPatterns(
+        "clawd🦋bots online",
+        buildMentionRegexes(configForName("Clawd🦋"), "decorated-agent"),
+      ),
+    ).toBe(false);
+    expect(
+      matchesMentionPatterns(
+        "前🦋小蝶 你好",
+        buildMentionRegexes(configForName("🦋小蝶"), "decorated-agent"),
+      ),
+    ).toBe(false);
+  });
+
+  it("leaves a glued decorated name in place when stripping", () => {
+    expect(
+      stripMentions("小蝶🦋後續說明", {} as MsgContext, configForName("小蝶🦋"), "decorated-agent"),
+    ).toBe("小蝶🦋後續說明");
+  });
+
   it("keeps an emoji-only identity name matching literally", () => {
     const regexes = buildMentionRegexes(configForName("🦋"), "decorated-agent");
 
