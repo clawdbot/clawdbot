@@ -43,7 +43,11 @@ type RuntimeIdentity = {
   sessionId: string;
 };
 
-type ScenarioName = "close-timeout" | "cancel-timeout" | "late-turn";
+type ScenarioName =
+  | "close-timeout"
+  | "cancel-timeout"
+  | "late-turn"
+  | "runtime-option-timeout";
 type GatewayProcess = ChildProcessByStdio<null, Readable, Readable>;
 type ChatFinalEvent = Extract<ChatEvent, { state: "final" }>;
 
@@ -61,6 +65,7 @@ type ScenarioResult = {
   resetElapsedMs: number;
   resetResponse: string;
   lateCompletionAt: string;
+  lateRuntimeOptionCompletedAt?: string;
   gatewayStayedAlive: boolean;
   assertions: string[];
   keyEvents: AdapterEvent[];
@@ -150,7 +155,7 @@ async function writeMarker(controlDir: string, name: string): Promise<void> {
 
 async function releaseAllMarkers(controlDir: string): Promise<void> {
   await Promise.all(
-    ["release-cancel", "release-close", "release-turn"].map((name) =>
+    ["release-cancel", "release-close", "release-set-mode", "release-turn"].map((name) =>
       writeMarker(controlDir, name),
     ),
   );
@@ -709,6 +714,9 @@ async function runScenario(params: {
 
     if (params.scenario === "cancel-timeout") {
       await writeMarker(controlDir, "hang-cancel");
+    } else if (params.scenario === "runtime-option-timeout") {
+      await writeMarker(controlDir, "hang-close");
+      await writeMarker(controlDir, "hang-set-mode");
     } else {
       await writeMarker(controlDir, "hang-close");
     }
@@ -717,8 +725,23 @@ async function runScenario(params: {
     }
 
     let heldTurnRunId: string | undefined;
+    let runtimeOptionRunId: string | undefined;
     let eventCursor = baseline.index;
-    if (params.scenario !== "close-timeout") {
+    if (params.scenario === "runtime-option-timeout") {
+      runtimeOptionRunId = await sendChat(client, "/acp set-mode plan");
+      const setModeStarted = await waitForEvent({
+        controlDir,
+        afterIndex: eventCursor,
+        description: "old runtime-option operation start",
+        predicate: (event) =>
+          event.event === "set_mode_start" && event.sessionId === oldIdentity.sessionId,
+      });
+      eventCursor = setModeStarted.index;
+      await logDriverEvent(scenarioDir, "held_runtime_option_started", {
+        runId: runtimeOptionRunId,
+        identity: oldIdentity,
+      });
+    } else if (params.scenario !== "close-timeout") {
       heldTurnRunId = await sendChat(client, "hold-turn");
       const heldTurn = await waitForEvent({
         controlDir,
@@ -787,6 +810,7 @@ async function runScenario(params: {
     });
 
     let lateCompletion: { event: AdapterEvent; index: number };
+    let lateRuntimeOptionCompletedAt: string | undefined;
     if (params.scenario === "close-timeout") {
       await writeMarker(controlDir, "release-close");
       lateCompletion = await waitForEvent({
@@ -813,6 +837,38 @@ async function runScenario(params: {
           event.event === "turn_end" &&
           event.sessionId === oldIdentity.sessionId &&
           event.stopReason === "cancelled",
+      });
+    } else if (params.scenario === "runtime-option-timeout") {
+      await writeMarker(controlDir, "release-set-mode");
+      await writeMarker(controlDir, "release-close");
+      const lateRuntimeOption = await waitForEvent({
+        controlDir,
+        afterIndex: eventCursor,
+        description: "late runtime-option completion",
+        predicate: (event) =>
+          event.event === "set_mode_end" && event.sessionId === oldIdentity.sessionId,
+      });
+      assert(
+        lateRuntimeOption.index > fresh.index,
+        "runtime-option completion was not observed after the fresh turn",
+      );
+      lateRuntimeOptionCompletedAt = lateRuntimeOption.event.at;
+      lateCompletion = await waitForEvent({
+        controlDir,
+        afterIndex: eventCursor,
+        description: "late close completion after runtime-option operation",
+        predicate: (event) =>
+          event.event === "close_end" && event.sessionId === oldIdentity.sessionId,
+      });
+      if (runtimeOptionRunId) {
+        await client
+          .request("agent.wait", { runId: runtimeOptionRunId, timeoutMs: 5_000 }, { timeoutMs: 10_000 })
+          .catch(() => undefined);
+      }
+      await logDriverEvent(scenarioDir, "late_runtime_option_completed", {
+        runId: runtimeOptionRunId,
+        identity: oldIdentity,
+        completionAt: lateRuntimeOption.event.at,
       });
     } else {
       await writeMarker(controlDir, "release-turn");
@@ -891,6 +947,8 @@ async function runScenario(params: {
         "session_load",
         "turn_start",
         "turn_end",
+        "set_mode_start",
+        "set_mode_end",
         "cancel_start",
         "cancel_end",
         "close_start",
@@ -912,6 +970,7 @@ async function runScenario(params: {
       resetElapsedMs,
       resetResponse,
       lateCompletionAt: lateCompletion.event.at,
+      ...(lateRuntimeOptionCompletedAt ? { lateRuntimeOptionCompletedAt } : {}),
       gatewayStayedAlive: true,
       assertions: [
         `reset exceeded the ${RESET_CLEANUP_DEADLINE_MS}ms production cleanup deadline`,
@@ -920,6 +979,12 @@ async function runScenario(params: {
         "the late old operation completed after the fresh turn",
         "persistent ACP metadata remained owned by the fresh session",
         "the follow-up turn remained on the fresh ACP session",
+        ...(params.scenario === "runtime-option-timeout"
+          ? [
+              "the old runtime-option operation started before reset and completed after the fresh turn",
+              "the superseded runtime-option operation did not replace fresh metadata or ownership",
+            ]
+          : []),
       ],
       keyEvents,
     };
@@ -1010,7 +1075,8 @@ function resolveScenarios(): ScenarioName[] {
   if (
     configured === "close-timeout" ||
     configured === "cancel-timeout" ||
-    configured === "late-turn"
+    configured === "late-turn" ||
+    configured === "runtime-option-timeout"
   ) {
     return [configured];
   }
@@ -1042,7 +1108,7 @@ async function main(): Promise<void> {
   }
   const summary = {
     claim:
-      "After ACP reset cleanup exceeds its production deadline, OpenClaw discards old runtime ownership, creates a fresh ACP session without restarting Gateway, and rejects late old cancel/close/turn completion from replacing the fresh runtime.",
+      "After ACP reset cleanup exceeds its production deadline, OpenClaw discards old runtime ownership, creates a fresh ACP session without restarting Gateway, and rejects late old cancel/close/turn/runtime-option completion from replacing the fresh runtime.",
     revision,
     startedAt,
     completedAt: new Date().toISOString(),
@@ -1068,7 +1134,7 @@ async function main(): Promise<void> {
       "The backend is a deterministic ACP protocol adapter, not a commercial third-party model backend.",
       "Reset removes the dynamic conversation binding, so post-reset proof turns target the same ACP session key directly through Gateway chat.send.",
       "The proof covers one old runtime and one fresh runtime per timeout mode; it does not exhaustively fuzz arbitrary reset concurrency.",
-      "Process and ACP session identity are observed at the adapter boundary; actor epochs remain an internal implementation detail covered by focused tests.",
+      "Process and ACP session identity are observed at the adapter boundary; actor epochs remain an internal implementation detail covered by focused tests and the reset-overlap runtime-option scenario.",
     ],
   };
   await fs.writeFile(

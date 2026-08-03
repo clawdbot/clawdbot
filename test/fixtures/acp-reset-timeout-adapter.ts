@@ -125,6 +125,14 @@ class ResetTimeoutProofAgent implements Agent {
 
   async authenticate(): Promise<void> {}
 
+  async setSessionMode(params: { sessionId: SessionId; modeId: string }): Promise<void> {
+    logEvent("set_mode_start", { sessionId: params.sessionId, mode: params.modeId });
+    if (markerExists("hang-set-mode")) {
+      await waitForMarker("release-set-mode");
+    }
+    logEvent("set_mode_end", { sessionId: params.sessionId, mode: params.modeId });
+  }
+
   async newSession(): Promise<NewSessionResponse> {
     const sessionId = `${instanceId}-session-${randomUUID().slice(0, 8)}`;
     this.sessions.set(sessionId, {});
