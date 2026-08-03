@@ -10,7 +10,6 @@ import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
 import {
   applyBasicWebhookRequestGuards,
   installRequestBodyLimitGuard,
-  normalizePluginHttpPath,
   readWebhookBodyOrReject,
   resolveRequestClientIp,
   safeEqualSecret,
@@ -28,6 +27,7 @@ import {
   wsClients,
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
+import { normalizeFeishuWebhookPath } from "./webhook-path.js";
 
 type MonitorTransportParams = {
   account: ResolvedFeishuAccount;
@@ -373,7 +373,13 @@ export async function monitorWebhook({
   }
 
   const port = account.config.webhookPort ?? 3000;
-  const path = normalizePluginHttpPath(account.config.webhookPath) ?? "/feishu/events";
+  const path = normalizeFeishuWebhookPath(account.config.webhookPath);
+  if (path === null) {
+    throw new Error(
+      `Feishu account "${accountId}" webhookPath must be a valid HTTP(S) URL or route path; ` +
+        'run "openclaw doctor --fix" to repair it',
+    );
+  }
   const host = account.config.webhookHost ?? "127.0.0.1";
 
   log(`feishu[${accountId}]: starting Webhook server on ${host}:${port}, path ${path}...`);

@@ -558,58 +558,46 @@ describe("Feishu webhook signed-request e2e", () => {
   });
 
   it.each([
-    {
-      label: "top-level relative route",
-      scope: "root",
-      configuredPath: "legacy-root-hook",
-      acceptedTarget: "/legacy-root-hook",
-      rejectedTarget: "/legacy-root-hook/",
-    },
-    {
-      label: "account relative route",
-      scope: "account",
-      configuredPath: "legacy-account-hook",
-      acceptedTarget: "/legacy-account-hook",
-      rejectedTarget: "/legacy-account-hook/",
-    },
-    {
-      label: "relative route with exact query",
-      scope: "root",
-      configuredPath: "legacy-query-hook?tenant=alpha&mode=exact",
-      acceptedTarget: "/legacy-query-hook?tenant=alpha&mode=exact",
-      rejectedTarget: "/legacy-query-hook?mode=exact&tenant=alpha",
-    },
-    {
-      label: "relative route with trailing slash",
-      scope: "account",
-      configuredPath: "legacy-trailing-hook/",
-      acceptedTarget: "/legacy-trailing-hook/",
-      rejectedTarget: "/legacy-trailing-hook",
-    },
-    {
-      label: "canonical route with trailing slash",
-      scope: "account",
-      configuredPath: "/legacy-canonical-hook/",
-      acceptedTarget: "/legacy-canonical-hook/",
-      rejectedTarget: "/legacy-canonical-hook",
-    },
-    {
-      label: "empty top-level route",
-      scope: "root",
-      configuredPath: "",
-      acceptedTarget: "/feishu/events",
-      rejectedTarget: "/",
-    },
-    {
-      label: "whitespace account route",
-      scope: "account",
-      configuredPath: "   ",
-      acceptedTarget: "/feishu/events",
-      rejectedTarget: "/",
-    },
+    ["root relative", "root", "old-root", "/old-root"],
+    ["account relative", "account", "old-account", "/old-account"],
+    ["root fragment", "root", "/old#fragment", "/old"],
+    ["account relative fragment", "account", "old#fragment", "/old"],
+    ["empty fragment", "root", "/old#", "/old"],
+    ["query fragment", "account", "old?tenant=alpha#fragment", "/old?tenant=alpha"],
+    ["fragment only", "root", "#fragment", "/"],
+    ["question inside fragment", "account", "#?", "/"],
+    ["query-only fragment", "account", "?tenant=alpha#fragment", "/?tenant=alpha"],
+    ["dot segments", "root", "/other/../old", "/old"],
+    ["encoded dot segments", "account", "/other/%2e%2e/old", "/old"],
+    ["backslash", "root", "/other\\old", "/other/old"],
+    ["backslash traversal", "account", "/other\\..\\old", "/old"],
+    ["external authority", "root", "//example.com/old#fragment", "/old"],
+    ["backslash authority", "account", "/\\example.com/old", "/old"],
+    ["absolute HTTPS", "root", "https://example.com/old/?x=1#fragment", "/old/?x=1"],
+    ["absolute HTTP", "account", "http://example.com:80/old/", "/old/"],
+    ["raw space", "root", "/old path", "/old%20path"],
+    ["query space", "account", "/old?name=hello world", "/old?name=hello%20world"],
+    ["Unicode", "root", "/café", "/caf%C3%A9"],
+    ["Unicode emoji", "account", "/💬", "/%F0%9F%92%AC"],
+    ["Unicode query", "account", "/old?name=café", "/old?name=caf%C3%A9"],
+    ["tab control", "root", "/old\tpath", "/oldpath"],
+    ["CRLF controls", "account", "/old\r\npath", "/oldpath"],
+    ["NUL control", "account", "/old\u0000path", "/old%00path"],
+    ["encoded hash", "root", "/old%23fragment", "/old%23fragment"],
+    ["encoded slash", "account", "/old%2Fnext", "/old%2Fnext"],
+    ["encoded backslash", "root", "/old%5Cnext", "/old%5Cnext"],
+    ["encoded NUL", "account", "/old%00next", "/old%00next"],
+    ["invalid percent escape", "root", "/old%ZZ", "/old%ZZ"],
+    ["dangling percent escape", "account", "/old%", "/old%"],
+    ["exact empty query", "account", "/old?", "/old?"],
+    ["empty query fragment", "root", "/old?#", "/old"],
+    ["relative trailing slash", "account", "old/", "/old/"],
+    ["canonical trailing slash", "root", "/old/", "/old/"],
+    ["empty root", "root", "", "/feishu/events"],
+    ["whitespace account", "account", "   ", "/feishu/events"],
   ])(
-    "normalizes the configured $label before raw webhook admission",
-    async ({ scope, configuredPath, acceptedTarget, rejectedTarget }) => {
+    "canonicalizes the configured %s before raw webhook admission",
+    async (_label, scope, configuredPath, acceptedTarget) => {
       const accountId = `legacy-route-${scope}`;
       const port = await getFreePort();
       const encryptKey = "encrypt_key";
@@ -660,6 +648,11 @@ describe("Feishu webhook signed-request e2e", () => {
       });
       const headers = signFeishuPayload({ encryptKey, rawBody });
       const acceptedPath = acceptedTarget.split("?", 1)[0];
+      const rejectedTarget = acceptedTarget.includes("?")
+        ? `${acceptedTarget}&wrong=1`
+        : acceptedTarget.endsWith("/") && acceptedTarget.length > 1
+          ? acceptedTarget.slice(0, -1)
+          : `${acceptedTarget}/`;
       const requests = [
         { label: "different raw target", target: rejectedTarget, status: 404 },
         { label: "foreign authority", target: `//attacker${acceptedPath}`, status: 404 },
