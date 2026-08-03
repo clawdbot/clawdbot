@@ -1,6 +1,9 @@
 // Codex tests cover thread lifecycle.binding plugin behavior.
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   ensureCodexAppServerClientRuntime,
@@ -3749,6 +3752,64 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     expect(binding.authProfileId).toBe("openai:bound");
     expect(binding.modelProvider).toBeUndefined();
+  });
+
+  it("recovers a same-ID retired stable tombstone through the full lifecycle entry point", async () => {
+    const root = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-lifecycle-reclaim-"));
+    const storePath = path.join(root, "sessions.json");
+    const sessionFile = path.join(tempDir, "session-reclaim.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-reclaim");
+    const params = createParams(sessionFile, workspaceDir);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    };
+
+    try {
+      // Seed session store entry (reclaimCurrentCodexSessionGeneration verifies against it).
+      await upsertSessionEntry({
+        agentId: identity.agentId,
+        sessionKey: identity.sessionKey,
+        storePath,
+        entry: { sessionId: identity.sessionId, updatedAt: 1 },
+      });
+      params.config = { session: { store: storePath } } as never;
+
+      // Seed a cleared/retired tombstone for this stable session identity.
+      await testCodexAppServerBindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-before-reset", cwd: workspaceDir },
+      });
+      await testCodexAppServerBindingStore.retireSessionGeneration(identity);
+
+      const threadId = "thread-after-reclaim";
+      const request = vi.fn(async (method: string) => {
+        if (method !== "thread/start" && method !== "thread/resume") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        return threadStartResult(threadId);
+      });
+      const common = {
+        client: { getInstanceId: () => "reclaim-client", request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        userMcpServersEnabled: false,
+      };
+
+      // The lifecycle must reclaim the tombstone before acquiring the lease.
+      const result = await startOrResumeThread(common);
+      expect(result).toMatchObject({
+        threadId,
+        lifecycle: { action: "started" },
+      });
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    } finally {
+      fsSync.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
