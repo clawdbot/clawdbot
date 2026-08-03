@@ -2300,53 +2300,56 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       previousDelta: "final ",
       replacementDelta: "answer",
     },
-  ])("keeps official SDK text consistent for $name", async ({ previousDelta, replacementDelta }) => {
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string }).runId;
-      if (!runId) {
-        throw new Error("expected a streaming chat-completion run ID");
-      }
-      if (previousDelta) {
+  ])(
+    "keeps official SDK text consistent for $name",
+    async ({ previousDelta, replacementDelta }) => {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming chat-completion run ID");
+        }
+        if (previousDelta) {
+          emitAgentEvent({
+            runId,
+            stream: "assistant",
+            data: { text: previousDelta, delta: previousDelta },
+          });
+        }
         emitAgentEvent({
           runId,
           stream: "assistant",
-          data: { text: previousDelta, delta: previousDelta },
+          data: {
+            text: "final answer",
+            replace: true,
+            phase: "commentary",
+            ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
+          },
         });
-      }
-      emitAgentEvent({
-        runId,
-        stream: "assistant",
-        data: {
-          text: "final answer",
-          replace: true,
-          phase: "commentary",
-          ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
-        },
-      });
-      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-      return { payloads: [{ text: "final answer" }] };
-    }) as never);
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        return { payloads: [{ text: "final answer" }] };
+      }) as never);
 
-    const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
-      model: "openclaw",
-      messages: [{ role: "user", content: "Preserve an append-compatible replacement." }],
-      stream: true,
-    });
-    const deliveredContent: string[] = [];
-    const finishReasons: Array<string | null> = [];
-    for await (const chunk of stream) {
-      for (const choice of chunk.choices) {
-        if (typeof choice.delta.content === "string") {
-          deliveredContent.push(choice.delta.content);
+      const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+        model: "openclaw",
+        messages: [{ role: "user", content: "Preserve an append-compatible replacement." }],
+        stream: true,
+      });
+      const deliveredContent: string[] = [];
+      const finishReasons: Array<string | null> = [];
+      for await (const chunk of stream) {
+        for (const choice of chunk.choices) {
+          if (typeof choice.delta.content === "string") {
+            deliveredContent.push(choice.delta.content);
+          }
+          finishReasons.push(choice.finish_reason);
         }
-        finishReasons.push(choice.finish_reason);
       }
-    }
-    expect(deliveredContent.join("")).toBe("final answer");
-    expect(finishReasons.at(-1)).toBe("stop");
-    expect(agentCommand).toHaveBeenCalledTimes(1);
-  });
+      expect(deliveredContent.join("")).toBe("final answer");
+      expect(finishReasons.at(-1)).toBe("stop");
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     {
