@@ -1072,6 +1072,22 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectsMessageToolMode: false,
     },
     {
+      name: "directly delivers direct-message subagent text when the announce agent only reports a tool error",
+      payloads: [{ text: "Yield failed before completion.", isError: true }],
+      event: { childSessionId: "child-session-id" },
+      content: "child completion output",
+      fullTarget: true,
+      expectsMessageToolMode: true,
+    },
+    {
+      name: "directly delivers direct-message subagent text when the announce agent only emits reasoning",
+      payloads: [{ text: "Waiting for the delegated task.", isReasoning: true }],
+      event: { childSessionId: "child-session-id" },
+      content: "child completion output",
+      fullTarget: true,
+      expectsMessageToolMode: true,
+    },
+    {
       name: "directly delivers direct-message subagent text when the announce agent omits the result",
       payloads: [{ text: "TG88042_NO_REOUTPUT" }],
       event: { childSessionId: "child-session-id", result: "TG88042_CHILD" },
@@ -1353,6 +1369,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   it.each([
     { name: "no payloads", result: { payloads: [] } },
     {
+      name: "only a failed-tool warning",
+      result: { payloads: [{ text: "Yield failed before completion.", isError: true }] },
+    },
+    {
+      name: "only hidden reasoning",
+      result: { payloads: [{ text: "Waiting for the delegated task.", isReasoning: true }] },
+    },
+    {
       name: "attachment payload without a usable media reference",
       result: { payloads: [{ attachments: [{}] }] },
     },
@@ -1397,6 +1421,56 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         channel: undefined,
         to: undefined,
         bestEffortDeliver: true,
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "only a failed-tool warning",
+      payloads: [{ text: "Yield failed before completion.", isError: true }],
+      delivered: false,
+    },
+    {
+      name: "only hidden reasoning",
+      payloads: [{ text: "Waiting for the delegated task.", isReasoning: true }],
+      delivered: false,
+    },
+    {
+      name: "a failed-tool warning and a successful visible reply",
+      payloads: [
+        { text: "Yield failed before completion.", isError: true },
+        { text: "The delegated task completed." },
+      ],
+      delivered: true,
+    },
+    {
+      name: "hidden reasoning and a successful visible reply",
+      payloads: [
+        { text: "Waiting for the delegated task.", isReasoning: true },
+        { text: "The delegated task completed." },
+      ],
+      delivered: true,
+    },
+  ])(
+    "requires a successful visible grouped completion reply when the agent returns $name",
+    async ({ payloads, delivered }) => {
+      const callGateway = createGatewayMock({ result: { payloads } });
+      const result = await deliverSlackThreadAnnouncement({
+        callGateway,
+        directIdempotencyKey: "announce-thread-completion-payload-visibility",
+        sourceTool: "agent_harness_task",
+      });
+
+      expectRecordFields(result, {
+        delivered,
+        path: "direct",
+        ...(!delivered
+          ? {
+              reason: "visible_reply_missing",
+              error: "completion agent did not produce a visible reply",
+            }
+          : {}),
       });
     },
   );
@@ -1491,6 +1565,24 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       result: {
         payloads: [],
         successfulCronAdds: 1,
+      },
+    },
+    {
+      name: "a successful visible reply alongside a failed-tool warning",
+      result: {
+        payloads: [
+          { text: "Yield failed before completion.", isError: true },
+          { text: "The delegated task completed." },
+        ],
+      },
+    },
+    {
+      name: "a successful visible reply alongside hidden reasoning",
+      result: {
+        payloads: [
+          { text: "Waiting for the delegated task.", isReasoning: true },
+          { text: "The delegated task completed." },
+        ],
       },
     },
   ])("accepts session-only completion handoff with $name evidence", async ({ result }) => {

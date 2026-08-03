@@ -1065,9 +1065,14 @@ async function sendSubagentAnnounceDirectly(params: {
       directAnnounceResult &&
       hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
     );
+    const completionPayloadVisibility = {
+      includeErrorPayloads: false,
+      includeReasoningPayloads: false,
+    };
     const hasVisibleGatewayPayload = Boolean(
       directAnnounceResult &&
-      (hasVisibleAgentPayload(directAnnounceResult) || hasMessagingToolDelivery),
+      (hasVisibleAgentPayload(directAnnounceResult, completionPayloadVisibility) ||
+        hasMessagingToolDelivery),
     );
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
@@ -1122,7 +1127,10 @@ async function sendSubagentAnnounceDirectly(params: {
     const hasVisibleCompletionReply = Boolean(
       directAnnounceResult &&
       (hasMessagingToolDelivery ||
-        hasVisibleAgentPayload(directAnnounceResult, { includeSilentReplyPayloads: false })),
+        hasVisibleAgentPayload(directAnnounceResult, {
+          ...completionPayloadVisibility,
+          includeSilentReplyPayloads: false,
+        })),
     );
     const hasCompletionSideEffect = Boolean(
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
