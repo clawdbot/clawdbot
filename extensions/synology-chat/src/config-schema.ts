@@ -5,11 +5,11 @@ import { z } from "zod";
 export const SynologyChatChannelConfigSchema = buildChannelConfigSchema(
   z
     .object({
-      dangerouslyAllowFileUrlFetch: z
+      dangerouslyAllowNasUrlFetches: z
         .boolean()
         .optional()
         .describe(
-          "Dangerous opt-in that lets Synology Chat fetch remote media URLs for automatic attachments. The NAS resolves and downloads these URLs outside OpenClaw's network controls.",
+          "Dangerous opt-in that exposes raw HTTP(S) links and lets Synology Chat fetch remote media for previews and automatic attachments outside OpenClaw's network controls.",
         ),
       dangerouslyAllowNameMatching: z.boolean().optional(),
       dangerouslyAllowInheritedWebhookPath: z.boolean().optional(),

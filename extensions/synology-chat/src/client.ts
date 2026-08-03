@@ -21,6 +21,9 @@ const MIN_SEND_INTERVAL_MS = 500;
 export const SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT = 2_000;
 export const SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE =
   "Remote media omitted: Synology Chat cannot safely fetch remote URLs.";
+const SYNOLOGY_CHAT_REMOTE_URL_NOTICE = "[remote URL omitted]";
+const SYNOLOGY_FORMATTED_LINK_RE = /<https?:\/\/[^<>|]+(?:\|[^<>]*)?>/giu;
+const RAW_HTTP_URL_RE = /\bhttps?:\/\/[^\s<>"'|]+/giu;
 /** user_list JSON can be larger than inbound webhook pre-auth payloads. */
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 /** Wall-clock budget for user_list fetch including response body. */
@@ -102,14 +105,22 @@ export async function sendMessage(
   text: string,
   userId?: string | number,
   allowInsecureSsl = false,
+  dangerouslyAllowNasUrlFetches = false,
 ): Promise<boolean> {
-  const chunks = chunkTextForOutbound(text, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
-  for (const chunk of chunks.length > 0 ? chunks : [text]) {
+  const safeText = dangerouslyAllowNasUrlFetches ? text : redactPreviewCapableUrls(text);
+  const chunks = chunkTextForOutbound(safeText, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
+  for (const chunk of chunks.length > 0 ? chunks : [safeText]) {
     if (!(await sendMessageChunk(incomingUrl, chunk, userId, allowInsecureSsl))) {
       return false;
     }
   }
   return true;
+}
+
+function redactPreviewCapableUrls(text: string): string {
+  return text
+    .replace(SYNOLOGY_FORMATTED_LINK_RE, SYNOLOGY_CHAT_REMOTE_URL_NOTICE)
+    .replace(RAW_HTTP_URL_RE, SYNOLOGY_CHAT_REMOTE_URL_NOTICE);
 }
 
 async function sendMessageChunk(
@@ -158,14 +169,14 @@ export async function sendFileReference(
   fileUrl: string,
   userId?: string | number,
   allowInsecureSsl = false,
-  dangerouslyAllowFileUrlFetch = false,
+  dangerouslyAllowNasUrlFetches = false,
 ): Promise<boolean> {
   try {
-    const safeFileUrl = dangerouslyAllowFileUrlFetch
+    const safeFileUrl = dangerouslyAllowNasUrlFetches
       ? await assertSafeWebhookFileUrl(fileUrl)
       : normalizeWebhookFileLink(fileUrl);
     const body = buildWebhookBody(
-      dangerouslyAllowFileUrlFetch
+      dangerouslyAllowNasUrlFetches
         ? { file_url: safeFileUrl }
         : { text: SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE },
       userId,

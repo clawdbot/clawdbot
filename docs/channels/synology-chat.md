@@ -69,7 +69,7 @@ Minimal config:
       dmPolicy: "allowlist",
       allowedUserIds: ["123456"],
       rateLimitPerMinute: 30,
-      dangerouslyAllowFileUrlFetch: false,
+      dangerouslyAllowNasUrlFetches: false,
       allowInsecureSsl: false,
     },
   },
@@ -112,9 +112,9 @@ openclaw message send --channel synology-chat --target synology-chat:123456 --me
 openclaw message send --channel synology-chat --target synology:123456 --message "Short prefix"
 ```
 
-Outbound text is chunked at 2000 characters. By default, media sends omit the remote URL and post a visible safety notice instead. OpenClaw cannot safely ask the NAS to download the file because both Synology's attachment fetch and optional URL previews resolve the destination outside OpenClaw's network controls.
+Outbound text is chunked at 2000 characters. By default, OpenClaw replaces raw HTTP(S) URLs in text with `[remote URL omitted]`, and media sends omit the remote URL and post a visible safety notice instead. OpenClaw cannot safely expose those URLs because both Synology's attachment fetch and optional URL previews resolve the destination outside OpenClaw's network controls.
 
-If you require the previous automatic-attachment behavior, set `dangerouslyAllowFileUrlFetch: true`. This sends the URL through Synology Chat's `file_url` field, causing the NAS to resolve and download it outside OpenClaw's network controls. Use this only when every media URL is trusted by the NAS operator.
+If you require raw links or the previous automatic-attachment behavior, set `dangerouslyAllowNasUrlFetches: true`. This exposes HTTP(S) URLs to optional Synology previews and sends media through the `file_url` field, allowing the NAS to resolve and download them outside OpenClaw's network controls. Use this only when every outbound URL is trusted by the NAS operator.
 
 ## Multi-account
 
@@ -155,7 +155,7 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
 
 - Keep `token` secret and rotate it if leaked.
 - Keep `allowInsecureSsl: false` unless you explicitly trust a self-signed local NAS cert.
-- Keep `dangerouslyAllowFileUrlFetch` off unless you explicitly accept NAS-side downloads of remote media URLs outside OpenClaw's network controls.
+- Keep `dangerouslyAllowNasUrlFetches` off unless you explicitly accept NAS-side preview and attachment fetches outside OpenClaw's network controls.
 - Inbound webhook requests are token-verified and rate-limited per sender (`rateLimitPerMinute`, default 30).
 - Invalid token checks use constant-time secret comparison and fail closed; repeated invalid-token attempts temporarily lock out the source IP.
 - Inbound message text is sanitized against known prompt-injection patterns and truncated at 4000 characters.

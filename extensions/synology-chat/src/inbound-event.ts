@@ -54,6 +54,7 @@ async function deliverSynologyChatReply(params: {
     text,
     params.sendUserId,
     params.account.allowInsecureSsl,
+    params.account.dangerouslyAllowNasUrlFetches,
   );
   return { visibleReplySent: ok };
 }

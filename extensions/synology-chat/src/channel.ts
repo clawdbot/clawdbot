@@ -112,7 +112,7 @@ const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynol
     "incomingUrl",
     "nasHost",
     "webhookPath",
-    "dangerouslyAllowFileUrlFetch",
+    "dangerouslyAllowNasUrlFetches",
     "dangerouslyAllowNameMatching",
     "dangerouslyAllowInheritedWebhookPath",
     "dmPolicy",
@@ -137,8 +137,8 @@ const collectSynologyChatSecurityWarnings =
       account.allowInsecureSsl &&
       "- Synology Chat: SSL verification is disabled (allowInsecureSsl=true). Only use this for local NAS with self-signed certificates.",
     (account) =>
-      account.dangerouslyAllowFileUrlFetch &&
-      "- Synology Chat: dangerouslyAllowFileUrlFetch=true lets the NAS download remote media outside OpenClaw's network controls. Prefer the default visible links.",
+      account.dangerouslyAllowNasUrlFetches &&
+      "- Synology Chat: dangerouslyAllowNasUrlFetches=true exposes raw links and lets the NAS fetch URLs for previews and attachments outside OpenClaw's network controls.",
     (account) =>
       account.dangerouslyAllowNameMatching &&
       "- Synology Chat: dangerouslyAllowNameMatching=true re-enables mutable username/nickname recipient matching for replies. Prefer stable numeric user IDs.",
@@ -286,7 +286,13 @@ async function sendSynologyChatText(
     }
     return `<${url.replace(/\\([()])/g, "$1")}|${label.replace(/\\([[\]])/g, "$1")}>`;
   });
-  const ok = await sendMessage(incomingUrl, text, ctx.to, account.allowInsecureSsl);
+  const ok = await sendMessage(
+    incomingUrl,
+    text,
+    ctx.to,
+    account.allowInsecureSsl,
+    account.dangerouslyAllowNasUrlFetches,
+  );
   if (!ok) {
     throw new Error("Failed to send message to Synology Chat");
   }
@@ -306,7 +312,7 @@ async function sendSynologyChatMedia(
     ctx.mediaUrl,
     ctx.to,
     account.allowInsecureSsl,
-    account.dangerouslyAllowFileUrlFetch,
+    account.dangerouslyAllowNasUrlFetches,
   );
   if (!ok) {
     throw new Error("Failed to send media to Synology Chat");
@@ -470,11 +476,15 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
             "### Synology Chat Formatting",
             "Synology Chat supports limited formatting. Use these patterns:",
             "",
-            "**Links**: Use `<URL|display text>` to create clickable links.",
-            "  Example: `<https://example.com|Click here>` renders as a clickable link.",
+            account.dangerouslyAllowNasUrlFetches
+              ? "**Links**: Use `<URL|display text>` to create clickable links."
+              : "**Links**: OpenClaw omits raw HTTP(S) URLs to prevent NAS preview fetches.",
+            account.dangerouslyAllowNasUrlFetches
+              ? "  Example: `<https://example.com|Click here>` renders as a clickable link."
+              : "  Send the relevant information without a remote URL.",
             "",
-            "**File sharing**: Include an HTTP or HTTPS URL to share files or images.",
-            account.dangerouslyAllowFileUrlFetch
+            "**File sharing**: Remote media is safe only when NAS URL fetching is explicitly enabled.",
+            account.dangerouslyAllowNasUrlFetches
               ? "  The NAS is configured to download the URL automatically. Only send URLs the operator trusts the NAS to fetch."
               : `  OpenClaw omits remote media URLs and sends this notice instead: ${SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE}`,
             "",
@@ -504,7 +514,13 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
           if (!account.incomingUrl) {
             return;
           }
-          await sendMessage(account.incomingUrl, message, id, account.allowInsecureSsl);
+          await sendMessage(
+            account.incomingUrl,
+            message,
+            id,
+            account.allowInsecureSsl,
+            account.dangerouslyAllowNasUrlFetches,
+          );
         },
       },
     },

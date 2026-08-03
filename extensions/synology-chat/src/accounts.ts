@@ -136,7 +136,7 @@ export function resolveAccount(
     nasHost: merged.nasHost ?? envNasHost,
     webhookPath: merged.webhookPath ?? "/webhook/synology",
     webhookPathSource,
-    dangerouslyAllowFileUrlFetch: merged.dangerouslyAllowFileUrlFetch ?? false,
+    dangerouslyAllowNasUrlFetches: merged.dangerouslyAllowNasUrlFetches ?? false,
     dangerouslyAllowNameMatching: resolveDangerousNameMatchingEnabled({
       providerConfig: channelCfg,
       accountConfig: accountOverrides,

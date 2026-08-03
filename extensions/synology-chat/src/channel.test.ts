@@ -12,7 +12,7 @@ const securityAccountDefaults: ResolvedSynologyChatAccount = {
   nasHost: "h",
   webhookPath: "/w",
   webhookPathSource: "default" as const,
-  dangerouslyAllowFileUrlFetch: false,
+  dangerouslyAllowNasUrlFetches: false,
   dangerouslyAllowNameMatching: false,
   dangerouslyAllowInheritedWebhookPath: false,
   dmPolicy: "allowlist" as const,
@@ -274,7 +274,7 @@ describe("createSynologyChatPlugin", () => {
         nasHost: "h",
         webhookPath: "/w",
         webhookPathSource: "default" as const,
-        dangerouslyAllowFileUrlFetch: false,
+        dangerouslyAllowNasUrlFetches: false,
         dangerouslyAllowNameMatching: false,
         dangerouslyAllowInheritedWebhookPath: false,
         dmPolicy: "allowlist" as const,
@@ -322,6 +322,7 @@ describe("createSynologyChatPlugin", () => {
         "OpenClaw: your access has been approved.",
         "USER1",
         true,
+        false,
       );
     });
   });
@@ -363,9 +364,9 @@ describe("createSynologyChatPlugin", () => {
 
     it("warns when automatic NAS file fetching is enabled", () => {
       const plugin = synologyChatPlugin;
-      const account = makeSecurityAccount({ dangerouslyAllowFileUrlFetch: true });
+      const account = makeSecurityAccount({ dangerouslyAllowNasUrlFetches: true });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
-      expectIncludesSubstring(warnings, "dangerouslyAllowFileUrlFetch=true");
+      expectIncludesSubstring(warnings, "dangerouslyAllowNasUrlFetches=true");
     });
 
     it("warns when dangerous name matching is enabled", () => {
@@ -479,7 +480,9 @@ describe("createSynologyChatPlugin", () => {
       const plugin = synologyChatPlugin;
       const hints = plugin.agentPrompt.messageToolHints({ cfg: {}, accountId: null });
       expect(hints).toContain("### Synology Chat Formatting");
-      expect(hints).toContain("**Links**: Use `<URL|display text>` to create clickable links.");
+      expect(hints).toContain(
+        "**Links**: OpenClaw omits raw HTTP(S) URLs to prevent NAS preview fetches.",
+      );
       expect(hints).toContain("- No buttons, cards, or interactive elements");
       expect(hints).toContain(
         "  OpenClaw omits remote media URLs and sends this notice instead: Remote media omitted: Synology Chat cannot safely fetch remote URLs.",
@@ -490,7 +493,7 @@ describe("createSynologyChatPlugin", () => {
       const hints = synologyChatPlugin.agentPrompt.messageToolHints({
         cfg: {
           channels: {
-            "synology-chat": { dangerouslyAllowFileUrlFetch: true },
+            "synology-chat": { dangerouslyAllowNasUrlFetches: true },
           },
         },
         accountId: null,
@@ -498,6 +501,7 @@ describe("createSynologyChatPlugin", () => {
       expect(hints).toContain(
         "  The NAS is configured to download the URL automatically. Only send URLs the operator trusts the NAS to fetch.",
       );
+      expect(hints).toContain("**Links**: Use `<URL|display text>` to create clickable links.");
     });
   });
 
@@ -604,6 +608,32 @@ describe("createSynologyChatPlugin", () => {
         "https://nas/incoming",
         `**Read** <https://example.com/a_(b)|the docs> <https://example.com|titled> \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`,
         "user1",
+        true,
+        false,
+      );
+    });
+
+    it("passes the NAS URL-fetch opt-in to text delivery", async () => {
+      await synologyChatPlugin.outbound.sendText({
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              dangerouslyAllowNasUrlFetches: true,
+            },
+          },
+        },
+        text: "https://example.com/trusted",
+        to: "user1",
+      });
+
+      expect(mockSendMessage).toHaveBeenLastCalledWith(
+        "https://nas/incoming",
+        "https://example.com/trusted",
+        "user1",
+        false,
         true,
       );
     });

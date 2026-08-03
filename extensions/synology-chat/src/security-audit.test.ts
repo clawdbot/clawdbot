@@ -15,7 +15,7 @@ function createAccount(params: {
     nasHost: "https://nas.example.com",
     webhookPath: "/webapi/entry.cgi",
     webhookPathSource: "explicit",
-    dangerouslyAllowFileUrlFetch: false,
+    dangerouslyAllowNasUrlFetches: false,
     dangerouslyAllowNameMatching: params.dangerouslyAllowNameMatching ?? false,
     dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "allowlist",

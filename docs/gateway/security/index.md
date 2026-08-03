@@ -699,7 +699,7 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
     - `channels.mattermost.dangerouslyAllowNameMatching` (plugin channel)
     - `channels.msteams.dangerouslyAllowNameMatching`
     - `channels.slack.dangerouslyAllowNameMatching`
-    - `channels.synology-chat.dangerouslyAllowFileUrlFetch` (plugin channel)
+    - `channels.synology-chat.dangerouslyAllowNasUrlFetches` (plugin channel)
     - `channels.synology-chat.dangerouslyAllowInheritedWebhookPath` (plugin channel)
     - `channels.synology-chat.dangerouslyAllowNameMatching` (plugin channel)
     - `channels.zalouser.dangerouslyAllowNameMatching` (plugin channel)

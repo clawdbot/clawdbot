@@ -255,6 +255,49 @@ describe("sendMessage", () => {
     expect(payload).toEqual({ text: "Hello", user_ids: [42] });
   });
 
+  it("redacts raw and formatted URLs before Synology previews can fetch them", async () => {
+    mockSuccessResponse();
+    await settleTimers(
+      sendMessage(
+        "https://nas.example.com/incoming",
+        "See https://example.com/a and <https://other.example/b|other>",
+        "42",
+      ),
+    );
+
+    const request = vi.mocked(https.request).mock.results[0]?.value as ClientRequest | undefined;
+    if (!request) {
+      throw new Error("expected Synology Chat webhook request");
+    }
+    const body = vi.mocked(request["write"]).mock.calls[0]?.[0];
+    if (typeof body !== "string") {
+      throw new Error("expected Synology Chat webhook body");
+    }
+    expect(JSON.parse(decodeURIComponent(body.replace(/^payload=/, "")))).toEqual({
+      text: "See [remote URL omitted] and [remote URL omitted]",
+      user_ids: [42],
+    });
+  });
+
+  it("preserves raw links only when NAS URL fetching is explicitly enabled", async () => {
+    mockSuccessResponse();
+    const text = "See https://example.com/a";
+    await settleTimers(sendMessage("https://nas.example.com/incoming", text, "42", false, true));
+
+    const request = vi.mocked(https.request).mock.results[0]?.value as ClientRequest | undefined;
+    if (!request) {
+      throw new Error("expected Synology Chat webhook request");
+    }
+    const body = vi.mocked(request["write"]).mock.calls[0]?.[0];
+    if (typeof body !== "string") {
+      throw new Error("expected Synology Chat webhook body");
+    }
+    expect(JSON.parse(decodeURIComponent(body.replace(/^payload=/, "")))).toEqual({
+      text,
+      user_ids: [42],
+    });
+  });
+
   it("only disables TLS verification when explicitly requested", async () => {
     mockSuccessResponse();
     await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));

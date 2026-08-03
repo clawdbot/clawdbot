@@ -82,7 +82,7 @@ describe("Synology Chat user_list loopback", () => {
 
     const outboundText = await synologyChatPlugin.outbound.sendText({
       cfg,
-      text: "native outbound text",
+      text: "native outbound text https://preview.example/private",
       to: "42",
     });
     const outboundMedia = await synologyChatPlugin.outbound.sendMedia({
@@ -103,7 +103,7 @@ describe("Synology Chat user_list loopback", () => {
     });
 
     expect(receivedPayloads).toEqual([
-      { text: "native outbound text", user_ids: [42] },
+      { text: "native outbound text [remote URL omitted]", user_ids: [42] },
       {
         text: "Remote media omitted: Synology Chat cannot safely fetch remote URLs.",
         user_ids: [42],
