@@ -1,5 +1,7 @@
 /** Tests Code Mode runtime and output limits. */
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codeModeFailureCode } from "./code-mode-runtime.js";
@@ -14,6 +16,8 @@ import {
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
+
+const execFileAsync = promisify(execFile);
 
 describe("Code Mode runtime and output limits", () => {
   beforeEach(() => {
@@ -357,23 +361,30 @@ describe("Code Mode runtime and output limits", () => {
   });
 
   it("classifies nonzero worker exits as unavailable", async () => {
-    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
-    const exitingWorkerUrl = new URL("data:text/javascript,process.exit(1)");
-
-    const result = await testing.runCodeModeWorker(
-      {
-        kind: "exec",
-        source: "return 1;",
-        config,
-        catalog: [],
-      },
-      500,
-      exitingWorkerUrl,
+    const workerModuleUrl = new URL("./code-mode-worker.ts", import.meta.url).href;
+    const childSource = `
+      import { runCodeModeWorker } from ${JSON.stringify(workerModuleUrl)};
+      const result = await runCodeModeWorker(
+        {},
+        5_000,
+        new URL("data:text/javascript,process.exit(1)"),
+      );
+      process.stdout.write(JSON.stringify(result));
+    `;
+    const childEnv = { ...process.env };
+    delete childEnv.NODE_OPTIONS;
+    delete childEnv.VITEST;
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", childSource],
+      { cwd: process.cwd(), env: childEnv },
     );
+    const result = JSON.parse(stdout) as unknown;
 
-    expect(result.status).toBe("failed");
     expect(result).toMatchObject({
+      status: "failed",
       code: "runtime_unavailable",
+      error: "code mode worker exited with code 1 before returning a result",
     });
   });
 
