@@ -550,15 +550,18 @@ function isStalledModelCallRecoveryEligible(params: {
   stuckSessionAbortMs: number;
 }): boolean {
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
-  // Local providers are not blanket-exempt from recovery. Streaming model
-  // chunks refresh run activity while emitted progress events are throttled, so
-  // active streams stay fresh and silent/non-streaming calls can be recovered.
+  // Model calls that look silent may still be alive (e.g. a background
+  // subagent writing output through a CLI backend). Apply the same floor
+  // that protects blocked tool calls so the diagnostic watchdog doesn't
+  // abort a run the CLI layer has already certified as alive — the two
+  // watchdogs must agree on the same floor.
+  const abortMs = Math.max(params.stuckSessionAbortMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "model_call" &&
     typeof lastProgressAgeMs === "number" &&
-    lastProgressAgeMs >= params.stuckSessionAbortMs
+    lastProgressAgeMs >= abortMs
   );
 }
 
