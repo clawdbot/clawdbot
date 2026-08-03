@@ -1,5 +1,6 @@
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+export type { ProviderFailoverErrorContext } from "./provider-failover.types.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderPrepareExtraParamsContext } from "./provider-runtime.types.js";
 
@@ -80,21 +81,6 @@ export type ProviderResolveWebSocketSessionPolicyContext = {
   modelId: string;
   model?: ProviderRuntimeModel;
   sessionId?: string;
-};
-
-/**
- * Provider-owned failover error classification input.
- *
- * Use this when provider-specific transport or API errors need classification
- * hints that generic string matching cannot express safely.
- */
-export type ProviderFailoverErrorContext = {
-  provider?: string;
-  modelId?: string;
-  errorMessage: string;
-  status?: number;
-  code?: string;
-  errorType?: string;
 };
 
 /**

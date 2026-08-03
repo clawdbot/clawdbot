@@ -7,6 +7,7 @@ import type {
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 import type { PluginRegistry } from "../registry-types.js";
+import { PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY } from "./gateway-request-scope-key.js";
 
 type PluginRuntimeGatewayRequestScope = {
   context?: GatewayRequestContext;
@@ -26,10 +27,6 @@ type PluginRuntimePluginScope = {
   pluginOrigin?: PluginOrigin;
   pluginTrustedOfficialInstall?: boolean;
 };
-
-const PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY: unique symbol = Symbol.for(
-  "openclaw.pluginRuntimeGatewayRequestScope",
-);
 
 const pluginRuntimeGatewayRequestScope = resolveGlobalSingleton<
   AsyncLocalStorage<PluginRuntimeGatewayRequestScope>
