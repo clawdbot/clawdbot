@@ -300,6 +300,15 @@ struct ExecHostRequestEvaluatorTests {
         }
     }
 
+    @Test func `closed local prompt is unavailable rather than an explicit deny`() {
+        let error = ExecHostRequestEvaluator.promptClosedError()
+
+        #expect(error.code == "UNAVAILABLE")
+        #expect(error.message == "SYSTEM_RUN_DENIED: approval prompt closed without decision")
+        #expect(error.reason == "approval-cancelled")
+        #expect(error.reason != "user-denied")
+    }
+
     @Test func `evaluate allows allow once decision on allowlist miss`() {
         let context = Self.makeContext(security: .allowlist, ask: .onMiss, allowlistSatisfied: false, skillAllow: false)
         let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: .allowOnce)

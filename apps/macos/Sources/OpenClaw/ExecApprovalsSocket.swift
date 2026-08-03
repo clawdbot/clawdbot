@@ -930,10 +930,7 @@ private enum ExecHostExecutor {
                         allowAlwaysEligible: context.canPersistAllowAlways)),
                 timeoutMs: execApprovalsSocketTimeoutMs)
             else {
-                return self.errorResponse(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DENIED: approval prompt closed without decision",
-                    reason: "approval-cancelled")
+                return self.errorResponse(ExecHostRequestEvaluator.promptClosedError())
             }
 
             let followupDecision: ExecApprovalDecision
