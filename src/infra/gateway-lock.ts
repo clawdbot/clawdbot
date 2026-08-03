@@ -370,7 +370,7 @@ async function assertLegacyGatewayLockIsNotActive(params: {
 export async function readActiveGatewayLockPort(
   opts: Pick<
     GatewayLockOptions,
-    "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
+    "env" | "lockDir" | "legacyLockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
   > = {},
 ): Promise<number | undefined> {
   return (await readActiveGatewayLockIdentity(opts))?.port;
@@ -379,13 +379,22 @@ export async function readActiveGatewayLockPort(
 export async function readActiveGatewayLockIdentity(
   opts: Pick<
     GatewayLockOptions,
-    "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
+    "env" | "lockDir" | "legacyLockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
   > = {},
 ): Promise<GatewayLockIdentity | undefined> {
   const env = opts.env ?? process.env;
-  const { configLockPath, stateLockPath } = resolveGatewayLockPaths(env, opts.lockDir);
+  const { configLockPath, legacyStateLockPath, stateLockPath } = resolveGatewayLockPaths(
+    env,
+    opts.lockDir,
+    opts.legacyLockDir ?? (opts.lockDir ? opts.lockDir : undefined),
+  );
   const configIdentity = await readVerifiedGatewayLockIdentity(configLockPath, opts);
-  return configIdentity ?? (await readVerifiedGatewayLockIdentity(stateLockPath, opts));
+  const stateIdentity = await readVerifiedGatewayLockIdentity(stateLockPath, opts);
+  return (
+    configIdentity ??
+    stateIdentity ??
+    (await readVerifiedGatewayLockIdentity(legacyStateLockPath, opts))
+  );
 }
 
 async function readVerifiedGatewayLockIdentity(

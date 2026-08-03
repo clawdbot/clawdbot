@@ -6,7 +6,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveConfigPath, resolveGatewayLockDir } from "../config/paths.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import {
+  acquireGatewayLock,
+  GatewayLockError,
+  readActiveGatewayLockIdentity,
+} from "./gateway-lock.js";
 
 function stateLockPath(lockDir: string, stateDir: string): string {
   const canonicalStateDir = fsSync.realpathSync.native(path.resolve(stateDir));
@@ -33,6 +37,99 @@ describe("Gateway lock state directory", () => {
         const expectedLockDir = resolveGatewayLockDir(env);
         expect(path.dirname(lock.lockPath)).toBe(expectedLockDir);
         expect(path.dirname(lock.stateLockPath)).toBe(expectedLockDir);
+      } finally {
+        await lock.release();
+      }
+    });
+  });
+
+  it("discovers an active legacy state lock during an in-place upgrade", async () => {
+    await withStateDirEnv("openclaw-gateway-lock-reader-", async ({ stateDir }) => {
+      const configPath = path.join(stateDir, "openclaw.json");
+      const legacyLockDir = path.join(stateDir, "legacy-temp");
+      const expectedPort = 48123;
+      await fs.writeFile(configPath, "{}\n");
+      await fs.mkdir(legacyLockDir, { recursive: true });
+      const env = {
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      await fs.writeFile(
+        stateLockPath(legacyLockDir, stateDir),
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: resolveConfigPath(env, stateDir),
+          port: expectedPort,
+          role: "gateway",
+          stateDir,
+        }),
+      );
+
+      await expect(
+        readActiveGatewayLockIdentity({
+          env,
+          legacyLockDir,
+          platform: "darwin",
+          readProcessCmdline: () => ["openclaw-gateway"],
+        }),
+      ).resolves.toMatchObject({
+        pid: process.pid,
+        port: expectedPort,
+      });
+    });
+  });
+
+  it("prefers a state-local lock over a legacy state lock during an upgrade", async () => {
+    await withStateDirEnv("openclaw-gateway-lock-reader-precedence-", async ({ stateDir }) => {
+      const configPath = path.join(stateDir, "openclaw.json");
+      const legacyLockDir = path.join(stateDir, "legacy-temp");
+      const currentPort = 48124;
+      await fs.writeFile(configPath, "{}\n");
+      await fs.mkdir(legacyLockDir, { recursive: true });
+      const env = {
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      const lock = await acquireGatewayLock({
+        allowInTests: true,
+        env,
+        legacyLockDir,
+        platform: "darwin",
+        port: currentPort,
+        readProcessCmdline: () => ["openclaw-gateway"],
+        timeoutMs: 30,
+      });
+      if (!lock) {
+        throw new Error("Expected Gateway lock");
+      }
+
+      try {
+        await fs.writeFile(
+          stateLockPath(legacyLockDir, stateDir),
+          JSON.stringify({
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+            configPath: resolveConfigPath(env, stateDir),
+            port: 48123,
+            role: "gateway",
+            stateDir,
+          }),
+        );
+
+        await expect(
+          readActiveGatewayLockIdentity({
+            env,
+            legacyLockDir,
+            platform: "darwin",
+            readProcessCmdline: () => ["openclaw-gateway"],
+          }),
+        ).resolves.toMatchObject({
+          pid: process.pid,
+          port: currentPort,
+        });
       } finally {
         await lock.release();
       }
