@@ -239,14 +239,15 @@ describe("Gateway node control plane", () => {
           reason: "persisted",
         });
 
+        const connectedOperator = operator;
         await vi.waitFor(
           async () => {
-            const afterAlive = await readNode(operator, identity.deviceId);
+            const afterAlive = await readNode(connectedOperator, identity.deviceId);
             expect(afterAlive, gateway.logs()).toMatchObject({
               lastSeenReason: "manual",
             });
             expect(afterAlive?.lastSeenAtMs).toBeGreaterThanOrEqual(aliveSentAtMs);
-            const describedAfterAlive = await operator.request<NodeRead>(
+            const describedAfterAlive = await connectedOperator.request<NodeRead>(
               "node.describe",
               { nodeId: identity.deviceId },
               { timeoutMs: REQUEST_TIMEOUT_MS },
