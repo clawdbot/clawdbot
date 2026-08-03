@@ -18,6 +18,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import "./server-startup-outcomes.test-support.js";
 
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn<() => Promise<PluginServicesHandle | null>>(async () => null);
