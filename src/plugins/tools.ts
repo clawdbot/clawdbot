@@ -16,7 +16,7 @@ import {
   registrationIncludesHostRestrictedConversationReadTool,
 } from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
-import type { PluginLoadOptions } from "./loader.js";
+import { loadPluginRegistryHandle, type PluginLoadOptions } from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
@@ -25,7 +25,6 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
-import { getPluginRegistryState } from "./runtime-state.js";
 import {
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
@@ -34,7 +33,6 @@ import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
-import { loadRuntimePluginRegistryHandle } from "./runtime/standalone-runtime-registry-loader.js";
 import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   buildPluginToolDescriptorCacheKey,
@@ -1071,161 +1069,26 @@ function resolvePluginToolRegistry(params: {
   onRetainRegistry?: (registry: PluginRegistry) => void;
 }) {
   const requestedPluginIds = params.onlyPluginIds;
-  // Retained registries belong to one cached descriptor execution. Reusing one
-  // across a multi-owner request would keep its tools but lose its hook state
-  // when another owner triggers a fresh scoped load.
-  const retainedRegistry =
-    requestedPluginIds === undefined || requestedPluginIds.length === 1
-      ? params.retainedRegistry
-      : undefined;
-  const registries: PluginRegistry[] = [];
-  const seenRegistries = new Set<PluginRegistry>();
-  const ownerRegistryByPluginId = new Map<string, PluginRegistry>();
-  const addRegistry = (registry: PluginRegistry | undefined) => {
-    if (!registry || seenRegistries.has(registry)) {
-      return;
-    }
-    seenRegistries.add(registry);
-    registries.push(registry);
-    if (requestedPluginIds === undefined) {
-      return;
-    }
-    const toolPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
-    for (const pluginId of requestedPluginIds) {
-      if (toolPluginIds.has(pluginId) && !ownerRegistryByPluginId.has(pluginId)) {
-        ownerRegistryByPluginId.set(pluginId, registry);
-      }
-    }
-  };
-  const missingPluginIds = () =>
-    requestedPluginIds?.filter((pluginId) => !ownerRegistryByPluginId.has(pluginId));
-  const composeSelectedRegistries = () =>
-    composePluginToolRegistries({
-      registries,
-      ownerRegistryByPluginId,
-      requestedPluginIds: requestedPluginIds ?? [],
-    });
-
-  // Use the established pinned-Gateway owner; its factories receive request
-  // context directly. Reapplying active-scope metadata would duplicate the
-  // registration and split hook/tool closure state.
-  const runtimeState = getPluginRegistryState();
-  const gatewayRegistry = runtimeState?.channel.pinned
-    ? (runtimeState.channel.registry ?? undefined)
-    : undefined;
-  if (
-    requestedPluginIds === undefined &&
-    registryHasScopedPluginTools(gatewayRegistry, undefined)
-  ) {
-    return gatewayRegistry;
+  if (registryHasScopedPluginTools(params.retainedRegistry, requestedPluginIds)) {
+    return params.retainedRegistry;
   }
-  addRegistry(gatewayRegistry);
-  let requiredPluginIds = missingPluginIds();
-  if (requiredPluginIds?.length === 0) {
-    return composeSelectedRegistries();
-  }
-
-  let activeRegistry: PluginRegistry | undefined;
-  if (requiredPluginIds === undefined) {
-    activeRegistry = getLoadedRuntimePluginRegistry({
-      env: params.loadOptions.env,
-      workspaceDir: params.loadOptions.workspaceDir,
-      surface: "active",
-    });
-  } else {
-    for (const pluginId of requiredPluginIds) {
-      activeRegistry = getLoadedRuntimePluginRegistry({
-        env: params.loadOptions.env,
-        workspaceDir: params.loadOptions.workspaceDir,
-        requiredPluginIds: [pluginId],
-        surface: "active",
-      });
-      if (activeRegistry) {
-        break;
-      }
-    }
-  }
-  if (requestedPluginIds === undefined && registryHasScopedPluginTools(activeRegistry, undefined)) {
+  const activeRegistry = getLoadedRuntimePluginRegistry({
+    loadOptions: params.loadOptions,
+    workspaceDir: params.loadOptions.workspaceDir,
+    requiredPluginIds: requestedPluginIds,
+  });
+  if (registryHasScopedPluginTools(activeRegistry, requestedPluginIds)) {
     return activeRegistry;
   }
-  addRegistry(activeRegistry);
-  requiredPluginIds = missingPluginIds();
-  if (requiredPluginIds?.length === 0) {
-    return composeSelectedRegistries();
-  }
-
-  if (
-    requestedPluginIds === undefined &&
-    registryHasScopedPluginTools(retainedRegistry, undefined)
-  ) {
-    return retainedRegistry;
-  }
-  addRegistry(retainedRegistry);
-  requiredPluginIds = missingPluginIds();
-  if (requiredPluginIds?.length === 0) {
-    return composeSelectedRegistries();
-  }
-  // Partial active/retained registries contribute their matching owners, but
-  // missing requested owners still force a fresh load. Plugin records alone
-  // do not prove that the executable tool registrations are available.
-  const forceStandaloneLoad = Boolean(gatewayRegistry || activeRegistry || retainedRegistry);
-  const shouldRetainColdLoadedToolRegistry =
-    forceStandaloneLoad &&
-    params.loadOptions.activate === false &&
-    params.loadOptions.toolDiscovery === true &&
-    params.onRetainRegistry !== undefined;
-  const standaloneRegistry = loadRuntimePluginRegistryHandle({
-    surface: "active",
-    forceLoad: forceStandaloneLoad,
-    requiredPluginIds,
-    loadOptions:
-      requestedPluginIds === undefined
-        ? params.loadOptions
-        : { ...params.loadOptions, onlyPluginIds: requiredPluginIds },
+  const registry = loadPluginRegistryHandle({
+    ...params.loadOptions,
+    activate: false,
+    ...(requestedPluginIds === undefined ? {} : { onlyPluginIds: [...requestedPluginIds] }),
   });
-  if (standaloneRegistry && shouldRetainColdLoadedToolRegistry) {
-    params.onRetainRegistry?.(standaloneRegistry);
+  if (registryHasScopedPluginTools(registry, requestedPluginIds)) {
+    params.onRetainRegistry?.(registry);
   }
-  addRegistry(standaloneRegistry);
-  if (requestedPluginIds === undefined) {
-    return standaloneRegistry ?? gatewayRegistry ?? activeRegistry;
-  }
-  return composeSelectedRegistries();
-}
-
-function composePluginToolRegistries(params: {
-  registries: PluginRegistry[];
-  ownerRegistryByPluginId: ReadonlyMap<string, PluginRegistry>;
-  requestedPluginIds: readonly string[];
-}): PluginRegistry | undefined {
-  if (params.registries.length === 0) {
-    return undefined;
-  }
-  const contributingRegistries = params.registries.filter((registry) =>
-    params.requestedPluginIds.some(
-      (pluginId) => params.ownerRegistryByPluginId.get(pluginId) === registry,
-    ),
-  );
-  const baseRegistry = params.registries.at(-1)!;
-  if (contributingRegistries.length === 1 && contributingRegistries[0] === baseRegistry) {
-    return baseRegistry;
-  }
-  const selectedPluginIds = new Set(params.requestedPluginIds);
-  return {
-    ...baseRegistry,
-    plugins: contributingRegistries.flatMap((registry) =>
-      registry.plugins.filter(
-        (plugin) =>
-          selectedPluginIds.has(plugin.id) &&
-          params.ownerRegistryByPluginId.get(plugin.id) === registry,
-      ),
-    ),
-    tools: contributingRegistries.flatMap((registry) =>
-      registry.tools.filter(
-        (entry) => params.ownerRegistryByPluginId.get(entry.pluginId) === registry,
-      ),
-    ),
-  };
+  return registry;
 }
 
 function registryHasScopedPluginTools(
@@ -1314,11 +1177,7 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
   if (!loadState) {
     return undefined;
   }
-  const registry = loadRuntimePluginRegistryHandle({
-    surface: "channel",
-    requiredPluginIds: loadState.onlyPluginIds,
-    loadOptions: loadState.loadOptions,
-  });
+  const registry = loadPluginRegistryHandle(loadState.loadOptions);
   if (registryHasScopedPluginTools(registry, loadState.onlyPluginIds)) {
     return registry;
   }
@@ -1409,32 +1268,10 @@ export function resolvePluginTools(params: {
     });
   }
   if (!registry) {
-    // Cold registry: path-based plugins (origin "config") registered via plugins.load.paths
-    // are not pinned to any active channel/surface registry until explicitly loaded.
-    // Trigger a standalone load so their tool factories become available, then retry.
-    try {
-      registry = loadRuntimePluginRegistryHandle({
-        surface: "channel",
-        requiredPluginIds: runtimePluginIds,
-        loadOptions,
-      });
-    } catch (error) {
-      context.logger.error(
-        `failed to cold-load plugin tool registry for plugin ids [${runtimePluginIds.join(", ")}]: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      throw error;
-    }
-    registry ??= resolvePluginToolRegistry({ loadOptions, onlyPluginIds: runtimePluginIds });
-    if (!registry) {
-      context.logger.warn(
-        `plugin tool registry still unavailable after cold load for plugin ids [${runtimePluginIds.join(
-          ", ",
-        )}]`,
-      );
-      return tools;
-    }
+    context.logger.warn(
+      `plugin tool registry unavailable for plugin ids [${runtimePluginIds.join(", ")}]`,
+    );
+    return tools;
   }
 
   const scopedPluginIds = new Set(runtimePluginIds);

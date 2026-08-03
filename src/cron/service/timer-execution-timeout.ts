@@ -58,6 +58,7 @@ export type CronJobRunResult = CronRunOutcome &
   Pick<CronRunTelemetry, "provider"> & {
     deliveryError?: string;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
     startedAt: number;
     endedAt: number;
     nextCheck?: CronNextCheckProposal;

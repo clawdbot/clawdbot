@@ -8,6 +8,7 @@ import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "../swarm-code-mode.js";
+import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -388,11 +389,12 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
+      "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
     );
-    expect(tool.description).toContain("`visible=true`: persistent dashboard session");
+    expect(tool.description).toContain("`visible=true`: persistent sidebar dashboard session");
+    expect(tool.description).toContain("when the user asks to create/open a thread");
     expect(tool.description).toContain('no `mode="run"`');
-    expect(tool.description).toContain("inherited tool allow/denylist");
+    expect(tool.description).toContain("inherits the caller tool-policy ceiling");
     expect(tool.description).toContain("`tools.sessions.visibility`");
     expect(schema.properties?.runtime?.description).toContain("visible=true");
     expect(schema.properties?.mode?.description).toContain("Omit with visible=true");
@@ -718,26 +720,49 @@ describe("sessions_spawn tool", () => {
     );
   });
 
-  it("denies visible sessions when tool restrictions cannot carry forward", async () => {
-    const callGateway = vi.fn();
+  it("creates visible sessions while carrying inherited tool restrictions forward", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:main:dashboard:restricted-child",
+      runStarted: true,
+      runId: "run-visible-restricted",
+    })) as InProcessGatewayCaller;
+    const registerRun = vi.fn();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       config: { agents: { list: [{ id: "main" }] } },
+      inheritedToolAllowlist: ["read", "sessions_spawn"],
       inheritedToolDenylist: ["exec"],
       callGateway,
+      registerRun,
+      countActiveRuns: () => 0,
     });
 
     const result = await tool.execute("visible-restricted", {
       task: "inspect",
+      label: "Track upstream fix",
       visible: true,
     });
 
     expect(result.details).toMatchObject({
-      status: "forbidden",
-      error:
-        "Visible sessions unavailable with inherited tool restrictions. This session was spawned with a tool allow/denylist; visible sessions require an unrestricted session.",
+      status: "accepted",
+      childSessionKey: "agent:main:dashboard:restricted-child",
+      runId: "run-visible-restricted",
     });
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({
+        agentId: "main",
+        label: "Track upstream fix",
+        parentSessionKey: "agent:main:main",
+        spawnDepth: 1,
+      }),
+    );
+    expect(registerRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionKey: "agent:main:dashboard:restricted-child",
+        runId: "run-visible-restricted",
+      }),
+    );
   });
 
   it("blocks unsandboxed visible targets for a sandboxed caller runtime", async () => {

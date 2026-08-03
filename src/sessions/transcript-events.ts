@@ -2,6 +2,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveGlobalSet } from "../shared/global-singleton.js";
 
 /** Storage-neutral identity for the session transcript that changed. */
 type SessionTranscriptUpdateTarget = {
@@ -38,8 +39,14 @@ export type InternalSessionTranscriptUpdate = SessionTranscriptUpdateFields;
 type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
 type InternalSessionTranscriptListener = (update: InternalSessionTranscriptUpdate) => void;
 
-const SESSION_TRANSCRIPT_LISTENERS = new Set<SessionTranscriptListener>();
-const INTERNAL_SESSION_TRANSCRIPT_LISTENERS = new Set<InternalSessionTranscriptListener>();
+const SESSION_TRANSCRIPT_LISTENERS = resolveGlobalSet<SessionTranscriptListener>(
+  Symbol.for("openclaw.sessionTranscriptListeners"),
+  "close-and-restart",
+);
+const INTERNAL_SESSION_TRANSCRIPT_LISTENERS = resolveGlobalSet<InternalSessionTranscriptListener>(
+  Symbol.for("openclaw.internalSessionTranscriptListeners"),
+  "close-and-restart",
+);
 
 /** Registers a listener for normalized session transcript updates. */
 export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): () => void {

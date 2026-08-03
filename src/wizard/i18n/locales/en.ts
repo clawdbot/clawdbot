@@ -291,6 +291,7 @@ export const en = {
       browserHandoffTitle: "Continue in your browser",
       codingAgentQuip:
         "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
+      controlUiPreparing: "Preparing the Control UI…",
       custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
       failedOptionLine: "{label}: {reason}",
       failedOptionsIntro: "These didn't work just now:",

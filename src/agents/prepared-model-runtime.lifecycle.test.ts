@@ -72,6 +72,7 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
+  listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
   listAgentIds: () => mocks.configuredAgentIds,
   resolveAgentDir: (_config: unknown, agentId: string) =>
     mocks.configuredAgentDirs.get(agentId) ??
@@ -81,6 +82,12 @@ vi.mock("./agent-scope.js", () => ({
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
+  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveRunModelFallbacksOverride: () => undefined,
+  resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
+    defaultAgentId: "default",
+    sessionAgentId: agentId ?? "default",
+  }),
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
@@ -260,7 +267,7 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
   });
 
-  it("publishes an exact dynamic workspace owner at gateway run admission", async () => {
+  it("retains an exact dynamic workspace owner after gateway run admission", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
     await refreshPreparedModelRuntimeSnapshots(config, {
@@ -286,25 +293,16 @@ describe("prepared model runtime snapshots", () => {
     expect(firstLease.snapshot.workspaceDir).toBe("/tmp/spawned-workspace");
     expect(secondLease.snapshot).toBe(firstLease.snapshot);
     firstLease.release();
-    await expect(
-      prepareModelRuntimeSnapshot({
-        agentId: "default",
-        config,
-        agentDir: "/tmp/unused-agent",
-        inheritedAuthDir: "/tmp/unused-agent",
-        workspaceDir: "/tmp/spawned-workspace",
-      }),
-    ).resolves.toBe(firstLease.snapshot);
     secondLease.release();
-    await expect(
-      prepareModelRuntimeSnapshot({
-        agentId: "default",
-        config,
-        agentDir: "/tmp/unused-agent",
-        inheritedAuthDir: "/tmp/unused-agent",
-        workspaceDir: "/tmp/spawned-workspace",
-      }),
-    ).rejects.toThrow("prepared model runtime owner was not published");
+    const retainedLease = await acquireAgentRunPreparedModelRuntime({
+      agentId: "default",
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/spawned-workspace",
+    });
+    expect(retainedLease.snapshot).toBe(firstLease.snapshot);
+    retainedLease.release();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
   });
 

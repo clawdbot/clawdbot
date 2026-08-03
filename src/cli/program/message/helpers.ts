@@ -26,7 +26,6 @@ import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway
 import { defaultRuntime } from "../../../runtime.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
 import { createDefaultDeps } from "../../deps.js";
-import type { PluginRegistryScope } from "../../plugin-registry.js";
 
 /** Shared helpers used by every message subcommand registration. */
 export type MessageCliHelpers = {
@@ -51,10 +50,7 @@ const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([
   ["deleteDays", "--delete-days"],
 ]);
 
-type MessagePluginLoadOptions = { scope: PluginRegistryScope; onlyChannelIds?: string[] };
-type MessagePluginPreloadPlan =
-  | { preload: true; loadOptions: MessagePluginLoadOptions }
-  | { preload: false };
+type MessagePluginPreloadPlan = { preload: true; channelId?: string } | { preload: false };
 
 function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
   const { account, ...rest } = opts;
@@ -136,9 +132,6 @@ function resolveMessagePluginPreloadPlan(
   opts: Record<string, unknown>,
 ): MessagePluginPreloadPlan {
   const scopedChannel = resolveScopedMessageChannel(opts);
-  const loadOptions = scopedChannel
-    ? { scope: "configured-channels" as const, onlyChannelIds: [scopedChannel] }
-    : { scope: "configured-channels" as const };
   // Gateway-owned actions can execute without loading channel plugins in the CLI process;
   // dry-runs, broadcasts, and local actions need registry metadata before building payloads.
   if (
@@ -146,7 +139,7 @@ function resolveMessagePluginPreloadPlan(
     ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD.has(action) ||
     !isGatewayOwnedMessageAction(action, scopedChannel)
   ) {
-    return { preload: true, loadOptions };
+    return { preload: true, ...(scopedChannel ? { channelId: scopedChannel } : {}) };
   }
   return { preload: false };
 }
@@ -183,12 +176,11 @@ export function createMessageCliHelpers(
         const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
         if (preloadPlan.preload) {
           const config = getRuntimeConfig();
-          const requestedChannelIds = preloadPlan.loadOptions.onlyChannelIds;
-          const pluginIds = requestedChannelIds
+          const pluginIds = preloadPlan.channelId
             ? resolveDiscoverableScopedChannelPluginIds({
                 config,
                 activationSourceConfig: config,
-                channelIds: requestedChannelIds,
+                channelIds: [preloadPlan.channelId],
                 env: process.env,
               })
             : resolveConfiguredChannelPluginIds({

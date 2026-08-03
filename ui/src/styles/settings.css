@@ -160,6 +160,13 @@
   cursor: pointer;
 }
 
+.settings-section__help-button > span {
+  /* SF's ascent+descent exceed 1em, so a centered line box parks the glyph
+     below the circle's midline; trim to cap bounds for true centering. */
+  display: block;
+  text-box: trim-both cap alphabetic;
+}
+
 .settings-section__help-button:hover,
 .settings-section__help-button:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));

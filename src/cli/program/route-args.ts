@@ -449,11 +449,8 @@ export function parseChannelsStatusRouteArgs(argv: string[]) {
   };
 }
 
-/** Parse JSON-only `openclaw plugins list` flags for plugin inventory output. */
+/** Parse `openclaw plugins list` flags for the metadata-only inventory path. */
 export function parsePluginsListRouteArgs(argv: string[]) {
-  if (!hasFlag(argv, "--json")) {
-    return null;
-  }
   const positionals = getRoutedCommandPositionals(argv, {
     commandPath: ["plugins", "list"],
     booleanFlags: ["--json", "--enabled", "--verbose"],
@@ -462,7 +459,7 @@ export function parsePluginsListRouteArgs(argv: string[]) {
     return null;
   }
   return {
-    json: true as const,
+    json: hasFlag(argv, "--json"),
     enabled: hasFlag(argv, "--enabled"),
     verbose: hasFlag(argv, "--verbose"),
   };

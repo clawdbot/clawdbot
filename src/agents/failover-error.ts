@@ -6,7 +6,7 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
-import { readErrorName } from "../infra/errors.js";
+import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
@@ -505,6 +505,13 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
   );
 }
 
+function hasGatewayDrainingFailure(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, (candidate) => {
+    const errors = candidate.errors;
+    return [candidate.error, candidate.cause, ...(Array.isArray(errors) ? errors : [])];
+  }).some((candidate) => readErrorName(candidate) === "GatewayDrainingError");
+}
+
 function hasDirectProviderFailureIdentity(err: unknown): boolean {
   if (isFailoverError(err)) {
     return true;
@@ -763,6 +770,9 @@ export function buildFailoverRemediationHint(err: unknown): string | undefined {
   if (!provider) {
     return undefined;
   }
+  if (provider === "google-gemini-cli") {
+    return `Authenticate in Gemini CLI directly, or configure a supported Google API key with: ${formatCliCommand("openclaw configure")}`;
+  }
   const command = buildProviderReauthCommand(provider);
   return command ? `Re-authenticate with: ${command}` : undefined;
 }
@@ -914,6 +924,11 @@ export function resolveModelFallbackError(
   context?: FailoverErrorContext,
 ): ModelFallbackErrorResolution {
   if (err instanceof AgentHarnessSessionSupersededError) {
+    return { kind: "coordination", error: err };
+  }
+  // Gateway admission can fail before any provider turn starts. Preserve that
+  // identity through wrappers and aggregates so fallback cannot blame a model.
+  if (hasGatewayDrainingFailure(err)) {
     return { kind: "coordination", error: err };
   }
   const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);

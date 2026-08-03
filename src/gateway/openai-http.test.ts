@@ -2167,11 +2167,33 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   });
 
   it.each([
-    { name: "successful completion", fail: false, expected: "hello" },
-    { name: "internal agent error", fail: true, expected: "Error: internal error" },
+    {
+      name: "successful completion without a provider terminal",
+      fail: false,
+      providerTerminal: false,
+      expected: "hello",
+    },
+    {
+      name: "successful completion with a provider terminal",
+      fail: false,
+      providerTerminal: true,
+      expected: "hello",
+    },
+    {
+      name: "internal agent error without a provider terminal",
+      fail: true,
+      providerTerminal: false,
+      expected: "Error: internal error",
+    },
+    {
+      name: "internal agent error with a provider terminal",
+      fail: true,
+      providerTerminal: true,
+      expected: "Error: internal error",
+    },
   ])(
     "separates streamed content from the terminal finish for an official SDK $name",
-    async ({ fail, expected }) => {
+    async ({ fail, providerTerminal, expected }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
       const terminalAdmission = createDeferred<{
         active: number;
@@ -2179,15 +2201,17 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }>();
       const wireResponse = createDeferred<string>();
       const continueAgent = createDeferred();
+      const lifecycleTerminals: string[] = [];
       let activeRunId: string | undefined;
       const unsubscribe = onAgentEvent((event) => {
-        if (
-          event.runId !== activeRunId ||
-          event.stream !== "lifecycle" ||
-          event.data?.phase !== "end"
-        ) {
+        const phase = event.data?.phase;
+        if (event.runId !== activeRunId || event.stream !== "lifecycle") {
           return;
         }
+        if (phase !== "end" && phase !== "error") {
+          return;
+        }
+        lifecycleTerminals.push(phase);
         // Agent settlement schedules the terminal in a later microtask. The
         // request must remain admitted until Node finishes the actual stream.
         const active = getActiveGatewayRootWorkCount();
@@ -2203,14 +2227,21 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         }
         await continueAgent.promise;
         if (fail) {
+          if (providerTerminal) {
+            emitAgentEvent({ runId: activeRunId, stream: "lifecycle", data: { phase: "error" } });
+          }
           throw new Error("private upstream failure");
         }
-        return buildAssistantDeltaResult({
+        const result = buildAssistantDeltaResult({
           opts,
           emit: emitAgentEvent,
           deltas: ["he", "llo"],
           text: expected,
         });
+        if (providerTerminal) {
+          emitAgentEvent({ runId: activeRunId, stream: "lifecycle", data: { phase: "end" } });
+        }
+        return result;
       }) as never);
 
       try {
@@ -2251,6 +2282,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(admission.active).toBe(idleRootCount + 1);
         expect(admission.drained).toEqual({ drained: false, active: idleRootCount + 1 });
         expect(parseSseDataLines(wire).at(-1)).toBe("[DONE]");
+        expect(lifecycleTerminals).toEqual([fail ? "error" : "end"]);
 
         const contentChoices = choices.filter((choice) => typeof choice.delta.content === "string");
         expect(contentChoices.map((choice) => choice.delta.content).join("")).toBe(expected);

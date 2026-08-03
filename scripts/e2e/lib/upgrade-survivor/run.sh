@@ -710,6 +710,7 @@ seed_state() {
     fi
     export HOME="$account_home"
     export USERPROFILE="$account_home"
+    unset OPENCLAW_HOME
     export OPENCLAW_STATE_DIR="$account_home/.openclaw"
     export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
   fi

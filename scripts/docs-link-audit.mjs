@@ -610,7 +610,7 @@ function createMintlifyNpmRunnerSpawnSpec(params, options = {}) {
  *   comSpec?: string;
  * }} params
  */
-export function resolveMintlifyAnchorAuditInvocation(params) {
+function resolveMintlifyAnchorAuditInvocation(params) {
   const nodeVersion = params.nodeVersion ?? process.versions.node;
   if (parseNodeMajor(nodeVersion) < NODE_25_UNSUPPORTED_BY_MINTLIFY) {
     return createMintlifyNpmRunnerSpawnSpec(params);
@@ -647,7 +647,7 @@ export function resolveMintlifyAnchorAuditInvocation(params) {
 /**
  * Audits local docs links against route, file, and redirect indexes.
  */
-export function auditDocsLinks(options = {}) {
+function auditDocsLinks(options = {}) {
   const docsDir = options.docsDir ?? DOCS_DIR;
   const index = buildAuditIndex(docsDir, {
     allowExternalClawHubRoutes: options.allowExternalClawHubRoutes === true,

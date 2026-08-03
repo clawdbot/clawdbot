@@ -204,6 +204,12 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     scanLimit?: number;
     candidateIds?: Iterable<string>;
     deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
+    /** Authorize a changed durable lane before the atomic pending-to-claimed transition. */
+    reconcileStoredLaneKey?: (
+      record: ChannelIngressQueueRecord<TPayload, TMetadata>,
+      storedLaneKey: string,
+      derivedLaneKey: string,
+    ) => boolean;
   }): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   claim(
     id: string,
@@ -769,6 +775,26 @@ export function createChannelIngressQueue<
     if (candidateIds?.length === 0) {
       return null;
     }
+    const resolveClaimLaneKey = (
+      record: ChannelIngressQueueRecord<TPayload, TMetadata>,
+    ): string | undefined => {
+      const storedLaneKey = record.laneKey;
+      if (storedLaneKey === undefined) {
+        return claimOptions?.deriveLaneKey?.(record);
+      }
+      if (!claimOptions?.deriveLaneKey || !claimOptions.reconcileStoredLaneKey) {
+        return storedLaneKey;
+      }
+      const derivedLaneKey = claimOptions.deriveLaneKey(record);
+      if (!derivedLaneKey || derivedLaneKey === storedLaneKey) {
+        return storedLaneKey;
+      }
+      // Durable identity changes need their channel owner's explicit approval;
+      // unrelated derivations can intentionally be ephemeral claim lanes.
+      return claimOptions.reconcileStoredLaneKey(record, storedLaneKey, derivedLaneKey)
+        ? derivedLaneKey
+        : storedLaneKey;
+    };
     const database = openStateDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
@@ -788,14 +814,11 @@ export function createChannelIngressQueue<
           ).rows;
           const claimedCandidateLaneKeys = claimedCandidateRows
             .map((row) => {
-              if (row.lane_key) {
+              if (row.lane_key && !claimOptions?.reconcileStoredLaneKey) {
                 return row.lane_key;
               }
-              if (!claimOptions?.deriveLaneKey) {
-                return undefined;
-              }
               const rec = baseRecord<TPayload, TMetadata>(row);
-              return rec ? claimOptions.deriveLaneKey(rec) : undefined;
+              return rec ? resolveClaimLaneKey(rec) : (row.lane_key ?? undefined);
             })
             .filter((laneKey): laneKey is string => Boolean(laneKey));
           if (claimedCandidateLaneKeys.length > 0) {
@@ -847,9 +870,7 @@ export function createChannelIngressQueue<
               }
               continue;
             }
-            const laneKey =
-              row.lane_key ??
-              (claimOptions?.deriveLaneKey ? claimOptions.deriveLaneKey(rec) : undefined);
+            const laneKey = resolveClaimLaneKey(rec);
             if (!laneKey || !effectiveBlocked.has(laneKey)) {
               selected = { row, record: rec };
               break;
@@ -866,9 +887,7 @@ export function createChannelIngressQueue<
         if (!selected) {
           return null;
         }
-        const derivedLaneKey =
-          selected.row.lane_key ??
-          (claimOptions?.deriveLaneKey ? claimOptions.deriveLaneKey(selected.record) : undefined);
+        const derivedLaneKey = resolveClaimLaneKey(selected.record);
         const token = randomUUID();
         const ownerId = normalizePart(claimOptions?.ownerId, `${process.pid}`);
         const result = executeSqliteQuerySync(

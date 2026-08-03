@@ -457,6 +457,9 @@ function buildTestFileEvidence(params: {
   );
   if (producerEntries.length > 0) {
     const definition = testFileRunnerDefinitions[params.kind];
+    // Failed scripts still need generic fallback evidence unless their producer
+    // already recorded that scenario identity at the authoritative boundary.
+    const producerEntryIds = new Set(producerEntries.map((entry) => entry.test.id));
     const fallbackResults = params.results.filter(
       (result) => !result.producerEvidence || result.includeFallbackEvidence,
     );
@@ -498,7 +501,8 @@ function buildTestFileEvidence(params: {
           const { execution: _execution, ...withoutExecution } = entry;
           return withoutExecution;
         }),
-        ...(fallbackEvidence?.entries ?? []),
+        ...(fallbackEvidence?.entries.filter((entry) => !producerEntryIds.has(entry.test.id)) ??
+          []),
       ],
     });
   }

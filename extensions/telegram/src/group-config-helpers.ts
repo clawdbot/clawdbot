@@ -1,6 +1,7 @@
-import type { ScopeTree } from "openclaw/plugin-sdk/channel-policy";
+import { resolveChannelGroupPolicy, type ScopeTree } from "openclaw/plugin-sdk/channel-policy";
 // Telegram helper module supports group config helpers behavior.
 import type {
+  OpenClawConfig,
   TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -40,6 +41,21 @@ export function resolveTelegramScopedGroupConfig(
   const groupConfig = matchKey ? scopedConfigs?.[matchKey] : undefined;
   const topicConfig = resolveTopicConfig(groupConfig);
   return { groupConfig, topicConfig };
+}
+
+export function resolveTelegramGroupIngestEnabled(params: {
+  cfg: OpenClawConfig;
+  chatId: string | number;
+  accountId?: string;
+  topicConfig?: TelegramTopicConfig;
+}): boolean {
+  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy({
+    cfg: params.cfg,
+    channel: "telegram",
+    groupId: String(params.chatId),
+    accountId: params.accountId,
+  });
+  return (params.topicConfig?.ingest ?? groupConfig?.ingest ?? defaultConfig?.ingest) === true;
 }
 
 export function resolveTelegramGroupPromptSettings(params: {

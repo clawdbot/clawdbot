@@ -19,6 +19,8 @@ export function createTelegramWebhookStatusPublisher(setStatus?: TelegramWebhook
       setStatus?.({
         ...createConnectedChannelStatusPatch(at),
         mode: "webhook",
+        lifecycle: "ready",
+        terminalDisconnect: undefined,
         lastError: null,
       });
     },
@@ -26,13 +28,21 @@ export function createTelegramWebhookStatusPublisher(setStatus?: TelegramWebhook
       setStatus?.({
         ...createConnectedChannelStatusPatch(at),
         mode: "webhook",
+        lifecycle: "ready",
+        // Runtime patches merge, so a repaired token must clear the prior terminal auth fact.
+        terminalDisconnect: undefined,
         lastError: null,
       });
     },
-    noteWebhookRegistrationFailure(error: string) {
+    noteWebhookRecovery() {
+      setStatus?.({ lifecycle: "recovering" });
+    },
+    noteWebhookRegistrationFailure(error: string, lifecycle?: "recovering" | "blocked") {
       setStatus?.({
         mode: "webhook",
         connected: false,
+        ...(lifecycle ? { lifecycle } : {}),
+        ...(lifecycle === "blocked" ? { terminalDisconnect: true } : {}),
         lastError: error,
       });
     },

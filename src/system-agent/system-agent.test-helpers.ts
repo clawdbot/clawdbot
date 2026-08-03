@@ -11,6 +11,12 @@ import {
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  captureCurrentPluginMetadataSnapshotState,
+  restoreCurrentPluginMetadataSnapshotState,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
@@ -24,6 +30,28 @@ type SystemAgentVerifiedInferenceTestFixture = {
   binding: SystemAgentVerifiedInferenceBinding;
   deps: SystemAgentVerifiedInferenceDeps;
 };
+
+export type SystemAgentPluginMetadataTestSnapshot = {
+  /** Rebind after a test redirects to another empty state root with the same plugin inventory. */
+  rebindForCurrentEnv: () => void;
+  restore: () => void;
+};
+
+/** Install the process-stable plugin metadata snapshot that the real Gateway owns. */
+export function installSystemAgentPluginMetadataTestSnapshot(
+  config: OpenClawConfig = {},
+): SystemAgentPluginMetadataTestSnapshot {
+  const previous = captureCurrentPluginMetadataSnapshotState();
+  const snapshot = resolvePluginMetadataSnapshot({ config, env: process.env });
+  const rebindForCurrentEnv = () => {
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env: process.env });
+  };
+  rebindForCurrentEnv();
+  return {
+    rebindForCurrentEnv,
+    restore: () => restoreCurrentPluginMetadataSnapshotState(previous),
+  };
+}
 
 export function readLastSystemAgentAuditEntry(): unknown {
   return listSystemAgentAuditEntriesForTests().at(-1)?.value;

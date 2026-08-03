@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n/index.ts";
@@ -833,6 +834,50 @@ describe("dreaming view", () => {
     expect(container.querySelector(".dreams-diary__heatmap-cell")).toBeNull();
     expect(container.querySelector(".dreams-diary__timeline-month")).toBeNull();
     setDreamSubTab("scene");
+  });
+
+  it.each([
+    { tab: "dreams", labels: ["1/2", "1/1"] },
+    { tab: "insights", labels: ["Travel", "Health"] },
+    { tab: "wiki", labels: ["Syntheses", "Concepts"] },
+  ] as const)("keeps $tab navigation inside the sticky diary controls", ({ tab, labels }) => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab(tab);
+    const props = buildProps({
+      dreamDiaryContent: [
+        "# Dream Diary",
+        "---",
+        "*January 1, 2026*",
+        "An earlier dream.",
+        "---",
+        "*January 2, 2026*",
+        ...Array.from({ length: 12 }, (_, index) => `Long diary paragraph ${index + 1}.`),
+      ].join("\n\n"),
+      onViewStateChange: vi.fn(),
+    });
+    const wikiOverview = props.wikiOverview;
+    if (wikiOverview) {
+      const firstCluster = expectDefined(wikiOverview.clusters[0], "first memory wiki cluster");
+      props.wikiOverview = {
+        ...wikiOverview,
+        clusters: [
+          ...wikiOverview.clusters,
+          { ...firstCluster, key: "concept", label: "Concepts" },
+        ],
+      };
+    }
+
+    const container = renderInto(props);
+    const stickyChrome = expectElement(container, ".dreams-diary__chrome");
+    const navigation = expectElement(stickyChrome, ".dreams-diary__daychips");
+    const buttons = [...navigation.querySelectorAll<HTMLButtonElement>(".dreams-diary__day-chip")];
+
+    expect(buttons.map((button) => compactText(button))).toEqual(labels);
+    expect(container.querySelector("#dream-diary-panel .dreams-diary__daychips")).toBeNull();
+
+    buttons[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(viewState.diaryPage).toBe(1);
+    expect(props.onViewStateChange).toHaveBeenCalledOnce();
   });
 
   it("renders diary empty, error, and removed-navigation states", () => {

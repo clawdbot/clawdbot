@@ -9,6 +9,7 @@ import type {
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { createRealtimeVoiceAudioQueue } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
@@ -20,7 +21,6 @@ import {
 } from "./generation-provider-metadata.js";
 import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { registerGoogleProvider } from "./provider-registration.js";
-import { createGoogleRealtimeAudioQueue } from "./realtime-audio-queue.js";
 import { buildGoogleSpeechProvider } from "./speech-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
@@ -219,7 +219,7 @@ function createLazyGoogleRealtimeVoiceBridge(
   let latestMediaTimestamp: number | undefined;
   let pendingGreeting: string | undefined;
   // Lazy startup keeps the newest microphone tail when loading stalls.
-  const pendingAudio = createGoogleRealtimeAudioQueue("drop-oldest");
+  const pendingAudio = createRealtimeVoiceAudioQueue("drop-oldest");
   const pendingUserMessages: string[] = [];
   let pendingUserMessageBytes = 0;
   // Loading and connecting finish on separate async boundaries. Keep close ownership

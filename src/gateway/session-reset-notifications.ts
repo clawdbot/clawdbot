@@ -1,6 +1,11 @@
+import { resolveGlobalSet } from "../shared/global-singleton.js";
+
 type GatewaySessionResetListener = (sessionKey: string) => void;
 
-const listeners = new Set<GatewaySessionResetListener>();
+const listeners = resolveGlobalSet<GatewaySessionResetListener>(
+  Symbol.for("openclaw.gatewaySessionResetListeners"),
+  "close-and-restart",
+);
 
 /** Subscribes process-local lifecycle services to committed session resets. */
 export function onGatewaySessionReset(listener: GatewaySessionResetListener): () => void {

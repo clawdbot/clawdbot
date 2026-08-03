@@ -7,9 +7,11 @@ import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { detectMime, mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
 import {
+  buildOutboundMediaLoadOptions,
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
   runFfmpeg,
   runFfprobe,
+  type OutboundMediaAccess,
 } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer, type SavedMedia } from "openclaw/plugin-sdk/media-store";
 import type { ReplyPayloadTtsSupplement } from "openclaw/plugin-sdk/reply-payload";
@@ -949,8 +951,7 @@ async function maybeProbeUploadDurationMs(params: {
 
 /**
  * Upload and send media (image or file) from URL, local path, or buffer.
- * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
- * must be passed so loadWebMedia allows the path (post CVE-2026-26321).
+ * Local paths require host-owned mediaAccess or approved legacy roots/readers.
  */
 export async function sendMediaFeishu(params: {
   cfg: ClawdbotConfig;
@@ -962,8 +963,10 @@ export async function sendMediaFeishu(params: {
   replyInThread?: boolean;
   allowTopLevelReplyFallback?: boolean;
   accountId?: string;
+  mediaAccess?: OutboundMediaAccess;
   /** Allowed roots for local path reads; required for local filePath to work. */
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: OutboundMediaAccess["readFile"];
   /** When true, transcode compatible audio to Feishu native Ogg/Opus voice bubbles. */
   audioAsVoice?: boolean;
 }): Promise<SendMediaResult> {
@@ -1001,11 +1004,16 @@ export async function sendMediaFeishu(params: {
       return { buffer: mediaBuffer, name: fileName ?? "file", contentType: undefined };
     }
     if (mediaUrl) {
-      const media = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
-        maxBytes: mediaMaxBytes,
-        optimizeImages: false,
-        localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
-      });
+      const media = await getFeishuRuntime().media.loadWebMedia(
+        mediaUrl,
+        buildOutboundMediaLoadOptions({
+          maxBytes: mediaMaxBytes,
+          mediaAccess: params.mediaAccess,
+          mediaLocalRoots,
+          mediaReadFile: params.mediaReadFile,
+          optimizeImages: false,
+        }),
+      );
       return {
         buffer: media.buffer,
         name: fileName ?? media.fileName ?? "file",

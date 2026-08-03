@@ -91,18 +91,29 @@ async function pollMatrixQaRoomObserver(
   }
 
   params.roomObserver.pollPromise = (async () => {
-    const response = await requestMatrixJson<MatrixQaSyncResponse>({
-      accessToken: params.accessToken,
-      baseUrl: params.baseUrl,
-      endpoint: "/_matrix/client/v3/sync",
-      fetchImpl,
-      method: "GET",
-      query: {
-        ...(params.roomObserver.since ? { since: params.roomObserver.since } : {}),
-        timeout: Math.min(10_000, params.timeoutMs),
-      },
-      timeoutMs: Math.min(15_000, params.timeoutMs + 5_000),
-    });
+    const deadlineSignal = AbortSignal.timeout(Math.min(15_000, params.timeoutMs + 5_000));
+    let response;
+    try {
+      response = await requestMatrixJson<MatrixQaSyncResponse>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        endpoint: "/_matrix/client/v3/sync",
+        fetchImpl,
+        method: "GET",
+        query: {
+          ...(params.roomObserver.since ? { since: params.roomObserver.since } : {}),
+          timeout: Math.min(10_000, params.timeoutMs),
+        },
+        signal: deadlineSignal,
+      });
+    } catch (error) {
+      // An empty long-poll is expected at this observer-owned boundary. Other
+      // request failures stay terminal so auth and protocol defects remain visible.
+      if (deadlineSignal.aborted && error === deadlineSignal.reason) {
+        return;
+      }
+      throw error;
+    }
     params.roomObserver.since = response.body.next_batch?.trim() || params.roomObserver.since;
     for (const [roomId, joinedRoom] of Object.entries(response.body.rooms?.join ?? {})) {
       for (const event of joinedRoom.timeline?.events ?? []) {

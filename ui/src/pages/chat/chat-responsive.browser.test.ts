@@ -160,9 +160,6 @@ function activityAlignmentHtml() {
 function chatFooterActionsHtml() {
   return `
     <div class="chat-group-footer-actions">
-      <button class="chat-expand-btn" type="button" aria-label="Open in canvas">
-        <span class="chat-expand-btn__icon" aria-hidden="true">${iconSvg()}</span>
-      </button>
       <button class="chat-copy-btn" type="button" aria-label="Copy as markdown">
         <span class="chat-copy-btn__icon" aria-hidden="true">${iconSvg()}</span>
       </button>

@@ -9,6 +9,7 @@ import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
@@ -179,39 +180,39 @@ export async function maybeGenerateSessionTitle(params: {
   if (existing) {
     return { kind: "in-flight", settled: existing };
   }
-  const request = (async () => {
-    const displayName = await generateDashboardSessionTitle({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      entry: params.entry,
-      userMessage: sourceText,
-    });
-    if (!displayName) {
-      return false;
-    }
-
-    let persisted = false;
-    await updateSessionEntry(
-      {
+  const request = getOrCreatePromise(
+    sessionTitleRequests,
+    requestKey,
+    async () => {
+      const displayName = await generateDashboardSessionTitle({
+        cfg: params.cfg,
         agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
-      (current) => {
-        if (current.sessionId !== params.sessionId || hasExplicitSessionName(current)) {
-          return null;
-        }
-        persisted = true;
-        return { displayName };
-      },
-      { requireWriteSuccess: true },
-    );
-    return persisted;
-  })();
-  sessionTitleRequests.set(requestKey, request);
-  try {
-    return (await request) ? { kind: "persisted" } : { kind: "skipped" };
-  } finally {
-    sessionTitleRequests.delete(requestKey);
-  }
+        entry: params.entry,
+        userMessage: sourceText,
+      });
+      if (!displayName) {
+        return false;
+      }
+
+      let persisted = false;
+      await updateSessionEntry(
+        {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+        },
+        (current) => {
+          if (current.sessionId !== params.sessionId || hasExplicitSessionName(current)) {
+            return null;
+          }
+          persisted = true;
+          return { displayName };
+        },
+        { requireWriteSuccess: true },
+      );
+      return persisted;
+    },
+    { evictOnSettled: true },
+  );
+  return (await request) ? { kind: "persisted" } : { kind: "skipped" };
 }

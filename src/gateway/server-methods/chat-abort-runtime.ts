@@ -48,7 +48,7 @@ function collectSessionAbortPartials(params: {
     if (!params.runIds.has(runId)) {
       continue;
     }
-    const text = params.chatRunState.runs.get(runId)?.buffer;
+    const text = params.chatRunState.resolveBuffer(runId).text;
     if (!text || !text.trim()) {
       continue;
     }

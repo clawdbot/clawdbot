@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core";
 import {
   ClawHubTrustErrorCodes,
   readClawHubTrustErrorDetails,
@@ -9,6 +10,7 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
+import { redactToolDetail } from "../browser-redact.ts";
 import {
   normalizeSkillApiKeyReplacement,
   runSkillConfigMutation,
@@ -154,8 +156,6 @@ function setSkillMessage(state: SkillsState, key: string, message: SkillMessage)
   }
   state.skillMessages = { ...state.skillMessages, [key]: message };
 }
-
-const getErrorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 function getClawHubTrustDetailsFromError(err: unknown) {
   if (!err || typeof err !== "object" || !("details" in err)) {
@@ -342,7 +342,7 @@ export async function loadSkills(
     if (!isCurrent()) {
       return;
     }
-    state.skillsError = getErrorMessage(err);
+    state.skillsError = formatErrorMessage(err, { redact: redactToolDetail });
   } finally {
     // A transient disconnect invalidates the result, not this invocation's
     // loading ownership. Source/scope identity still protects newer loads.
@@ -453,7 +453,10 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
     }
   } catch (err) {
     if (isSkillsAgentScopeCurrent(state, agentScope)) {
-      state.skillCardErrors = { ...state.skillCardErrors, [skillKey]: getErrorMessage(err) };
+      state.skillCardErrors = {
+        ...state.skillCardErrors,
+        [skillKey]: formatErrorMessage(err, { redact: redactToolDetail }),
+      };
     }
   } finally {
     if (isSkillsAgentScopeCurrent(state, agentScope) && state.skillCardLoadingKey === skillKey) {
@@ -496,7 +499,7 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
       return;
     }
     state.clawhubVerdicts = {};
-    state.clawhubVerdictsError = getErrorMessage(err);
+    state.clawhubVerdictsError = formatErrorMessage(err, { redact: redactToolDetail });
   } finally {
     if (isSkillsAgentScopeCurrent(state, agentScope)) {
       state.clawhubVerdictsLoading = false;
@@ -549,7 +552,7 @@ async function runSkillMutation(
     ) {
       return;
     }
-    const message = getErrorMessage(err);
+    const message = formatErrorMessage(err, { redact: redactToolDetail });
     state.skillsError = message;
     setSkillMessage(state, skillKey, {
       kind: "error",
@@ -652,7 +655,7 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
       state.clawhubDetail = res ?? null;
     },
     (err) => {
-      state.clawhubDetailError = getErrorMessage(err);
+      state.clawhubDetailError = formatErrorMessage(err, { redact: redactToolDetail });
     },
     () => {
       state.clawhubDetailLoading = false;
@@ -718,7 +721,10 @@ export async function installFromClawHub(
         kind: "error",
         text: needsAcknowledgement
           ? formatClawHubAcknowledgementMessage(trustDetails?.warning)
-          : formatClawHubInstallMessage(getErrorMessage(err), trustDetails?.warning),
+          : formatClawHubInstallMessage(
+              formatErrorMessage(err, { redact: redactToolDetail }),
+              trustDetails?.warning,
+            ),
         ...(needsAcknowledgement ? { acknowledgeSlug: slug } : {}),
         ...(needsAcknowledgement && trustDetails?.version
           ? { acknowledgeVersion: trustDetails.version }

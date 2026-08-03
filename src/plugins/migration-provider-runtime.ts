@@ -6,10 +6,10 @@ import {
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
+import { loadPluginRegistryHandle } from "./loader.js";
 import { resolveManifestContractRuntimePluginResolution } from "./manifest-contract-runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
-import { loadRuntimePluginRegistryHandle } from "./runtime/standalone-runtime-registry-loader.js";
 import type { MigrationProviderPlugin } from "./types.js";
 
 type MigrationProviderPluginResolution = {
@@ -147,13 +147,10 @@ export function ensureStandaloneMigrationProviderRegistryLoaded(
     cfg: params.cfg,
     bundledCompatPluginIds: resolution.bundledCompatPluginIds,
   });
-  const registry = loadRuntimePluginRegistryHandle({
-    surface: "active",
-    requiredPluginIds: resolution.pluginIds,
-    loadOptions: {
-      ...(compatConfig === undefined ? {} : { config: compatConfig }),
-      onlyPluginIds: resolution.pluginIds,
-    },
+  const registry = loadPluginRegistryHandle({
+    ...(compatConfig === undefined ? {} : { config: compatConfig }),
+    onlyPluginIds: resolution.pluginIds,
+    activate: false,
   });
   standaloneMigrationRegistrySlot = registry
     ? {

@@ -2,7 +2,16 @@
 import type { BaseProbeResult } from "../channels/plugins/types.public.js";
 import { withTimeout } from "../utils/with-timeout.js";
 
+export {
+  estimateToolResultTextChars,
+  sliceToolResultTextToBudget,
+} from "../agents/embedded-agent-runner/tool-result-text-budget.js";
+export {
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  resolveLiveToolResultMaxChars,
+} from "../agents/tool-result-limits.js";
 export { escapeHtml } from "../shared/html-escape.js";
+export { estimateStringChars } from "../utils/cjk-chars.js";
 
 type ChannelProbeResult = BaseProbeResult & { elapsedMs?: number };
 

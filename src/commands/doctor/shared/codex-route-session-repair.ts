@@ -1,13 +1,31 @@
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentDir } from "../../../agents/agent-scope.js";
+import {
+  areOAuthCredentialsEquivalent,
+  hasMatchingOAuthIdentity,
+} from "../../../agents/auth-profiles/oauth-shared.js";
+import {
+  loadPersistedAuthProfileStore,
+  parseLegacyCredentialEntry,
+} from "../../../agents/auth-profiles/persisted.js";
+import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
+import {
+  applySessionEntryReplacements,
+  listSessionEntriesForCanonicalRepair,
+  listSessionEntriesReadOnly,
+} from "../../../config/sessions/session-accessor.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { loadJsonFile } from "../../../infra/json-file.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
 } from "../../../infra/state-migrations.legacy-session-store.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-harness-session-key.js";
+import { resolveLegacyAuthProfilesPath } from "../../doctor-auth-legacy-paths.js";
 import {
   isOpenAICodexAuthProfileRef,
   isBlockedLegacyCodexModelPair,
@@ -170,6 +188,7 @@ function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   now?: number;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+  authProfileIdMap?: ReadonlyMap<string, string>;
 }): SessionRouteRepairResult {
   const now = params.now ?? Date.now();
   const sessionKeys: string[] = [];
@@ -205,7 +224,23 @@ function repairCodexSessionStoreRoutes(params: {
     const changedRuntimePins = changedModelRoute
       ? preserveRepairedSessionRuntimeIntent(entry)
       : false;
-    if (!changedModelRoute && !changedFallbackNotice && !changedRuntimePins) {
+    // Providerless route repair first needs the legacy profile prefix; only the
+    // auth migration owner's exact collision-aware map may rewrite its identity.
+    const mappedAuthProfileId =
+      typeof entry.authProfileOverride === "string"
+        ? params.authProfileIdMap?.get(entry.authProfileOverride)
+        : undefined;
+    const changedAuthProfile =
+      mappedAuthProfileId !== undefined && mappedAuthProfileId !== entry.authProfileOverride;
+    if (changedAuthProfile) {
+      entry.authProfileOverride = mappedAuthProfileId;
+    }
+    if (
+      !changedModelRoute &&
+      !changedFallbackNotice &&
+      !changedRuntimePins &&
+      !changedAuthProfile
+    ) {
       continue;
     }
     entry.updatedAt = now;
@@ -226,6 +261,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 function scanCodexSessionStoreRoutes(
   store: Record<string, SessionEntry>,
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+  authProfileIdMap?: ReadonlyMap<string, string>,
 ): string[] {
   return Object.entries(store).flatMap(([sessionKey, entry]) => {
     if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
@@ -277,9 +313,70 @@ function scanCodexSessionStoreRoutes(
           normalizeString(entry.authProfileOverride)?.split(":", 1)[0],
           entry.modelOverride,
         )) ||
+      (typeof entry.authProfileOverride === "string" &&
+        authProfileIdMap?.has(entry.authProfileOverride)) ||
       hasRewritableFallbackNotice;
     return hasLegacyRoute ? [sessionKey] : [];
   });
+}
+
+function resolveVerifiedSessionAuthProfileIdMap(params: {
+  agentId: string;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  authProfileIdMap: ReadonlyMap<string, string> | undefined;
+}): ReadonlyMap<string, string> | undefined {
+  if (!params.authProfileIdMap || params.authProfileIdMap.size === 0) {
+    return params.authProfileIdMap;
+  }
+  const agentDir = resolveAgentDir(params.cfg, params.agentId, params.env);
+  const localProfiles = loadPersistedAuthProfileStore(agentDir)?.profiles ?? {};
+  const mainProfiles =
+    loadPersistedAuthProfileStore(resolveSharedMainAuthAgentDir(params.env))?.profiles ?? {};
+  const localLegacyAuthPath = resolveLegacyAuthProfilesPath(agentDir);
+  const localLegacySourceExists = fs.existsSync(localLegacyAuthPath);
+  const localLegacySource = localLegacySourceExists ? loadJsonFile(localLegacyAuthPath) : null;
+  const localLegacyProfiles =
+    isRecord(localLegacySource) && isRecord(localLegacySource.profiles)
+      ? localLegacySource.profiles
+      : undefined;
+
+  return new Map(
+    [...params.authProfileIdMap].filter(([legacyProfileId, canonicalProfileId]) => {
+      const localCredential = localProfiles[canonicalProfileId];
+      if (localCredential) {
+        return normalizeString(localCredential.provider) === "openai";
+      }
+      // A failed local import still owns its account. Never replace it with a
+      // same-named main credential; inheritance is safe only without that source.
+      const inheritedCredential = mainProfiles[canonicalProfileId];
+      if (localLegacySourceExists) {
+        if (!localLegacyProfiles) {
+          return false;
+        }
+        const legacyCredential = localLegacyProfiles[legacyProfileId];
+        if (legacyCredential !== undefined) {
+          if (!isRecord(legacyCredential)) {
+            return false;
+          }
+          const canonicalLegacyCredential = parseLegacyCredentialEntry(
+            { ...legacyCredential, provider: "openai" },
+            "openai",
+          );
+          // A retained mixed-sidecar source still contains successful entries.
+          // Permit deduped main inheritance only when exact account identity matches.
+          return (
+            canonicalLegacyCredential?.type === "oauth" &&
+            inheritedCredential?.type === "oauth" &&
+            inheritedCredential.provider === "openai" &&
+            (hasMatchingOAuthIdentity(canonicalLegacyCredential, inheritedCredential) ||
+              areOAuthCredentialsEquivalent(canonicalLegacyCredential, inheritedCredential))
+          );
+        }
+      }
+      return normalizeString(inheritedCredential?.provider) === "openai";
+    }),
+  );
 }
 
 /** Scan or repair all configured agent session stores that still contain legacy Codex routes. */
@@ -289,20 +386,62 @@ export async function maybeRepairCodexSessionRoutes(params: {
   shouldRepair: boolean;
   codexRuntimeReady?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+  authProfileIdMap?: ReadonlyMap<string, string>;
 }): Promise<CodexSessionRouteRepairSummary> {
-  const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, {
-    env: params.env ?? process.env,
-  }).filter((target) => fs.existsSync(target.storePath));
+  const env = params.env ?? process.env;
+  const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }).flatMap((target) => {
+    const sessionScope = {
+      storePath: target.storePath,
+      agentId: target.agentId,
+      env,
+    };
+    // Preview cannot canonicalize legacy rows; its doctor-only inventory must
+    // remain readable without weakening strict post-migration repair writes.
+    const sqliteEntries = params.shouldRepair
+      ? listSessionEntriesReadOnly(sessionScope)
+      : listSessionEntriesForCanonicalRepair(sessionScope);
+    const hasLegacyStore = fs.existsSync(target.storePath);
+    return sqliteEntries.length > 0 || hasLegacyStore
+      ? [
+          {
+            ...target,
+            sqliteEntries,
+            hasLegacyStore,
+            authProfileIdMap: resolveVerifiedSessionAuthProfileIdMap({
+              agentId: target.agentId,
+              cfg: params.cfg,
+              env,
+              authProfileIdMap: params.authProfileIdMap,
+            }),
+          },
+        ]
+      : [];
+  });
   if (targets.length === 0) {
     return emptyRepairSummary();
   }
   if (!params.shouldRepair) {
     const stale = targets.flatMap((target) => {
-      const sessionKeys = scanCodexSessionStoreRoutes(
-        loadLegacySessionStore(target.storePath),
-        params.blockedModelIdentities,
+      const sqliteStore = Object.fromEntries(
+        target.sqliteEntries.map(({ sessionKey, entry }) => [sessionKey, entry]),
       );
-      return sessionKeys.map((sessionKey) => `${target.agentId}:${sessionKey}`);
+      const sessionKeys = new Set(
+        scanCodexSessionStoreRoutes(
+          sqliteStore,
+          params.blockedModelIdentities,
+          target.authProfileIdMap,
+        ),
+      );
+      if (target.hasLegacyStore) {
+        for (const sessionKey of scanCodexSessionStoreRoutes(
+          loadLegacySessionStore(target.storePath),
+          params.blockedModelIdentities,
+          target.authProfileIdMap,
+        )) {
+          sessionKeys.add(sessionKey);
+        }
+      }
+      return Array.from(sessionKeys, (sessionKey) => `${target.agentId}:${sessionKey}`);
     });
     return {
       scannedStores: targets.length,
@@ -324,27 +463,70 @@ export async function maybeRepairCodexSessionRoutes(params: {
   let repairedStores = 0;
   let repairedSessions = 0;
   for (const target of targets) {
-    const staleSessionKeys = scanCodexSessionStoreRoutes(
-      loadLegacySessionStore(target.storePath),
+    const repairedSessionKeys = new Set<string>();
+    const sqliteStore = Object.fromEntries(
+      target.sqliteEntries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
+    const staleSqliteSessionKeys = scanCodexSessionStoreRoutes(
+      sqliteStore,
       params.blockedModelIdentities,
+      target.authProfileIdMap,
     );
-    if (staleSessionKeys.length === 0) {
-      continue;
+    if (staleSqliteSessionKeys.length > 0) {
+      const result = await applySessionEntryReplacements({
+        agentId: target.agentId,
+        storePath: target.storePath,
+        sessionKeys: staleSqliteSessionKeys,
+        skipMaintenance: true,
+        update: (entries) => {
+          const store = Object.fromEntries(
+            entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+          );
+          const repair = repairCodexSessionStoreRoutes({
+            store,
+            blockedModelIdentities: params.blockedModelIdentities,
+            authProfileIdMap: target.authProfileIdMap,
+          });
+          return {
+            result: repair,
+            replacements: repair.sessionKeys.map((sessionKey) => ({
+              sessionKey,
+              entry: store[sessionKey]!,
+            })),
+          };
+        },
+      });
+      for (const sessionKey of result.sessionKeys) {
+        repairedSessionKeys.add(sessionKey);
+      }
     }
-    const result = await updateLegacySessionStore(
-      target.storePath,
-      (store) =>
-        repairCodexSessionStoreRoutes({
-          store,
-          blockedModelIdentities: params.blockedModelIdentities,
-        }),
-      { skipMaintenance: true },
-    );
-    if (!result.changed) {
-      continue;
+
+    if (target.hasLegacyStore) {
+      const staleLegacySessionKeys = scanCodexSessionStoreRoutes(
+        loadLegacySessionStore(target.storePath),
+        params.blockedModelIdentities,
+        target.authProfileIdMap,
+      );
+      if (staleLegacySessionKeys.length > 0) {
+        const result = await updateLegacySessionStore(
+          target.storePath,
+          (store) =>
+            repairCodexSessionStoreRoutes({
+              store,
+              blockedModelIdentities: params.blockedModelIdentities,
+              authProfileIdMap: target.authProfileIdMap,
+            }),
+          { skipMaintenance: true },
+        );
+        for (const sessionKey of result.sessionKeys) {
+          repairedSessionKeys.add(sessionKey);
+        }
+      }
     }
-    repairedStores += 1;
-    repairedSessions += result.sessionKeys.length;
+    if (repairedSessionKeys.size > 0) {
+      repairedStores += 1;
+      repairedSessions += repairedSessionKeys.size;
+    }
   }
   return {
     scannedStores: targets.length,

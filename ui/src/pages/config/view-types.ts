@@ -125,6 +125,8 @@ export type ConfigProps = {
   resetTextScale: () => void;
   sidebarLiveActivity: boolean;
   setSidebarLiveActivity: (enabled: boolean) => void;
+  hiddenSessionCatalogIds: ReadonlySet<string>;
+  setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
   showAdvancedSettings: boolean;

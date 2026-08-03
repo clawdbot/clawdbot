@@ -302,7 +302,6 @@ import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
   createOpenAICompletionsStrictMessageKeysWrapper,
-  createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,
@@ -346,13 +345,10 @@ function installFullProviderRuntimeDepsForTest() {
     resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: (params) => {
       if (params.provider === "openai") {
-        return createTestOpenAIProviderWrapper(params, true);
-      }
-      if (params.provider === "openai") {
-        return createTestOpenAIProviderWrapper(params, false);
+        return createTestOpenAIProviderWrapper(params);
       }
       if (params.provider === "azure-openai" || params.provider === "azure-openai-responses") {
-        return createTestOpenAIProviderWrapper(params, false);
+        return createTestOpenAIProviderWrapper(params);
       }
       if (params.provider === "amazon-bedrock") {
         return isAnthropicFamilyCacheTtlEligible({
@@ -444,14 +440,8 @@ function withMinimalProviderRuntimeDepsForTest<T>(run: () => T): T {
   }
 }
 
-function createTestOpenAIProviderWrapper(
-  params: WrapProviderStreamFnParams,
-  withDefaultTransport: boolean,
-): StreamFn {
+function createTestOpenAIProviderWrapper(params: WrapProviderStreamFnParams): StreamFn {
   let streamFn = params.context.streamFn;
-  if (withDefaultTransport) {
-    streamFn = createOpenAIDefaultTransportWrapper(streamFn);
-  }
   streamFn = createOpenAIAttributionHeadersWrapper(streamFn);
 
   if (resolveOpenAIFastMode(params.context.extraParams)) {
