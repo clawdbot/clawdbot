@@ -245,6 +245,7 @@ async function canRevealReadinessDetails(params: {
   resolvedAuth: ResolvedGatewayAuth;
   trustedProxies: string[];
   allowRealIpFallback: boolean;
+  rateLimiter?: AuthRateLimiter;
 }): Promise<boolean> {
   // Readiness details expose subsystem names; show them only to local direct callers or
   // requests that prove gateway auth, while unauthenticated remote probes get a boolean.
@@ -263,6 +264,7 @@ async function canRevealReadinessDetails(params: {
     req: params.req,
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
+    rateLimiter: params.rateLimiter,
     browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req),
   });
   return authResult.ok;
@@ -276,6 +278,7 @@ async function handleGatewayProbeRequest(
   resolvedAuth: ResolvedGatewayAuth,
   trustedProxies: string[],
   allowRealIpFallback: boolean,
+  rateLimiter?: AuthRateLimiter,
   getReadiness?: ReadinessChecker,
 ): Promise<boolean> {
   const status = GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath);
@@ -303,6 +306,7 @@ async function handleGatewayProbeRequest(
       resolvedAuth,
       trustedProxies,
       allowRealIpFallback,
+      rateLimiter,
     });
     try {
       const result = getReadiness();
@@ -589,6 +593,7 @@ export function createGatewayHttpServer(opts: {
           getResolvedAuth(),
           [],
           false,
+          rateLimiter,
           getReadiness,
         );
         return;
@@ -634,6 +639,7 @@ export function createGatewayHttpServer(opts: {
               resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
+              rateLimiter,
               getReadiness,
             ),
         },

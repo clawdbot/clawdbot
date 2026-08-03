@@ -11,6 +11,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ChannelManager } from "./server-channels.js";
 import {
   AUTH_TOKEN,
@@ -342,6 +343,51 @@ describe("gateway probe endpoints", () => {
         });
       },
     });
+  });
+
+  it("rate limits repeated proxy-shaped readiness authentication failures", async () => {
+    const rateLimiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+    });
+    const getReadiness: ReadinessChecker = () => ({
+      ready: false,
+      failing: ["discord"],
+      uptimeMs: 8_000,
+    });
+
+    try {
+      await withGatewayServer({
+        prefix: "probe-ready-proxy-rate-limit",
+        resolvedAuth: AUTH_TOKEN,
+        overrides: { getReadiness, rateLimiter },
+        run: async (server) => {
+          const sendReady = async (authorization: string) => {
+            const { getBody } = await sendGatewayRequest(server, {
+              path: "/ready",
+              remoteAddress: "127.0.0.1",
+              host: "gateway.test",
+              authorization,
+              headers: { forwarded: "for=203.0.113.10" },
+            });
+            return JSON.parse(getBody());
+          };
+
+          await expect(sendReady("Bearer test-token")).resolves.toEqual({
+            ready: false,
+            failing: ["discord"],
+            uptimeMs: 8_000,
+          });
+          await expect(sendReady("Bearer wrong-one")).resolves.toEqual({ ready: false });
+          await expect(sendReady("Bearer wrong-two")).resolves.toEqual({ ready: false });
+          await expect(sendReady("Bearer test-token")).resolves.toEqual({ ready: false });
+        },
+      });
+    } finally {
+      rateLimiter.dispose();
+    }
   });
 
   it("re-resolves auth for remote /ready requests after shared auth rotation", async () => {
