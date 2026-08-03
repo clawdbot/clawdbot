@@ -163,7 +163,7 @@ struct ExecApprovalPromptLayoutTests {
         #expect(ExecApprovalsPromptPresenter.allowedPromptDecisions(request) == [.allowOnce, .deny])
     }
 
-    @Test func `modal close does not synthesize deny when deny is unavailable`() {
+    @Test func `modal close never synthesizes an explicit decision`() {
         let closeResponse = NSApplication.ModalResponse(rawValue: 0)
 
         let withoutDeny = ExecApprovalsPromptPresenter.decision(
@@ -174,7 +174,15 @@ struct ExecApprovalPromptLayoutTests {
             decisions: [.allowOnce, .deny])
 
         #expect(withoutDeny == nil)
-        #expect(withDeny == .deny)
+        #expect(withDeny == nil)
+    }
+
+    @Test func `explicit deny button still returns deny`() {
+        let decision = ExecApprovalsPromptPresenter.decision(
+            forModalResponse: .alertSecondButtonReturn,
+            decisions: [.allowOnce, .deny])
+
+        #expect(decision == .deny)
     }
 
     @Test func `accessory view reserves nonzero alert layout space`() {

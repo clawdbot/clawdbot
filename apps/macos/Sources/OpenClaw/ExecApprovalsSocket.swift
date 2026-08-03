@@ -722,7 +722,7 @@ enum ExecApprovalsPromptPresenter {
         if decisions.indices.contains(selectedIndex) {
             return decisions[selectedIndex]
         }
-        return decisions.contains(.deny) ? .deny : nil
+        return nil
     }
 
     static func allowedPromptDecisions(_ request: ExecApprovalPromptRequest) -> [ExecApprovalDecision] {
