@@ -1,0 +1,107 @@
+{
+  "id": "openrouter",
+  "icon": "https://cdn.simpleicons.org/openrouter",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["openrouter"],
+  "modelCatalog": {
+    "discovery": {
+      "openrouter": "runtime"
+    }
+  },
+  "modelIdNormalization": {
+    "providers": {
+      "openrouter": {
+        "prefixWhenBare": "openrouter"
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "openrouter": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": false
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "openrouter",
+      "hostSuffixes": ["openrouter.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "openrouter": {
+        "family": "openrouter"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "openrouter",
+        "envVars": ["OPENROUTER_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "openrouter",
+      "method": "api-key",
+      "choiceId": "openrouter-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "OpenRouter API key",
+      "groupId": "openrouter",
+      "groupLabel": "OpenRouter",
+      "groupHint": "OAuth or API key",
+      "onboardingScopes": ["text-inference", "music-generation"],
+      "optionKey": "openrouterApiKey",
+      "cliFlag": "--openrouter-api-key",
+      "cliOption": "--openrouter-api-key <key>",
+      "cliDescription": "OpenRouter API key"
+    },
+    {
+      "provider": "openrouter",
+      "method": "oauth",
+      "choiceId": "openrouter-oauth",
+      "appGuidedAuth": "oauth",
+      "choiceLabel": "OpenRouter OAuth",
+      "choiceHint": "Browser sign-in",
+      "groupId": "openrouter",
+      "groupLabel": "OpenRouter",
+      "groupHint": "OAuth or API key",
+      "onboardingScopes": ["text-inference", "music-generation"],
+      "onboardingFeatured": true
+    }
+  ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["openrouter"],
+    "imageGenerationProviders": ["openrouter"],
+    "musicGenerationProviders": ["openrouter"],
+    "videoGenerationProviders": ["openrouter"],
+    "speechProviders": ["openrouter"],
+    "usageProviders": ["openrouter"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "openrouter": {
+      "capabilities": ["image", "audio"],
+      "defaultModels": {
+        "image": "auto",
+        "audio": "openai/whisper-large-v3-turbo"
+      },
+      "autoPriority": {
+        "audio": 35
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

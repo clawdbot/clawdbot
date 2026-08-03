@@ -1,0 +1,99 @@
+name: Maintainer Command Reactions
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions: {}
+
+concurrency:
+  group: maintainer-command-reactions-${{ github.event.comment.id }}
+  cancel-in-progress: true
+
+jobs:
+  react:
+    if: ${{ !endsWith(github.actor, '[bot]') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+      pull-requests: write
+    env:
+      MAINTAINER_COMMAND_REACTIONS: ${{ vars.MAINTAINER_COMMAND_REACTIONS || '/autoclose,/clawsweeper autoclose,/clawsweeper automerge,/merge,/land,/landpr' }}
+    steps:
+      - name: React to maintainer slash command
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const comment = context.payload.comment;
+            const issue = context.payload.issue;
+
+            const commands = (process.env.MAINTAINER_COMMAND_REACTIONS || "")
+              .split(",")
+              .map((command) => command.trim())
+              .filter(Boolean);
+            const commandLine = String(comment.body || "")
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .find((line) => commands.some((command) => line === command || line.startsWith(`${command} `)));
+
+            if (!commandLine) {
+              core.info(`Skipping comment ${comment.id}; no tracked maintainer command found.`);
+              return;
+            }
+
+            const isAutocloseCommand =
+              commandLine === "/autoclose" ||
+              commandLine.startsWith("/autoclose ") ||
+              commandLine === "/clawsweeper autoclose" ||
+              commandLine.startsWith("/clawsweeper autoclose ");
+            if (!issue.pull_request && !isAutocloseCommand) {
+              core.info("Skipping non-autoclose command reaction because the comment is not on a pull request.");
+              return;
+            }
+
+            const maintainerPermissions = new Set(["admin", "maintain", "write"]);
+            let permission = "none";
+            try {
+              const result = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: comment.user.login,
+              });
+              permission = String(result.data.permission || "none").toLowerCase();
+            } catch (error) {
+              if (error.status !== 404) {
+                core.info(`Could not resolve repository permission for ${comment.user.login}: ${error.message}`);
+              }
+            }
+
+            if (!maintainerPermissions.has(permission)) {
+              core.info(
+                `Skipping non-maintainer command reaction for ${comment.user.login}; repository permission is ${permission}.`,
+              );
+              return;
+            }
+
+            async function react(content) {
+              try {
+                await github.rest.reactions.createForIssueComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                  content,
+                });
+                core.info(`Added ${content} reaction to comment ${comment.id}.`);
+              } catch (error) {
+                if (error.status === 422 && /already exists/i.test(String(error.message))) {
+                  core.info(`${content} reaction already exists on comment ${comment.id}.`);
+                  return;
+                }
+                if (error.status === 403 && /resource not accessible by integration/i.test(String(error.message))) {
+                  core.warning(`${content} reaction could not be added with this token: ${error.message}`);
+                  return;
+                }
+                throw error;
+              }
+            }
+
+            await react("eyes");
+            core.info(`Maintainer command observed on ${issue.pull_request ? "PR" : "issue"} #${issue.number}: ${commandLine}`);

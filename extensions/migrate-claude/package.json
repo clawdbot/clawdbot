@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/migrate-claude",
+  "version": "2026.7.2",
+  "private": true,
+  "description": "Claude to OpenClaw migration provider",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.7.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"is typing...","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":3,"at":0,"dir":"in","kind":"partial","data":{"text":"Compiling the changelog"}}
+{"seq":4,"at":0,"dir":"out","kind":"chat.postMessage","data":{"payload":{"channel":"C0TRACE","text":"Compiling the changelog","thread_ts":"ts#1","unfurl_links":false},"result":{"ts":"ts#2"},"target":"C0TRACE"}}
+{"seq":5,"at":300,"dir":"in","kind":"partial","data":{"text":"Compiling the changelog for 2026.1.0."}}
+{"seq":6,"at":1000,"dir":"out","kind":"chat.update","data":{"payload":{"channel":"C0TRACE","text":"Compiling the changelog for 2026.1.0.","ts":"ts#2"},"result":{"ok":true},"target":"ts#2"}}
+{"seq":7,"at":1400,"dir":"in","kind":"final","data":{"text":"Compiling the changelog for 2026.1.0.\n\nDone: 12 entries."}}
+{"seq":8,"at":1400,"dir":"out","kind":"chat.update","data":{"payload":{"channel":"C0TRACE","text":"Compiling the changelog for 2026.1.0.\n\nDone: 12 entries.","ts":"ts#2"},"result":{"ok":true},"target":"ts#2"}}
+{"seq":9,"at":1400,"dir":"in","kind":"idle"}
+{"seq":10,"at":1400,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}

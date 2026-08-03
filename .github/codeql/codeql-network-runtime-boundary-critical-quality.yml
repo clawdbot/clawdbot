@@ -1,0 +1,37 @@
+name: openclaw-codeql-network-runtime-boundary-critical-quality
+
+disable-default-queries: true
+
+queries:
+  - uses: ./.github/codeql/openclaw-boundary/queries/raw-socket-callsite-classification.ql
+  - uses: ./.github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql
+
+paths:
+  - src/cli/gateway-cli/run-loop.ts
+  - src/infra/gateway-lock.ts
+  - src/infra/jsonl-socket.ts
+  - src/infra/net
+  - src/infra/push-apns-http2.ts
+  - src/infra/ssh-tunnel.ts
+  - src/proxy-capture
+  - extensions/codex/src/app-server/transport-websocket.ts
+  - extensions/irc/src
+  - extensions/qa-lab/src
+  - packages/net-policy/src
+
+paths-ignore:
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.ts"
+  - "**/*.bundle.js"
+  - "**/*-runtime.js"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.e2e.test.ts"
+  - "**/*.e2e.test.tsx"
+  - "**/*test-support*"
+  - "**/*test-helper*"
+  - "**/*mock*"
+  - "**/*fixture*"
+  - "**/*bench*"
+  - "extensions/diffs/assets/**"

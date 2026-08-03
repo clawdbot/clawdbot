@@ -1,0 +1,142 @@
+/** E2E harness for reply directive behavior tests. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { afterEach, beforeEach, vi } from "vitest";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import { resetSkillsRefreshForTest } from "../skills/runtime/refresh.test-support.js";
+import {
+  clearSessionAuthProfileOverrideMock,
+  compactEmbeddedAgentSessionMock,
+  loadModelCatalogMock,
+  resolveCommandSecretRefsViaGatewayMock,
+  resolveSessionAuthProfileOverrideMock,
+  runDirectiveBehaviorReplyAgent,
+  runEmbeddedAgentMock,
+  runDirectiveBehaviorPreparedReply,
+  runPreparedReplyMock,
+  runReplyAgentMock,
+} from "./reply.directive.directive-behavior.e2e-mocks.js";
+
+type PluginProviderRegistration = PluginRegistry["providers"][number];
+
+const DEFAULT_TEST_MODEL_CATALOG: Array<{
+  id: string;
+  name: string;
+  provider: string;
+}> = [
+  { id: "claude-opus-4-6", name: "Opus 4.5", provider: "anthropic" },
+  { id: "claude-sonnet-4-1", name: "Sonnet 4.1", provider: "anthropic" },
+  { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+  { id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai" },
+  { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", provider: "openai" },
+  { id: "gpt-5.4-nano", name: "GPT-5.4 Nano", provider: "openai" },
+  { id: "gpt-5.4", name: "GPT-5.4 (Codex)", provider: "openai" },
+  { id: "gpt-5.4-pro", name: "GPT-5.4 Pro (Codex)", provider: "openai" },
+  { id: "gpt-5.4-mini", name: "GPT-5.4 Mini (Codex)", provider: "openai" },
+  { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+];
+
+const OPENAI_XHIGH_MODEL_IDS = [
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gpt-5.2",
+] as const;
+
+const OPENAI_CODEX_XHIGH_MODEL_IDS = [
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.4-mini",
+  "gpt-5.3-codex",
+  "gpt-5.3-codex-spark",
+  "gpt-5.2-codex",
+  "gpt-5.1-codex",
+] as const;
+
+function createThinkingPolicyProvider(
+  providerId: string,
+  xhighModelIds: readonly string[],
+): ProviderPlugin {
+  return {
+    id: providerId,
+    label: providerId,
+    auth: [],
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: [
+        { id: "off" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(xhighModelIds.includes(normalizeLowercaseStringOrEmpty(modelId))
+          ? [{ id: "xhigh" as const }]
+          : []),
+      ],
+    }),
+  };
+}
+
+function createDirectiveBehaviorProviderRegistry(): ReturnType<typeof createEmptyPluginRegistry> {
+  const registry = createEmptyPluginRegistry();
+  const providers: PluginProviderRegistration[] = [
+    {
+      pluginId: "openai",
+      pluginName: "OpenAI Provider",
+      source: "test",
+      provider: createThinkingPolicyProvider("openai", OPENAI_XHIGH_MODEL_IDS),
+    },
+    {
+      pluginId: "openai",
+      pluginName: "OpenAI Provider",
+      source: "test",
+      provider: createThinkingPolicyProvider("openai", OPENAI_CODEX_XHIGH_MODEL_IDS),
+    },
+  ];
+  registry.providers.push(...providers);
+  return registry;
+}
+
+export function installDirectiveBehaviorE2EHooks() {
+  beforeEach(async () => {
+    await resetSkillsRefreshForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    clearSessionStoreCacheForTest();
+    resetSystemEventsForTest();
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createDirectiveBehaviorProviderRegistry());
+    compactEmbeddedAgentSessionMock.mockReset();
+    compactEmbeddedAgentSessionMock.mockResolvedValue({ payloads: [], meta: {} });
+    runEmbeddedAgentMock.mockReset();
+    loadModelCatalogMock.mockReset();
+    loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
+    resolveCommandSecretRefsViaGatewayMock.mockReset();
+    resolveCommandSecretRefsViaGatewayMock.mockImplementation(async ({ config }) => ({
+      resolvedConfig: config,
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    }));
+    clearSessionAuthProfileOverrideMock.mockReset();
+    clearSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthProfileOverrideMock.mockReset();
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    runReplyAgentMock.mockReset();
+    runReplyAgentMock.mockImplementation(runDirectiveBehaviorReplyAgent);
+    runPreparedReplyMock.mockReset();
+    runPreparedReplyMock.mockImplementation(runDirectiveBehaviorPreparedReply);
+  });
+
+  afterEach(async () => {
+    await resetSkillsRefreshForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    clearSessionStoreCacheForTest();
+    resetSystemEventsForTest();
+    resetPluginRuntimeStateForTest();
+    vi.restoreAllMocks();
+  });
+}

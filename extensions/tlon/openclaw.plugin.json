@@ -1,0 +1,15 @@
+{
+  "id": "tlon",
+  "name": "Tlon/Urbit",
+  "description": "OpenClaw Tlon/Urbit channel plugin for chat workflows.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["tlon"],
+  "skills": ["node_modules/@tloncorp/tlon-skill"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

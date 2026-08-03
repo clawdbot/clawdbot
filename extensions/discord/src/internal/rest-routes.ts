@@ -1,0 +1,96 @@
+// Discord plugin module implements rest routes behavior.
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+
+type QueryValue = string | number | boolean;
+
+const RATE_LIMIT_HEADER_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+const DISCORD_ROUTE_IDENTIFIER_HASH_LENGTH = 32;
+
+function redactWebhookTokenInPath(path: string): string {
+  const hasLeadingSlash = path.startsWith("/");
+  const segments = path.replace(/^\/+/, "").split("/");
+  if (segments[0] !== "webhooks" || !segments[1] || !segments[2]) {
+    return path;
+  }
+  // Webhook tokens are route identity, but they are also credentials. Keep
+  // stable grouping without retaining the raw token in scheduler diagnostics.
+  segments[2] = redactIdentifier(segments[2], {
+    len: DISCORD_ROUTE_IDENTIFIER_HASH_LENGTH,
+  });
+  return `${hasLeadingSlash ? "/" : ""}${segments.join("/")}`;
+}
+
+export function createRouteKey(method: string, path: string): string {
+  const pathname = path.split("?")[0] ?? path;
+  return `${method.toUpperCase()} ${redactWebhookTokenInPath(pathname)}`;
+}
+
+function readTopLevelRouteKey(path: string): string {
+  const [pathname = path] = path.split("?");
+  const [first, id, token] = pathname.replace(/^\/+/, "").split("/");
+  if (!first || !id) {
+    return pathname;
+  }
+  if (first === "channels" || first === "guilds" || first === "webhooks") {
+    return first === "webhooks" && token
+      ? `${first}/${id}/${redactIdentifier(token, {
+          len: DISCORD_ROUTE_IDENTIFIER_HASH_LENGTH,
+        })}`
+      : `${first}/${id}`;
+  }
+  return first;
+}
+
+export function createBucketKey(bucket: string, path: string): string {
+  return `${bucket}:${readTopLevelRouteKey(path)}`;
+}
+
+export function readHeaderNumber(headers: Headers, name: string): number | undefined {
+  const value = headers.get(name);
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!RATE_LIMIT_HEADER_NUMBER_RE.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && Math.abs(parsed) <= Number.MAX_SAFE_INTEGER
+    ? parsed
+    : undefined;
+}
+
+export function resolveRateLimitResetAt(delayMs: number): number | undefined {
+  const clampedDelayMs = Math.ceil(Math.max(0, delayMs));
+  if (!Number.isSafeInteger(clampedDelayMs)) {
+    return undefined;
+  }
+  if (clampedDelayMs === 0) {
+    return asDateTimestampMs(Date.now());
+  }
+  return resolveExpiresAtMsFromDurationMs(clampedDelayMs);
+}
+
+export function readResetAt(response: Response): number | undefined {
+  const resetAfter = readHeaderNumber(response.headers, "X-RateLimit-Reset-After");
+  if (resetAfter !== undefined) {
+    return resolveRateLimitResetAt(resetAfter * 1000);
+  }
+  const reset = readHeaderNumber(response.headers, "X-RateLimit-Reset");
+  return reset !== undefined ? asDateTimestampMs(reset * 1000) : undefined;
+}
+
+export function appendQuery(path: string, query?: Record<string, QueryValue>): string {
+  if (!query || Object.keys(query).length === 0) {
+    return path;
+  }
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    search.set(key, String(value));
+  }
+  return `${path}?${search.toString()}`;
+}

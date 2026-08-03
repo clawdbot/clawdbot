@@ -1,0 +1,37 @@
+{
+  "id": "synthetic",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["synthetic"],
+  "setup": {
+    "providers": [
+      {
+        "id": "synthetic",
+        "envVars": ["SYNTHETIC_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "synthetic",
+      "method": "api-key",
+      "choiceId": "synthetic-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Synthetic API key",
+      "groupId": "synthetic",
+      "groupLabel": "Synthetic",
+      "groupHint": "Anthropic-compatible (multi-model)",
+      "optionKey": "syntheticApiKey",
+      "cliFlag": "--synthetic-api-key",
+      "cliOption": "--synthetic-api-key <key>",
+      "cliDescription": "Synthetic API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

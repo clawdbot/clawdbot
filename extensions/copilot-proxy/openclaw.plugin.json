@@ -1,0 +1,28 @@
+{
+  "id": "copilot-proxy",
+  "icon": "https://cdn.simpleicons.org/githubcopilot",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["copilot-proxy"],
+  "autoEnableWhenConfiguredProviders": ["copilot-proxy"],
+  "providerAuthChoices": [
+    {
+      "provider": "copilot-proxy",
+      "method": "local",
+      "choiceId": "copilot-proxy",
+      "choiceLabel": "Copilot Proxy",
+      "choiceHint": "Configure base URL + model ids",
+      "assistantPriority": 3,
+      "groupId": "copilot",
+      "groupLabel": "Copilot",
+      "groupHint": "GitHub, GitHub Enterprise + Local Proxy"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

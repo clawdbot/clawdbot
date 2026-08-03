@@ -1,0 +1,18 @@
+{
+  "language": "ar",
+  "tabs": [
+    {
+      "tab": "ابدأ",
+      "groups": [
+        {
+          "group": "نظرة عامة",
+          "pages": ["ar/index"]
+        },
+        {
+          "group": "الخطوات الأولى",
+          "pages": ["ar/start/getting-started", "ar/start/wizard"]
+        }
+      ]
+    }
+  ]
+}

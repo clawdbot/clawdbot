@@ -1,0 +1,81 @@
+name: Feature request
+description: Propose a new capability or product improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us evaluate this request with concrete use cases and tradeoffs.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One-line statement of the requested capability.
+      placeholder: Add per-channel default response prefix.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What user pain this solves and why current behavior is insufficient.
+      placeholder: Agents cannot distinguish persona context in mixed channels, causing misrouted follow-ups.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed solution
+      description: Desired behavior/API/UX with as much specificity as possible.
+      placeholder: Support channels.<channel>.responsePrefix with default fallback and account-level override.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches considered and why they are weaker.
+      placeholder: Manual prefixing in prompts is inconsistent and hard to enforce.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: |
+        Explain who is affected, severity/urgency, how often this pain occurs, and practical consequences.
+        Include:
+        - Affected users/systems/channels
+        - Severity (annoying, blocks workflow, etc.)
+        - Frequency (always/intermittent/edge case)
+        - Consequence (delays, errors, extra manual work, etc.)
+      placeholder: |
+        Affected: Multi-team shared channels
+        Severity: Medium
+        Frequency: Daily
+        Consequence: +20 minutes/day/operator and delayed alerts
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence/examples
+      description: Prior art, links, screenshots, logs, or metrics.
+      placeholder: Comparable behavior in X, sample config, and screenshot of current limitation.
+  - type: dropdown
+    id: implementation_intent
+    attributes:
+      label: Do you plan to open a PR for this?
+      description: Helps maintainers route the idea — self-implemented features move faster.
+      options:
+        - Yes, I plan to implement this myself
+        - Maybe, with maintainer guidance
+        - No, proposing the idea only
+    validations:
+      required: true
+  - type: textarea
+    id: additional_information
+    attributes:
+      label: Additional information
+      description: Extra context, constraints, or references not covered above.
+      placeholder: Must remain backward-compatible with existing config keys.

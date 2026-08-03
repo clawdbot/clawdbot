@@ -1,0 +1,14 @@
+# Write and Refine
+# Draft content, then iteratively improve it
+
+# Create initial draft
+session "Write a first draft of a README.md for this project. Include sections for: overview, installation, usage, and contributing."
+
+# Self-review and improve
+session "Review the README draft you just wrote. Identify areas that are unclear, too verbose, or missing important details."
+
+# Apply improvements
+session "Rewrite the README incorporating your review feedback. Make it more concise and add any missing sections."
+
+# Final polish
+session "Do a final pass on the README. Fix any typos, improve formatting, and ensure code examples are correct."

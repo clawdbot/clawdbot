@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+base="$script_dir/pr"
+if common_git_dir=$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  canonical_base="$(dirname "$common_git_dir")/scripts/pr"
+  if [ -x "$canonical_base" ]; then
+    base="$canonical_base"
+  fi
+fi
+
+usage() {
+  cat <<USAGE
+Usage:
+  scripts/pr-merge <PR>          # verify only (backward compatible)
+  scripts/pr-merge verify <PR>   # verify only
+  scripts/pr-merge run <PR>      # verify + merge + post-merge checks + cleanup
+USAGE
+}
+
+if [ "$#" -eq 1 ]; then
+  exec "$base" merge-verify "$1"
+fi
+
+if [ "$#" -eq 2 ]; then
+  mode="$1"
+  pr="$2"
+  case "$mode" in
+    verify)
+      exec "$base" merge-verify "$pr"
+      ;;
+    run)
+      exec "$base" merge-run "$pr"
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+fi
+
+usage
+exit 2

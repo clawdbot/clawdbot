@@ -1,0 +1,12 @@
+{
+  "id": "qa-channel",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["qa-channel"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

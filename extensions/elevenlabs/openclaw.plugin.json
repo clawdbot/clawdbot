@@ -1,0 +1,46 @@
+{
+  "id": "elevenlabs",
+  "icon": "https://cdn.simpleicons.org/elevenlabs",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "setup": {
+    "providers": [
+      {
+        "id": "elevenlabs",
+        "envVars": ["ELEVENLABS_API_KEY", "XI_API_KEY"]
+      }
+    ]
+  },
+  "contracts": {
+    "speechProviders": ["elevenlabs"],
+    "mediaUnderstandingProviders": ["elevenlabs"],
+    "realtimeTranscriptionProviders": ["elevenlabs"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "elevenlabs": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "scribe_v2"
+      },
+      "autoPriority": {
+        "audio": 45
+      }
+    }
+  },
+  "configContracts": {
+    "compatibilityMigrationPaths": [
+      "talk.voiceId",
+      "talk.voiceAliases",
+      "talk.modelId",
+      "talk.outputFormat",
+      "talk.apiKey"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

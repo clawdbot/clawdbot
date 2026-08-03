@@ -1,0 +1,63 @@
+# Retry with Backoff Example
+# Demonstrates automatic retry patterns for resilient API calls
+
+# Simple retry - try up to 3 times on failure
+session "Call flaky third-party API"
+  retry: 3
+
+# Retry with exponential backoff for rate-limited APIs
+session "Query rate-limited service"
+  retry: 5
+  backoff: "exponential"
+
+# Retry with linear backoff
+session "Send webhook notification"
+  retry: 3
+  backoff: "linear"
+
+# Combining retry with context passing
+let config = session "Load API configuration"
+
+session "Make authenticated API request"
+  context: config
+  retry: 3
+  backoff: "exponential"
+
+# Retry inside try/catch for fallback after all retries fail
+try:
+  session "Call primary payment processor"
+    retry: 3
+    backoff: "exponential"
+catch:
+  session "All retries failed - use backup payment processor"
+    retry: 2
+
+# Parallel retries for redundant services
+parallel:
+  primary = try:
+    session "Query primary database"
+      retry: 2
+      backoff: "linear"
+  catch:
+    session "Primary DB unavailable"
+  replica = try:
+    session "Query replica database"
+      retry: 2
+      backoff: "linear"
+  catch:
+    session "Replica DB unavailable"
+
+session "Merge results from available databases"
+  context: { primary, replica }
+
+# Retry in a loop for batch processing
+let items = ["batch1", "batch2", "batch3"]
+for item in items:
+  try:
+    session "Process this batch item"
+      context: item
+      retry: 2
+      backoff: "exponential"
+  catch:
+    session "Log failed batch for manual review"
+      context: item

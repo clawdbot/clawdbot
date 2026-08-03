@@ -1,0 +1,123 @@
+// Verifies provider auth environment trust decisions.
+import { describe, expect, it, vi } from "vitest";
+
+const getProviderEnvVars = vi.hoisted(() => vi.fn(() => ["WHISPERX_API_KEY"]));
+
+vi.mock("../secrets/provider-env-vars.js", () => ({
+  getProviderEnvVars,
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
+}));
+
+describe("provider auth env trust", () => {
+  it("buildApiKeyCredential excludes untrusted workspace plugin env vars for ref mode", async () => {
+    const { buildApiKeyCredential } = await import("./provider-auth-helpers.js");
+    const config = { plugins: {} };
+
+    const credential = buildApiKeyCredential("whisperx", "secret-value", undefined, {
+      secretInputMode: "ref",
+      config,
+    });
+
+    expect(getProviderEnvVars).toHaveBeenCalledWith("whisperx", {
+      config,
+      includeUntrustedWorkspacePlugins: false,
+    });
+    expect(credential).toEqual({
+      type: "api_key",
+      provider: "whisperx",
+      keyRef: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
+    });
+  });
+
+  it("buildApiKeyCredential keeps secret-ref-like input literal in plaintext mode", async () => {
+    const { buildApiKeyCredential } = await import("./provider-auth-helpers.js");
+
+    const credential = buildApiKeyCredential("ollama", "${AWS_SECRET_ACCESS_KEY}", undefined, {
+      secretInputMode: "plaintext",
+    });
+
+    expect(credential).toEqual({
+      type: "api_key",
+      provider: "ollama",
+      key: "${AWS_SECRET_ACCESS_KEY}",
+    });
+  });
+
+  it("buildApiKeyCredential rejects malformed object SecretRefs", async () => {
+    const { buildApiKeyCredential } = await import("./provider-auth-helpers.js");
+    const malformedRefs = [
+      { source: "env", provider: "default", id: "OPENAI_API_KEY", extra: "x" },
+      { source: "env", provider: "Default", id: "OPENAI_API_KEY" },
+      { source: "env", provider: "default", id: "openai_api_key" },
+      { source: "file", provider: "default", id: "providers/openai/apiKey" },
+      { source: "exec", provider: "vault", id: "vault/../api-key" },
+    ];
+
+    for (const ref of malformedRefs) {
+      expect(() => buildApiKeyCredential("openai", ref as never)).toThrow(
+        "API key SecretRef is invalid.",
+      );
+    }
+  });
+
+  it("buildApiKeyCredential keeps invalid env-template strings as plaintext", async () => {
+    const { buildApiKeyCredential } = await import("./provider-auth-helpers.js");
+    const overlongEnvRef = `\${A${"B".repeat(128)}}`;
+
+    expect(buildApiKeyCredential("openai", overlongEnvRef)).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: overlongEnvRef,
+    });
+  });
+
+  it("resolveRefFallbackInput excludes untrusted workspace plugin env vars", async () => {
+    const { resolveRefFallbackInput } = await import("./provider-auth-ref.js");
+    const config = { plugins: {} };
+
+    const result = resolveRefFallbackInput({
+      config,
+      provider: "whisperx",
+      env: { WHISPERX_API_KEY: "test-secret" },
+    });
+
+    expect(getProviderEnvVars).toHaveBeenCalledWith("whisperx", {
+      config,
+      includeUntrustedWorkspacePlugins: false,
+    });
+    expect(result).toEqual({
+      ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
+      resolvedValue: "test-secret",
+    });
+  });
+
+  it("promptSecretRefForSetup keeps config-aware trusted env var suggestions", async () => {
+    const { promptSecretRefForSetup } = await import("./provider-auth-ref.js");
+    const config = { plugins: { allow: ["workspace-audio"] } };
+    const prompter = {
+      select: vi.fn(async () => "env"),
+      text: vi.fn(async () => "WHISPERX_API_KEY"),
+      note: vi.fn(async () => {}),
+    };
+
+    const result = await promptSecretRefForSetup({
+      config,
+      provider: "whisperx",
+      prompter: prompter as never,
+      env: { WHISPERX_API_KEY: "test-secret" },
+    });
+
+    expect(getProviderEnvVars).toHaveBeenCalledWith("whisperx", {
+      config,
+      includeUntrustedWorkspacePlugins: false,
+    });
+    expect(result).toEqual({
+      ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
+      resolvedValue: "test-secret",
+    });
+  });
+});

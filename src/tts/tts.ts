@@ -1,0 +1,42 @@
+/** Public TTS runtime barrel exposed to core callers and plugin SDK facades. */
+import {
+  setSpeechRuntimeAvailabilityGuard,
+  setTtsMachinePrefsPathResolver,
+} from "../../packages/speech-core/runtime-api.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
+
+setSpeechRuntimeAvailabilityGuard(() => {
+  assertSecretOwnerAvailable("capability", "tts");
+});
+
+setTtsMachinePrefsPathResolver(() => readConfigMachineState<string>("tts.prefsPath"));
+
+export {
+  getLastTtsAttempt,
+  getResolvedSpeechProviderConfig,
+  getTtsMaxLength,
+  getTtsPersona,
+  getTtsProvider,
+  isSummarizationEnabled,
+  isTtsEnabled,
+  isTtsProviderConfigured,
+  listSpeechVoices,
+  listTtsPersonas,
+  maybeApplyTtsToPayload,
+  resolveExplicitTtsOverrides,
+  resolveTtsAutoMode,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+  resolveTtsProviderOrder,
+  setLastTtsAttempt,
+  setSummarizationEnabled,
+  setTtsEnabled,
+  setTtsMaxLength,
+  setTtsPersona,
+  setTtsProvider,
+  synthesizeSpeech,
+  textToSpeech,
+  type ResolvedTtsConfig,
+  type TtsDirectiveOverrides,
+} from "../plugin-sdk/tts-runtime.js";

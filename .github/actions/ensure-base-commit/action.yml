@@ -1,0 +1,77 @@
+name: Ensure base commit
+description: Ensure a shallow checkout has enough history to diff against a base SHA.
+inputs:
+  base-sha:
+    description: Base commit SHA to diff against.
+    required: true
+  fetch-ref:
+    description: Branch or ref to deepen/fetch from origin when base-sha is missing.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Ensure base commit is available
+      shell: bash
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
+        FETCH_REF: ${{ inputs.fetch-ref }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+          echo "No concrete base SHA available; skipping targeted fetch."
+          exit 0
+        fi
+
+        if ! [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+          echo "::error title=ensure-base-commit invalid base sha::Refusing invalid base SHA: $BASE_SHA"
+          exit 2
+        fi
+
+        if ! git check-ref-format --branch "$FETCH_REF" >/dev/null 2>&1; then
+          echo "::error title=ensure-base-commit invalid fetch ref::Refusing invalid fetch ref: $FETCH_REF"
+          exit 2
+        fi
+
+        if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+          echo "Base commit already present: $BASE_SHA"
+          exit 0
+        fi
+
+        fetch_base_ref() {
+          timeout --signal=TERM --kill-after=10s 30s git \
+            -c protocol.version=2 \
+            fetch "$@"
+        }
+
+        echo "Base commit missing; fetching exact SHA before branch history."
+        if ! fetch_base_ref --no-tags --depth=1 origin "$BASE_SHA"; then
+          echo "::warning title=ensure-base-commit exact fetch failed::Failed to fetch exact base SHA $BASE_SHA"
+        fi
+        if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+          echo "Resolved base commit after exact fetch: $BASE_SHA"
+          exit 0
+        fi
+
+        for deepen_by in 25 100 300; do
+          echo "Base commit missing; deepening $FETCH_REF by $deepen_by."
+          if ! fetch_base_ref --no-tags --deepen="$deepen_by" origin -- "$FETCH_REF"; then
+            echo "::warning title=ensure-base-commit fetch failed::Failed to deepen $FETCH_REF by $deepen_by while looking for $BASE_SHA"
+          fi
+          if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+            echo "Resolved base commit after deepening: $BASE_SHA"
+            exit 0
+          fi
+        done
+
+        echo "Base commit still missing; fetching full history for $FETCH_REF."
+        if ! fetch_base_ref --no-tags origin -- "$FETCH_REF"; then
+          echo "::warning title=ensure-base-commit fetch failed::Failed to fetch full history for $FETCH_REF while looking for $BASE_SHA"
+        fi
+        if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+          echo "Resolved base commit after full ref fetch: $BASE_SHA"
+          exit 0
+        fi
+
+        echo "::error title=ensure-base-commit missing base::Base commit still unavailable after fetch attempts: $BASE_SHA"
+        exit 1

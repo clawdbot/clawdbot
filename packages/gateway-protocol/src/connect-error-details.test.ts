@@ -1,0 +1,237 @@
+// Gateway Protocol tests cover connect error details behavior.
+import { describe, expect, it } from "vitest";
+import {
+  buildPairingConnectCloseReason,
+  buildPairingConnectErrorDetails,
+  buildPairingConnectErrorMessage,
+  describePairingConnectRequirement,
+  formatConnectErrorMessage,
+  formatConnectPairingRequiredMessage,
+  normalizePairingConnectRequestId,
+  readConnectErrorDetailCode,
+  readConnectErrorRecoveryAdvice,
+  readConnectPairingRequiredMessage,
+  readPairingConnectErrorDetails,
+  resolveAuthConnectErrorDetailCode,
+} from "./connect-error-details.js";
+
+/**
+ * Connect error detail regressions for Gateway/WebSocket clients.
+ *
+ * These tests pin structured auth/pairing details, human-readable fallback
+ * formatting, and request-id sanitization because these strings surface in
+ * control UI reconnect flows and device pairing diagnostics.
+ */
+
+describe("readConnectErrorDetailCode", () => {
+  it("reads structured detail codes", () => {
+    expect(readConnectErrorDetailCode({ code: "AUTH_TOKEN_MISMATCH" })).toBe("AUTH_TOKEN_MISMATCH");
+  });
+
+  it("returns trimmed detail codes when payload padding is present", () => {
+    expect(readConnectErrorDetailCode({ code: "  AUTH_TOKEN_MISMATCH  " })).toBe(
+      "AUTH_TOKEN_MISMATCH",
+    );
+    expect(readConnectErrorDetailCode({ code: "\tPAIRING_REQUIRED\n" })).toBe("PAIRING_REQUIRED");
+  });
+
+  it("returns null for invalid detail payloads", () => {
+    expect(readConnectErrorDetailCode(null)).toBeNull();
+    expect(readConnectErrorDetailCode("AUTH_TOKEN_MISMATCH")).toBeNull();
+  });
+});
+
+describe("readConnectErrorRecoveryAdvice", () => {
+  it("reads retry advice fields when present", () => {
+    expect(
+      readConnectErrorRecoveryAdvice({
+        canRetryWithDeviceToken: true,
+        recommendedNextStep: "retry_with_device_token",
+      }),
+    ).toEqual({
+      canRetryWithDeviceToken: true,
+      recommendedNextStep: "retry_with_device_token",
+    });
+  });
+
+  it("returns empty advice for invalid payloads", () => {
+    expect(readConnectErrorRecoveryAdvice(null)).toStrictEqual({});
+    expect(readConnectErrorRecoveryAdvice("x")).toStrictEqual({});
+    expect(readConnectErrorRecoveryAdvice({ canRetryWithDeviceToken: "yes" })).toEqual({});
+    expect(
+      readConnectErrorRecoveryAdvice({
+        canRetryWithDeviceToken: true,
+        recommendedNextStep: "retry_with_magic",
+      }),
+    ).toEqual({ canRetryWithDeviceToken: true, recommendedNextStep: undefined });
+  });
+});
+
+describe("resolveAuthConnectErrorDetailCode", () => {
+  it("maps device token scope mismatches to a dedicated auth detail", () => {
+    expect(resolveAuthConnectErrorDetailCode("scope_mismatch")).toBe("AUTH_SCOPE_MISMATCH");
+  });
+});
+
+describe("pairing connect details", () => {
+  it("builds reason-specific pairing messages", () => {
+    expect(buildPairingConnectErrorMessage("scope-upgrade")).toBe(
+      "pairing required: device is asking for more scopes than currently approved",
+    );
+    expect(describePairingConnectRequirement("not-paired")).toBe("device is not approved yet");
+  });
+
+  it("builds structured pairing details with remediation", () => {
+    expect(
+      buildPairingConnectErrorDetails({
+        reason: "not-paired",
+        requestId: "req-123",
+        recommendedNextStep: "wait_then_retry",
+        retryable: true,
+        pauseReconnect: false,
+      }),
+    ).toEqual({
+      code: "PAIRING_REQUIRED",
+      reason: "not-paired",
+      requestId: "req-123",
+      remediationHint: "Approve this device from the pending pairing requests.",
+      recommendedNextStep: "wait_then_retry",
+      retryable: true,
+      pauseReconnect: false,
+    });
+  });
+
+  it("reads pairing details and backfills missing remediation hints", () => {
+    expect(
+      readPairingConnectErrorDetails({
+        code: "PAIRING_REQUIRED",
+        reason: "scope-upgrade",
+        requestId: "req-456",
+      }),
+    ).toEqual({
+      code: "PAIRING_REQUIRED",
+      reason: "scope-upgrade",
+      requestId: "req-456",
+      remediationHint: "Review the requested scopes, then approve the pending upgrade.",
+    });
+  });
+
+  it("includes request ids in close reasons when available", () => {
+    expect(
+      buildPairingConnectCloseReason({
+        reason: "role-upgrade",
+        requestId: "req-789",
+      }),
+    ).toBe(
+      "pairing required: device is asking for a higher role than currently approved (requestId: req-789)",
+    );
+  });
+
+  it("drops request ids that do not match the allowlist", () => {
+    expect(normalizePairingConnectRequestId("req-123")).toBe("req-123");
+    expect(normalizePairingConnectRequestId("req-123;rm -rf /")).toBeUndefined();
+    expect(
+      readPairingConnectErrorDetails({
+        code: "PAIRING_REQUIRED",
+        reason: "scope-upgrade",
+        requestId: "req-123;rm -rf /",
+      }),
+    ).toEqual({
+      code: "PAIRING_REQUIRED",
+      reason: "scope-upgrade",
+      remediationHint: "Review the requested scopes, then approve the pending upgrade.",
+    });
+  });
+
+  it("formats upgrade rejections with the request id", () => {
+    expect(
+      formatConnectPairingRequiredMessage({
+        code: "PAIRING_REQUIRED",
+        requestId: "req-123",
+        reason: "scope-upgrade",
+      }),
+    ).toBe("scope upgrade pending approval (requestId: req-123)");
+  });
+
+  it("parses surfaced pairing-required messages", () => {
+    expect(
+      readConnectPairingRequiredMessage("scope upgrade pending approval (requestId: req-123)"),
+    ).toEqual({
+      requestId: "req-123",
+      reason: "scope-upgrade",
+    });
+    expect(
+      readConnectPairingRequiredMessage(
+        "scope upgrade pending approval (requestId: req-123;rm -rf /)",
+      ),
+    ).toEqual({
+      reason: "scope-upgrade",
+    });
+  });
+
+  it("prefers pairing detail formatting over the generic message", () => {
+    expect(
+      formatConnectErrorMessage({
+        message: "pairing required",
+        details: {
+          code: "PAIRING_REQUIRED",
+          requestId: "req-123",
+          reason: "scope-upgrade",
+        },
+      }),
+    ).toBe("scope upgrade pending approval (requestId: req-123)");
+  });
+  it("reads pairing details when detail code has surrounding whitespace", () => {
+    expect(
+      readPairingConnectErrorDetails({
+        code: "  PAIRING_REQUIRED  ",
+        reason: "scope-upgrade",
+        requestId: "req-456",
+      }),
+    ).toEqual({
+      code: "PAIRING_REQUIRED",
+      reason: "scope-upgrade",
+      requestId: "req-456",
+      remediationHint: "Review the requested scopes, then approve the pending upgrade.",
+    });
+  });
+
+  it("formats connect errors when padded detail codes are present", () => {
+    expect(
+      formatConnectErrorMessage({
+        message: "pairing required",
+        details: {
+          code: "  PAIRING_REQUIRED  ",
+          requestId: "req-123",
+          reason: "scope-upgrade",
+        },
+      }),
+    ).toBe("scope upgrade pending approval (requestId: req-123)");
+    expect(
+      formatConnectErrorMessage({
+        message: "protocol mismatch",
+        details: {
+          code: "\tPROTOCOL_MISMATCH\n",
+          clientMinProtocol: 5,
+          clientMaxProtocol: 5,
+          expectedProtocol: 4,
+        },
+      }),
+    ).toBe("protocol mismatch: Control UI v5, Gateway v4");
+  });
+
+  it("formats protocol mismatch details with both client and gateway versions", () => {
+    expect(
+      formatConnectErrorMessage({
+        message: "protocol mismatch",
+        details: {
+          code: "PROTOCOL_MISMATCH",
+          clientMinProtocol: 5,
+          clientMaxProtocol: 5,
+          expectedProtocol: 4,
+          minimumProbeProtocol: 4,
+        },
+      }),
+    ).toBe("protocol mismatch: Control UI v5, Gateway v4, probe min v4");
+  });
+});

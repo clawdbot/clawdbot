@@ -1,0 +1,91 @@
+/** Runtime resolver for plugin-contributed web fetch providers. */
+import { loadOpenClawPlugins } from "./loader.js";
+import type { PluginLoadOptions } from "./loader.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginWebFetchProviderEntry } from "./types.js";
+import {
+  resolveBundledWebFetchResolutionConfig,
+  sortWebFetchProviders,
+} from "./web-fetch-providers.shared.js";
+import {
+  resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts,
+  resolveBundledWebFetchProvidersFromPublicArtifacts,
+} from "./web-provider-public-artifacts.js";
+import {
+  mapRegistryProviders,
+  resolveManifestDeclaredWebProviderCandidatePluginIds,
+} from "./web-provider-resolution-shared.js";
+import {
+  resolvePluginWebProviders,
+  resolveRuntimeWebProviders,
+} from "./web-provider-runtime-shared.js";
+
+function resolveWebFetchCandidatePluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: readonly string[];
+  origin?: PluginManifestRecord["origin"];
+  sandboxed?: boolean;
+}): string[] | undefined {
+  return resolveManifestDeclaredWebProviderCandidatePluginIds({
+    contract: "webFetchProviders",
+    configKey: "webFetch",
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    onlyPluginIds: params.onlyPluginIds,
+    origin: params.origin,
+    sandboxed: params.sandboxed,
+  });
+}
+
+function mapRegistryWebFetchProviders(params: {
+  registry: ReturnType<typeof loadOpenClawPlugins>;
+  onlyPluginIds?: readonly string[];
+}): PluginWebFetchProviderEntry[] {
+  return mapRegistryProviders({
+    entries: params.registry.webFetchProviders,
+    onlyPluginIds: params.onlyPluginIds,
+    sortProviders: sortWebFetchProviders,
+  });
+}
+
+/** Resolves web fetch providers, activating plugin runtimes when requested. */
+export function resolvePluginWebFetchProviders(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: readonly string[];
+  activate?: boolean;
+  cache?: boolean;
+  mode?: "runtime" | "setup";
+  origin?: PluginManifestRecord["origin"];
+  sandboxed?: boolean;
+}): PluginWebFetchProviderEntry[] {
+  return resolvePluginWebProviders(params, {
+    resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,
+    resolveCandidatePluginIds: resolveWebFetchCandidatePluginIds,
+    mapRegistryProviders: mapRegistryWebFetchProviders,
+    resolveBundledPublicArtifactProviders: resolveBundledWebFetchProvidersFromPublicArtifacts,
+    resolveBundledRuntimeArtifactProviders:
+      resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts,
+  });
+}
+
+/** Resolves already-eligible runtime web fetch providers without setup-mode activation. */
+export function resolveRuntimeWebFetchProviders(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: readonly string[];
+  origin?: PluginManifestRecord["origin"];
+}): PluginWebFetchProviderEntry[] {
+  return resolveRuntimeWebProviders(params, {
+    resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,
+    resolveCandidatePluginIds: resolveWebFetchCandidatePluginIds,
+    mapRegistryProviders: mapRegistryWebFetchProviders,
+    resolveBundledRuntimeArtifactProviders:
+      resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts,
+  });
+}

@@ -1,0 +1,59 @@
+{
+  "id": "linux-node",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": true,
+  "name": "Linux Node",
+  "description": "Desktop notifications, camera capture, and location for Linux node hosts.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "notify": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "camera": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "location": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "notify.enabled": {
+      "label": "Desktop Notifications",
+      "help": "Expose system.notify when notify-send is installed. Enabled by default."
+    },
+    "camera.enabled": {
+      "label": "Camera",
+      "help": "Expose camera commands when FFmpeg is installed. Requires a node service restart."
+    },
+    "location.enabled": {
+      "label": "Location",
+      "help": "Expose location.get when the GeoClue where-am-i demo is installed. Requires a node service restart."
+    }
+  }
+}

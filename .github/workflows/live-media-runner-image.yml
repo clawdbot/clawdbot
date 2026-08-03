@@ -1,0 +1,53 @@
+name: Live Media Runner Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/images/live-media-runner/Dockerfile"
+      - ".github/workflows/live-media-runner-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: live-media-runner-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: Build live media runner image
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Login to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        with:
+          max-cache-size-mb: 800000
+
+      - name: Build and push live media runner image
+        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
+        with:
+          context: .github/images/live-media-runner
+          file: .github/images/live-media-runner/Dockerfile
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04
+            ghcr.io/openclaw/openclaw-live-media-runner:${{ github.sha }}
+          sbom: true
+          provenance: mode=max
+          push: true

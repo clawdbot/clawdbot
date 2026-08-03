@@ -1,0 +1,151 @@
+{
+  "id": "memory-lancedb",
+  "name": "Memory LanceDB",
+  "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.",
+  "catalog": { "featured": true, "order": 70 },
+  "commandAliases": [{ "name": "ltm" }],
+  "activation": {
+    "onStartup": false,
+    "onCommands": ["ltm"]
+  },
+  "kind": "memory",
+  "contracts": {
+    "tools": ["memory_forget", "memory_recall", "memory_store"]
+  },
+  "uiHints": {
+    "embedding.apiKey": {
+      "label": "Embedding API Key",
+      "sensitive": true,
+      "placeholder": "sk-proj-...",
+      "help": "Optional API key override for OpenAI-compatible embeddings; omit to use configured provider auth"
+    },
+    "embedding.provider": {
+      "label": "Embedding Provider",
+      "placeholder": "openai",
+      "help": "Memory embedding provider adapter to use (for example openai, github-copilot, ollama)"
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "text-embedding-3-small",
+      "help": "OpenAI embedding model to use"
+    },
+    "embedding.baseUrl": {
+      "label": "Base URL",
+      "placeholder": "https://api.openai.com/v1",
+      "help": "Optional provider or OpenAI-compatible embedding endpoint base URL",
+      "advanced": true
+    },
+    "embedding.dimensions": {
+      "label": "Dimensions",
+      "placeholder": "1536",
+      "help": "Vector dimensions for custom models (required for non-standard models)",
+      "advanced": true
+    },
+    "dbPath": {
+      "label": "Database Path",
+      "placeholder": "~/.openclaw/memory/lancedb",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically capture important information from conversations"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories into context"
+    },
+    "dreaming": {
+      "label": "Dreaming",
+      "help": "Optional dreaming config consumed when this plugin owns the memory slot"
+    },
+    "captureMaxChars": {
+      "label": "Capture Max Chars",
+      "help": "Maximum message length eligible for auto-capture",
+      "advanced": true,
+      "placeholder": "500"
+    },
+    "customTriggers": {
+      "label": "Custom Triggers",
+      "help": "Literal phrases that should make auto-capture consider a message memory-worthy",
+      "advanced": true
+    },
+    "recallMaxChars": {
+      "label": "Recall Query Max Chars",
+      "help": "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
+      "advanced": true,
+      "placeholder": "1000"
+    },
+    "storageOptions": {
+      "label": "Storage Options",
+      "advanced": true,
+      "help": "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embedding": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "dbPath": {
+        "type": "string"
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      },
+      "dreaming": {
+        "type": "object"
+      },
+      "captureMaxChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 10000
+      },
+      "customTriggers": {
+        "type": "array",
+        "maxItems": 50,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        }
+      },
+      "recallMaxChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 10000
+      },
+      "storageOptions": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

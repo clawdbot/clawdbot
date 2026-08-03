@@ -1,0 +1,225 @@
+# Workflow Crystallizer v2
+# Observes a conversation thread, extracts the workflow pattern, crystallizes into .prose
+#
+# Key design decisions:
+# - Author fetches latest prose.md spec + patterns/antipatterns from GitHub
+# - Single self-verifying author session (Design+Author+Overseer consolidated)
+# - Single user checkpoint (scope + placement combined)
+# - Scoper uses Sonnet (analytical work, not creative)
+# - Parallel: observation + research, collision + scope options
+
+input thread: "The conversation thread to analyze"
+input hint: "Optional: What aspect to focus on"
+
+# Always fetch latest guidance from source of truth
+const PROSE_SPEC_URL = "https://raw.githubusercontent.com/openprose/prose/refs/heads/main/skills/open-prose/prose.md"
+const PATTERNS_URL = "https://raw.githubusercontent.com/openprose/prose/refs/heads/main/skills/open-prose/guidance/patterns.md"
+const ANTIPATTERNS_URL = "https://raw.githubusercontent.com/openprose/prose/refs/heads/main/skills/open-prose/guidance/antipatterns.md"
+
+agent observer:
+  model: opus
+  prompt: """
+    Identify implicit workflows in conversation threads.
+    Look for: repeated patterns, multi-step processes, decision points,
+    parallelization opportunities, validations performed.
+    Be specific - quote actions from the thread.
+  """
+
+agent researcher:
+  model: sonnet
+  prompt: "Research codebases thoroughly. Report what exists and patterns used."
+  permissions:
+    read: ["**/*.prose", "**/*.md"]
+
+agent scoper:
+  model: sonnet
+  prompt: """
+    Determine the right abstraction level for workflows.
+    Too specific = only works for one case
+    Too general = loses essence, becomes vague
+    Find the sweet spot: capture the pattern, parameterize the variables.
+  """
+
+agent author:
+  model: opus
+  prompt: """
+    Write idiomatic OpenProse. Follow existing example patterns.
+    Prefer explicit over clever. Use agents for distinct roles.
+    Use parallel for independent tasks. Use try/catch for reversible operations.
+  """
+  permissions:
+    write: ["**/*.prose", "**/*.md"]
+
+agent compiler:
+  model: sonnet
+  prompt: "Validate OpenProse syntax. Report specific errors with line numbers."
+  permissions:
+    bash: allow
+
+# ============================================================
+# Phase 1: Observe and Research (parallel)
+# ============================================================
+
+parallel:
+  raw_observation = session: observer
+    prompt: """
+      Analyze this conversation thread. Identify:
+      1. What manual process was executed?
+      2. What were the distinct steps?
+      3. What decisions were made?
+      4. What could have been parallelized?
+      5. What validations were performed?
+      6. What artifacts were created?
+      Be concrete. Quote specific actions.
+    """
+    context: { thread, hint }
+
+  existing_examples = session: researcher
+    prompt: "List all .prose examples with one-line summaries"
+    context: "skills/open-prose/examples/"
+
+  existing_ops = session: researcher
+    prompt: "What operational .prose files already exist?"
+    context: "OPERATIONS.prose.md"
+
+  patterns_used = session: researcher
+    prompt: "What patterns does this codebase favor?"
+    context: "skills/open-prose/examples/*.prose"
+
+# ============================================================
+# Phase 2: Scope (parallel analysis, then synthesis)
+# ============================================================
+
+parallel:
+  collision_check = session: scoper
+    prompt: """
+      Does the observed workflow overlap with existing examples?
+      If yes: how different? What unique value would a new file add?
+      If no: what category does it belong to?
+    """
+    context: { raw_observation, existing_examples, existing_ops }
+
+  scope_options_raw = session: scoper
+    prompt: """
+      Propose 3 scoping options:
+      1. NARROW: Specific to exactly what happened (precise but may not generalize)
+      2. MEDIUM: Captures pattern with key parameters (reusable, clear)
+      3. BROAD: Abstract template (widely applicable but may lose details)
+      For each: describe inputs, agents, key phases.
+    """
+    context: { raw_observation, patterns_used }
+
+let scope_options = session: scoper
+  prompt: "Refine scope options considering collision analysis"
+  context: { scope_options_raw, collision_check }
+
+let placement_suggestion = session: scoper
+  prompt: """
+    Where should this file live?
+    1. examples/XX-name.prose - If reusable pattern (determine next number)
+    2. Custom location - If project-specific
+    Is this operational (used to run this project)? Note for OPERATIONS.prose.md
+  """
+  context: { raw_observation, existing_examples, existing_ops }
+
+# ============================================================
+# Phase 3: User Decision (single checkpoint)
+# ============================================================
+
+input user_decision: """
+  OBSERVED WORKFLOW:
+  {raw_observation}
+
+  COLLISION CHECK:
+  {collision_check}
+
+  SCOPE OPTIONS:
+  {scope_options}
+
+  PLACEMENT RECOMMENDATION:
+  {placement_suggestion}
+
+  YOUR DECISIONS:
+  1. Which scope? (1/2/3 or describe custom)
+  2. Confirm placement or specify different location:
+"""
+
+let final_decisions = session: scoper
+  prompt: "Parse user's scope choice and placement confirmation into structured form"
+  context: { scope_options, placement_suggestion, user_decision }
+
+# ============================================================
+# Phase 4: Author with Self-Verification
+# ============================================================
+
+let draft = session: author
+  prompt: """
+    Design and write the complete .prose file.
+
+    IMPORTANT: First fetch and read the guidance documents:
+    - prose.md spec: {PROSE_SPEC_URL}
+    - patterns.md: {PATTERNS_URL}
+    - antipatterns.md: {ANTIPATTERNS_URL}
+
+    Then:
+    1. DESIGN: Plan inputs, agents, phases, parallelism, error handling
+    2. WRITE: Complete .prose following the spec and patterns
+    3. SELF-REVIEW: Check against antipatterns and remove cruft:
+       - Remove sessions that just run single commands
+       - Remove over-abstracted agents that don't add value
+       - Remove comments that restate what code does
+       - Remove unnecessary variables and single-item parallel blocks
+       - Keep: clear agent roles, meaningful parallelism, genuine error handling
+
+    Include header comment explaining what it does.
+    Output only the final, clean version.
+  """
+  context: { final_decisions, existing_examples }
+  permissions:
+    network: [PROSE_SPEC_URL, PATTERNS_URL, ANTIPATTERNS_URL]
+
+# ============================================================
+# Phase 5: Compile with Bounded Retry
+# ============================================================
+
+let current = draft
+loop until **compilation succeeds** (max: 3):
+  let result = session: compiler
+    prompt: """Validate this .prose file against the spec.
+    Fetch spec from: {PROSE_SPEC_URL}
+    Report SUCCESS or specific errors with line numbers."""
+    context: current
+    permissions:
+      network: [PROSE_SPEC_URL]
+
+  if **compilation has errors**:
+    current = session: author
+      prompt: "Fix these syntax errors, return corrected version"
+      context: { current, result }
+      permissions:
+        network: [PROSE_SPEC_URL]
+
+# ============================================================
+# Phase 6: Write All Files
+# ============================================================
+
+let written = session: author
+  prompt: """
+    Write the .prose file and update indices:
+    1. Write .prose to confirmed location
+    2. If this is an example, add entry to examples/README.md
+    3. If this is operational, add entry to OPERATIONS.prose.md
+
+    Return: { file_path, readme_updated: bool, ops_updated: bool }
+  """
+  context: { current, final_decisions, existing_examples, existing_ops }
+
+# ============================================================
+# Output
+# ============================================================
+
+output crystallized = {
+  observation: raw_observation,
+  decisions: final_decisions,
+  file: written
+}

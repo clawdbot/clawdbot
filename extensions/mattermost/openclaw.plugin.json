@@ -1,0 +1,13 @@
+{
+  "id": "mattermost",
+  "icon": "https://cdn.simpleicons.org/mattermost",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["mattermost"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "cases": [
+    {
+      "name": "request mismatch preserves base details",
+      "runId": "approval-req-1",
+      "match": {
+        "ok": false,
+        "code": "APPROVAL_REQUEST_MISMATCH",
+        "message": "approval id does not match request"
+      },
+      "expected": {
+        "ok": false,
+        "message": "approval id does not match request",
+        "details": {
+          "code": "APPROVAL_REQUEST_MISMATCH",
+          "runId": "approval-req-1"
+        }
+      }
+    },
+    {
+      "name": "missing env binding keeps env key details",
+      "runId": "approval-env-missing",
+      "match": {
+        "ok": false,
+        "code": "APPROVAL_ENV_BINDING_MISSING",
+        "message": "approval id missing env binding for requested env overrides",
+        "details": {
+          "envKeys": ["GIT_EXTERNAL_DIFF"]
+        }
+      },
+      "expected": {
+        "ok": false,
+        "message": "approval id missing env binding for requested env overrides",
+        "details": {
+          "code": "APPROVAL_ENV_BINDING_MISSING",
+          "runId": "approval-env-missing",
+          "envKeys": ["GIT_EXTERNAL_DIFF"]
+        }
+      }
+    },
+    {
+      "name": "env mismatch preserves hash diagnostics",
+      "runId": "approval-env-mismatch",
+      "match": {
+        "ok": false,
+        "code": "APPROVAL_ENV_MISMATCH",
+        "message": "approval id env binding mismatch",
+        "details": {
+          "envKeys": ["SAFE_A"],
+          "expectedEnvHash": "expected-hash",
+          "actualEnvHash": "actual-hash"
+        }
+      },
+      "expected": {
+        "ok": false,
+        "message": "approval id env binding mismatch",
+        "details": {
+          "code": "APPROVAL_ENV_MISMATCH",
+          "runId": "approval-env-mismatch",
+          "envKeys": ["SAFE_A"],
+          "expectedEnvHash": "expected-hash",
+          "actualEnvHash": "actual-hash"
+        }
+      }
+    }
+  ]
+}

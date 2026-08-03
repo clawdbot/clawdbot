@@ -1,0 +1,82 @@
+// Xai tests cover runtime model compat plugin behavior.
+import { describe, expect, it } from "vitest";
+import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
+
+describe("xai runtime model compat", () => {
+  it("maps OpenClaw thinking levels to xAI efforts for reasoning-capable models", () => {
+    const model = applyXaiRuntimeModelCompat({
+      id: "grok-4.3",
+      provider: "xai",
+      reasoning: true,
+    });
+
+    expect(model.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "low", "medium", "high"],
+    });
+    expect(model.thinkingLevelMap).toEqual({
+      off: "none",
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "high",
+    });
+  });
+
+  it("maps Grok 4.5 thinking levels to its supported reasoning efforts", () => {
+    const model = applyXaiRuntimeModelCompat({
+      id: "grok-4.5",
+      provider: "xai",
+      reasoning: true,
+    });
+
+    expect(model.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+    });
+    expect(model.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "high",
+    });
+  });
+
+  it("suppresses reasoning efforts for non-reasoning models", () => {
+    const model = applyXaiRuntimeModelCompat({
+      id: "grok-4-fast-non-reasoning",
+      provider: "xai",
+      reasoning: false,
+    });
+
+    expect(model.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: null,
+      medium: null,
+      high: null,
+      xhigh: null,
+    });
+  });
+
+  it("does not advertise configurable reasoning effort for older xAI reasoning models", () => {
+    const model = applyXaiRuntimeModelCompat({
+      id: "grok-4.20-0309-reasoning",
+      provider: "xai",
+      reasoning: true,
+    });
+
+    expect(model.compat).toMatchObject({ supportsReasoningEffort: false });
+    expect(model.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: null,
+      medium: null,
+      high: null,
+      xhigh: null,
+    });
+  });
+});

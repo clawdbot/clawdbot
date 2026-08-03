@@ -1,0 +1,184 @@
+{
+  "id": "acpx",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": true,
+  "name": "ACPX Runtime",
+  "description": "OpenClaw ACP runtime backend with plugin-owned session and transport management.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "cwd": {
+        "type": "string",
+        "minLength": 1
+      },
+      "stateDir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "probeAgent": {
+        "type": "string",
+        "minLength": 1
+      },
+      "permissionMode": {
+        "type": "string",
+        "enum": ["approve-all", "approve-reads", "deny-all"]
+      },
+      "nonInteractivePermissions": {
+        "type": "string",
+        "enum": ["deny", "fail"]
+      },
+      "pluginToolsMcpBridge": {
+        "type": "boolean"
+      },
+      "openClawToolsMcpBridge": {
+        "type": "boolean"
+      },
+      "strictWindowsCmdWrapper": {
+        "type": "boolean"
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 0.001,
+        "default": 120
+      },
+      "queueOwnerTtlSeconds": {
+        "type": "number",
+        "minimum": 0
+      },
+      "piSessionCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "mcpServers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Command to run the MCP server"
+            },
+            "args": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Arguments to pass to the command"
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Environment variables for the MCP server"
+            }
+          },
+          "required": ["command"]
+        }
+      },
+      "agents": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "minLength": 1
+            },
+            "args": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["command"]
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "cwd": {
+      "label": "Default Working Directory",
+      "help": "Default working directory for embedded ACP session operations when not set per session."
+    },
+    "stateDir": {
+      "label": "State Directory",
+      "help": "Directory used for embedded ACP session state and persistence."
+    },
+    "permissionMode": {
+      "label": "Permission Mode",
+      "help": "Default permission policy for embedded ACP runtime prompts."
+    },
+    "nonInteractivePermissions": {
+      "label": "Non-Interactive Permission Policy",
+      "help": "Policy when interactive permission prompts are unavailable."
+    },
+    "pluginToolsMcpBridge": {
+      "label": "Plugin Tools MCP Bridge",
+      "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into embedded ACP sessions so ACP agents can call plugin-registered tools.",
+      "advanced": true
+    },
+    "openClawToolsMcpBridge": {
+      "label": "OpenClaw Tools MCP Bridge",
+      "help": "Default off. When enabled, inject the built-in OpenClaw core-tools MCP server into embedded ACP sessions so ACP agents can call selected built-in tools such as cron.",
+      "advanced": true
+    },
+    "strictWindowsCmdWrapper": {
+      "label": "Strict Windows cmd Wrapper",
+      "help": "Legacy compatibility field. The current embedded acpx/runtime package uses its own Windows command resolution behavior. Setting this to false is accepted for compatibility and logged as ignored.",
+      "advanced": true
+    },
+    "timeoutSeconds": {
+      "label": "Runtime Operation Timeout Seconds",
+      "help": "Timeout for embedded ACP runtime startup and control operations. ACP turns use OpenClaw agent/run timeouts.",
+      "advanced": true
+    },
+    "queueOwnerTtlSeconds": {
+      "label": "Queue Owner TTL Seconds",
+      "help": "Reserved compatibility field for the older embedded ACPX queue-owner path. Accepted for compatibility and logged as ignored.",
+      "advanced": true
+    },
+    "piSessionCatalog.enabled": {
+      "label": "Pi Session Catalog",
+      "help": "Auto-detect Pi sessions on the Gateway and paired nodes, then show them in the sessions sidebar."
+    },
+    "probeAgent": {
+      "label": "Health Probe Agent",
+      "help": "Agent id used for the embedded ACP runtime health probe. Defaults to the first `acp.allowedAgents` entry when that allowlist is set, otherwise to the runtime built-in probe agent (codex). Set this explicitly (for example `opencode` or `claude`) when the default probe agent is not installed or not authenticated, so the whole embedded ACP backend does not get marked unavailable.",
+      "advanced": true
+    },
+    "mcpServers": {
+      "label": "MCP Servers",
+      "help": "Named MCP server definitions to inject into embedded ACP session bootstrap. Each entry needs a command and can include args and env.",
+      "advanced": true
+    },
+    "agents": {
+      "label": "Agent Commands",
+      "help": "Optional per-agent command overrides for the embedded ACP runtime.",
+      "advanced": true
+    }
+  },
+  "configContracts": {
+    "dangerousFlags": [
+      {
+        "path": "permissionMode",
+        "equals": "approve-all"
+      }
+    ],
+    "secretInputs": {
+      "bundledDefaultEnabled": false,
+      "paths": [
+        {
+          "path": "mcpServers.*.env.*",
+          "expected": "string"
+        }
+      ]
+    }
+  }
+}

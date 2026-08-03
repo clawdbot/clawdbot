@@ -1,0 +1,241 @@
+// Provides PTY harness helpers for TUI end-to-end tests.
+import { appendFileSync } from "node:fs";
+import * as nodePty from "@lydell/node-pty";
+import type { IPty } from "@lydell/node-pty";
+import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
+import { toErrorObject } from "../infra/errors.js";
+import { signalProcessTree } from "../process/kill-tree.js";
+
+// Shared PTY harness utilities for fake-backend and local TUI smoke tests.
+type PtyExitEvent = Parameters<Parameters<IPty["onExit"]>[0]>[0];
+
+/** Handle returned by PTY tests for input, output waits, and cleanup. */
+export type PtyRun = {
+  output: () => string;
+  visibleOutput: () => string;
+  write: (data: string, opts?: { delay?: boolean }) => Promise<void>;
+  waitForOutput: (needle: string, timeoutMs?: number) => Promise<string>;
+  waitForExit: (timeoutMs?: number) => Promise<PtyExitEvent>;
+  /** Ends behavior-complete PTY scenarios without exercising graceful TUI shutdown. */
+  forceKill: () => Promise<void>;
+  dispose: () => Promise<void>;
+};
+
+const PTY_EXIT_SETTLE_MS = 25;
+
+/** Polls until a reader returns a value or the timeout expires. */
+export function waitFor<T>(params: {
+  timeoutMs: number;
+  read: () => T | null;
+  onTimeout: () => Error;
+}): Promise<T> {
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      let result: T | null;
+      try {
+        result = params.read();
+      } catch (error) {
+        reject(toErrorObject(error, "Non-Error rejection"));
+        return;
+      }
+      if (result !== null) {
+        resolve(result);
+        return;
+      }
+      if (Date.now() - start >= params.timeoutMs) {
+        reject(params.onTimeout());
+        return;
+      }
+      setTimeout(tick, 25);
+    };
+    tick();
+  });
+}
+
+/** Async sleep used to simulate slower PTY typing. */
+export function sleep(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function readPositiveIntegerEnv(name: string, env: NodeJS.ProcessEnv = process.env): number | null {
+  const value = Number.parseInt(env[name] ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function readPtyDimensionEnv(name: string, fallback: number, env: NodeJS.ProcessEnv): number {
+  return readPositiveIntegerEnv(name, env) ?? fallback;
+}
+
+async function writePtyInput(
+  pty: IPty,
+  data: string,
+  env: NodeJS.ProcessEnv,
+  opts: { delay?: boolean } = {},
+): Promise<void> {
+  const delayMs = readPositiveIntegerEnv("OPENCLAW_TUI_PTY_TYPE_DELAY_MS", env);
+  if (!delayMs || opts.delay === false) {
+    pty.write(data);
+    return;
+  }
+  const chunkSize = readPositiveIntegerEnv("OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE", env) ?? 1;
+  // Chunk by Unicode characters so stress typing never sends half of a surrogate pair.
+  const characters = Array.from(data);
+  for (let idx = 0; idx < characters.length; idx += chunkSize) {
+    pty.write(characters.slice(idx, idx + chunkSize).join(""));
+    if (idx + chunkSize < characters.length) {
+      await sleep(delayMs);
+    }
+  }
+}
+
+function mirrorPtyOutput(data: string) {
+  const mirrorPath = process.env.OPENCLAW_TUI_PTY_MIRROR_PATH;
+  if (!mirrorPath) {
+    return;
+  }
+  appendFileSync(mirrorPath, data, "utf8");
+}
+
+/** Starts a PTY process and exposes deterministic output/exit wait helpers. */
+export function startPty(
+  command: string,
+  args: string[],
+  opts: {
+    activeRuns?: PtyRun[];
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    exitTimeoutMs: number;
+    outputTimeoutMs: number;
+  },
+) {
+  let output = "";
+  let visibleOutput = "";
+  let exitEvent: PtyExitEvent | null = null;
+  const ansiStripper = new AnsiSequenceStripper();
+  const mergedEnv = {
+    ...process.env,
+    ...opts.env,
+    TERM: "xterm-256color",
+  };
+  const ptyEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(mergedEnv)) {
+    if (value !== undefined) {
+      ptyEnv[key] = value;
+    }
+  }
+  const pty = nodePty.spawn(command, args, {
+    name: "xterm-256color",
+    cols: readPtyDimensionEnv("OPENCLAW_TUI_PTY_COLS", 100, ptyEnv),
+    rows: readPtyDimensionEnv("OPENCLAW_TUI_PTY_ROWS", 30, ptyEnv),
+    cwd: opts.cwd,
+    env: ptyEnv,
+  });
+
+  const dataSubscription = pty.onData((data) => {
+    output += data;
+    // PTY line wrapping and ANSI chunks must not hide visible text from behavior checks.
+    const visibleChunk = ansiStripper.write(data).replace(/\s+/gu, " ");
+    visibleOutput +=
+      visibleOutput.endsWith(" ") && visibleChunk.startsWith(" ")
+        ? visibleChunk.slice(1)
+        : visibleChunk;
+    mirrorPtyOutput(data);
+  });
+  const exitSubscription = pty.onExit((event) => {
+    exitEvent = event;
+  });
+
+  const waitForExit = async (timeoutMs = opts.exitTimeoutMs) =>
+    await waitFor({
+      timeoutMs,
+      read: () => exitEvent,
+      onTimeout: () => new Error(`timed out waiting for PTY exit\n${output}`),
+    });
+
+  let forceKillPromise: Promise<void> | undefined;
+  let disposePromise: Promise<void> | undefined;
+  let subscriptionsDisposed = false;
+
+  const disposeSubscriptions = () => {
+    if (subscriptionsDisposed) {
+      return;
+    }
+    subscriptionsDisposed = true;
+    dataSubscription.dispose();
+    exitSubscription.dispose();
+  };
+
+  const forceKillPty = async () => {
+    if (!exitEvent) {
+      // The PTY owns a process group; killing only its shell can leave the TUI child alive.
+      await new Promise<void>((resolve) => {
+        signalProcessTree(pty.pid, "SIGKILL", { onComplete: resolve });
+      });
+      // Native PTY backends do not consistently emit onExit after a forced tree kill.
+      await sleep(PTY_EXIT_SETTLE_MS);
+      exitEvent ??= { exitCode: 137, signal: 9 };
+    }
+  };
+
+  const run: PtyRun = {
+    output: () => output,
+    visibleOutput: () => visibleOutput,
+    write: async (data, writeOpts) => await writePtyInput(pty, data, ptyEnv, writeOpts),
+    waitForOutput: async (needle, timeoutMs = opts.outputTimeoutMs) =>
+      await waitFor({
+        timeoutMs,
+        read: () => {
+          if (visibleOutput.includes(needle.replace(/\s+/gu, " "))) {
+            return output;
+          }
+          if (exitEvent) {
+            throw new Error(
+              `PTY exited before ${JSON.stringify(needle)}\nexit=${JSON.stringify(exitEvent)}\n${output}`,
+            );
+          }
+          return null;
+        },
+        onTimeout: () => new Error(`timed out waiting for ${JSON.stringify(needle)}\n${output}`),
+      }),
+    waitForExit,
+    forceKill: () => {
+      forceKillPromise ??= (async () => {
+        try {
+          await forceKillPty();
+        } finally {
+          disposeSubscriptions();
+        }
+      })();
+      return forceKillPromise;
+    },
+    dispose: () => {
+      if (forceKillPromise) {
+        return forceKillPromise;
+      }
+      disposePromise ??= (async () => {
+        try {
+          if (!exitEvent) {
+            try {
+              pty.kill("SIGTERM");
+              await waitForExit();
+            } catch {
+              // Failure cleanup must not strand the PTY tree or replace the primary test error.
+              await forceKillPty();
+            }
+          }
+          // node-pty releases its native exit callback after onExit returns.
+          // Give that release a turn before Vitest tears down the worker.
+          await sleep(PTY_EXIT_SETTLE_MS);
+        } finally {
+          disposeSubscriptions();
+        }
+      })();
+      return disposePromise;
+    },
+  };
+  opts.activeRuns?.push(run);
+  return run;
+}

@@ -1,0 +1,139 @@
+openclaw-custodian-panel {
+  position: fixed;
+  z-index: 60;
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.cp {
+  position: fixed;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.cp--bottom {
+  right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
+  bottom: calc(var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px));
+  left: var(--shell-nav-width, 0);
+  border-top: 1px solid var(--border);
+}
+
+.cp--right {
+  top: var(--shell-topbar-height, 0);
+  right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
+  bottom: calc(var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px));
+  border-left: 1px solid var(--border);
+}
+
+.cp-resizer {
+  position: absolute;
+  z-index: 2;
+  background: transparent;
+}
+
+.cp-resizer:hover {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.cp-resizer--bottom {
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 5px;
+  cursor: ns-resize;
+}
+
+.cp-resizer--right {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 5px;
+  cursor: ew-resize;
+}
+
+.cp-header {
+  display: flex;
+  min-height: 38px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 6px 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cp-title,
+.cp-actions {
+  display: flex;
+  align-items: center;
+}
+
+.cp-title {
+  min-width: 0;
+  gap: 7px;
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+.cp-actions {
+  gap: 2px;
+}
+
+.cp-icon {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.cp-icon:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.cp-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.cp > openclaw-custodian-surface {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 0;
+}
+
+.cp .custodian-surface {
+  width: 100%;
+  min-height: 0;
+  padding: 0 12px 12px;
+}
+
+.cp .custodian__messages {
+  padding-block: 16px;
+}
+
+.cp .custodian__option-card {
+  margin-right: 0;
+  margin-left: 42px;
+}
+
+@media (max-width: 600px) {
+  .cp--right {
+    top: var(--shell-topbar-height, 0);
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto !important;
+  }
+}

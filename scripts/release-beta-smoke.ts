@@ -1,0 +1,466 @@
+#!/usr/bin/env -S pnpm tsx
+// Release Beta Smoke script supports OpenClaw repository automation.
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+interface Options {
+  beta: string;
+  model: string;
+  providerMode: string;
+  ref: string;
+  repo: string;
+  skipParallels: boolean;
+  skipTelegram: boolean;
+}
+
+export type RunOptions = {
+  capture?: boolean;
+  timeoutMs?: number;
+};
+
+type WorkflowRunInfo = {
+  conclusion: string | null;
+  html_url: string;
+  status: string;
+  updated_at: string;
+};
+
+type PollRunOptions = {
+  pollIntervalMs?: number;
+  readRun?: (repo: string, runId: string) => WorkflowRunInfo;
+  sleep?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
+  now?: () => number;
+};
+
+function usage(): string {
+  return `Usage: pnpm release:beta-smoke -- --beta beta4 [options]
+
+Options:
+  --beta <beta|betaN|version>  Beta target. Default: beta
+  --model <provider/model>     Parallels agent-turn model. Default: openai/gpt-5.4
+  --provider-mode <mode>       Telegram workflow provider mode. Default: mock-openai
+  --ref <ref>                  GitHub workflow dispatch ref. Default: main
+  --repo <owner/repo>          GitHub repo. Default: openclaw/openclaw
+  --skip-parallels             Only run Telegram workflow
+  --skip-telegram              Only run Parallels beta validation
+  -h, --help                   Show help
+`;
+}
+
+export function parseArgs(argv: string[]): Options {
+  const args = stripLeadingPackageManagerSeparator(argv);
+  const options: Options = {
+    beta: "beta",
+    model: "openai/gpt-5.4",
+    providerMode: "mock-openai",
+    ref: "main",
+    repo: "openclaw/openclaw",
+    skipParallels: false,
+    skipTelegram: false,
+  };
+  parseArgv: for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    switch (arg) {
+      case "--":
+        break parseArgv;
+      case "--beta":
+        options.beta = requireValue(args, ++i, arg);
+        break;
+      case "--model":
+        options.model = requireValue(args, ++i, arg);
+        break;
+      case "--provider-mode":
+        options.providerMode = requireValue(args, ++i, arg);
+        break;
+      case "--ref":
+        options.ref = requireValue(args, ++i, arg);
+        break;
+      case "--repo":
+        options.repo = requireValue(args, ++i, arg);
+        break;
+      case "--skip-parallels":
+        options.skipParallels = true;
+        break;
+      case "--skip-telegram":
+        options.skipTelegram = true;
+        break;
+      case "-h":
+      case "--help":
+        process.stdout.write(usage());
+        process.exit(0);
+      default:
+        throw new Error(`unknown option: ${arg}`);
+    }
+  }
+  if (options.skipParallels && options.skipTelegram) {
+    throw new Error("--skip-parallels and --skip-telegram cannot be used together");
+  }
+  return options;
+}
+
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
+function requireValue(argv: string[], index: number, flag: string): string {
+  const value = argv[index];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
+const CAPTURE_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+const DEFAULT_COMMAND_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS,
+  10 * 60_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS",
+);
+const TELEGRAM_POLL_INTERVAL_MS = readPositiveInt(
+  process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_INTERVAL_MS,
+  30_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_POLL_INTERVAL_MS",
+);
+const TELEGRAM_POLL_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_TIMEOUT_MS,
+  4 * 60 * 60_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_POLL_TIMEOUT_MS",
+);
+
+export function readPositiveInt(
+  raw: string | undefined,
+  fallback: number,
+  label = "value",
+): number {
+  const text = (raw ?? "").trim();
+  if (!text) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return parsed;
+}
+
+export function run(command: string, args: string[], input?: RunOptions): string {
+  const timeoutMs = input?.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    killSignal: "SIGKILL",
+    maxBuffer: CAPTURE_MAX_BUFFER_BYTES,
+    stdio: input?.capture ? ["ignore", "pipe", "pipe"] : "inherit",
+    timeout: timeoutMs,
+  });
+  if (result.error || result.status !== 0) {
+    const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
+    const reason =
+      errorCode === "ETIMEDOUT"
+        ? `timed out after ${timeoutMs}ms`
+        : (result.status ?? result.signal ?? result.error?.message ?? "unknown");
+    const stderr = result.stderr ? `\n${result.stderr}` : "";
+    throw new Error(`${command} ${args.join(" ")} failed with ${reason}${stderr}`);
+  }
+  return result.stdout ?? "";
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+const TELEGRAM_BETA_WORKFLOW_FILE = "npm-telegram-beta-e2e.yml";
+
+function resolveBetaVersion(beta: string): string {
+  const value = beta.trim().replace(/^openclaw@/, "");
+  if (/^\d{4}\.\d+\.\d+-beta\.\d+$/u.test(value)) {
+    return value;
+  }
+  if (value === "beta") {
+    return run("npm", ["view", "openclaw@beta", "version"], { capture: true }).trim();
+  }
+  const betaMatch = /^(?:beta)?(\d+)$/u.exec(value);
+  if (!betaMatch) {
+    return run("npm", ["view", `openclaw@${value}`, "version"], { capture: true }).trim();
+  }
+  const suffix = `-beta.${betaMatch[1]}`;
+  const versions = JSON.parse(
+    run("npm", ["view", "openclaw", "versions", "--json"], { capture: true }),
+  ) as string[];
+  const match = versions
+    .filter((version) => version.endsWith(suffix))
+    .toSorted((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .at(-1);
+  if (!match) {
+    throw new Error(`no openclaw registry version found for ${beta}`);
+  }
+  return match;
+}
+
+function timeoutCommand(): string {
+  return run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
+    capture: true,
+  }).trim();
+}
+
+function runParallels(beta: string, model: string): void {
+  const timeoutBin = timeoutCommand();
+  const forwarded = [
+    "pnpm",
+    "test:parallels:npm-update",
+    "--",
+    "--beta-validation",
+    beta,
+    "--model",
+    model,
+    "--json",
+  ];
+  const command = [
+    'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
+    "exec",
+    shellQuote(timeoutBin),
+    "--foreground",
+    "150m",
+    ...forwarded.map(shellQuote),
+  ].join(" ");
+  run("bash", ["-lc", command], { timeoutMs: 155 * 60_000 });
+}
+
+function ghJson(repo: string, pathSuffix: string): unknown {
+  const url = `https://api.github.com/repos/${repo}/${pathSuffix}`;
+  const result = spawnSync(
+    "bash",
+    [
+      "-lc",
+      [
+        "set -euo pipefail",
+        'token="$(gh auth token)"',
+        'curl -fsS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "${OPENCLAW_GITHUB_REST_URL}"',
+      ].join("\n"),
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, OPENCLAW_GITHUB_REST_URL: url },
+      killSignal: "SIGKILL",
+      maxBuffer: CAPTURE_MAX_BUFFER_BYTES,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: DEFAULT_COMMAND_TIMEOUT_MS,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    const reason = result.status ?? result.signal ?? result.error?.message ?? "unknown";
+    const stderr = result.stderr ? `\n${result.stderr}` : "";
+    throw new Error(`GitHub REST request failed for ${pathSuffix} with ${reason}${stderr}`);
+  }
+  return JSON.parse(result.stdout ?? "");
+}
+
+export function parseWorkflowRunIdFromOutput(output: string): string | undefined {
+  return /\/actions\/runs\/(\d+)/u.exec(output)?.[1];
+}
+
+export function requireWorkflowRunIdFromOutput(output: string, workflow: string): string {
+  const runId = parseWorkflowRunIdFromOutput(output);
+  if (!runId) {
+    throw new Error(
+      `gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs`,
+    );
+  }
+  return runId;
+}
+
+async function dispatchTelegram(options: Options, packageSpec: string): Promise<string> {
+  const output = run(
+    "gh",
+    [
+      "workflow",
+      "run",
+      TELEGRAM_BETA_WORKFLOW_FILE,
+      "--repo",
+      options.repo,
+      "--ref",
+      options.ref,
+      "-f",
+      `package_spec=${packageSpec}`,
+      "-f",
+      `package_label=${packageSpec}`,
+      "-f",
+      `provider_mode=${options.providerMode}`,
+    ],
+    { capture: true },
+  );
+  return requireWorkflowRunIdFromOutput(output, TELEGRAM_BETA_WORKFLOW_FILE);
+}
+
+export async function pollRun(
+  repo: string,
+  runId: string,
+  options: PollRunOptions = {},
+): Promise<void> {
+  const started = (options.now ?? Date.now)();
+  const timeoutMs = Math.max(1, options.timeoutMs ?? TELEGRAM_POLL_TIMEOUT_MS);
+  const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? TELEGRAM_POLL_INTERVAL_MS);
+  const sleep =
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
+  const readRun =
+    options.readRun ??
+    ((currentRepo: string, currentRunId: string) =>
+      ghJson(currentRepo, `actions/runs/${currentRunId}`) as WorkflowRunInfo);
+  for (;;) {
+    const info = readRun(repo, runId);
+    console.log(
+      `Telegram workflow ${runId}: ${info.status}${info.conclusion ? `/${info.conclusion}` : ""} updated=${info.updated_at}`,
+    );
+    if (info.status === "completed") {
+      if (info.conclusion !== "success") {
+        throw new Error(
+          `Telegram workflow failed: ${info.conclusion ?? "unknown"} ${info.html_url}`,
+        );
+      }
+      console.log(info.html_url);
+      return;
+    }
+    const elapsedMs = (options.now ?? Date.now)() - started;
+    if (elapsedMs >= timeoutMs) {
+      throw new Error(`Telegram workflow ${runId} did not complete within ${timeoutMs}ms`);
+    }
+    await sleep(Math.min(pollIntervalMs, timeoutMs - elapsedMs));
+  }
+}
+
+function downloadTelegramArtifact(repo: string, runId: string): string {
+  const artifacts = (
+    ghJson(repo, `actions/runs/${runId}/artifacts`) as {
+      artifacts: Array<{ expired: boolean; name: string }>;
+    }
+  ).artifacts;
+  const artifact = artifacts.find(
+    (entry) => !entry.expired && entry.name.startsWith(`npm-telegram-beta-e2e-${runId}-`),
+  );
+  if (!artifact) {
+    throw new Error(`no npm Telegram artifact found for run ${runId}`);
+  }
+  const outputDir = path.join(".artifacts", "qa-e2e", artifact.name);
+  mkdirSync(outputDir, { recursive: true });
+  run("gh", [
+    "run",
+    "download",
+    runId,
+    "--repo",
+    repo,
+    "--name",
+    artifact.name,
+    "--dir",
+    outputDir,
+  ]);
+  return outputDir;
+}
+
+function findFile(root: string, basename: string): string {
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const filePath = path.join(root, entry.name);
+    if (entry.isFile() && entry.name === basename) {
+      return filePath;
+    }
+    if (entry.isDirectory()) {
+      const nested = findFile(filePath, basename);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+  return "";
+}
+
+export function mergeTelegramProofIntoReleaseBody(body: string, telegramLine: string): string {
+  if (body.includes(telegramLine)) {
+    return body;
+  }
+
+  const marker = "### Release verification";
+  const telegramProofPattern = /^- npm Telegram beta E2E: .*$/mu;
+  if (telegramProofPattern.test(body)) {
+    return body.replace(telegramProofPattern, telegramLine);
+  }
+  if (!body.includes(marker)) {
+    return `${body.trimEnd()}\n\n${marker}\n\n${telegramLine}\n`;
+  }
+
+  const markerIndex = body.indexOf(marker);
+  const afterMarkerIndex = markerIndex + marker.length;
+  const nextHeading = /\n#{1,6} /u.exec(body.slice(afterMarkerIndex));
+  const insertionIndex = nextHeading === null ? -1 : afterMarkerIndex + nextHeading.index;
+  if (insertionIndex === -1) {
+    return `${body.trimEnd()}\n${telegramLine}\n`;
+  }
+  return `${body.slice(0, insertionIndex).trimEnd()}\n${telegramLine}\n${body.slice(insertionIndex)}`;
+}
+
+function appendTelegramProofToRelease(repo: string, version: string, runId: string): void {
+  const tag = `v${version}`;
+  const release = ghJson(repo, `releases/tags/${encodeURIComponent(tag)}`) as {
+    body?: string;
+    html_url?: string;
+  };
+  const body = release.body ?? "";
+  const telegramLine = `- npm Telegram beta E2E: https://github.com/${repo}/actions/runs/${runId}`;
+  const notesFile = path.join(
+    "/tmp",
+    `openclaw-${version.replace(/[^a-zA-Z0-9.-]/g, "-")}-release-notes-${process.pid}.md`,
+  );
+  const nextBody = mergeTelegramProofIntoReleaseBody(body, telegramLine);
+  if (nextBody === body) {
+    return;
+  }
+  writeFileSync(notesFile, nextBody);
+  run("gh", ["release", "edit", tag, "--repo", repo, "--notes-file", notesFile]);
+  console.log(
+    `Updated release proof: ${release.html_url ?? `https://github.com/${repo}/releases/tag/${tag}`}`,
+  );
+}
+
+async function main(): Promise<void> {
+  const options = parseArgs(process.argv.slice(2));
+  const version = resolveBetaVersion(options.beta);
+  const packageSpec = `openclaw@${version}`;
+  console.log(`Resolved beta target: ${packageSpec}`);
+
+  let telegramRunId: string | undefined;
+  if (!options.skipTelegram) {
+    telegramRunId = await dispatchTelegram(options, packageSpec);
+    console.log(
+      `Dispatched Telegram workflow: https://github.com/${options.repo}/actions/runs/${telegramRunId}`,
+    );
+  }
+
+  if (!options.skipParallels) {
+    runParallels(version, options.model);
+  }
+
+  if (telegramRunId) {
+    await pollRun(options.repo, telegramRunId);
+    const artifactDir = downloadTelegramArtifact(options.repo, telegramRunId);
+    const report = findFile(artifactDir, "qa-suite-report.md");
+    if (report && existsSync(report)) {
+      console.log(`\nTelegram report: ${report}\n`);
+      console.log(readFileSync(report, "utf8"));
+    }
+    appendTelegramProofToRelease(options.repo, version, telegramRunId);
+  }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

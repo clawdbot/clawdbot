@@ -1,0 +1,127 @@
+// Discord plugin module implements inbound job behavior.
+import {
+  resolveDiscordChannelIdSafe,
+  resolveDiscordChannelInfoSafe,
+  resolveDiscordChannelNameSafe,
+  resolveDiscordChannelParentSafe,
+} from "./channel-access.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
+
+type DiscordInboundJobRuntimeField =
+  | "runtime"
+  | "abortSignal"
+  | "guildHistories"
+  | "client"
+  | "turnAdoptionLifecycle"
+  | "threadBindings"
+  | "discordRestFetch";
+
+type DiscordInboundJobRuntime = Pick<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
+
+type DiscordInboundJobPayload = Omit<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
+
+export type DiscordInboundJob = {
+  queueKey: string;
+  payload: DiscordInboundJobPayload;
+  runtime: DiscordInboundJobRuntime;
+  ingressSettlement?: {
+    settle: () => Promise<void>;
+    abandon: (error?: unknown) => Promise<void>;
+  };
+};
+
+function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
+  // Serialize work by the eventual session route so one conversation cannot
+  // race itself when Discord channel and session identifiers differ.
+  const sessionKey = ctx.route.sessionKey?.trim();
+  if (sessionKey) {
+    return sessionKey;
+  }
+  const baseSessionKey = ctx.baseSessionKey?.trim();
+  if (baseSessionKey) {
+    return baseSessionKey;
+  }
+  return ctx.messageChannelId;
+}
+
+export function buildDiscordInboundJob(
+  ctx: DiscordMessagePreflightContext,
+  options?: { ingressSettlement?: DiscordInboundJob["ingressSettlement"] },
+): DiscordInboundJob {
+  const {
+    runtime,
+    abortSignal,
+    guildHistories,
+    client,
+    turnAdoptionLifecycle,
+    threadBindings,
+    discordRestFetch,
+    message,
+    data,
+    threadChannel,
+    ...payload
+  } = ctx;
+
+  const sanitizedMessage = sanitizeDiscordInboundMessage(message);
+  return {
+    queueKey: resolveDiscordInboundJobQueueKey(ctx),
+    payload: {
+      ...payload,
+      message: sanitizedMessage,
+      data: {
+        ...data,
+        message: sanitizedMessage,
+      },
+      threadChannel: normalizeDiscordThreadChannel(threadChannel),
+    },
+    runtime: {
+      runtime,
+      abortSignal,
+      guildHistories,
+      client,
+      turnAdoptionLifecycle,
+      threadBindings,
+      discordRestFetch,
+    },
+    ingressSettlement: options?.ingressSettlement,
+  };
+}
+
+export function materializeDiscordInboundJob(
+  job: DiscordInboundJob,
+  abortSignal?: AbortSignal,
+): DiscordMessagePreflightContext {
+  return {
+    ...job.payload,
+    ...job.runtime,
+    abortSignal: abortSignal ?? job.runtime.abortSignal,
+  };
+}
+
+function sanitizeDiscordInboundMessage<T extends object>(message: T): T {
+  const descriptors = Object.getOwnPropertyDescriptors(message);
+  delete descriptors.channel;
+  return Object.create(Object.getPrototypeOf(message), descriptors) as T;
+}
+
+function normalizeDiscordThreadChannel(
+  threadChannel: DiscordMessagePreflightContext["threadChannel"],
+): DiscordMessagePreflightContext["threadChannel"] {
+  if (!threadChannel) {
+    return null;
+  }
+  const channelInfo = resolveDiscordChannelInfoSafe(threadChannel);
+  const parent = resolveDiscordChannelParentSafe(threadChannel);
+  return {
+    id: threadChannel.id,
+    name: channelInfo.name,
+    parentId: channelInfo.parentId,
+    parent: parent
+      ? {
+          id: resolveDiscordChannelIdSafe(parent),
+          name: resolveDiscordChannelNameSafe(parent),
+        }
+      : undefined,
+    ownerId: channelInfo.ownerId,
+  };
+}

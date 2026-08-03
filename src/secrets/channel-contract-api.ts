@@ -1,0 +1,228 @@
+/** Loads channel secret contract APIs from bundled and external plugin artifacts. */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  listAgentEntries,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  createPluginModuleLoaderCache,
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../plugins/plugin-module-loader-cache.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
+import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
+
+type BundledChannelContractApi = {
+  collectRuntimeConfigAssignments?: (params: {
+    config: OpenClawConfig;
+    defaults: SecretDefaults | undefined;
+    context: ResolverContext;
+  }) => void;
+  secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
+};
+
+const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
+const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
+const RUNNING_FROM_BUILT_ARTIFACT =
+  CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
+  CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
+const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+
+function loadBundledChannelPublicArtifact(
+  channelId: string,
+  artifactBasename: string,
+): BundledChannelContractApi | undefined {
+  try {
+    return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
+      dirName: channelId,
+      artifactBasename,
+    });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("Unable to resolve bundled plugin public surface ")
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+type BundledChannelSecretContractApi = Pick<
+  BundledChannelContractApi,
+  "collectRuntimeConfigAssignments" | "secretTargetRegistryEntries"
+>;
+
+/** Loads a bundled channel secret contract from its public artifact bundle. */
+function loadBundledChannelSecretContractApi(
+  channelId: string,
+): BundledChannelSecretContractApi | undefined {
+  return loadBundledChannelPublicArtifact(channelId, "secret-contract-api.js");
+}
+
+function orderedContractApiExtensions(): readonly string[] {
+  return RUNNING_FROM_BUILT_ARTIFACT
+    ? CONTRACT_API_EXTENSIONS
+    : ([...CONTRACT_API_EXTENSIONS.slice(3), ...CONTRACT_API_EXTENSIONS.slice(0, 3)] as const);
+}
+
+function resolvePluginContractApiPath(rootDir: string): string | null {
+  // Compiled npm-published plugins place their public artifacts under <rootDir>/dist/
+  // (per package.json `openclaw.runtimeExtensions`), while flat-layout plugins keep
+  // them at <rootDir>/. Search both, preferring dist/ when running from built openclaw
+  // artifacts and rootDir/ when running from source.
+  const searchDirs = RUNNING_FROM_BUILT_ARTIFACT
+    ? [path.join(rootDir, "dist"), rootDir]
+    : [rootDir, path.join(rootDir, "dist")];
+  for (const basename of ["secret-contract-api", "contract-api"]) {
+    for (const dir of searchDirs) {
+      for (const extension of orderedContractApiExtensions()) {
+        const candidate = path.join(dir, `${basename}${extension}`);
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function loadPluginContractModule(modulePath: string): BundledChannelContractApi {
+  return getCachedPluginModuleLoader({
+    cache: moduleLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+  })(modulePath) as BundledChannelContractApi;
+}
+
+function loadExternalChannelSecretContractFromRecord(
+  record: PluginManifestRecord,
+  env: NodeJS.ProcessEnv = process.env,
+): BundledChannelSecretContractApi | undefined {
+  const contractPath = resolvePluginContractApiPath(record.rootDir);
+  if (!contractPath) {
+    return undefined;
+  }
+  const opened = openRootFileSync({
+    absolutePath: contractPath,
+    rootPath: record.rootDir,
+    boundaryLabel: "plugin root",
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+      origin: record.origin,
+      rootDir: record.rootDir,
+      env,
+    }),
+    skipLexicalRootCheck: true,
+  });
+  if (!opened.ok) {
+    return undefined;
+  }
+  const safePath = opened.path;
+  fs.closeSync(opened.fd);
+  try {
+    const mod = loadPluginContractModule(safePath);
+    if (mod.collectRuntimeConfigAssignments || mod.secretTargetRegistryEntries) {
+      return mod;
+    }
+  } catch (error) {
+    if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[channel-contract-api] failed to load ${record.id} contract ${safePath}: ${detail}`,
+      );
+    }
+  }
+  return undefined;
+}
+
+function recordOwnsChannel(record: PluginManifestRecord, channelId: string): boolean {
+  return (
+    record.channels.includes(channelId) ||
+    Object.hasOwn(record.channelConfigs ?? {}, channelId) ||
+    record.channelCatalogMeta?.id === channelId ||
+    record.packageChannel?.id === channelId
+  );
+}
+
+function listChannelSecretContractRecords(params: {
+  channelId: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+}): PluginManifestRecord[] {
+  // Static target-registry compilation intentionally has no runtime config.
+  // External plugin discovery can proceed without a workspace scan in that case.
+  const workspaceDir =
+    listAgentEntries(params.config).length > 0
+      ? resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), params.env)
+      : undefined;
+  const snapshot = loadPluginMetadataSnapshot({
+    config: params.config,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    env: params.env,
+  });
+  return snapshot.plugins
+    .filter((record) => record.origin !== "bundled")
+    .filter((record) => recordOwnsChannel(record, params.channelId))
+    .filter(
+      (record) => !params.loadablePluginOrigins || params.loadablePluginOrigins.has(record.id),
+    )
+    .toSorted((left, right) => {
+      if (left.id === params.channelId && right.id !== params.channelId) {
+        return -1;
+      }
+      if (right.id === params.channelId && left.id !== params.channelId) {
+        return 1;
+      }
+      return left.id.localeCompare(right.id);
+    });
+}
+
+/** Loads the first channel secret contract for a channel, preferring bundled metadata. */
+/** Loads a channel secret contract API for a channel id and current plugin origin policy. */
+export function loadChannelSecretContractApi(params: {
+  channelId: string;
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+}): BundledChannelSecretContractApi | undefined {
+  const bundled = loadBundledChannelSecretContractApi(params.channelId);
+  if (bundled) {
+    return bundled;
+  }
+  // External contracts are considered only after bundled artifacts so core channels keep their
+  // shipped metadata stable even when similarly named plugins are installed.
+  const env = params.env ?? process.env;
+  for (const record of listChannelSecretContractRecords({
+    channelId: params.channelId,
+    config: params.config,
+    env,
+    loadablePluginOrigins: params.loadablePluginOrigins,
+  })) {
+    const contract = loadExternalChannelSecretContractFromRecord(record, env);
+    if (contract) {
+      return contract;
+    }
+  }
+  return undefined;
+}
+
+/** Loads a channel secret contract directly from a manifest record. */
+export function loadChannelSecretContractApiForRecord(
+  record: PluginManifestRecord,
+): BundledChannelSecretContractApi | undefined {
+  if (record.origin === "bundled") {
+    return loadBundledChannelSecretContractApi(record.id);
+  }
+  return loadExternalChannelSecretContractFromRecord(record);
+}

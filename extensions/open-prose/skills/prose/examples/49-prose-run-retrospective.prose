@@ -1,0 +1,210 @@
+# Prose Run Retrospective
+# Analyzes a completed run to extract learnings and produce an improved version.
+
+input run_id: "Path to the completed run directory"
+input prose_path: "Path to the .prose file that was executed"
+
+const PATTERNS_PATH = "prose/skills/open-prose/guidance/patterns.md"
+const ANTIPATTERNS_PATH = "prose/skills/open-prose/guidance/antipatterns.md"
+
+agent analyst:
+  model: sonnet
+  prompt: """You analyze OpenProse run artifacts to identify issues and classify outcomes.
+Checklist-style evaluation: read systematically, identify issues with evidence, classify outcomes.
+
+Classification criteria:
+- success: Program completed, outputs are correct
+- transient-error: External failure (API timeout, network) - not a program flaw
+- architectural-issue: Structural problem in .prose design
+- antipattern-instance: Program exhibits a known antipattern"""
+
+agent extractor:
+  model: opus
+  prompt: """You extract generalizable patterns from specific experiences.
+Deep reasoning: identify abstract success/failure factors, distinguish situational from generalizable,
+reason about trade-offs, synthesize observations into principles.
+Be conservative - avoid over-generalizing from single instances."""
+
+parallel:
+  run_artifacts = session: analyst
+    prompt: """Read and catalog all artifacts in {run_id}.
+Look for bindings/*.md, state.md, outputs/, error files.
+Summarize what exists and its content."""
+    context:
+      file: "{run_id}/state.md"
+
+  source_analysis = session: analyst
+    prompt: """Parse the .prose file structure at {prose_path}.
+Identify: inputs, agents and models, phase structure, error handling, decision points, outputs."""
+    context:
+      file: prose_path
+
+let classification = session: analyst
+  prompt: """Classify the run outcome.
+
+Run artifacts: {run_artifacts}
+Source structure: {source_analysis}
+
+Determine:
+- outcome_type: success | transient-error | architectural-issue | antipattern-instance
+- confidence: high | medium | low
+- evidence: Specific quotes supporting classification
+- summary: One-line description"""
+
+if **classification indicates transient error (API timeout, network failure) not caused by program**:
+  output result = {
+    status: "transient-error",
+    classification: classification,
+    recommendation: "Re-run the program; no structural changes needed"
+  }
+
+let improvements = session: analyst
+  prompt: """Identify improvement opportunities in the .prose file.
+
+Classification: {classification}
+Source structure: {source_analysis}
+
+For each improvement:
+- What: Specific change
+- Why: Problem it solves
+- Priority: high | medium | low
+
+Focus on structural improvements: model selection, parallelization, error handling, context management."""
+  context:
+    file: PATTERNS_PATH
+    file: ANTIPATTERNS_PATH
+
+let pattern_candidates = session: extractor
+  prompt: """Extract generalizable patterns from this run.
+
+Classification: {classification}
+Improvements: {improvements}
+
+For genuinely novel patterns/antipatterns (not already in guidance):
+- Name (kebab-case)
+- Category
+- Description
+- Example code
+- Rationale
+
+Be conservative. Only propose broadly applicable patterns supported by evidence."""
+  context:
+    file: PATTERNS_PATH
+    file: ANTIPATTERNS_PATH
+
+let improved_prose = session: extractor
+  prompt: """Write an improved version of the .prose file.
+
+Source structure: {source_analysis}
+Improvements: {improvements}
+
+Write the complete improved file:
+- Keep same purpose and inputs
+- Apply identified improvements
+- Follow patterns from guidance
+- Add brief header comment on what changed"""
+  context:
+    file: prose_path
+    file: PATTERNS_PATH
+
+if **pattern_candidates contains no novel patterns worth documenting**:
+  let new_patterns = { count: 0, entries: [] }
+  let new_antipatterns = { count: 0, entries: [] }
+else:
+  parallel:
+    new_patterns = session: analyst
+      prompt: """Draft new pattern entries for patterns.md.
+
+Candidates: {pattern_candidates}
+
+For genuinely novel patterns, follow exact format from patterns.md.
+Output: count, names, and full markdown entries."""
+      context:
+        file: PATTERNS_PATH
+
+    new_antipatterns = session: analyst
+      prompt: """Draft new antipattern entries for antipatterns.md.
+
+Candidates: {pattern_candidates}
+
+For genuinely novel antipatterns, follow exact format from antipatterns.md.
+Output: count, names, and full markdown entries."""
+      context:
+        file: ANTIPATTERNS_PATH
+
+input approval_response: """
+## Retrospective Complete
+
+**Classification**: {classification.outcome_type} ({classification.confidence})
+**Summary**: {classification.summary}
+
+**Improvements**: {improvements}
+
+**New Patterns**: {new_patterns.count} proposed
+**New Antipatterns**: {new_antipatterns.count} proposed
+
+Approve: `all` | `prose-only` | `docs-only` | `none`
+"""
+
+choice **user approval**:
+
+  option "all":
+    session "Write improved prose"
+      prompt: "Write to {run_id}/outputs/improved.prose:\n{improved_prose}"
+      permissions:
+        write: ["{run_id}/outputs/*"]
+
+    if **new_patterns.count > 0**:
+      session "Update patterns.md"
+        prompt: "Append to {PATTERNS_PATH}:\n{new_patterns.entries}"
+        permissions:
+          write: [PATTERNS_PATH]
+
+    if **new_antipatterns.count > 0**:
+      session "Update antipatterns.md"
+        prompt: "Append to {ANTIPATTERNS_PATH}:\n{new_antipatterns.entries}"
+        permissions:
+          write: [ANTIPATTERNS_PATH]
+
+    output result = {
+      status: classification.outcome_type,
+      improved_prose_path: "{run_id}/outputs/improved.prose",
+      patterns_added: new_patterns.names,
+      antipatterns_added: new_antipatterns.names
+    }
+
+  option "prose-only":
+    session "Write improved prose"
+      prompt: "Write to {run_id}/outputs/improved.prose:\n{improved_prose}"
+      permissions:
+        write: ["{run_id}/outputs/*"]
+
+    output result = {
+      status: classification.outcome_type,
+      improved_prose_path: "{run_id}/outputs/improved.prose"
+    }
+
+  option "docs-only":
+    if **new_patterns.count > 0**:
+      session "Update patterns.md"
+        prompt: "Append to {PATTERNS_PATH}:\n{new_patterns.entries}"
+        permissions:
+          write: [PATTERNS_PATH]
+
+    if **new_antipatterns.count > 0**:
+      session "Update antipatterns.md"
+        prompt: "Append to {ANTIPATTERNS_PATH}:\n{new_antipatterns.entries}"
+        permissions:
+          write: [ANTIPATTERNS_PATH]
+
+    output result = {
+      status: classification.outcome_type,
+      patterns_added: new_patterns.names,
+      antipatterns_added: new_antipatterns.names
+    }
+
+  option "none":
+    output result = {
+      status: "review-complete",
+      learnings: pattern_candidates
+    }

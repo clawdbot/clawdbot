@@ -1,0 +1,223 @@
+# OpenProse - Confirmed Syntax
+# Python-like indentation, keyword-driven, minimal punctuation
+
+# ============================================
+# IMPORTS (quoted skill names)
+# ============================================
+
+import "web-search" from "github:example/web-search"
+import "summarizer" from "./skills/summarizer"
+
+# ============================================
+# AGENT DEFINITIONS (quoted skills array)
+# ============================================
+
+agent researcher:
+  model: sonnet
+  skills: ["web-search", "summarizer"]
+  permissions:
+    bash: deny
+
+agent writer:
+  model: opus
+  skills: ["summarizer"]
+
+# ============================================
+# SIMPLE FLOW
+# ============================================
+
+# Simplest program: single session
+session "Explain quantum computing"
+
+# Sequential (indentation = sequence)
+do:
+  session: researcher
+    prompt: "Research quantum computing"
+  session: writer
+    prompt: "Write a blog post"
+
+# Inline sequence with arrow
+session "A" -> session "B" -> session "C"
+
+# ============================================
+# PARALLEL EXECUTION (quoted modifiers)
+# ============================================
+
+# Default: wait for all, fail-fast
+parallel:
+  session "Security review"
+  session "Performance review"
+  session "Style review"
+
+# Race: first to complete wins
+parallel ("first"):
+  session "Try approach A"
+  session "Try approach B"
+
+# Continue on failure
+parallel (on-fail: "continue"):
+  session "Risky operation 1"
+  session "Risky operation 2"
+
+# Named results for downstream use
+parallel:
+  security = session "Security review"
+  perf = session "Performance review"
+
+session "Synthesize":
+  context: { security, perf }
+
+# ============================================
+# COMPOSITION: NAMED BLOCKS WITH PARAMETERS
+# ============================================
+
+# Define a reusable block
+block review-pipeline:
+  parallel:
+    session "Security review"
+    session "Performance review"
+  session "Synthesize reviews"
+
+# Block with parameters
+block research(topic):
+  session "Research {topic}"
+  session "Summarize findings about {topic}"
+
+# Invoke with `do`
+do:
+  session "Write code"
+  do review-pipeline
+  session "Final edits"
+
+do research("quantum computing")
+
+# ============================================
+# LOOPS (with ** orchestrator discretion)
+# ============================================
+
+# Loop until condition (orchestrator evaluates **)
+loop until **approved**:
+  session "Write draft"
+  session "Get feedback"
+
+# Multi-word condition
+loop until **user is satisfied with the result**:
+  session "Propose solution"
+  session "Get feedback"
+
+# Repeat N times
+repeat 3:
+  session "Attempt solution"
+
+# Infinite loop (with runtime safeguards)
+loop:
+  session "Monitor for events"
+  session "Handle event"
+
+# For-each
+for item in items:
+  session "Process {item}"
+
+# ============================================
+# CHOICE (orchestrator discretion)
+# ============================================
+
+choice **based on urgency**:
+  session "Quick fix"
+  session "Thorough solution"
+
+# ============================================
+# PIPELINE OPERATIONS
+# ============================================
+
+# Map: transform each item
+items | map: session "Process {item}"
+
+# Filter: select items
+items | filter: session "Is {item} relevant?"
+
+# Reduce: accumulate results
+items | reduce(summary, item):
+  session "Add {item} to {summary}"
+
+# Chaining
+files
+  | filter: session "Is {item} relevant?"
+  | map: session "Extract info from {item}"
+  | reduce(report, info):
+      session "Add {info} to {report}"
+
+# Parallel map
+items | pmap: session "Process {item}"
+
+# ============================================
+# ERROR HANDLING
+# ============================================
+
+# Try/catch/finally
+try:
+  session "Risky operation"
+catch:
+  session "Handle failure"
+finally:
+  session "Cleanup"
+
+# Retry with backoff
+session "Flaky API call" (retry: 3)
+
+# ============================================
+# CONTEXT PASSING
+# ============================================
+
+# Variable binding (mutable)
+let research = session: researcher
+  prompt: "Research topic"
+
+# Variable binding (immutable)
+const config = session "Get configuration"
+
+# Explicit context
+session: writer
+  prompt: "Write about the research"
+  context: research
+
+# Multiple contexts
+session "Final synthesis":
+  context: [research, analysis, feedback]
+
+# No context (start fresh)
+session "Independent task":
+  context: []
+
+# ============================================
+# COMPLETE EXAMPLE
+# ============================================
+
+import "code-review" from "github:example/code-review"
+
+agent code-reviewer:
+  model: sonnet
+  skills: ["code-review"]
+
+agent synthesizer:
+  model: opus
+
+# Parallel review with named results
+parallel:
+  sec = session: code-reviewer
+    prompt: "Review for security issues"
+  perf = session: code-reviewer
+    prompt: "Review for performance issues"
+  style = session: code-reviewer
+    prompt: "Review for style issues"
+
+# Synthesize all results
+session: synthesizer
+  prompt: "Create unified review report"
+  context: { sec, perf, style }
+
+# Iterative refinement with ** condition
+loop until **approved**:
+  let draft = session "Improve based on feedback"
+  let feedback = session "Get stakeholder review"
+    context: draft

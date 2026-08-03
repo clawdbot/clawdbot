@@ -1,0 +1,31 @@
+title: Docker upgrade survivor
+
+scenario:
+  id: docker-upgrade-survivor
+  surface: cli
+  category: cli.updates-and-upgrades
+  coverage:
+    primary:
+      - cli.update-status-and-rpc
+    secondary:
+      - containers.release-path-install
+  objective: Verify dirty existing user state survives package update, doctor repair, Gateway startup, health probes, and RPC status in Docker.
+  successCriteria:
+    - The packed candidate installs over seeded existing-user state with agents, channels, plugin allowlists, workspaces, sessions, and stale dependency debris.
+    - Package update plus non-interactive doctor completes without live provider or channel keys.
+    - Gateway startup, `/healthz`, `/readyz`, and `gateway status --require-rpc --json` pass within survivor budgets.
+  docsRefs:
+    - docs/help/testing.md
+    - docs/help/testing-updates-plugins.md
+    - docs/reference/test.md
+  codeRefs:
+    - scripts/e2e/upgrade-survivor-docker.sh
+    - scripts/e2e/lib/upgrade-survivor/run.sh
+    - scripts/e2e/lib/upgrade-survivor/assertions.mjs
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the existing upgrade-survivor Docker E2E lane and records QA Lab evidence for update status/RPC survival coverage.
+    args:
+      - --lane
+      - upgrade-survivor

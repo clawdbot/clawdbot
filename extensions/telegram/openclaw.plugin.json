@@ -1,0 +1,13 @@
+{
+  "id": "telegram",
+  "icon": "https://cdn.simpleicons.org/telegram",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["telegram"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

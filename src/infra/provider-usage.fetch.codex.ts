@@ -1,0 +1,151 @@
+// Fetches Codex provider usage windows.
+import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import { parseStrictFiniteNumber } from "./parse-finite-number.js";
+import {
+  buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
+  fetchJson,
+  readUsageJson,
+} from "./provider-usage.fetch.shared.js";
+import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+
+type CodexUsageResponse = {
+  rate_limit?: {
+    limit_reached?: boolean;
+    primary_window?: {
+      limit_window_seconds?: number;
+      used_percent?: number;
+      reset_at?: number;
+      reset_after_seconds?: number;
+    };
+    secondary_window?: {
+      limit_window_seconds?: number;
+      used_percent?: number;
+      reset_at?: number;
+      reset_after_seconds?: number;
+    };
+  };
+  plan_type?: string;
+  credits?: { balance?: number | string | null };
+};
+
+const WEEKLY_RESET_GAP_SECONDS = 3 * 24 * 60 * 60;
+
+function resolveSecondaryWindowLabel(params: {
+  windowHours: number;
+  secondaryResetAt?: number;
+  primaryResetAt?: number;
+}): string {
+  if (params.windowHours >= 168) {
+    return "Week";
+  }
+  if (params.windowHours < 24) {
+    return `${params.windowHours}h`;
+  }
+  // Codex occasionally reports a 24h secondary window while exposing a
+  // weekly reset cadence in reset timestamps. Prefer cadence in that case.
+  if (
+    typeof params.secondaryResetAt === "number" &&
+    typeof params.primaryResetAt === "number" &&
+    params.secondaryResetAt - params.primaryResetAt >= WEEKLY_RESET_GAP_SECONDS
+  ) {
+    return "Week";
+  }
+  return "Day";
+}
+
+export async function fetchCodexUsage(
+  token: string,
+  accountId: string | undefined,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<ProviderUsageSnapshot> {
+  const version = process.env.OPENCLAW_VERSION?.trim();
+  const defaultHeaders: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/json",
+    originator: "openclaw",
+    ...(version ? { version } : {}),
+    "User-Agent": `openclaw/${version || "dev"}`,
+  };
+  if (accountId) {
+    defaultHeaders["ChatGPT-Account-Id"] = accountId;
+  }
+  const headers =
+    resolveProviderRequestHeaders({
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/wham/usage",
+      capability: "other",
+      transport: "http",
+      defaultHeaders,
+    }) ?? defaultHeaders;
+
+  const res = await fetchJson(
+    "https://chatgpt.com/backend-api/wham/usage",
+    { method: "GET", headers },
+    timeoutMs,
+    fetchFn,
+  );
+
+  if (!res.ok) {
+    await discardUsageResponseBody(res);
+    return buildUsageHttpErrorSnapshot({
+      provider: "openai",
+      status: res.status,
+      tokenExpiredStatuses: [401, 403],
+    });
+  }
+
+  const parsed = await readUsageJson("openai", res);
+  if (!parsed.ok) {
+    return parsed.snapshot;
+  }
+  const data = parsed.data as CodexUsageResponse;
+  const windows: UsageWindow[] = [];
+
+  if (data.rate_limit?.primary_window) {
+    const pw = data.rate_limit.primary_window;
+    const windowHours = Math.round((pw.limit_window_seconds || 10800) / 3600);
+    windows.push({
+      label: `${windowHours}h`,
+      usedPercent: clampPercent(pw.used_percent || 0),
+      resetAt: pw.reset_at ? pw.reset_at * 1000 : undefined,
+    });
+  }
+
+  if (data.rate_limit?.secondary_window) {
+    const sw = data.rate_limit.secondary_window;
+    const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
+    const label = resolveSecondaryWindowLabel({
+      windowHours,
+      primaryResetAt: data.rate_limit?.primary_window?.reset_at,
+      secondaryResetAt: sw.reset_at,
+    });
+    windows.push({
+      label,
+      usedPercent: clampPercent(sw.used_percent || 0),
+      resetAt: sw.reset_at ? sw.reset_at * 1000 : undefined,
+    });
+  }
+
+  const plan = data.plan_type;
+  let billing: ProviderUsageSnapshot["billing"];
+  if (data.credits?.balance !== undefined && data.credits.balance !== null) {
+    const balance =
+      typeof data.credits.balance === "number"
+        ? data.credits.balance
+        : parseStrictFiniteNumber(data.credits.balance);
+    if (balance !== undefined && balance >= 0) {
+      billing = [{ type: "balance", amount: balance, unit: "credits" }];
+    }
+  }
+
+  return {
+    provider: "openai",
+    displayName: PROVIDER_LABELS.openai,
+    windows,
+    plan,
+    ...(billing ? { billing } : {}),
+  };
+}

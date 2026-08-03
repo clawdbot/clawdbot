@@ -1,0 +1,90 @@
+// Discord plugin module implements monitor.gateway behavior.
+import type { DiscordGatewayHandle } from "./monitor/gateway-handle.js";
+import { DiscordGatewayLifecycleError } from "./monitor/gateway-supervisor.js";
+import type {
+  DiscordGatewayEvent,
+  DiscordGatewaySupervisor,
+} from "./monitor/gateway-supervisor.js";
+
+export { getDiscordGatewayEmitter } from "./monitor/gateway-supervisor.js";
+
+type WaitForDiscordGatewayStopParams = {
+  gateway?: DiscordGatewayHandle;
+  abortSignal?: AbortSignal;
+  gatewaySupervisor?: Pick<DiscordGatewaySupervisor, "attachLifecycle" | "detachLifecycle">;
+  onGatewayEvent?: (event: DiscordGatewayEvent) => "continue" | "stop";
+  registerForceStop?: (forceStop: (err: unknown) => void) => void;
+};
+
+export async function waitForDiscordGatewayStop(
+  params: WaitForDiscordGatewayStopParams,
+): Promise<void> {
+  const { gateway, abortSignal } = params;
+  return await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      abortSignal?.removeEventListener("abort", onAbort);
+      params.gatewaySupervisor?.detachLifecycle();
+    };
+    const finishResolve = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      try {
+        gateway?.disconnect?.();
+      } finally {
+        // remove listeners after disconnect so late "error" events emitted
+        // during disconnect are still handled instead of becoming uncaught
+        cleanup();
+        resolve();
+      }
+    };
+    const finishReject = (err: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      try {
+        gateway?.disconnect?.();
+      } finally {
+        cleanup();
+        reject(toLintErrorObject(err, "Non-Error rejection"));
+      }
+    };
+    const onAbort = () => {
+      finishResolve();
+    };
+    const onGatewayEvent = (event: DiscordGatewayEvent) => {
+      const shouldStop = (params.onGatewayEvent?.(event) ?? "stop") === "stop";
+      if (shouldStop) {
+        finishReject(new DiscordGatewayLifecycleError(event));
+      }
+    };
+    const onForceStop = (err: unknown) => {
+      finishReject(err);
+    };
+    if (abortSignal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+    params.gatewaySupervisor?.attachLifecycle(onGatewayEvent);
+    params.registerForceStop?.(onForceStop);
+  });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

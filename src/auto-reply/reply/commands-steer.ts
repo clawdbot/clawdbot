@@ -1,0 +1,160 @@
+// Implements steer commands that persist per-session agent guidance.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "../../agents/tools/sessions-helpers.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { applyCommandTextToParams } from "./command-context-rewrite.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import {
+  formatEmbeddedAgentQueueFailureSummary,
+  isEmbeddedAgentRunActive,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
+  resolveActiveEmbeddedRunSessionId,
+} from "./commands-steer.runtime.js";
+import type {
+  CommandHandler,
+  CommandHandlerResult,
+  HandleCommandsParams,
+} from "./commands-types.js";
+
+const STEER_USAGE = "Usage: /steer <message>";
+
+function parseSteerMessage(raw: string): string | null {
+  const match = raw.trim().match(/^\/(?:steer|tell)(?:\s+([\s\S]*))?$/i);
+  if (!match) {
+    return null;
+  }
+  return (match[1] ?? "").trim();
+}
+
+function resolveSteerTargetSessionKey(params: HandleCommandsParams): string | undefined {
+  const commandTarget = normalizeOptionalString(params.ctx.CommandTargetSessionKey);
+  const commandSession = normalizeOptionalString(params.sessionKey);
+  const raw = isNativeCommandTurn(resolveCommandTurnContext(params.ctx))
+    ? commandTarget || commandSession
+    : commandSession || commandTarget;
+  if (!raw) {
+    return undefined;
+  }
+
+  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+  return resolveInternalSessionKey({ key: raw, alias, mainKey });
+}
+
+function resolveStoredSessionEntry(
+  params: HandleCommandsParams,
+  targetSessionKey: string,
+): SessionEntry | undefined {
+  if (params.sessionStore?.[targetSessionKey]) {
+    return params.sessionStore[targetSessionKey];
+  }
+  if (params.sessionKey === targetSessionKey) {
+    return params.sessionEntry;
+  }
+  return undefined;
+}
+
+function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
+  const candidates = [targetSessionKey];
+  if (targetSessionKey.includes(":slash:")) {
+    candidates.push(
+      targetSessionKey.replace(":slash:", ":direct:"),
+      targetSessionKey.replace(":slash:", ":dm:"),
+    );
+  }
+  return [...new Set(candidates)];
+}
+
+function resolveSteerSessionId(params: {
+  commandParams: HandleCommandsParams;
+  targetSessionKey: string;
+}): string | undefined {
+  const candidateKeys = listSteerCandidateSessionKeys(params.targetSessionKey);
+  for (const candidateKey of candidateKeys) {
+    const activeSessionId = resolveActiveEmbeddedRunSessionId(candidateKey);
+    if (activeSessionId) {
+      return activeSessionId;
+    }
+  }
+
+  for (const candidateKey of candidateKeys) {
+    const entry = resolveStoredSessionEntry(params.commandParams, candidateKey);
+    const sessionId = normalizeOptionalString(entry?.sessionId);
+    if (sessionId && isEmbeddedAgentRunActive(sessionId)) {
+      return sessionId;
+    }
+  }
+
+  return undefined;
+}
+
+function continueWithSteerFallback(
+  params: HandleCommandsParams,
+  message: string,
+  logMessage: string,
+): CommandHandlerResult {
+  logVerbose(logMessage);
+  applyCommandTextToParams(params, message);
+  return { shouldContinue: true };
+}
+
+export const handleSteerCommand: CommandHandler = defineAuthorizedTextCommand(
+  { label: "/steer", match: parseSteerMessage },
+  async (params, message) => {
+    if (!message) {
+      return commandReply(STEER_USAGE);
+    }
+
+    const targetSessionKey = resolveSteerTargetSessionKey(params);
+    if (!targetSessionKey) {
+      return continueWithSteerFallback(
+        params,
+        message,
+        "steer: no current session; continuing with /steer payload as a normal prompt",
+      );
+    }
+
+    const sessionId = resolveSteerSessionId({ commandParams: params, targetSessionKey });
+    if (!sessionId) {
+      return continueWithSteerFallback(
+        params,
+        message,
+        `steer: no active run for ${targetSessionKey}; continuing with /steer payload as a normal prompt`,
+      );
+    }
+
+    const queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, message, {
+      steeringMode: "all",
+      isInboundUserMessage: true,
+      debounceMs: 0,
+      ...(params.opts?.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode }
+        : {}),
+      taskSuggestionDeliveryMode: params.opts?.taskSuggestionDeliveryMode,
+    }).catch((err: unknown): CommandHandlerResult => {
+      return continueWithSteerFallback(
+        params,
+        message,
+        `steer: active session ${sessionId} threw while steering: ${formatErrorMessage(err)}; continuing with /steer payload as a normal prompt`,
+      );
+    });
+    if ("shouldContinue" in queueOutcome) {
+      return queueOutcome;
+    }
+    if (!queueOutcome.queued) {
+      const summary = formatEmbeddedAgentQueueFailureSummary(queueOutcome);
+      return continueWithSteerFallback(
+        params,
+        message,
+        `steer: active session ${sessionId} rejected steering injection: ${summary}; continuing with /steer payload as a normal prompt`,
+      );
+    }
+
+    return commandReply("steered current session.");
+  },
+);

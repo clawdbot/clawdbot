@@ -1,0 +1,48 @@
+# Example 14: Composition Blocks
+# Demonstrates do: blocks, block definitions, and inline sequences
+
+# Define reusable agents
+agent researcher:
+  model: sonnet
+  prompt: "You are a thorough research assistant"
+
+agent writer:
+  model: opus
+  prompt: "You are a skilled technical writer"
+
+agent reviewer:
+  model: sonnet
+  prompt: "You are a careful code and document reviewer"
+
+# Define a reusable research block
+block research-phase:
+  session: researcher
+    prompt: "Gather information on the topic"
+  session: researcher
+    prompt: "Analyze key findings"
+
+# Define a reusable writing block
+block writing-phase:
+  session: writer
+    prompt: "Write initial draft"
+  session: writer
+    prompt: "Polish and refine the draft"
+
+# Define a review block
+block review-cycle:
+  session: reviewer
+    prompt: "Review for accuracy"
+  session: reviewer
+    prompt: "Review for clarity"
+
+# Main workflow using blocks
+let research = do research-phase
+
+let document = do writing-phase
+
+do review-cycle
+
+# Use anonymous do block for final steps
+do:
+  session "Incorporate review feedback"
+  session "Prepare final version"

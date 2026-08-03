@@ -1,0 +1,42 @@
+{
+  "id": "raft",
+  "name": "Raft",
+  "description": "OpenClaw Raft channel plugin for secure CLI wake bridges.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["raft"],
+  "channelConfigs": {
+    "raft": {
+      "label": "Raft",
+      "description": "Raft External Agent CLI wake bridge.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "profile": { "type": "string", "minLength": 1 },
+          "defaultAccount": { "type": "string" },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "enabled": { "type": "boolean" },
+                "profile": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

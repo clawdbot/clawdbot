@@ -1,0 +1,337 @@
+// Compares CLI startup benchmark reports against checked-in budgets.
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import { booleanFlag, intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { budgetFloatFlag, readBudgetEnvNumber } from "./lib/budget-number-args.mjs";
+import { readJsonFile } from "./test-report-utils.mjs";
+
+const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
+
+function formatMs(value) {
+  return `${value.toFixed(1)}ms`;
+}
+
+function formatMb(value) {
+  return `${value.toFixed(1)}MB`;
+}
+
+if (process.argv.slice(2).includes("--help")) {
+  console.log(
+    [
+      "Usage: node scripts/test-cli-startup-bench-budget.mjs [options]",
+      "",
+      "Compare current CLI benchmark results against the checked-in fixture.",
+      "",
+      "Options:",
+      "  --baseline <path>             Baseline fixture path",
+      "  --report <path>               Reuse an existing current benchmark report",
+      "  --entry <path>                CLI entry to benchmark when report is omitted",
+      "  --preset <name>               startup | real | all (default: all)",
+      "  --runs <n>                    Measured runs per case (default: 1)",
+      "  --warmup <n>                  Warmup runs per case (default: 0)",
+      "  --timeout-ms <ms>             Per-run timeout (default: 30000)",
+      "  --max-duration-regression-pct <n>",
+      "                                Fail if avg duration regresses more than this percent",
+      "  --max-first-output-regression-pct <n>",
+      "                                Fail if avg first-output time regresses more than this percent",
+      "  --max-rss-regression-pct <n>  Fail if avg RSS regresses more than this percent",
+      "  --skip-baseline               Skip fixture regression checks and enforce case contracts only",
+      "  --skip-response-budgets       Skip response first-output and exit budget contracts",
+      "",
+      "Non-x64 runs skip fixture regression checks by default because the",
+      "checked-in startup fixture is a canonical x64 budget. Response contracts still run. Set",
+      "OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH=1 to force them.",
+      "  --help                        Show this help text",
+      "",
+      "Example:",
+      "  node scripts/test-cli-startup-bench-budget.mjs --preset real --max-duration-regression-pct 15",
+    ].join("\n"),
+  );
+  process.exit(0);
+}
+
+let opts;
+try {
+  opts = parseFlagArgs(
+    process.argv.slice(2),
+    {
+      baseline: CLI_STARTUP_BENCH_FIXTURE_PATH,
+      report: "",
+      entry: "openclaw.mjs",
+      preset: "all",
+      runs: 1,
+      warmup: 0,
+      timeoutMs: 30_000,
+      maxDurationRegressionPct:
+        readBudgetEnvNumber("OPENCLAW_STARTUP_BENCH_MAX_DURATION_REGRESSION_PCT") ?? 20,
+      maxFirstOutputRegressionPct:
+        readBudgetEnvNumber("OPENCLAW_STARTUP_BENCH_MAX_FIRST_OUTPUT_REGRESSION_PCT") ?? 20,
+      maxRssRegressionPct:
+        readBudgetEnvNumber("OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT") ?? 20,
+      skipBaseline: false,
+      skipResponseBudgets: false,
+    },
+    [
+      stringFlag("--baseline", "baseline"),
+      stringFlag("--report", "report"),
+      stringFlag("--entry", "entry"),
+      stringFlag("--preset", "preset"),
+      intFlag("--runs", "runs", { min: 1 }),
+      intFlag("--warmup", "warmup", { min: 0 }),
+      intFlag("--timeout-ms", "timeoutMs", { min: 1 }),
+      budgetFloatFlag("--max-duration-regression-pct", "maxDurationRegressionPct"),
+      budgetFloatFlag("--max-first-output-regression-pct", "maxFirstOutputRegressionPct"),
+      budgetFloatFlag("--max-rss-regression-pct", "maxRssRegressionPct"),
+      booleanFlag("--skip-baseline", "skipBaseline"),
+      booleanFlag("--skip-response-budgets", "skipResponseBudgets"),
+    ],
+  );
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+
+const shouldAutoSkipNonCanonicalBaselineChecks =
+  process.arch !== "x64" && process.env.OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH !== "1";
+if (shouldAutoSkipNonCanonicalBaselineChecks && !opts.skipBaseline) {
+  console.warn(
+    `[test-cli-startup-bench-budget] skipping x64 startup fixture budgets on ${process.arch}; response contracts and sample output validation still ran. Set OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH=1 to force fixture checks.`,
+  );
+  opts = {
+    ...opts,
+    skipBaseline: true,
+  };
+}
+
+function resolveCurrentReportPath() {
+  if (opts.report) {
+    return opts.report;
+  }
+  const build = spawnSync(process.execPath, ["scripts/ensure-cli-startup-build.mjs"], {
+    cwd: process.cwd(),
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (build.status !== 0) {
+    process.exit(build.status ?? 1);
+  }
+  const reportPath = `.artifacts/cli-startup-bench.current.json`;
+  fs.mkdirSync(".artifacts", { recursive: true });
+  const args = [
+    "--import",
+    "tsx",
+    "scripts/bench-cli-startup.ts",
+    "--entry",
+    opts.entry,
+    "--preset",
+    opts.preset,
+    "--runs",
+    String(opts.runs),
+    "--warmup",
+    String(opts.warmup),
+    "--timeout-ms",
+    String(opts.timeoutMs),
+    "--output",
+    reportPath,
+  ];
+  const run = spawnSync(process.execPath, args, {
+    cwd: process.cwd(),
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (run.status !== 0) {
+    process.exit(run.status ?? 1);
+  }
+  return reportPath;
+}
+
+function indexCases(report) {
+  return new Map((report?.primary?.cases ?? []).map((entry) => [entry.id, entry]));
+}
+
+const baseline = readJsonFile(opts.baseline);
+const current = readJsonFile(resolveCurrentReportPath());
+const baselineCases = indexCases(baseline);
+const currentCases = indexCases(current);
+const shouldRequireEveryBaselineCase = opts.preset === "all";
+const matchedBaselineCaseIds = [...baselineCases.keys()].filter((id) => currentCases.has(id));
+
+let failed = false;
+
+if (currentCases.size === 0) {
+  console.error(
+    `[test-cli-startup-bench-budget] current report has no cases for preset ${opts.preset}`,
+  );
+  failed = true;
+}
+
+for (const [id] of baselineCases) {
+  if (shouldRequireEveryBaselineCase && !currentCases.has(id)) {
+    console.error(`[test-cli-startup-bench-budget] missing current case ${String(id)}`);
+    failed = true;
+  }
+}
+if (
+  !opts.skipBaseline &&
+  !shouldRequireEveryBaselineCase &&
+  baselineCases.size > 0 &&
+  matchedBaselineCaseIds.length === 0
+) {
+  console.error(
+    `[test-cli-startup-bench-budget] no current cases matched the baseline for preset ${opts.preset}`,
+  );
+  failed = true;
+}
+
+for (const currentCase of currentCases.values()) {
+  const samples = currentCase.samples ?? [];
+  if (samples.length === 0) {
+    console.error(`[test-cli-startup-bench-budget] ${currentCase.name} has no measured samples.`);
+    failed = true;
+  }
+  if (samples.some((sample) => sample.timedOut === true)) {
+    console.error(`[test-cli-startup-bench-budget] ${currentCase.name} timed out.`);
+    failed = true;
+  }
+  if (samples.some((sample) => !Number.isFinite(sample.maxRssMb))) {
+    console.error(`[test-cli-startup-bench-budget] ${currentCase.name} did not report max RSS.`);
+    failed = true;
+  }
+}
+
+if (!opts.skipBaseline) {
+  for (const [id, baselineCase] of baselineCases) {
+    const currentCase = currentCases.get(id);
+    if (!currentCase) {
+      continue;
+    }
+
+    const baselineDuration = baselineCase.summary?.durationMs?.avg;
+    const currentDuration = currentCase.summary?.durationMs?.avg;
+    if (
+      Number.isFinite(baselineDuration) &&
+      Number.isFinite(currentDuration) &&
+      baselineDuration > 0
+    ) {
+      const allowedDuration = baselineDuration * (1 + opts.maxDurationRegressionPct / 100);
+      if (currentDuration > allowedDuration) {
+        console.error(
+          `[test-cli-startup-bench-budget] ${baselineCase.name} avg duration ${formatMs(
+            currentDuration,
+          )} exceeded ${formatMs(allowedDuration)} (baseline ${formatMs(
+            baselineDuration,
+          )}, +${String(opts.maxDurationRegressionPct)}%).`,
+        );
+        failed = true;
+      }
+    }
+
+    const baselineFirstOutput = baselineCase.summary?.firstOutputMs?.avg;
+    const currentFirstOutput = currentCase.summary?.firstOutputMs?.avg;
+    if (
+      Number.isFinite(baselineFirstOutput) &&
+      Number.isFinite(currentFirstOutput) &&
+      baselineFirstOutput > 0
+    ) {
+      const allowedFirstOutput = baselineFirstOutput * (1 + opts.maxFirstOutputRegressionPct / 100);
+      if (currentFirstOutput > allowedFirstOutput) {
+        console.error(
+          `[test-cli-startup-bench-budget] ${baselineCase.name} avg first output ${formatMs(
+            currentFirstOutput,
+          )} exceeded ${formatMs(allowedFirstOutput)} (baseline ${formatMs(
+            baselineFirstOutput,
+          )}, +${String(opts.maxFirstOutputRegressionPct)}%).`,
+        );
+        failed = true;
+      }
+    }
+
+    const baselineRss = baselineCase.summary?.maxRssMb?.avg;
+    const currentRss = currentCase.summary?.maxRssMb?.avg;
+    if (Number.isFinite(baselineRss) && Number.isFinite(currentRss) && baselineRss > 0) {
+      const allowedRss = baselineRss * (1 + opts.maxRssRegressionPct / 100);
+      if (currentRss > allowedRss) {
+        console.error(
+          `[test-cli-startup-bench-budget] ${baselineCase.name} avg RSS ${formatMb(
+            currentRss,
+          )} exceeded ${formatMb(allowedRss)} (baseline ${formatMb(
+            baselineRss,
+          )}, +${String(opts.maxRssRegressionPct)}%).`,
+        );
+        failed = true;
+      }
+    }
+
+    console.log(
+      `[test-cli-startup-bench-budget] ${baselineCase.name} duration=${formatMs(
+        currentDuration,
+      )} baseline=${formatMs(baselineDuration)} firstOutput=${
+        Number.isFinite(currentFirstOutput) ? formatMs(currentFirstOutput) : "n/a"
+      } baselineFirstOutput=${
+        Number.isFinite(baselineFirstOutput) ? formatMs(baselineFirstOutput) : "n/a"
+      } rss=${
+        Number.isFinite(currentRss) ? formatMb(currentRss) : "n/a"
+      } baselineRss=${Number.isFinite(baselineRss) ? formatMb(baselineRss) : "n/a"}`,
+    );
+  }
+}
+
+for (const currentCase of currentCases.values()) {
+  const contract = currentCase.contract;
+  if (!contract) {
+    continue;
+  }
+
+  const badSample = (currentCase.samples ?? []).find(
+    (sample) => sample.timedOut === true || sample.exitCode !== 0 || sample.signal != null,
+  );
+  if (badSample) {
+    console.error(
+      `[test-cli-startup-bench-budget] ${currentCase.name} exited ${String(
+        badSample.timedOut === true ? "timeout" : (badSample.signal ?? badSample.exitCode),
+      )}; response contract requires a clean exit.`,
+    );
+    failed = true;
+  }
+
+  if (!opts.skipResponseBudgets) {
+    const firstOutputBudgetMs = contract.firstOutputBudgetMs;
+    const firstOutputMax = currentCase.summary?.firstOutputMs?.max;
+    if (Number.isFinite(firstOutputBudgetMs)) {
+      if (!Number.isFinite(firstOutputMax)) {
+        console.error(
+          `[test-cli-startup-bench-budget] ${currentCase.name} produced no stdout/stderr before exit; response contract requires first output within ${formatMs(
+            firstOutputBudgetMs,
+          )}.`,
+        );
+        failed = true;
+      } else if (firstOutputMax > firstOutputBudgetMs) {
+        console.error(
+          `[test-cli-startup-bench-budget] ${currentCase.name} first output ${formatMs(
+            firstOutputMax,
+          )} exceeded contract ${formatMs(firstOutputBudgetMs)}.`,
+        );
+        failed = true;
+      }
+    }
+
+    const exitBudgetMs = contract.exitBudgetMs;
+    const durationMax = currentCase.summary?.durationMs?.max;
+    if (
+      Number.isFinite(exitBudgetMs) &&
+      Number.isFinite(durationMax) &&
+      durationMax > exitBudgetMs
+    ) {
+      console.error(
+        `[test-cli-startup-bench-budget] ${currentCase.name} exit ${formatMs(
+          durationMax,
+        )} exceeded contract ${formatMs(exitBudgetMs)}.`,
+      );
+      failed = true;
+    }
+  }
+}
+
+if (failed) {
+  process.exit(1);
+}

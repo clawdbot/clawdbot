@@ -1,0 +1,32 @@
+rules:
+  - id: no-raw-http2-connect
+    languages:
+      - typescript
+      - javascript
+    severity: ERROR
+    message: Use connectApnsHttp2Session() from src/infra/push-apns-http2.ts instead of raw http2.connect() so APNs HTTP/2 honors managed proxy policy.
+    metadata:
+      advisory-id: OPENCLAW-POLICY-RAW-HTTP2-CONNECT
+      advisory-url: https://github.com/openclaw/openclaw/pull/74905
+      cwe:
+        - "CWE-441"
+      category: security
+      confidence: HIGH
+    paths:
+      include:
+        - "src/**/*.ts"
+        - "src/**/*.mts"
+        - "src/**/*.js"
+        - "src/**/*.mjs"
+        - "extensions/**/*.ts"
+        - "extensions/**/*.mts"
+        - "extensions/**/*.js"
+        - "extensions/**/*.mjs"
+      exclude:
+        - "src/infra/push-apns-http2.ts"
+        - "**/*.test.ts"
+        - "**/*.test.mts"
+        - "**/*.test.js"
+        - "**/*.test.mjs"
+    patterns:
+      - pattern: http2.connect(...)

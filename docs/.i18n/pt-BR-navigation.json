@@ -1,0 +1,18 @@
+{
+  "language": "pt-BR",
+  "tabs": [
+    {
+      "tab": "Começar",
+      "groups": [
+        {
+          "group": "Visão geral",
+          "pages": ["pt-BR/index"]
+        },
+        {
+          "group": "Primeiros passos",
+          "pages": ["pt-BR/start/getting-started", "pt-BR/start/wizard"]
+        }
+      ]
+    }
+  ]
+}

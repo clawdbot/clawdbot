@@ -1,0 +1,272 @@
+/**
+ * Image/media understanding helper functions.
+ *
+ * Handles model config, data URL decoding, provider lookup, and reasoning-only response validation.
+ */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AssistantMessage } from "../../llm/types.js";
+import { extractAssistantText } from "../embedded-agent-utils.js";
+import { isMinimaxVlmProvider } from "../minimax-vlm.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
+
+/** Image tool model config uses the shared tool model config shape. */
+export type ImageModelConfig = ToolModelConfig;
+
+const IMAGE_REASONING_FALLBACK_SIGNATURES = new Set([
+  "reasoning_content",
+  "reasoning",
+  "reasoning_details",
+  "reasoning_text",
+]);
+const MAX_IMAGE_REASONING_FALLBACK_BLOCKS = 50;
+const MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS = 2_048;
+const MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS = 65_536;
+
+function hasResponsesReasoningSignatureMarkers(value: string): boolean {
+  const scanned = value.slice(0, MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS);
+  return /"id"\s*:\s*"rs_/.test(scanned) && /"type"\s*:\s*"reasoning(?:[."])/.test(scanned);
+}
+
+function isImageReasoningFallbackSignature(value: unknown): boolean {
+  if (!value) {
+    return false;
+  }
+  if (typeof value === "string") {
+    if (IMAGE_REASONING_FALLBACK_SIGNATURES.has(value)) {
+      return true;
+    }
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      return false;
+    }
+    if (trimmed.length > MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS) {
+      return hasResponsesReasoningSignatureMarkers(trimmed);
+    }
+    try {
+      return isImageReasoningFallbackSignature(JSON.parse(trimmed));
+    } catch {
+      return false;
+    }
+  }
+  if (typeof value !== "object") {
+    return false;
+  }
+  const record = value as { id?: unknown; type?: unknown };
+  const id = typeof record.id === "string" ? record.id : "";
+  const type = typeof record.type === "string" ? record.type : "";
+  return id.startsWith("rs_") && (type === "reasoning" || type.startsWith("reasoning."));
+}
+
+/** Detects provider responses that contain only reasoning blocks and no usable image text. */
+export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
+  if (extractAssistantText(message).trim() || !Array.isArray(message.content)) {
+    return false;
+  }
+  let checkedBlocks = 0;
+  for (const block of message.content) {
+    checkedBlocks += 1;
+    if (checkedBlocks > MAX_IMAGE_REASONING_FALLBACK_BLOCKS) {
+      break;
+    }
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as { type?: unknown; thinking?: unknown; thinkingSignature?: unknown };
+    if (
+      record.type === "thinking" &&
+      typeof record.thinking === "string" &&
+      isImageReasoningFallbackSignature(record.thinkingSignature)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Decodes a base64 image data URL with optional decoded-size protection. */
+export function decodeDataUrl(
+  dataUrl: string,
+  opts?: { maxBytes?: number },
+): {
+  buffer: Buffer;
+  mimeType: string;
+  kind: "image";
+} {
+  const trimmed = dataUrl.trim();
+  const match = /^data:([^;,]+);base64,([a-z0-9+/=\r\n]+)$/i.exec(trimmed);
+  if (!match) {
+    throw new Error("Invalid data URL (expected base64 data: URL).");
+  }
+  const mimeType = normalizeLowercaseStringOrEmpty(match[1]);
+  if (!mimeType.startsWith("image/")) {
+    throw new Error(`Unsupported data URL type: ${mimeType || "unknown"}`);
+  }
+  const b64 = (match[2] ?? "").trim();
+  if (typeof opts?.maxBytes === "number" && estimateBase64DecodedBytes(b64) > opts.maxBytes) {
+    // Estimate before decoding so oversized inline payloads do not allocate large buffers.
+    throw new Error("Invalid data URL: payload exceeds size limit.");
+  }
+  const buffer = Buffer.from(b64, "base64");
+  if (buffer.length === 0) {
+    throw new Error("Invalid data URL: empty payload.");
+  }
+  return { buffer, mimeType, kind: "image" };
+}
+
+/** Extracts assistant text or throws a provider/model-specific image failure. */
+export function coerceImageAssistantText(params: {
+  message: AssistantMessage;
+  provider: string;
+  model: string;
+}): string {
+  const stop = params.message.stopReason;
+  const errorMessage = params.message.errorMessage?.trim();
+  if (stop === "error" || stop === "aborted") {
+    throw new Error(
+      errorMessage
+        ? `Image model failed (${params.provider}/${params.model}): ${errorMessage}`
+        : `Image model failed (${params.provider}/${params.model})`,
+    );
+  }
+  if (errorMessage) {
+    throw new Error(`Image model failed (${params.provider}/${params.model}): ${errorMessage}`);
+  }
+  const text = extractAssistantText(params.message);
+  if (text.trim()) {
+    return text.trim();
+  }
+  throw new Error(`Image model returned no text (${params.provider}/${params.model}).`);
+}
+
+/** Reads imageModel defaults from config into the shared tool model config shape. */
+export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
+  return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
+}
+
+function formatConfiguredImageModelRef(provider: string, modelId: string): string {
+  const slash = modelId.indexOf("/");
+  if (slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider) {
+    return modelId;
+  }
+  return `${provider}/${modelId}`;
+}
+
+function modelIdMatchesProviderlessRef(params: {
+  provider: string;
+  modelId: string;
+  ref: string;
+}): boolean {
+  const candidates = new Set([params.modelId]);
+  const slash = params.modelId.indexOf("/");
+  if (slash > 0 && normalizeProviderId(params.modelId.slice(0, slash)) === params.provider) {
+    candidates.add(params.modelId.slice(slash + 1));
+  }
+  const normalizedRef = normalizeLowercaseStringOrEmpty(params.ref);
+  for (const candidate of candidates) {
+    if (candidate === params.ref || normalizeLowercaseStringOrEmpty(candidate) === normalizedRef) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: string }): string[] {
+  const providers = params.cfg?.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return [];
+  }
+
+  const matches = new Set<string>();
+  for (const [providerKey, providerConfig] of Object.entries(providers)) {
+    const provider = normalizeProviderId(providerKey);
+    if (!provider || !Array.isArray(providerConfig?.models)) {
+      continue;
+    }
+    for (const entry of providerConfig.models) {
+      const modelId = entry?.id?.trim();
+      if (!modelId || !Array.isArray(entry?.input) || !entry.input.includes("image")) {
+        continue;
+      }
+      if (!modelIdMatchesProviderlessRef({ provider, modelId, ref: params.ref })) {
+        continue;
+      }
+      matches.add(formatConfiguredImageModelRef(provider, modelId));
+    }
+  }
+  return [...matches];
+}
+
+function resolveProviderlessConfiguredImageModelRef(params: {
+  cfg?: OpenClawConfig;
+  ref: string;
+}): string {
+  const ref = params.ref.trim();
+  if (!ref || ref.includes("/")) {
+    return ref;
+  }
+
+  const matches = findConfiguredImageModelMatches({ cfg: params.cfg, ref });
+  if (matches.length === 0) {
+    return ref;
+  }
+  if (matches.length === 1) {
+    return matches.at(0) ?? ref;
+  }
+  throw new Error(
+    `Ambiguous image model "${ref}". Configure a provider-prefixed ref such as ${matches
+      .map((match) => `"${match}"`)
+      .join(" or ")}.`,
+  );
+}
+
+/** Resolves providerless configured image model refs against configured provider models. */
+export function resolveConfiguredImageModelRefs(params: {
+  cfg?: OpenClawConfig;
+  imageModelConfig: ImageModelConfig;
+}): ImageModelConfig {
+  const primary = params.imageModelConfig.primary?.trim();
+  const fallbacks = params.imageModelConfig.fallbacks
+    ?.map((ref) => resolveProviderlessConfiguredImageModelRef({ cfg: params.cfg, ref }))
+    .filter((ref) => ref.length > 0);
+
+  return {
+    ...(params.imageModelConfig.primary !== undefined
+      ? {
+          primary: primary
+            ? resolveProviderlessConfiguredImageModelRef({ cfg: params.cfg, ref: primary })
+            : primary,
+        }
+      : {}),
+    ...(fallbacks && fallbacks.length > 0 ? { fallbacks } : {}),
+    ...(params.imageModelConfig.timeoutMs !== undefined
+      ? { timeoutMs: params.imageModelConfig.timeoutMs }
+      : {}),
+  };
+}
+
+/** Returns the configured vision-capable model for a provider, if present. */
+export function resolveProviderVisionModelFromConfig(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+}): string | null {
+  if (isMinimaxVlmProvider(params.provider)) {
+    return null;
+  }
+  const providerCfg = findNormalizedProviderValue(
+    params.cfg?.models?.providers,
+    params.provider,
+  ) as unknown as { models?: Array<{ id?: string; input?: string[] }> } | undefined;
+  const models = providerCfg?.models ?? [];
+  const picked = models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
+  const id = (picked?.id ?? "").trim();
+  if (!id) {
+    return null;
+  }
+  const slash = id.indexOf("/");
+  const idProvider = slash === -1 ? "" : normalizeLowercaseStringOrEmpty(id.slice(0, slash));
+  const selectedProvider = normalizeLowercaseStringOrEmpty(params.provider);
+  return idProvider && idProvider === selectedProvider ? id : `${params.provider}/${id}`;
+}

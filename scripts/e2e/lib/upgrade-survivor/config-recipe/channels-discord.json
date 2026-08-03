@@ -1,0 +1,32 @@
+{
+  "enabled": true,
+  "token": {
+    "source": "env",
+    "provider": "default",
+    "id": "DISCORD_BOT_TOKEN"
+  },
+  "dm": {
+    "policy": "allowlist",
+    "allowFrom": ["111111111111111111"]
+  },
+  "groupPolicy": "allowlist",
+  "guilds": {
+    "222222222222222222": {
+      "slug": "survivor-guild",
+      "channels": {
+        "333333333333333333": {
+          "enabled": true,
+          "requireMention": true,
+          "tools": {
+            "allow": ["message_send"],
+            "deny": ["exec"]
+          }
+        }
+      }
+    }
+  },
+  "threadBindings": {
+    "enabled": true,
+    "idleHours": 72
+  }
+}

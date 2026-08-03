@@ -1,0 +1,162 @@
+// Memory embedding provider contract tests cover memory plugin embedding provider behavior.
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { describe, expect, it } from "vitest";
+import type { MemoryEmbeddingBatchOptions } from "../memory-embedding-providers.js";
+import { createPluginRecord } from "../status.test-fixtures.js";
+
+describe("memory embedding provider registration", () => {
+  it("rejects non-memory plugins that did not declare the capability contract", () => {
+    const { config, registry } = createPluginRegistryFixture();
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "not-memory",
+      name: "Not Memory",
+      register(api) {
+        api.registerMemoryEmbeddingProvider({
+          id: "forbidden",
+          create: async () => ({ provider: null }),
+        });
+      },
+    });
+    expect(registry.registry.memoryEmbeddingProviders).toStrictEqual([]);
+    const diagnostic = registry.registry.diagnostics.find(
+      (entry) => entry.pluginId === "not-memory",
+    );
+    expect(diagnostic?.message).toBe(
+      "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: forbidden",
+    );
+  });
+
+  it("allows non-memory plugins that declare the capability contract", () => {
+    const { config, registry } = createPluginRegistryFixture();
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "external-vector",
+      name: "External Vector",
+      contracts: {
+        memoryEmbeddingProviders: ["external-vector"],
+      },
+      register(api) {
+        api.registerMemoryEmbeddingProvider({
+          id: "external-vector",
+          create: async () => ({ provider: null }),
+        });
+      },
+    });
+    const provider = registry.registry.memoryEmbeddingProviders[0];
+    expect(provider?.provider.id).toBe("external-vector");
+    expect(provider?.pluginId).toBe("external-vector");
+  });
+
+  it("records the owning memory plugin id for registered adapters", () => {
+    const { config, registry } = createPluginRegistryFixture();
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "memory-core",
+      name: "Memory Core",
+      kind: "memory",
+      register(api) {
+        api.registerMemoryEmbeddingProvider({
+          id: "demo-embedding",
+          create: async () => ({ provider: null }),
+        });
+      },
+    });
+    const provider = registry.registry.memoryEmbeddingProviders[0];
+    expect(provider?.provider.id).toBe("demo-embedding");
+    expect(provider?.pluginId).toBe("memory-core");
+  });
+
+  it("keeps source-wide batch embedding behind an explicit runtime opt-in", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "source-wide-memory",
+      name: "Source Wide Memory",
+      contracts: {
+        memoryEmbeddingProviders: ["source-wide-memory"],
+      },
+      register(api) {
+        api.registerMemoryEmbeddingProvider({
+          id: "source-wide-memory",
+          create: async () => ({
+            provider: {
+              id: "source-wide-memory",
+              model: "test-embedding",
+              embedQuery: async (text: string) => [text.length],
+              embedBatch: async (texts: string[]) => texts.map((text) => [text.length]),
+            },
+            runtime: {
+              id: "source-wide-memory",
+              sourceWideBatchEmbed: true,
+              batchEmbed: async (batch: MemoryEmbeddingBatchOptions) =>
+                batch.chunks.map((chunk, index) => [index, chunk.text.length]),
+            },
+          }),
+        });
+      },
+    });
+    const adapter = registry.registry.memoryEmbeddingProviders[0]?.provider;
+    const result = await adapter?.create({ config, model: "test-embedding" });
+
+    expect(result?.runtime?.sourceWideBatchEmbed).toBe(true);
+    await expect(
+      result?.runtime?.batchEmbed?.({
+        agentId: "main",
+        chunks: [{ text: "alpha" }, { text: "beta" }],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 1000,
+        timeoutMs: 60_000,
+        debug: () => {},
+      }),
+    ).resolves.toEqual([
+      [0, 5],
+      [1, 4],
+    ]);
+  });
+
+  it("keeps companion embedding providers available during tool discovery", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const record = createPluginRecord({
+      id: "tool-discovery-memory",
+      name: "Tool Discovery Memory",
+      kind: "memory",
+      contracts: { tools: ["memory_recall"] },
+    });
+    registry.registry.plugins.push(record);
+    const api = registry.createApi(record, {
+      config,
+      registrationMode: "tool-discovery",
+    });
+
+    api.registerMemoryEmbeddingProvider({
+      id: "tool-discovery-embedding",
+      create: async () => ({ provider: null }),
+    });
+    api.registerTool({
+      name: "memory_recall",
+      label: "Memory Recall",
+      description: "Recall memory",
+      parameters: {},
+      execute: async () => ({ content: [], details: {} }),
+    });
+    const provider = registry.registry.memoryEmbeddingProviders[0];
+    expect(provider?.provider.id).toBe("tool-discovery-embedding");
+    expect(provider?.pluginId).toBe("tool-discovery-memory");
+    expect(registry.registry.tools).toHaveLength(1);
+    expect(registry.registry.tools[0]?.pluginId).toBe("tool-discovery-memory");
+    expect(registry.registry.tools[0]?.names).toEqual(["memory_recall"]);
+  });
+});

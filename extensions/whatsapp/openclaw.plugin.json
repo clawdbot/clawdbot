@@ -1,0 +1,30 @@
+{
+  "id": "whatsapp",
+  "name": "WhatsApp",
+  "description": "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",
+  "icon": "https://cdn.simpleicons.org/whatsapp",
+  "skills": ["./skills"],
+  "activation": {
+    "onStartup": false
+  },
+  "contracts": {
+    "tools": ["whatsapp_call"]
+  },
+  "channels": ["whatsapp"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pluginHooks": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "messageReceived": {
+            "type": "boolean",
+            "description": "Opt in to broadcasting inbound WhatsApp message_received hook payloads to loaded plugins."
+          }
+        }
+      }
+    }
+  }
+}

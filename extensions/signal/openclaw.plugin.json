@@ -1,0 +1,13 @@
+{
+  "id": "signal",
+  "icon": "https://cdn.simpleicons.org/signal",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["signal"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

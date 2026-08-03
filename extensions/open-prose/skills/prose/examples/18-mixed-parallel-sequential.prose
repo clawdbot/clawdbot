@@ -1,0 +1,36 @@
+# Mixed Parallel and Sequential Workflow
+# Demonstrates nesting parallel and sequential blocks
+
+agent worker:
+  model: sonnet
+
+# Define reusable blocks
+block setup:
+  session "Initialize resources"
+  session "Validate configuration"
+
+block cleanup:
+  session "Save results"
+  session "Release resources"
+
+# Main workflow with mixed composition
+do:
+  do setup
+
+  # Parallel processing phase
+  parallel:
+    # Each parallel branch can have multiple steps
+    do:
+      session: worker
+        prompt: "Process batch 1 - step 1"
+      session: worker
+        prompt: "Process batch 1 - step 2"
+    do:
+      session: worker
+        prompt: "Process batch 2 - step 1"
+      session: worker
+        prompt: "Process batch 2 - step 2"
+
+  session "Aggregate results"
+
+  do cleanup

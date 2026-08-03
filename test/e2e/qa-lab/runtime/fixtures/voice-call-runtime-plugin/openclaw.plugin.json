@@ -1,0 +1,11 @@
+{
+  "id": "qa-voice-call-runtime",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

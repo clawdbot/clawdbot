@@ -1,0 +1,60 @@
+// Verifies agent concurrency config defaults and limits.
+import { describe, expect, it } from "vitest";
+import {
+  DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+  DEFAULT_SUBAGENT_MAX_CONCURRENT,
+  resolveAgentMaxConcurrent,
+  resolveSubagentMaxConcurrent,
+} from "./agent-limits.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS, resolveCronMaxConcurrentRuns } from "./cron-limits.js";
+import { applyAgentDefaults } from "./defaults.js";
+import { OpenClawSchema } from "./zod-schema.js";
+
+describe("agent concurrency defaults", () => {
+  it("resolves defaults when unset", () => {
+    expect(resolveAgentMaxConcurrent({})).toBeGreaterThanOrEqual(8);
+    expect(resolveAgentMaxConcurrent({})).toBeLessThanOrEqual(16);
+    expect(resolveSubagentMaxConcurrent({})).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+    expect(resolveCronMaxConcurrentRuns()).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+  });
+
+  it("clamps invalid values to at least 1", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          maxConcurrent: 0,
+          subagents: { maxConcurrent: -3 },
+        },
+      },
+    };
+    expect(resolveAgentMaxConcurrent(cfg)).toBe(1);
+    expect(resolveSubagentMaxConcurrent(cfg)).toBe(1);
+  });
+
+  it("accepts subagent spawn depth and per-agent child limits", () => {
+    const parsed = OpenClawSchema.parse({
+      agents: {
+        defaults: {
+          subagents: {
+            maxSpawnDepth: 2,
+            maxChildrenPerAgent: 7,
+          },
+        },
+        entries: { main: { default: true } },
+      },
+    });
+
+    expect(parsed.agents?.defaults?.subagents?.maxSpawnDepth).toBe(2);
+    expect(parsed.agents?.defaults?.subagents?.maxChildrenPerAgent).toBe(7);
+  });
+
+  it("injects missing agent defaults", () => {
+    const cfg = applyAgentDefaults({});
+
+    expect(cfg.agents?.defaults?.maxConcurrent).toBe(resolveAgentMaxConcurrent());
+    expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+    expect(cfg.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(
+      DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+    );
+  });
+});

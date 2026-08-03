@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notcrawl"
+  short_description: "Search local Notion archives and freshness"
+  default_prompt: "Use $notcrawl to search local Notion pages and databases, check freshness, inspect exports, and report exact date spans and source gaps."

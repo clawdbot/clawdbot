@@ -1,0 +1,186 @@
+// Discord tests cover auto presence plugin behavior.
+import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import { describe, expect, it, vi } from "vitest";
+import { createDiscordAutoPresenceController } from "./auto-presence.js";
+
+function createStore(params?: {
+  cooldownUntil?: number;
+  failureCounts?: Record<string, number>;
+}): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test",
+      },
+    },
+    usageStats: {
+      "openai:default": {
+        ...(typeof params?.cooldownUntil === "number"
+          ? { cooldownUntil: params.cooldownUntil }
+          : {}),
+        ...(params?.failureCounts ? { failureCounts: params.failureCounts } : {}),
+      },
+    },
+  };
+}
+
+function expectExhaustedDecision(params: { failureCounts: Record<string, number> }) {
+  const now = Date.now();
+  const updatePresence = vi.fn();
+  const controller = createDiscordAutoPresenceController({
+    accountId: "default",
+    discordConfig: {
+      autoPresence: {
+        enabled: true,
+        exhaustedText: "token exhausted",
+      },
+    },
+    gateway: { isConnected: true, updatePresence },
+    loadAuthStore: () =>
+      createStore({ cooldownUntil: now + 60_000, failureCounts: params.failureCounts }),
+    now: () => now,
+  });
+  controller.runNow();
+
+  expect(updatePresence).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "dnd",
+      activities: [expect.objectContaining({ state: "token exhausted" })],
+    }),
+  );
+}
+
+describe("discord auto presence", () => {
+  it("maps exhausted runtime signal to dnd", () => {
+    expectExhaustedDecision({ failureCounts: { rate_limit: 2 } });
+  });
+
+  it("treats overloaded cooldown as exhausted", () => {
+    expectExhaustedDecision({ failureCounts: { overloaded: 2 } });
+  });
+
+  it("recovers from exhausted to online once a profile becomes usable", () => {
+    let now = Date.now();
+    let store = createStore({ cooldownUntil: now + 60_000, failureCounts: { rate_limit: 1 } });
+    const updatePresence = vi.fn();
+    const controller = createDiscordAutoPresenceController({
+      accountId: "default",
+      discordConfig: {
+        autoPresence: {
+          enabled: true,
+          intervalMs: 5_000,
+          minUpdateIntervalMs: 1_000,
+          exhaustedText: "token exhausted",
+        },
+      },
+      gateway: {
+        isConnected: true,
+        updatePresence,
+      },
+      loadAuthStore: () => store,
+      now: () => now,
+    });
+
+    controller.runNow();
+
+    now += 2_000;
+    store = createStore();
+    controller.runNow();
+
+    expect(updatePresence).toHaveBeenCalledTimes(2);
+    expect(updatePresence.mock.calls).toEqual([
+      [
+        {
+          since: null,
+          activities: [{ name: "Custom Status", type: 4, state: "token exhausted" }],
+          status: "dnd",
+          afk: false,
+        },
+      ],
+      [
+        {
+          since: null,
+          activities: [],
+          status: "online",
+          afk: false,
+        },
+      ],
+    ]);
+  });
+
+  it("re-applies presence on refresh even when signature is unchanged", () => {
+    let now = Date.now();
+    const store = createStore();
+    const updatePresence = vi.fn();
+
+    const controller = createDiscordAutoPresenceController({
+      accountId: "default",
+      discordConfig: {
+        autoPresence: {
+          enabled: true,
+          intervalMs: 60_000,
+          minUpdateIntervalMs: 60_000,
+        },
+      },
+      gateway: {
+        isConnected: true,
+        updatePresence,
+      },
+      loadAuthStore: () => store,
+      now: () => now,
+    });
+
+    controller.runNow();
+    now += 1_000;
+    controller.runNow();
+    controller.refresh();
+
+    expect(updatePresence).toHaveBeenCalledTimes(2);
+    expect(updatePresence.mock.calls).toEqual([
+      [
+        {
+          since: null,
+          activities: [],
+          status: "online",
+          afk: false,
+        },
+      ],
+      [
+        {
+          since: null,
+          activities: [],
+          status: "online",
+          afk: false,
+        },
+      ],
+    ]);
+  });
+
+  it("does nothing when auto presence is disabled", () => {
+    const updatePresence = vi.fn();
+    const controller = createDiscordAutoPresenceController({
+      accountId: "default",
+      discordConfig: {
+        autoPresence: {
+          enabled: false,
+        },
+      },
+      gateway: {
+        isConnected: true,
+        updatePresence,
+      },
+      loadAuthStore: () => createStore(),
+    });
+
+    controller.runNow();
+    controller.start();
+    controller.refresh();
+    controller.stop();
+
+    expect(controller.enabled).toBe(false);
+    expect(updatePresence).not.toHaveBeenCalled();
+  });
+});

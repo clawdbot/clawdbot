@@ -1,0 +1,436 @@
+// Implements `openclaw channels capabilities` account capability/probe reporting.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
+import {
+  createMessageActionDiscoveryContext,
+  resolveMessageActionDiscoveryForPlugin,
+} from "../../channels/plugins/message-action-discovery.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import type {
+  ChannelCapabilities,
+  ChannelCapabilitiesDiagnostics,
+  ChannelCapabilitiesDisplayLine,
+  ChannelPlugin,
+} from "../../channels/plugins/types.public.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
+import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { danger } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
+import { persistResolvedChannelPluginConfig } from "./plugin-config-persistence.js";
+import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
+
+export type ChannelsCapabilitiesOptions = {
+  channel?: string;
+  account?: string;
+  target?: string;
+  timeout?: string;
+  json?: boolean;
+};
+
+type ChannelCapabilitiesReport = {
+  plugin: ChannelPlugin;
+  channel: string;
+  accountId: string;
+  accountName?: string;
+  configured?: boolean;
+  enabled?: boolean;
+  support?: ChannelCapabilities;
+  actions?: string[];
+  probe?: unknown;
+  diagnostics?: ChannelCapabilitiesDiagnostics;
+};
+
+const CHANNEL_CAPABILITIES_TIMEOUT_MAX_MS = 30_000;
+
+type ChannelCapabilitiesStepResult<T> =
+  | { kind: "value"; value: T }
+  | { kind: "error"; error: unknown }
+  | { kind: "timeout" };
+
+function resolveChannelCapabilitiesTimeoutMs(timeoutMs: number) {
+  return Math.min(timeoutMs, CHANNEL_CAPABILITIES_TIMEOUT_MAX_MS);
+}
+
+async function raceChannelCapabilitiesStep<T>(params: {
+  timeoutMs: number;
+  run: () => Promise<T> | T;
+}): Promise<ChannelCapabilitiesStepResult<T>> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<ChannelCapabilitiesStepResult<T>>((resolve) => {
+    timeout = setTimeout(() => resolve({ kind: "timeout" }), params.timeoutMs);
+    timeout.unref?.();
+  });
+  const resultPromise: Promise<ChannelCapabilitiesStepResult<T>> = Promise.resolve()
+    .then(params.run)
+    .then(
+      (value): ChannelCapabilitiesStepResult<T> => ({ kind: "value", value }),
+      (error: unknown): ChannelCapabilitiesStepResult<T> => ({ kind: "error", error }),
+    );
+  const result = await Promise.race([resultPromise, timeoutPromise]);
+  if (timeout) {
+    clearTimeout(timeout);
+  }
+  return result;
+}
+
+async function runChannelCapabilitiesProbe(params: {
+  timeoutMs: number;
+  run: () => unknown;
+}): Promise<unknown> {
+  const result = await raceChannelCapabilitiesStep(params);
+  switch (result.kind) {
+    case "value":
+      return result.value;
+    case "timeout":
+      return {
+        ok: false,
+        timedOut: true,
+        error: `probe timed out after ${params.timeoutMs}ms`,
+      };
+    case "error":
+      return { ok: false, error: formatErrorMessage(result.error) };
+  }
+  return undefined;
+}
+
+async function runChannelCapabilitiesDiagnostics(params: {
+  timeoutMs: number;
+  run: () =>
+    | Promise<ChannelCapabilitiesDiagnostics | undefined>
+    | ChannelCapabilitiesDiagnostics
+    | undefined;
+}): Promise<ChannelCapabilitiesDiagnostics | undefined> {
+  const result = await raceChannelCapabilitiesStep(params);
+  switch (result.kind) {
+    case "value":
+      return result.value;
+    case "timeout":
+      return {
+        lines: [
+          {
+            text: `Diagnostics: timed out after ${params.timeoutMs}ms`,
+            tone: "error",
+          },
+        ],
+        details: { timedOut: true },
+      };
+    case "error":
+      return {
+        lines: [
+          {
+            text: `Diagnostics: failed (${formatErrorMessage(result.error)})`,
+            tone: "error",
+          },
+        ],
+      };
+  }
+  return undefined;
+}
+
+function formatSupport(capabilities?: ChannelCapabilities) {
+  if (!capabilities) {
+    return "unknown";
+  }
+  const bits: string[] = [];
+  if (capabilities.chatTypes?.length) {
+    bits.push(`chatTypes=${capabilities.chatTypes.join(",")}`);
+  }
+  if (capabilities.polls) {
+    bits.push("polls");
+  }
+  if (capabilities.reactions) {
+    bits.push("reactions");
+  }
+  if (capabilities.edit) {
+    bits.push("edit");
+  }
+  if (capabilities.unsend) {
+    bits.push("unsend");
+  }
+  if (capabilities.reply) {
+    bits.push("reply");
+  }
+  if (capabilities.effects) {
+    bits.push("effects");
+  }
+  if (capabilities.groupManagement) {
+    bits.push("groupManagement");
+  }
+  if (capabilities.threads) {
+    bits.push("threads");
+  }
+  if (capabilities.media) {
+    bits.push("media");
+  }
+  if (capabilities.nativeCommands) {
+    bits.push("nativeCommands");
+  }
+  if (capabilities.blockStreaming) {
+    bits.push("blockStreaming");
+  }
+  return bits.length ? bits.join(" ") : "none";
+}
+
+function formatGenericProbeLines(probe: unknown): ChannelCapabilitiesDisplayLine[] {
+  if (!probe || typeof probe !== "object") {
+    return [];
+  }
+  const probeObj = probe as Record<string, unknown>;
+  const ok = typeof probeObj.ok === "boolean" ? probeObj.ok : undefined;
+  if (ok === true) {
+    return [{ text: "Probe: ok" }];
+  }
+  if (ok === false) {
+    const error =
+      typeof probeObj.error === "string" && probeObj.error ? ` (${probeObj.error})` : "";
+    return [{ text: `Probe: failed${error}`, tone: "error" }];
+  }
+  return [];
+}
+
+function renderDisplayLine(line: ChannelCapabilitiesDisplayLine) {
+  switch (line.tone) {
+    case "muted":
+      return theme.muted(line.text);
+    case "success":
+      return theme.success(line.text);
+    case "warn":
+      return theme.warn(line.text);
+    case "error":
+      return theme.error(line.text);
+    default:
+      return line.text;
+  }
+}
+
+async function resolveChannelReports(params: {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  timeoutMs: number;
+  accountOverride?: string;
+  target?: string;
+}): Promise<ChannelCapabilitiesReport[]> {
+  const { plugin, cfg, timeoutMs } = params;
+  const accountIds = params.accountOverride
+    ? [params.accountOverride]
+    : (() => {
+        const ids = plugin.config.listAccountIds(cfg);
+        return ids.length > 0
+          ? ids
+          : [resolveChannelDefaultAccountId({ plugin, cfg, accountIds: ids })];
+      })();
+  const reports: ChannelCapabilitiesReport[] = [];
+
+  for (const accountId of accountIds) {
+    const resolvedAccount = plugin.config.resolveAccount(cfg, accountId);
+    const configured = plugin.config.isConfigured
+      ? await plugin.config.isConfigured(resolvedAccount, cfg)
+      : Boolean(resolvedAccount);
+    const enabled = plugin.config.isEnabled
+      ? plugin.config.isEnabled(resolvedAccount, cfg)
+      : (resolvedAccount as { enabled?: boolean }).enabled !== false;
+    let probe: unknown;
+    if (configured && enabled && plugin.status?.probeAccount) {
+      probe = await runChannelCapabilitiesProbe({
+        timeoutMs,
+        run: () =>
+          plugin.status?.probeAccount?.({
+            account: resolvedAccount,
+            timeoutMs,
+            cfg,
+          }),
+      });
+    }
+
+    const diagnostics =
+      configured && enabled && plugin.status?.buildCapabilitiesDiagnostics
+        ? await runChannelCapabilitiesDiagnostics({
+            timeoutMs,
+            run: () =>
+              plugin.status?.buildCapabilitiesDiagnostics?.({
+                account: resolvedAccount,
+                timeoutMs,
+                cfg,
+                probe,
+                target: params.target,
+              }),
+          })
+        : undefined;
+    const discoveredActions = resolveMessageActionDiscoveryForPlugin({
+      pluginId: plugin.id,
+      actions: plugin.actions,
+      context: createMessageActionDiscoveryContext({
+        cfg,
+        accountId,
+      }),
+      includeActions: true,
+    }).actions;
+    const actions = Array.from(
+      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => action)]),
+    );
+
+    reports.push({
+      plugin,
+      channel: plugin.id,
+      accountId,
+      accountName:
+        typeof (resolvedAccount as { name?: string }).name === "string"
+          ? normalizeOptionalString((resolvedAccount as { name?: string }).name)
+          : undefined,
+      configured,
+      enabled,
+      support: plugin.capabilities,
+      probe,
+      actions,
+      diagnostics,
+    });
+  }
+  return reports;
+}
+
+/** Print or serialize configured channel capabilities, actions, and optional health probe details. */
+export async function channelsCapabilitiesCommand(
+  opts: ChannelsCapabilitiesOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
+  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
+  const loadedCfg = await requireValidConfig(runtime);
+  if (!loadedCfg) {
+    return;
+  }
+  let cfg = loadedCfg;
+  const timeoutMs = resolveChannelCapabilitiesTimeoutMs(
+    parseTimeoutMsWithFallback(opts.timeout, 10_000),
+  );
+  const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
+  const rawTarget = normalizeOptionalString(opts.target) ?? "";
+
+  if (opts.account && (!rawChannel || rawChannel === "all")) {
+    runtime.error(
+      danger(
+        `--account requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
+      ),
+    );
+    runtime.exit(1);
+    return;
+  }
+  if (rawTarget && (!rawChannel || rawChannel === "all")) {
+    runtime.error(
+      danger(
+        `--target requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
+      ),
+    );
+    runtime.exit(1);
+    return;
+  }
+
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    includeSetupFallbackPlugins: true,
+  });
+  const selected =
+    !rawChannel || rawChannel === "all"
+      ? plugins
+      : await (async () => {
+          const resolved = await resolveInstallableChannelPlugin({
+            cfg,
+            runtime,
+            rawChannel,
+            allowInstall: true,
+          });
+          if (resolved.configChanged) {
+            cfg = await persistResolvedChannelPluginConfig({
+              resolved,
+              baseHash: (await sourceSnapshotPromise)?.hash,
+              runtime,
+            });
+          }
+          return resolved.plugin ? [resolved.plugin] : null;
+        })();
+
+  if (!selected || selected.length === 0) {
+    if (!rawChannel || rawChannel === "all") {
+      if (opts.json) {
+        writeRuntimeJson(runtime, { channels: [] });
+        return;
+      }
+      runtime.log(
+        theme.muted(
+          `No configured channel capabilities found. Run ${formatCliCommand(
+            "openclaw channels list --all",
+          )} to see available channels.`,
+        ),
+      );
+      return;
+    }
+    runtime.error(danger(formatUnknownChannelMessage({ channel: rawChannel })));
+    runtime.exit(1);
+    return;
+  }
+
+  const reports: ChannelCapabilitiesReport[] = [];
+  for (const plugin of selected) {
+    const accountOverride = normalizeOptionalString(opts.account);
+    reports.push(
+      ...(await resolveChannelReports({
+        plugin,
+        cfg,
+        timeoutMs,
+        accountOverride,
+        target: rawTarget || undefined,
+      })),
+    );
+  }
+
+  if (opts.json) {
+    writeRuntimeJson(runtime, { channels: reports });
+    return;
+  }
+
+  const lines: string[] = [];
+  for (const report of reports) {
+    const label = formatChannelAccountLabel({
+      channel: report.channel,
+      accountId: report.accountId,
+      name: report.accountName,
+      channelLabel: report.plugin.meta.label ?? report.channel,
+      channelStyle: theme.accent,
+      accountStyle: theme.heading,
+    });
+    lines.push(theme.heading(label));
+    lines.push(`Support: ${formatSupport(report.support)}`);
+    if (report.actions && report.actions.length > 0) {
+      lines.push(`Actions: ${report.actions.join(", ")}`);
+    }
+    if (report.configured === false || report.enabled === false) {
+      const configuredLabel = report.configured === false ? "not configured" : "configured";
+      const enabledLabel = report.enabled === false ? "disabled" : "enabled";
+      lines.push(`Status: ${configuredLabel}, ${enabledLabel}`);
+    }
+    const formattedProbeLines = report.plugin.status?.formatCapabilitiesProbe?.({
+      probe: report.probe,
+    });
+    const probeLines = formattedProbeLines?.length
+      ? formattedProbeLines
+      : formatGenericProbeLines(report.probe);
+    if (probeLines.length > 0) {
+      lines.push(...probeLines.map(renderDisplayLine));
+    } else if (report.configured && report.enabled) {
+      lines.push(theme.muted("Probe: unavailable"));
+    }
+    if (report.diagnostics?.lines?.length) {
+      lines.push(...report.diagnostics.lines.map(renderDisplayLine));
+    }
+    lines.push("");
+  }
+
+  runtime.log(lines.join("\n").trimEnd());
+}

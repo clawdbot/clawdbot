@@ -1,0 +1,216 @@
+/* Activity page: live tool-activity feed. Filter chrome uses the settings
+   design language; only the stream (entries, previews) keeps bespoke styles
+   as the in-group escape hatch. */
+
+/* Fill-height chain: the section, group, and stream absorb the remaining
+   viewport height inside .settings-workspace--fill-height (settings.css). */
+.settings-workspace--fill-height .activity-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.settings-workspace--fill-height .activity-group {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-workspace--fill-height .activity-stream {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.activity-count {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.activity-status-filters {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.activity-status-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  cursor: pointer;
+}
+
+.activity-status-filter input {
+  margin: 0;
+}
+
+.activity-status-filter:focus-within,
+.activity-entry__summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ── Stream (escape hatch inside the settings group) ── */
+
+.activity-stream {
+  min-height: 260px;
+  max-height: calc(100vh - 310px);
+  overflow: auto;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.activity-empty {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  padding: var(--space-5);
+  color: var(--muted);
+  text-align: center;
+}
+
+.activity-entry {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.activity-entry:last-child {
+  border-bottom: 0;
+}
+
+.activity-entry[open] {
+  background: color-mix(in srgb, var(--bg-elevated) 48%, transparent);
+}
+
+.activity-entry__summary {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  list-style: none;
+}
+
+.activity-entry__summary::-webkit-details-marker {
+  display: none;
+}
+
+.activity-entry__summary::marker {
+  content: "";
+}
+
+.activity-entry__summary:hover {
+  background: var(--bg-hover);
+}
+
+.activity-entry__chevron {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+  transition: transform var(--duration-fast) ease;
+}
+
+.activity-entry[open] .activity-entry__chevron {
+  transform: rotate(90deg);
+}
+
+.activity-entry__chevron svg {
+  width: 18px;
+  height: 18px;
+}
+
+.activity-entry__main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.activity-entry__title,
+.activity-entry__meta,
+.activity-entry__facts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.activity-entry__tool,
+.activity-entry__text,
+.activity-entry__facts span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.activity-entry__text {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.activity-entry__meta {
+  justify-content: flex-end;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
+}
+
+.activity-entry__body {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-4) 42px;
+}
+
+.activity-entry__facts {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.activity-entry__preview {
+  max-height: 280px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  color: var(--text);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.activity-entry__note {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+@media (max-width: 720px) {
+  .activity-entry__meta {
+    white-space: normal;
+  }
+
+  .activity-entry__summary {
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: var(--space-2);
+  }
+
+  .activity-entry__meta {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .activity-entry__body {
+    padding-left: 42px;
+  }
+
+  .activity-stream {
+    max-height: calc(100vh - 360px);
+  }
+}

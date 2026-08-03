@@ -1,0 +1,12 @@
+{
+  "id": "irc",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["irc"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

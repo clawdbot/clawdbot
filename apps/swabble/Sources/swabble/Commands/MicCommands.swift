@@ -1,0 +1,54 @@
+import AVFoundation
+import Commander
+import Foundation
+import Swabble
+
+@MainActor
+struct MicList: ParsableCommand {
+    static var commandDescription: CommandDescription {
+        CommandDescription(commandName: "list", abstract: "List input devices")
+    }
+
+    mutating func run() async throws {
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified)
+        let devices = session.devices
+        if devices.isEmpty {
+            print("no audio inputs found")
+            return
+        }
+        for (idx, device) in devices.enumerated() {
+            print("[\(idx)] \(device.localizedName)")
+        }
+    }
+}
+
+@MainActor
+struct MicSet: ParsableCommand {
+    @Argument(help: "Device index from list") var index: Int = 0
+    @Option(name: .long("config"), help: "Path to config JSON") var configPath: String?
+
+    static var commandDescription: CommandDescription {
+        CommandDescription(commandName: "set", abstract: "Set default input device index")
+    }
+
+    init() {}
+    init(parsed: ParsedValues) {
+        self.init()
+        if let value = parsed.positional.first, let intVal = Int(value) { self.index = intVal }
+        if let cfg = parsed.options["config"]?.last { self.configPath = cfg }
+    }
+
+    mutating func run() async throws {
+        var cfg = try ConfigLoader.load(at: self.configURL)
+        cfg.audio.deviceIndex = self.index
+        try ConfigLoader.save(cfg, at: self.configURL)
+        print("saved device index \(self.index)")
+    }
+
+    private var configURL: URL? {
+        self.configPath.map { URL(fileURLWithPath: $0) }
+    }
+}

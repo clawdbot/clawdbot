@@ -1,0 +1,30 @@
+{
+  "defaults": {
+    "model": {
+      "primary": "openai/gpt-5.5"
+    },
+    "contextTokens": 64000
+  },
+  "list": [
+    {
+      "id": "main",
+      "default": true,
+      "name": "Main",
+      "workspace": "~/workspace",
+      "model": {
+        "primary": "openai/gpt-5.5"
+      },
+      "thinkingDefault": "low",
+      "skills": ["memory"]
+    },
+    {
+      "id": "ops",
+      "name": "Ops",
+      "workspace": "~/workspace/ops",
+      "model": {
+        "primary": "openai/gpt-5.5"
+      },
+      "fastModeDefault": true
+    }
+  ]
+}

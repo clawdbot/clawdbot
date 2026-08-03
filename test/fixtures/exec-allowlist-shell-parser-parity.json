@@ -1,0 +1,82 @@
+{
+  "cases": [
+    {
+      "id": "simple-pipeline",
+      "command": "echo ok | jq .foo",
+      "ok": true,
+      "executables": ["echo", "jq"]
+    },
+    {
+      "id": "chained-commands",
+      "command": "ls && rm -rf /tmp/openclaw-allowlist",
+      "ok": true,
+      "executables": ["ls", "rm"]
+    },
+    {
+      "id": "quoted-chain-operators-remain-literal",
+      "command": "echo \"a && b\"",
+      "ok": true,
+      "executables": ["echo"]
+    },
+    {
+      "id": "reject-command-substitution-unquoted",
+      "command": "echo $(whoami)",
+      "ok": false,
+      "executables": []
+    },
+    {
+      "id": "reject-command-substitution-double-quoted",
+      "command": "echo \"output: $(whoami)\"",
+      "ok": false,
+      "executables": []
+    },
+    {
+      "id": "allow-command-substitution-literal-in-single-quotes",
+      "command": "echo 'output: $(whoami)'",
+      "ok": true,
+      "executables": ["echo"]
+    },
+    {
+      "id": "allow-escaped-command-substitution-double-quoted",
+      "command": "echo \"output: \\$(whoami)\"",
+      "ok": true,
+      "executables": ["echo"]
+    },
+    {
+      "id": "reject-backticks-unquoted",
+      "command": "echo `id`",
+      "ok": false,
+      "executables": []
+    },
+    {
+      "id": "reject-backticks-double-quoted",
+      "command": "echo \"output: `id`\"",
+      "ok": false,
+      "executables": []
+    },
+    {
+      "id": "reject-process-substitution-unquoted-input",
+      "command": "cat <(echo ok)",
+      "ok": false,
+      "executables": []
+    },
+    {
+      "id": "reject-process-substitution-unquoted-output",
+      "command": "echo >(cat)",
+      "ok": false,
+      "executables": []
+    },
+    {
+      "id": "allow-process-substitution-literal-double-quoted-input",
+      "command": "echo \"<(echo ok)\"",
+      "ok": true,
+      "executables": ["echo"]
+    },
+    {
+      "id": "allow-process-substitution-literal-double-quoted-output",
+      "command": "echo \">(cat)\"",
+      "ok": true,
+      "executables": ["echo"]
+    }
+  ]
+}

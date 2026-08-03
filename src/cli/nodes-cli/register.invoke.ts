@@ -1,0 +1,77 @@
+// Generic node.invoke command with shell-exec commands intentionally blocked.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { Command } from "commander";
+import { randomIdempotencyKey } from "../../gateway/call.js";
+import { defaultRuntime } from "../../runtime.js";
+import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import {
+  callGatewayCli,
+  nodesCallOpts,
+  parseOptionalNodePositiveInteger,
+  resolveNodeId,
+} from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
+
+const BLOCKED_NODE_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
+
+function parseNodeInvokeParams(value = "{}"): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("--params must be valid JSON.");
+  }
+}
+
+/** Register direct node command invocation. */
+export function registerNodesInvokeCommands(nodes: Command) {
+  nodesCallOpts(
+    nodes
+      .command("invoke")
+      .description("Invoke a command on a paired node")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .requiredOption("--command <command>", "Command (e.g. canvas.eval)")
+      .option("--params <json>", "JSON object string for params", "{}")
+      .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 15000)", "15000")
+      .option("--idempotency-key <key>", "Idempotency key (optional)")
+      .action(async (opts: NodesRpcOpts) => {
+        await runNodesCommand("invoke", async () => {
+          const nodeQuery = normalizeOptionalString(opts.node) ?? "";
+          const command = normalizeOptionalString(opts.command) ?? "";
+          if (!nodeQuery || !command) {
+            const { error } = getNodesTheme();
+            defaultRuntime.error(error("--node and --command required"));
+            defaultRuntime.exit(1);
+            return;
+          }
+          if (BLOCKED_NODE_INVOKE_COMMANDS.has(normalizeLowercaseStringOrEmpty(command))) {
+            throw new Error(
+              `command "${command}" is reserved for shell execution; use the exec tool with host=node instead`,
+            );
+          }
+          const params = parseNodeInvokeParams(opts.params);
+          const nodeId = await resolveNodeId(opts, nodeQuery);
+          const timeoutMs = parseOptionalNodePositiveInteger(
+            opts.invokeTimeout,
+            "--invoke-timeout",
+          );
+
+          const invokeParams: Record<string, unknown> = {
+            nodeId,
+            command,
+            params,
+            idempotencyKey: opts.idempotencyKey ?? randomIdempotencyKey(),
+          };
+          if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
+            invokeParams.timeoutMs = timeoutMs;
+          }
+
+          const result = await callGatewayCli("node.invoke", opts, invokeParams);
+          defaultRuntime.writeJson(result);
+        });
+      }),
+    { timeoutMs: 30_000 },
+  );
+}

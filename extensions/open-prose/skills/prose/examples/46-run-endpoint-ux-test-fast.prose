@@ -1,0 +1,148 @@
+# /run Endpoint UX Test - Fast Loop
+#
+# Streamlined version optimized for speed:
+# - Sonnet for most tasks (Opus only for complex synthesis)
+# - Hardcoded defaults (no prompts for standard config)
+# - Single-agent investigation (not 3 parallel)
+# - Early exit on blocking errors
+# - Auto-proceed for obvious decisions
+# - Combined implement + test + review
+
+# ============================================================================
+# Configuration (hardcoded defaults - no user prompts)
+# ============================================================================
+
+const API_URL = "https://api-v2.prose.md"
+const TEST_PROGRAM = """
+# Quick Hello
+session "Say hello and count to 5"
+"""
+
+# Auth: Read from .env.test synchronously (no LLM needed)
+const AUTH_CREDS = env("TEST_EMAIL", "TEST_PASSWORD") from ".env.test"
+let auth_token = http.post("{API_URL}/auth/login", AUTH_CREDS).token
+
+# ============================================================================
+# Agents (Sonnet default, Opus only where complexity requires)
+# ============================================================================
+
+agent observer:
+  model: sonnet
+  persist: true
+  prompt: """UX researcher watching execution.
+  Focus on: latency, status clarity, error messages.
+  Signal IMMEDIATELY if you detect a blocking error (don't wait for completion).
+  Output: { blocking_error: bool, error_summary: string, observations: [...] }"""
+
+agent investigator:
+  model: sonnet  # Fast investigation
+  prompt: """Senior engineer diagnosing production errors.
+
+  COMBINED WORKFLOW (do all in one pass):
+  1. Check code path that produced the error
+  2. Examine logs/observations for timing and state
+  3. Check execution context (env status, DB records)
+  4. Self-verify: does evidence support conclusion?
+
+  Output a VERIFIED diagnosis:
+  - root_cause: specific and actionable
+  - evidence: concrete supporting data
+  - confidence: high/medium/low
+  - affected_files: list of files to change
+  - fix_approach: how to fix it"""
+
+agent fixer:
+  model: sonnet
+  prompt: """Engineer implementing and verifying fixes.
+
+  COMBINED WORKFLOW:
+  1. Implement the smallest fix that addresses root cause
+  2. Run build/tests to verify
+  3. Self-review: does it fix the issue without regressions?
+  4. Commit if passing
+
+  Output: { implemented: bool, files_changed: [...], tests_pass: bool, commit_sha: string }"""
+
+agent triage:
+  model: sonnet
+  prompt: """Tech lead classifying fixes.
+  QUICK: <3 files, <1hr, no architecture changes, low risk
+  BIGGER: anything else
+  Output: { decision: "quick"|"bigger", rationale: string }"""
+
+# ============================================================================
+# Main Flow (streamlined)
+# ============================================================================
+
+# Phase 1: Execute and observe (single agent, early exit on error)
+let exec = http.post("{API_URL}/run", { program: TEST_PROGRAM, token: auth_token })
+
+let observation = session: observer
+  prompt: """Connect to WebSocket: {exec.wsUrl}&token={auth_token}
+  Send: {"type":"execute","program":{TEST_PROGRAM}}
+
+  Watch the stream. If you see a BLOCKING ERROR (hung >10s, repeated failures,
+  stopped environment), signal immediately with blocking_error: true.
+
+  Otherwise observe until completion and summarize UX."""
+  timeout: 120s
+  early_exit: **blocking_error detected**
+
+# Phase 2: Handle result
+if observation.blocking_error:
+
+  # Auto-investigate (no user prompt - if there's an error, we investigate)
+  let diagnosis = session: investigator
+    prompt: """Investigate this blocking error:
+
+    ERROR: {observation.error_summary}
+    OBSERVATIONS: {observation.observations}
+    EXEC_INFO: {exec}
+
+    Search code, check logs, verify your diagnosis before outputting."""
+    context: { observation, exec }
+
+  # Skip if low confidence (needs human)
+  if diagnosis.confidence == "low":
+    output { status: "needs_human", diagnosis }
+
+  # Auto-triage
+  let triage_result = session: triage
+    prompt: """Triage: {diagnosis}"""
+    context: diagnosis
+
+  if triage_result.decision == "bigger":
+    # Bigger changes need human oversight
+    output { status: "needs_planning", diagnosis, triage: triage_result }
+
+  # Quick fix: implement + test + deploy in one flow
+  let fix = session: fixer
+    prompt: """Fix this issue:
+
+    DIAGNOSIS: {diagnosis}
+    APPROACH: {diagnosis.fix_approach}
+
+    Implement, test, self-review, commit."""
+    context: diagnosis
+
+  if not fix.tests_pass:
+    output { status: "fix_failed", diagnosis, fix }
+
+  # Deploy (auto if tests pass)
+  let deploy = session "Deploy"
+    prompt: """Deploy per docs/DEPLOYMENT.md. Verify health endpoint."""
+    retry: 2
+
+  # Quick smoke test
+  let smoke = http.get("{API_URL}/health")
+
+  output {
+    status: smoke.status == "ok" ? "fixed" : "deploy_failed",
+    diagnosis,
+    fix,
+    deploy
+  }
+
+else:
+  # No blocking error - just output UX feedback
+  output { status: "ok", ux_feedback: observation }

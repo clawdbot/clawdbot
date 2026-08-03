@@ -1,0 +1,40 @@
+{
+  "id": "copilot",
+  "name": "GitHub Copilot agent runtime",
+  "description": "Registers the GitHub Copilot agent runtime.",
+  "icon": "https://cdn.simpleicons.org/githubcopilot",
+  "version": "2026.6.2",
+  "activation": {
+    "onStartup": false,
+    "onAgentHarnesses": ["copilot"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pool": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "idleTtlMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 300000
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "pool": {
+      "label": "Client Pool",
+      "help": "Advanced GitHub Copilot agent runtime client pooling controls.",
+      "advanced": true
+    },
+    "pool.idleTtlMs": {
+      "label": "Idle Client TTL",
+      "help": "Milliseconds to keep an idle GitHub Copilot agent runtime client alive before disposal.",
+      "advanced": true
+    }
+  }
+}

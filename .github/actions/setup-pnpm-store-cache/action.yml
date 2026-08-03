@@ -1,0 +1,115 @@
+name: Setup pnpm
+description: Prepare pnpm from the repository packageManager and restore its store cache.
+inputs:
+  package-manager-file:
+    description: package.json file that owns the packageManager pnpm pin.
+    required: false
+    default: "package.json"
+  lockfile-path:
+    description: pnpm lockfile used to key the store cache.
+    required: false
+    default: "pnpm-lock.yaml"
+  node-version:
+    description: Expected Node.js version already installed by actions/setup-node.
+    required: false
+    default: ""
+  use-actions-cache:
+    description: Whether actions/cache should restore the pnpm store.
+    required: false
+    default: "true"
+outputs:
+  pnpm-version:
+    description: Resolved pnpm version activated by the setup action.
+    value: ${{ steps.pnpm-version.outputs.pnpm-version }}
+  project-dir:
+    description: Directory containing the packageManager file used for pnpm resolution.
+    value: ${{ steps.setup-pnpm.outputs.project-dir }}
+  store-cache-hit:
+    description: Whether the pnpm store cache restored an exact key.
+    value: ${{ steps.pnpm-store-cache.outputs.cache-hit }}
+  store-cache-primary-key:
+    description: Exact pnpm store cache key used for restore/save.
+    value: ${{ steps.pnpm-store-cache.outputs.cache-primary-key }}
+  store-path:
+    description: Resolved pnpm store path.
+    value: ${{ steps.pnpm-store.outputs.path }}
+runs:
+  using: composite
+  steps:
+    - name: Validate pnpm setup inputs
+      id: setup-pnpm
+      shell: bash
+      env:
+        PACKAGE_MANAGER_FILE: ${{ inputs.package-manager-file }}
+        REQUESTED_NODE_VERSION: ${{ inputs.node-version }}
+      run: |
+        set -euo pipefail
+        project_dir="$(dirname "$PACKAGE_MANAGER_FILE")"
+        if [[ ! -f "$PACKAGE_MANAGER_FILE" ]]; then
+          echo "::error::package manager file not found: $PACKAGE_MANAGER_FILE"
+          exit 1
+        fi
+        echo "project-dir=$project_dir" >> "$GITHUB_OUTPUT"
+
+        requested_node="${REQUESTED_NODE_VERSION:-${NODE_VERSION:-}}"
+        source "$GITHUB_ACTION_PATH/ensure-node.sh"
+        openclaw_ensure_node "$requested_node"
+
+    - name: Setup pnpm from packageManager
+      shell: bash
+      env:
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        PACKAGE_MANAGER_FILE: ${{ inputs.package-manager-file }}
+      run: |
+        set -euo pipefail
+        package_manager="$(node -e "const fs = require('node:fs'); const path = require('node:path'); const pkg = JSON.parse(fs.readFileSync(path.resolve(process.argv[1]), 'utf8')); process.stdout.write(pkg.packageManager || '')" "$PACKAGE_MANAGER_FILE")"
+        case "$package_manager" in
+          pnpm@*) ;;
+          *)
+            echo "::error::Expected packageManager to pin pnpm, got '${package_manager:-<empty>}'"
+            exit 1
+            ;;
+        esac
+        if [ -n "${PNPM_HOME:-}" ]; then
+          mkdir -p "$PNPM_HOME"
+          corepack enable --install-directory "$PNPM_HOME"
+          echo "PNPM_HOME=$PNPM_HOME" >> "$GITHUB_ENV"
+          echo "$PNPM_HOME" >> "$GITHUB_PATH"
+        else
+          corepack enable
+        fi
+        for attempt in 1 2 3; do
+          if corepack prepare "$package_manager" --activate; then
+            exit 0
+          fi
+          sleep $((attempt * 5))
+        done
+        corepack prepare "$package_manager" --activate
+
+    - name: Resolve pnpm store path
+      id: pnpm-store
+      if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        store_path="$(pnpm store path --silent)"
+        node -e "require('node:fs').mkdirSync(process.argv[1], { recursive: true })" "$store_path"
+        echo "path=$store_path" >> "$GITHUB_OUTPUT"
+
+    - name: Restore pnpm store cache
+      id: pnpm-store-cache
+      if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles(inputs.package-manager-file) }}-${{ hashFiles(inputs.lockfile-path) }}
+        restore-keys: |
+          pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles(inputs.package-manager-file) }}-
+          pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-
+
+    - name: Record pnpm version
+      id: pnpm-version
+      shell: bash
+      env:
+        PROJECT_DIR: ${{ steps.setup-pnpm.outputs.project-dir }}
+      run: echo "pnpm-version=$(cd "$PROJECT_DIR" && pnpm -v)" >> "$GITHUB_OUTPUT"

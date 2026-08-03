@@ -1,0 +1,90 @@
+/**
+ * Tests effective OAuth credential selection.
+ * Ensures external CLI bootstrap credentials are used only when local OAuth
+ * state is unusable and identity-safe.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveEffectiveOAuthCredential } from "./effective-oauth.js";
+import type { OAuthCredential } from "./types.js";
+
+const mocks = vi.hoisted(() => ({
+  readExternalCliBootstrapCredential: vi.fn<() => OAuthCredential | null>(() => null),
+}));
+
+vi.mock("./external-cli-sync.js", () => ({
+  readExternalCliBootstrapCredential: mocks.readExternalCliBootstrapCredential,
+}));
+
+function makeCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
+  return {
+    type: "oauth",
+    provider: "openai",
+    access: "local-access-token",
+    refresh: "local-refresh-token",
+    expires: Date.now() - 60_000,
+    ...overrides,
+  };
+}
+
+describe("resolveEffectiveOAuthCredential", () => {
+  beforeEach(() => {
+    mocks.readExternalCliBootstrapCredential.mockReset().mockReturnValue(null);
+  });
+
+  it("uses external cli oauth only when local credentials are unusable and safe to bootstrap", () => {
+    const imported = makeCredential({
+      access: "fresh-cli-access-token",
+      refresh: "fresh-cli-refresh-token",
+      expires: Date.now() + 30 * 60_000,
+    });
+    mocks.readExternalCliBootstrapCredential.mockReturnValue(imported);
+
+    expect(
+      resolveEffectiveOAuthCredential({
+        store: { version: 1, profiles: {} },
+        profileId: "openai:default",
+        credential: makeCredential(),
+      }),
+    ).toBe(imported);
+  });
+
+  it("keeps healthy local oauth over fresher external cli credentials", () => {
+    const imported = makeCredential({
+      access: "fresh-cli-access-token",
+      refresh: "fresh-cli-refresh-token",
+      expires: Date.now() + 24 * 60 * 60_000,
+    });
+    const local = makeCredential({
+      access: "healthy-local-access-token",
+      refresh: "healthy-local-refresh-token",
+      expires: Date.now() + 30 * 60_000,
+    });
+    mocks.readExternalCliBootstrapCredential.mockReturnValue(imported);
+
+    expect(
+      resolveEffectiveOAuthCredential({
+        store: { version: 1, profiles: {} },
+        profileId: "openai:default",
+        credential: local,
+      }),
+    ).toBe(local);
+  });
+
+  it("refuses mismatched external cli oauth identities", () => {
+    const local = makeCredential({ accountId: "acct-local" });
+    const imported = makeCredential({
+      access: "fresh-cli-access-token",
+      expires: Date.now() + 30 * 60_000,
+      accountId: "acct-external",
+    });
+    mocks.readExternalCliBootstrapCredential.mockReturnValue(imported);
+
+    expect(
+      resolveEffectiveOAuthCredential({
+        store: { version: 1, profiles: {} },
+        profileId: "openai:default",
+        credential: local,
+      }),
+    ).toBe(local);
+  });
+});

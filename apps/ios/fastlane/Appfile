@@ -1,0 +1,17 @@
+app_identifier("ai.openclawfoundation.app")
+
+# Auth is expected via App Store Connect API key.
+# Provide either:
+# - APP_STORE_CONNECT_API_KEY_PATH=/path/to/AuthKey_XXXXXX.p8.json (recommended)
+# or:
+# - APP_STORE_CONNECT_KEY_PATH=/path/to/AuthKey_XXXXXX.p8 with
+#   APP_STORE_CONNECT_KEY_ID and APP_STORE_CONNECT_ISSUER_ID
+# - APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_ISSUER_ID, and
+#   APP_STORE_CONNECT_KEY_CONTENT (base64 or raw p8 content)
+# - APP_STORE_CONNECT_KEY_ID and APP_STORE_CONNECT_ISSUER_ID plus Keychain fallback:
+#   APP_STORE_CONNECT_KEYCHAIN_SERVICE (default: openclaw-app-store-connect-key)
+#   APP_STORE_CONNECT_KEYCHAIN_ACCOUNT (default: USER/LOGNAME)
+#
+# Optional deliver app lookup overrides:
+# - APP_STORE_CONNECT_APP_IDENTIFIER (bundle ID)
+# - APP_STORE_CONNECT_APP_ID (numeric App Store Connect app ID)

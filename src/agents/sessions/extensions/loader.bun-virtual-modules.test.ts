@@ -1,0 +1,77 @@
+// Bun binary extension loader tests cover virtual SDK modules passed to jiti.
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+
+const jitiCalls = vi.hoisted(() => ({
+  options: [] as Array<Record<string, unknown>>,
+}));
+
+vi.mock("jiti/static", () => ({
+  createJiti: vi.fn((_url: string, options: Record<string, unknown>) => {
+    jitiCalls.options.push(options);
+    return {
+      import: vi.fn(
+        async () => async (api: { registerCommand: (id: string, command: unknown) => void }) => {
+          api.registerCommand("bun-virtual-module-probe", {
+            description: "probe",
+            handler() {},
+          });
+        },
+      ),
+    };
+  }),
+}));
+
+vi.mock("../../config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config.js")>();
+  return { ...actual, isBunBinary: true };
+});
+
+const tempDirs: string[] = [];
+let virtualModulesCase: {
+  errors: unknown[];
+  virtualModuleIds: string[];
+};
+
+beforeAll(async () => {
+  const { clearExtensionCache, loadExtensionsCached } = await import("./loader.js");
+  clearExtensionCache();
+  const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-sdk-"));
+  tempDirs.push(dir);
+  const extensionPath = join(dir, "extension.ts");
+  await writeFile(extensionPath, "export default function extension() {}\n");
+
+  const result = await loadExtensionsCached([extensionPath], dir);
+  const virtualModules = jitiCalls.options[0]?.virtualModules as Record<string, unknown>;
+  virtualModulesCase = {
+    errors: result.errors,
+    virtualModuleIds: Object.keys(virtualModules),
+  };
+});
+
+afterEach(async () => {
+  const { clearExtensionCache } = await import("./loader.js");
+  clearExtensionCache();
+  jitiCalls.options.length = 0;
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
+});
+
+describe("loadExtensionsCached in Bun binary mode", () => {
+  it("virtualizes scoped and unscoped SDK module ids", async () => {
+    // Bundled Bun binaries cannot rely on Node resolution for SDK aliases, so
+    // both historical and scoped module ids are registered as virtual modules.
+    expect(virtualModulesCase.errors).toEqual([]);
+    expect(virtualModulesCase.virtualModuleIds).toEqual(
+      expect.arrayContaining([
+        "openclaw/plugin-sdk/agent-core",
+        "@openclaw/plugin-sdk/agent-core",
+        "openclaw/plugin-sdk/llm",
+        "@openclaw/plugin-sdk/llm",
+        "openclaw/plugin-sdk/agent-sessions",
+        "@openclaw/plugin-sdk/agent-sessions",
+      ]),
+    );
+  });
+});
