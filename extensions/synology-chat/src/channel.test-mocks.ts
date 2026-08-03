@@ -149,6 +149,8 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
 });
 
 vi.mock("./client.js", () => ({
+  SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE:
+    "Remote media omitted: Synology Chat cannot safely fetch remote URLs.",
   SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT: 2_000,
   sendMessage: vi.fn().mockResolvedValue(true),
   sendFileReference: vi.fn().mockResolvedValue(true),
