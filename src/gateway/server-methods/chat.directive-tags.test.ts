@@ -16,6 +16,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
@@ -222,14 +223,18 @@ vi.mock("../../auto-reply/dispatch.js", async () => {
   const { createReplyDispatcher } = await vi.importActual<
     typeof import("../../auto-reply/reply/reply-dispatcher.js")
   >("../../auto-reply/reply/reply-dispatcher.js");
+  const { withReplyDispatcher } = await vi.importActual<
+    typeof import("../../auto-reply/dispatch-dispatcher.js")
+  >("../../auto-reply/dispatch-dispatcher.js");
   return {
     dispatchInboundMessage: dispatchInboundMessageMock,
     dispatchInboundMessageWithProjectedDispatcher: vi.fn(
       async (params: ProjectedDispatchParams) => {
         const { dispatcherOptions, ...dispatchParams } = params;
-        return await dispatchInboundMessageMock({
-          ...dispatchParams,
-          dispatcher: createReplyDispatcher(dispatcherOptions),
+        const dispatcher = createReplyDispatcher(dispatcherOptions);
+        return await withReplyDispatcher({
+          dispatcher,
+          run: () => dispatchInboundMessageMock({ ...dispatchParams, dispatcher }),
         });
       },
     ),
@@ -5894,6 +5899,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(typeof message?.timestamp).toBe("number");
     const persistedUser = readPersistedUserMessages()[0];
     expect(persistedUser?.content).toBe("quick command");
+    expect(getTotalPendingReplies()).toBe(0);
   });
 
   it("emits a user transcript update when chat.send fails before an agent run starts", async () => {
@@ -5918,6 +5924,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const persistedUser = readPersistedUserMessages()[0];
       expect(persistedUser?.content).toBe("hello from failed dispatch");
     });
+    expect(getTotalPendingReplies()).toBe(0);
   });
 
   it("emits a user transcript update when a slash-prefixed turn fails before command delivery", async () => {
