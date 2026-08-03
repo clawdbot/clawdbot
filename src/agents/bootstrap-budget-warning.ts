@@ -14,14 +14,6 @@ function formatWarningCause(cause: BootstrapTruncationCause): string {
   return cause === "per-file-limit" ? "max/file" : "max/total";
 }
 
-function isAgentsBootstrapName(name: string | undefined): boolean {
-  return name?.toLowerCase() === "agents.md";
-}
-
-function isUserBootstrapName(name: string | undefined): boolean {
-  return name?.toLowerCase() === "user.md";
-}
-
 export function normalizeBootstrapWarningSignatures(signatures?: string[]): string[] {
   if (!Array.isArray(signatures) || signatures.length === 0) {
     return [];
@@ -119,12 +111,12 @@ function formatBootstrapTruncationWarningLines(params: {
       `+${params.analysis.truncatedFiles.length - topFiles.length} more truncated file(s).`,
     );
   }
-  if (params.analysis.truncatedFiles.some((file) => isAgentsBootstrapName(file.name))) {
+  if (params.analysis.truncatedFiles.some((file) => file.name?.toLowerCase() === "agents.md")) {
     lines.push("AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.");
   }
   const fixedUserCapApplied = params.analysis.truncatedFiles.some(
     (file) =>
-      isUserBootstrapName(file.name) &&
+      file.name?.toLowerCase() === "user.md" &&
       file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS &&
       file.causes.includes("per-file-limit"),
   );
@@ -135,7 +127,7 @@ function formatBootstrapTruncationWarningLines(params: {
   }
   const configurableLimitApplied = params.analysis.truncatedFiles.some(
     (file) =>
-      !isUserBootstrapName(file.name) ||
+      file.name?.toLowerCase() !== "user.md" ||
       file.effectiveFileLimit < USER_BOOTSTRAP_MAX_CHARS ||
       file.causes.includes("total-limit"),
   );
