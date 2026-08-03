@@ -258,7 +258,8 @@ function recordMatchesHandle(handle: AcpRuntimeHandle, record: AcpLoadedSessionR
   const acpxRecordId = readRecordAcpRecordId(record);
   const acpSessionId = readRecordAcpSessionId(record);
   const agentSessionId =
-    typeof record === "object" && record !== null &&
+    typeof record === "object" &&
+    record !== null &&
     typeof (record as { agentSessionId?: unknown }).agentSessionId === "string"
       ? (record as { agentSessionId: string }).agentSessionId.trim()
       : "";

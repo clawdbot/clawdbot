@@ -78,7 +78,9 @@ function makeRuntime(
     runtime,
     wrappedStore: (
       runtime as unknown as {
-        sessionStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
+        sessionStore: TestSessionStore & {
+          markFresh: (sessionKey: string, expectedGeneration?: number) => Promise<boolean>;
+        };
       }
     ).sessionStore,
     delegate: (
