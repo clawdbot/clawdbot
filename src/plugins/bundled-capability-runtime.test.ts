@@ -167,6 +167,35 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     expect(listImportedRuntimePluginIds()).toContain(target.id);
   });
 
+  it.each([
+    {
+      name: "explicitly disabled",
+      plugins: { entries: { "blocked-capability": { enabled: false } } },
+    },
+    { name: "denylisted", plugins: { deny: ["blocked-capability"] } },
+    { name: "outside the restrictive allowlist", plugins: { allow: ["allowed-capability"] } },
+    { name: "blocked by global plugin disablement", plugins: { enabled: false } },
+  ])("never imports a $name plugin through bundled capability capture", ({ plugins }) => {
+    const blocked = writePlugin({
+      id: "blocked-capability",
+      body: `module.exports = {
+        id: "blocked-capability",
+        register(api) {
+          api.registerProvider({ id: "blocked-capability", label: "Blocked", auth: [] });
+        },
+      };`,
+    });
+
+    const registry = loadBundledCapabilityRuntimeRegistry({
+      pluginIds: [blocked.id],
+      config: { plugins },
+      discovery: discoveryFor(blocked),
+    });
+
+    expect(registry.providers).toEqual([]);
+    expect(listImportedRuntimePluginIds()).not.toContain(blocked.id);
+  });
+
   it.each(["source", "built"] as const)(
     "keeps %s-first artifact preferences isolated across registry snapshots",
     (firstArtifact) => {
