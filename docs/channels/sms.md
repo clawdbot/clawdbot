@@ -327,7 +327,7 @@ For incoming MMS, OpenClaw processes at most 10 attachments and downloads at mos
 
 ### Delivery status
 
-After each successful outbound send, OpenClaw stores the initial Twilio API status when the response includes one. When `publicWebhookUrl` is configured, every outbound message also gives Twilio that same URL, including any connection-override fragment, as its `StatusCallback`.
+After each successful outbound send, OpenClaw stores the initial Twilio API status when the response includes one. When `publicWebhookUrl` is valid, every outbound message also gives Twilio a derived `StatusCallback` URL that preserves its base URL and connection overrides while adding the required delivery-callback retry settings. Invalid or oversized derived URLs are omitted.
 
 Later delivery callbacks update the same plugin-scoped SQLite record. Semantic retries are deduplicated, older transitions cannot regress a terminal state, and conflicting terminal observations are reported as `conflicted` instead of choosing a false winner. Records contain message SIDs, status/error metadata, and timestamps, but not message bodies or phone-number addresses. Each record is retained for up to 30 days after its latest observation, subject to the plugin-wide 5,000-message cap and oldest-record eviction.
 
@@ -385,7 +385,7 @@ The webhook route also enforces, independent of signature validation:
 - Delivery observations use a semantic, non-PII fingerprint of source, message SID, normalized status, error code, and carrier completion date. Multiple states for one outbound message remain distinct. Records expire 30 days after their latest observation, while the 5,000-message cap can evict older records sooner.
 - Request bodies over 32 KB are rejected.
 
-OpenClaw adds the `5xx` retry policy and a retry count to generated delivery `StatusCallback` URLs so Twilio can retry a failed SQLite commit or an overloaded delivery-state route. Twilio does not retry HTTP 429 by default. The `#rp=4xx` and `#rp=all` connection overrides opt into 4xx retries, but Twilio caps the complete retry transaction at 15 seconds. Neither a 429 nor a delivery-state 503 guarantees later recovery; use reconciliation when every transition matters.
+OpenClaw adds the `5xx` retry policy and a retry count to generated delivery `StatusCallback` URLs so Twilio can retry a failed SQLite commit or an overloaded delivery-state route. Twilio does not retry HTTP 429 by default. The `#rp=4xx` and `#rp=all` connection overrides opt into 4xx retries, but Twilio caps the complete retry transaction at 15 seconds. Neither a 429 nor a delivery-state 503 guarantees later recovery; use reconciliation when final-state completeness matters. Missed intermediate transitions cannot be reconstructed.
 
 For completeness-sensitive workflows, persist Message SIDs and reconcile stale nonterminal records by polling Twilio's Message resource. Twilio's [delivery logging guidance](https://www.twilio.com/docs/messaging/guides/outbound-message-logging) recommends polling when a message has not reached `delivered` or `undelivered` within 12 hours because a status callback may not have arrived. The SMS fallback URL is not a substitute: it only handles failures retrieving or executing the [inbound SMS TwiML webhook](https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource).
 
