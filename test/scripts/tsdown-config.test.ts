@@ -70,7 +70,7 @@ describe("tsdown config", () => {
   });
 
   it("keeps public SDK declarations together and isolates private runtime declarations", () => {
-    const [publicDeclarationSources, privateDeclarationSources] =
+    const [publicDeclarationSources = [], privateDeclarationSources = []] =
       TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.filter((name) =>
         name.startsWith("openclaw-dts-plugin-sdk-"),
       ).map((name) => {
