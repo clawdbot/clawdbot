@@ -7,7 +7,7 @@ import {
   mockedClassifyFailoverReason,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
-  resetRunOverflowCompactionHarnessMocks,
+  resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
@@ -20,7 +20,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
   });
 
   beforeEach(() => {
-    resetRunOverflowCompactionHarnessMocks();
+    resetSharedRunIntegrationHarnessMocks();
     useOpenAIPlatformAuthFixture();
   });
 

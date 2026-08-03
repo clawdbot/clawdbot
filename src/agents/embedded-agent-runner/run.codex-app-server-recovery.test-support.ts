@@ -362,5 +362,4 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
-
 });
