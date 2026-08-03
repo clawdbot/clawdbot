@@ -360,8 +360,19 @@ function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   return hasVideoMediaFileExtension(path);
 }
 
+// Collision-safe managed inbound URIs store the original filename plus a
+// "---<uuid>" suffix in the basename (e.g. media://inbound/report---<uuid>.pdf).
+// Restore the original filename for display without rewriting the stored URI.
+const MANAGED_INBOUND_MEDIA_PREFIX = "media://inbound/";
+const MANAGED_INBOUND_UUID_SUFFIX_PATTERN =
+  /---[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
 function labelForMediaPath(mediaPath: string): string {
   const trimmed = mediaPath.trim();
+  if (trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) {
+    const basename = trimmed.split("/").pop()?.trim() || trimmed;
+    return basename.replace(MANAGED_INBOUND_UUID_SUFFIX_PATTERN, "") || basename;
+  }
   try {
     if (/^https?:\/\//i.test(trimmed)) {
       const parsed = new URL(trimmed);
@@ -556,7 +567,7 @@ export function schedulePairingQrExpiryRefresh(
 
 export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   const attachments: AttachmentItem[] = [];
-  for (const { path: mediaPath, mediaType } of readTranscriptMediaEntries(message)) {
+  for (const { path: mediaPath, mediaType, fileName } of readTranscriptMediaEntries(message)) {
     if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
       continue;
     }
@@ -570,7 +581,7 @@ export function extractTranscriptAttachments(message: unknown): AttachmentItem[]
       attachment: {
         url: mediaPath,
         kind,
-        label: labelForMediaPath(mediaPath),
+        label: fileName?.trim() || labelForMediaPath(mediaPath),
         ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
       },
     });
