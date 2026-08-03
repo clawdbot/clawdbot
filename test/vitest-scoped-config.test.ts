@@ -247,13 +247,13 @@ describe("createScopedVitestConfig", () => {
 
   it("keeps broad package scoped cli directory filters aligned with repo-root include patterns", () => {
     const config = createScopedVitestConfig(["packages/**/*.test.ts"], {
-      argv: ["vitest", "run", "packages/speech-core"],
+      argv: ["vitest", "run", "packages/normalization-core"],
       dir: "packages",
       env: {},
       passWithNoTests: true,
     });
 
-    expect(requireTestConfig(config).include).toEqual(["speech-core/**/*.test.*"]);
+    expect(requireTestConfig(config).include).toEqual(["normalization-core/**/*.test.*"]);
   });
 
   it("relativizes scoped include and exclude patterns to the configured dir", () => {

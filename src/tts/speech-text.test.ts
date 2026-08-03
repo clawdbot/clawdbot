@@ -1,5 +1,5 @@
-import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import { describe, expect, it } from "vitest";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import {
   CODE_HEAVY_SPOKEN_FALLBACK,
   isCodeHeavySpeechText,

@@ -7,12 +7,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  getVoiceProviderConfig,
-  providerMatchesId,
-  resolveSupportedVoiceModelRefs,
-  type VoiceModelProvider,
-} from "../../../packages/speech-core/voice-models.js";
 import { resolveRealtimeBootstrapContextInstructions } from "../../agents/realtime-bootstrap-context.js";
 import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
@@ -32,6 +26,12 @@ import type {
   RealtimeVoiceProviderConfig,
 } from "../../talk/provider-types.js";
 import type { TalkBrain, TalkEvent, TalkMode, TalkTransport } from "../../talk/talk-events.js";
+import {
+  getVoiceProviderConfig,
+  providerMatchesId,
+  resolveSupportedVoiceModelRefs,
+  type VoiceModelProvider,
+} from "../../tts/voice-models.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { TalkHandoffTurnResult } from "../talk-handoff.js";
 

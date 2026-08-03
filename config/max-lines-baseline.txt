@@ -320,7 +320,6 @@ packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/sdk/src/client.ts
 packages/sdk/src/index.test.ts
-packages/speech-core/src/tts.test.ts
 packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
