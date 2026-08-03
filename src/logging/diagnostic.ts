@@ -1311,10 +1311,13 @@ export function startDiagnosticHeartbeat(
       // `state.lastActivity` is refreshed by every inbound message, so it dates the
       // arrival of new work rather than progress on existing work: a wedged lane
       // receiving messages faster than the threshold can never age into observation.
-      // Reconcile on run-progress age, and keep the session clock as a lower bound so
-      // an orphaned session with no activity row is still observed exactly as before.
+      // Reconcile on run-progress age instead, but only while run activity is
+      // registered — `markDiagnosticSessionProgress` (the ACP dispatcher's progress
+      // signal) refreshes the session clock alone, and `activityByRef` entries outlive
+      // the run that created them, so a finished run's row would otherwise make a
+      // healthy ACP turn read as stale forever.
       const progressAgeMs = activity.lastProgressAgeMs ?? ageMs;
-      const attentionAgeMs = Math.max(ageMs, progressAgeMs);
+      const attentionAgeMs = activity.activeWorkKind ? Math.max(ageMs, progressAgeMs) : ageMs;
       if (
         (state.state === "processing" && attentionAgeMs > stuckSessionWarnMs) ||
         idleQueuedRecoverableStall

@@ -1025,6 +1025,27 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
+  it("does not recover a session whose only progress signal is markDiagnosticSessionProgress", () => {
+    const recoverStuckSession = vi.fn();
+
+    // An earlier embedded turn leaves an activity row behind: recordRunCompleted
+    // clears the active sets but activityByRef is never pruned.
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticEmbeddedRunEnded({ sessionId: "s1", sessionKey: "main" });
+
+    startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+
+    // ACP turn in progress: dispatch-acp.ts:447 refreshes only state.lastActivity.
+    for (let i = 0; i < 8; i += 1) {
+      vi.advanceTimersByTime(25_000);
+      markDiagnosticSessionProgress({ sessionKey: "main" });
+      vi.advanceTimersByTime(5_000);
+    }
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
   it("recovers stale native tool calls through the active-run abort path", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
