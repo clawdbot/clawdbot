@@ -136,7 +136,7 @@ export async function dispatchSlackPluginInteractiveHandler(params: {
         ...createInteractiveConversationBindingHelpers({
           // The shared helpers fail closed without owner authority; never expose it to unauthenticated actions.
           registration:
-            params.ctx.auth.isAuthorizedSender === true && baseConversationId
+            params.ctx.auth.isAuthorizedSender && baseConversationId
               ? registration
               : { ...registration, pluginRoot: undefined },
           senderId: params.ctx.senderId,
