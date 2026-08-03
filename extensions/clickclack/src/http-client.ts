@@ -63,10 +63,9 @@ const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CLICKCLACK_CORRELATION_ID_MAX_LENGTH = 128;
 const CLICKCLACK_CORRELATION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
 const CLICKCLACK_CORRELATION_ID_HEADER = "X-Correlation-ID";
-// Control-plane REST bodies are small, so bound DNS/connect/header waits without
-// turning the full response or a streaming upload into a wall-clock deadline.
+// Bound control-plane waits before response headers without turning multipart
+// uploads into a wall-clock deadline that cannot observe upload progress.
 const CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS = 30_000;
-const CLICKCLACK_RESPONSE_BODY_IDLE_TIMEOUT_MS = 30_000;
 // Keep REST and websocket JSON under the same bounded response budget. ClickClack
 // accepts 1 MiB request bodies, then wraps and re-encodes them as events, so a
 // valid frame can exceed 1 MiB before ws hands it to the event parser.
@@ -163,20 +162,8 @@ export function createClickClackClient(options: ClientOptions) {
     const response = isUpload
       ? await fetcher(url, requestInit)
       : await fetchWithTimeout(url, requestInit, CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS, fetcher);
-    const bodyReadOptions = {
-      chunkTimeoutMs: CLICKCLACK_RESPONSE_BODY_IDLE_TIMEOUT_MS,
-      onIdleTimeout: () => {
-        const error = new Error("request timed out");
-        error.name = "TimeoutError";
-        return error;
-      },
-    };
     if (!response.ok) {
-      const detail = await readResponseTextLimited(
-        response,
-        CLICKCLACK_ERROR_BODY_LIMIT_BYTES,
-        bodyReadOptions,
-      );
+      const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
       // Remote error bodies are untrusted output; redact them even when the
       // operator disables log redaction or overrides log-only patterns.
       throw new ClickClackHttpError(
@@ -187,7 +174,6 @@ export function createClickClackClient(options: ClientOptions) {
     }
     return await readProviderJsonResponse<T>(response, "ClickClack response", {
       maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
-      ...bodyReadOptions,
     });
   }
 
