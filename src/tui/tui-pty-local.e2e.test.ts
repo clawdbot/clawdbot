@@ -25,6 +25,7 @@ import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js
 type MockModelServer = {
   baseUrl: string;
   requests: (modelId?: string) => MockModelRequest[];
+  rejectedRequests: () => MockModelRequest[];
   releaseFirstResponse: (modelId: string) => void;
   stop: () => Promise<void>;
 };
@@ -45,18 +46,15 @@ type MockModelRequest = {
 type GatewayScenario = MockModelBehavior & {
   agentId: string;
   modelId: string;
-  routeMarker: string;
   toolsProfile: "minimal" | "coding";
 };
 
 const SHARED_GATEWAY_AGENT_ID = "tui-pty-gateway";
-const SHARED_GATEWAY_MODEL_ID = "tui-pty-gateway";
 
 const GATEWAY_SCENARIOS = {
   validation: {
     agentId: "tui-pty-validation",
     modelId: "tui-pty-validation",
-    routeMarker: "trigger malformed edit calls",
     toolsProfile: "coding",
     replyText: "FIRST_RUN_ACTIVE",
     holdFirstResponse: false,
@@ -66,7 +64,6 @@ const GATEWAY_SCENARIOS = {
   crossClient: {
     agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-cross-client",
-    routeMarker: "seed cross-client session",
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
     holdFirstResponse: false,
@@ -75,7 +72,6 @@ const GATEWAY_SCENARIOS = {
   followup: {
     agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-followup",
-    routeMarker: "slow first turn",
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
     holdFirstResponse: true,
@@ -84,7 +80,6 @@ const GATEWAY_SCENARIOS = {
   emptyReply: {
     agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-empty-reply",
-    routeMarker: "non-deliverable first turn",
     toolsProfile: "minimal",
     replyText: "[[reply_to_current]]",
     holdFirstResponse: false,
@@ -93,7 +88,6 @@ const GATEWAY_SCENARIOS = {
   cancel: {
     agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-cancel",
-    routeMarker: "slow turn to abort",
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
     holdFirstResponse: true,
@@ -102,7 +96,6 @@ const GATEWAY_SCENARIOS = {
   collect: {
     agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-collect",
-    routeMarker: "slow collect parent",
     toolsProfile: "minimal",
     replyText: "FIRST_RUN_ACTIVE",
     holdFirstResponse: true,
@@ -111,7 +104,6 @@ const GATEWAY_SCENARIOS = {
   reconnect: {
     agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-reconnect",
-    routeMarker: "send preserved draft after restart",
     toolsProfile: "minimal",
     replyText: "RECONNECTED_RUN_COMPLETE",
   },
@@ -289,12 +281,9 @@ async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unk
 
 async function startRoutedMockModelServer(
   behaviors: Readonly<Record<string, MockModelBehavior>>,
-  opts: {
-    advertisedModelIds?: string[];
-    resolveBehaviorId?: (body: Record<string, unknown>, modelId: string) => string;
-  } = {},
 ): Promise<MockModelServer> {
   const requests: MockModelRequest[] = [];
+  const rejectedRequests: MockModelRequest[] = [];
   const requestsByModel = new Map<string, MockModelRequest[]>();
   const firstResponseGates = new Map(
     Object.entries(behaviors)
@@ -310,7 +299,7 @@ async function startRoutedMockModelServer(
       }
       if (req.method === "GET" && url.pathname === "/v1/models") {
         writeJson(res, 200, {
-          data: (opts.advertisedModelIds ?? Object.keys(behaviors)).map((id) => ({
+          data: Object.keys(behaviors).map((id) => ({
             id,
             object: "model",
           })),
@@ -321,18 +310,18 @@ async function startRoutedMockModelServer(
         const body = await readJsonRequest(req);
         if (url.pathname === "/v1/responses" || url.pathname === "/responses") {
           const modelId = typeof body.model === "string" ? body.model : "";
-          const behaviorId = opts.resolveBehaviorId?.(body, modelId) ?? modelId;
-          const behavior = behaviors[behaviorId];
+          const request = { method: req.method, path: url.pathname, body };
+          const behavior = behaviors[modelId];
           if (!behavior) {
-            writeJson(res, 400, { error: `unknown mock behavior: ${behaviorId || "missing"}` });
+            rejectedRequests.push(request);
+            writeJson(res, 400, { error: `unknown mock model: ${modelId || "missing"}` });
             return;
           }
-          const modelRequests = requestsByModel.get(behaviorId) ?? [];
-          if (!requestsByModel.has(behaviorId)) {
-            requestsByModel.set(behaviorId, modelRequests);
+          const modelRequests = requestsByModel.get(modelId) ?? [];
+          if (!requestsByModel.has(modelId)) {
+            requestsByModel.set(modelId, modelRequests);
           }
           const requestIndex = modelRequests.length;
-          const request = { method: req.method, path: url.pathname, body };
           requests.push(request);
           modelRequests.push(request);
           if (behavior.invalidEditLoop) {
@@ -344,7 +333,7 @@ async function startRoutedMockModelServer(
             requestIndex === 0
               ? behavior.replyText
               : (behavior.followupReplyText ?? behavior.replyText),
-            requestIndex === 0 ? firstResponseGates.get(behaviorId)?.promise : undefined,
+            requestIndex === 0 ? firstResponseGates.get(modelId)?.promise : undefined,
           );
           return;
         }
@@ -366,6 +355,7 @@ async function startRoutedMockModelServer(
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests: (modelId) => (modelId ? (requestsByModel.get(modelId) ?? []) : requests),
+    rejectedRequests: () => rejectedRequests,
     releaseFirstResponse: (modelId) => {
       firstResponseGates.get(modelId)?.resolve();
     },
@@ -614,7 +604,8 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
     ...new Map(scenarios.map((scenario) => [scenario.agentId, scenario])).values(),
   ];
   const defaultScenario = GATEWAY_SCENARIOS.validation;
-  const defaultModelRef = `tui-pty-mock/${SHARED_GATEWAY_MODEL_ID}`;
+  const defaultModelRef = `tui-pty-mock/${defaultScenario.modelId}`;
+  const modelRefs = scenarios.map((scenario) => `tui-pty-mock/${scenario.modelId}`);
   const base = buildLocalModeConfig({
     workspaceDir: path.join(params.tempDir, defaultScenario.agentId),
     providerBaseUrl: params.providerBaseUrl,
@@ -625,7 +616,9 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
       defaults: {
         workspace: path.join(params.tempDir, defaultScenario.agentId),
         model: { primary: defaultModelRef },
-        models: { [defaultModelRef]: { agentRuntime: { id: "openclaw" } } },
+        models: Object.fromEntries(
+          modelRefs.map((modelRef) => [modelRef, { agentRuntime: { id: "openclaw" } }]),
+        ),
         skills: [],
         skipBootstrap: true,
       },
@@ -636,7 +629,7 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
             ...(index === 0 ? { default: true } : {}),
             workspace: path.join(params.tempDir, scenario.agentId),
             skills: [],
-            model: { primary: defaultModelRef },
+            model: { primary: `tui-pty-mock/${scenario.modelId}` },
             tools: { profile: scenario.toolsProfile },
           },
         ]),
@@ -645,7 +638,10 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
     models: {
       mode: "replace",
       providers: {
-        "tui-pty-mock": buildMockModelProvider(params.providerBaseUrl, [SHARED_GATEWAY_MODEL_ID]),
+        "tui-pty-mock": buildMockModelProvider(
+          params.providerBaseUrl,
+          scenarios.map((scenario) => scenario.modelId),
+        ),
       },
     },
     messages: {
@@ -654,14 +650,6 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
       },
     },
   } satisfies OpenClawConfig;
-}
-
-function resolveGatewayBehaviorId(body: Record<string, unknown>): string {
-  const serialized = JSON.stringify(body);
-  const match = Object.values(GATEWAY_SCENARIOS).find((scenario) =>
-    serialized.includes(scenario.routeMarker),
-  );
-  return match?.modelId ?? "";
 }
 
 async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
@@ -689,10 +677,6 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
           },
         ]),
       ),
-      {
-        advertisedModelIds: [SHARED_GATEWAY_MODEL_ID],
-        resolveBehaviorId: (body) => resolveGatewayBehaviorId(body),
-      },
     );
     gateway = await createOpenClawTestInstance({
       name: "tui-pty-shared-gateway",
@@ -817,13 +801,14 @@ async function startGatewayModeTui(
   const shared = await requireSharedGatewayFixture();
   const scenario = GATEWAY_SCENARIOS[scenarioId];
   const requestOffset = shared.mockModel.requests(scenario.modelId).length;
+  const rejectedRequestOffset = shared.mockModel.rejectedRequests().length;
   const sessionKey = `agent:${scenario.agentId}:tui-pty-${++gatewaySessionSequence}`;
   const sessionKeys = new Set([sessionKey]);
   await shared.controlClient.createSession({ key: sessionKey, agentId: scenario.agentId });
   await shared.controlClient.patchSession({
     key: sessionKey,
     agentId: scenario.agentId,
-    model: `tui-pty-mock/${SHARED_GATEWAY_MODEL_ID}`,
+    model: `tui-pty-mock/${scenario.modelId}`,
   });
   const run = shared.run;
   const outputOffset = run.visibleOutput().length;
@@ -843,6 +828,7 @@ async function startGatewayModeTui(
     gateway: shared.gateway,
     mockModel: {
       requests: () => shared.mockModel.requests(scenario.modelId).slice(requestOffset),
+      rejectedRequests: () => shared.mockModel.rejectedRequests().slice(rejectedRequestOffset),
       releaseFirstResponse: () => shared.mockModel.releaseFirstResponse(scenario.modelId),
     },
     agentId: scenario.agentId,
@@ -1002,7 +988,11 @@ describe("TUI PTY real backends", () => {
             timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
             read: () => (fixture.mockModel.requests().length >= 2 ? true : null),
             onTimeout: () =>
-              new Error(`model did not repeat the malformed edit call\n${fixture.run.output()}`),
+              new Error(
+                `model did not repeat the malformed edit call\n` +
+                  `rejected model requests=${JSON.stringify(fixture.mockModel.rejectedRequests())}\n` +
+                  fixture.run.output(),
+              ),
           });
           if (eventProbe) {
             await waitFor({
@@ -1355,7 +1345,11 @@ describe("TUI PTY real backends", () => {
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
           read: () => (fixture.mockModel.requests().length === 1 ? true : null),
           onTimeout: () =>
-            new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
+            new Error(
+              `first prompt did not reach the model\n` +
+                `rejected model requests=${JSON.stringify(fixture.mockModel.rejectedRequests())}\n` +
+                fixture.run.output(),
+            ),
         });
         const alphaSend = queueClient.sendChat({
           sessionKey: fixture.sessionKey,
