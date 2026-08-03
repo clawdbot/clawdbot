@@ -572,6 +572,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
 export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   preManagedServiceStop: PreManagedServiceStop | undefined;
   jsonMode: boolean;
+  packageSwapCompleted: boolean;
 }): Promise<void> {
   if (!params.preManagedServiceStop?.stopped || !params.preManagedServiceStop.serviceEnv) {
     return;
@@ -579,10 +580,12 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   // The package swap can succeed before a later step fails. In that case the
   // service points at the new on-disk binary even though this updater process
   // is still the old version, so allow this narrowly scoped recovery restart.
-  const restartEnv = {
-    ...params.preManagedServiceStop.serviceEnv,
-    [ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]: "1",
-  };
+  const restartEnv = params.packageSwapCompleted
+    ? {
+        ...params.preManagedServiceStop.serviceEnv,
+        [ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]: "1",
+      }
+    : params.preManagedServiceStop.serviceEnv;
   try {
     await resolveGatewayService().restart({
       env: restartEnv,

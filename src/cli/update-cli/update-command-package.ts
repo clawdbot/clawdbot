@@ -202,6 +202,7 @@ export async function runPackageInstallUpdate(params: {
     reason: packageUpdate.failedStep ? packageUpdate.failedStep.name : undefined,
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion ?? beforeVersion },
+    packageSwapCompleted: packageUpdate.packageSwapCompleted,
     steps: packageUpdate.steps,
     durationMs: Date.now() - params.startedAt,
   };

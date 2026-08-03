@@ -227,6 +227,7 @@ export async function executeMutableUpdate(params: {
           await maybeRestartServiceAfterFailedMutableUpdate({
             preManagedServiceStop,
             jsonMode: Boolean(params.opts.json),
+            packageSwapCompleted: false,
           });
         }
         defaultRuntime.exit(1);
@@ -247,6 +248,7 @@ export async function executeMutableUpdate(params: {
     await maybeRestartServiceAfterFailedMutableUpdate({
       preManagedServiceStop,
       jsonMode: Boolean(params.opts.json),
+      packageSwapCompleted: false,
     });
     throw err;
   }

@@ -836,10 +836,12 @@ export async function runGlobalPackageUpdateSteps(params: {
   steps: PackageUpdateStepResult[];
   verifiedPackageRoot: string | null;
   afterVersion: string | null;
+  packageSwapCompleted: boolean;
   failedStep: PackageUpdateStepResult | null;
 }> {
   let stagedInstall: StagedNpmInstall | null | undefined;
   let packedInstallDir: string | null = null;
+  let packageSwapCompleted = false;
 
   try {
     const pnpmPreflight = await validatePnpmIsolatedUpdate({
@@ -854,6 +856,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         steps: [pnpmPreflight.failedStep],
         verifiedPackageRoot: params.packageRoot ?? params.installTarget.packageRoot,
         afterVersion: null,
+        packageSwapCompleted,
         failedStep: pnpmPreflight.failedStep,
       };
     }
@@ -882,6 +885,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         steps: [preparedInstall.failedStep],
         verifiedPackageRoot: params.packageRoot ?? null,
         afterVersion: null,
+        packageSwapCompleted,
         failedStep: preparedInstall.failedStep,
       };
     }
@@ -904,6 +908,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         steps,
         verifiedPackageRoot: params.packageRoot ?? null,
         afterVersion: null,
+        packageSwapCompleted,
         failedStep: preparedSpec.failedStep,
       };
     }
@@ -955,6 +960,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           steps,
           verifiedPackageRoot: params.packageRoot ?? null,
           afterVersion: null,
+          packageSwapCompleted,
           failedStep: preparedFallbackInstall.failedStep,
         };
       }
@@ -1017,6 +1023,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       params.installTarget.pnpmIsolated !== undefined &&
       params.installTarget.packageRoot !== null &&
       refreshedPnpmPackageRoot === null;
+    packageSwapCompleted = finalInstallStep.exitCode === 0 && !stagedInstall;
     if (pnpmReplacementMissing) {
       const replacementStep: PackageUpdateStepResult = {
         name: "global install verify",
@@ -1031,6 +1038,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         steps,
         verifiedPackageRoot: params.packageRoot ?? null,
         afterVersion: null,
+        packageSwapCompleted,
         failedStep: replacementStep,
       };
     }
@@ -1084,6 +1092,7 @@ export async function runGlobalPackageUpdateSteps(params: {
               steps,
               verifiedPackageRoot,
               afterVersion: null,
+              packageSwapCompleted,
               failedStep: markerStep,
             };
           }
@@ -1109,6 +1118,7 @@ export async function runGlobalPackageUpdateSteps(params: {
               steps,
               verifiedPackageRoot,
               afterVersion: null,
+              packageSwapCompleted,
               failedStep: lifecycleStep,
             };
           }
@@ -1130,6 +1140,7 @@ export async function runGlobalPackageUpdateSteps(params: {
             steps,
             verifiedPackageRoot,
             afterVersion: null,
+            packageSwapCompleted,
             failedStep: finalizeStep,
           };
         }
@@ -1170,6 +1181,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         });
         steps.push(swapStep);
         if (swapStep.exitCode === 0) {
+          packageSwapCompleted = true;
           verifiedPackageRoot = params.installTarget.packageRoot ?? verifiedPackageRoot;
           afterVersion = candidateVersion;
         }
@@ -1201,6 +1213,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       steps,
       verifiedPackageRoot,
       afterVersion,
+      packageSwapCompleted,
       failedStep,
     };
   } finally {

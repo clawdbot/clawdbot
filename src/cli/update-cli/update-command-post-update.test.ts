@@ -34,6 +34,14 @@ function failedResult(recovery: UpdateRunResult["recovery"]): UpdateRunResult {
   };
 }
 
+function failedPackageResult(): UpdateRunResult {
+  return {
+    ...failedResult(undefined),
+    mode: "npm",
+    packageSwapCompleted: true,
+  };
+}
+
 async function finishFailedUpdate(result: UpdateRunResult): Promise<void> {
   await finishUpdate({
     result,
@@ -79,6 +87,9 @@ describe("skipped update exit status", () => {
   it("keeps a non-Git install skip successful", async () => {
     await finishSkippedUpdate("not-git-install");
 
+    expect(mocks.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ packageSwapCompleted: false }),
+    );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
   });
 });
@@ -93,6 +104,17 @@ describe("failed Git update recovery restart", () => {
     await finishFailedUpdate(failedResult({ serviceRestartSafe: true }));
 
     expect(mocks.restart).toHaveBeenCalledOnce();
+    expect(mocks.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ packageSwapCompleted: false }),
+    );
+  });
+
+  it("allows the older-binary restart override only after a completed package swap", async () => {
+    await finishFailedUpdate(failedPackageResult());
+
+    expect(mocks.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ packageSwapCompleted: true }),
+    );
   });
 
   it("leaves a managed Gateway stopped after unverified rollback recovery", async () => {

@@ -27,6 +27,7 @@ export type UpdateRunResult = {
   reason?: string;
   before?: { sha?: string | null; version?: string | null };
   after?: { sha?: string | null; version?: string | null };
+  packageSwapCompleted?: boolean;
   steps: UpdateStepResult[];
   durationMs: number;
   recovery?:

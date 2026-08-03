@@ -214,6 +214,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       });
 
       expect(result.failedStep).toBeNull();
+      expect(result.packageSwapCompleted).toBe(true);
       expect(result.verifiedPackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("2.0.0");
       expect(result.steps.map((step) => step.name)).toEqual([
