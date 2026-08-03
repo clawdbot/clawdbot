@@ -32,10 +32,23 @@ function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRun
 }
 
 describe("resolveAnnounceRetryDelayMs", () => {
-  it("preserves the exact retry schedule through attempt 10", () => {
+  it("preserves the zero-jitter retry schedule through attempt 10", () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+
     expect(
       Array.from({ length: 10 }, (_, index) => resolveAnnounceRetryDelayMs(index + 1)),
-    ).toEqual([1_000, 2_000, 4_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000]);
+    ).toEqual([
+      15_000, 30_000, 60_000, 120_000, 240_000, 300_000, 300_000, 300_000, 300_000, 300_000,
+    ]);
+    randomSpy.mockRestore();
+  });
+
+  it("applies positive jitter without exceeding the five-minute cap", () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
+
+    expect(resolveAnnounceRetryDelayMs(1)).toBe(18_000);
+    expect(resolveAnnounceRetryDelayMs(6)).toBe(300_000);
+    randomSpy.mockRestore();
   });
 });
 

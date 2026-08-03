@@ -8884,6 +8884,9 @@ public struct TaskSummary: Codable, Sendable {
     public let progresssummary: String?
     public let terminalsummary: String?
     public let error: String?
+    public let deliverystatus: AnyCodable?
+    public let terminaloutcome: AnyCodable?
+    public let result: String?
     public let prompt: String?
 
     public init(
@@ -8910,6 +8913,9 @@ public struct TaskSummary: Codable, Sendable {
         progresssummary: String? = nil,
         terminalsummary: String? = nil,
         error: String? = nil,
+        deliverystatus: AnyCodable? = nil,
+        terminaloutcome: AnyCodable? = nil,
+        result: String? = nil,
         prompt: String? = nil)
     {
         self.id = id
@@ -8935,6 +8941,9 @@ public struct TaskSummary: Codable, Sendable {
         self.progresssummary = progresssummary
         self.terminalsummary = terminalsummary
         self.error = error
+        self.deliverystatus = deliverystatus
+        self.terminaloutcome = terminaloutcome
+        self.result = result
         self.prompt = prompt
     }
 
@@ -8962,6 +8971,9 @@ public struct TaskSummary: Codable, Sendable {
         case progresssummary = "progressSummary"
         case terminalsummary = "terminalSummary"
         case error
+        case deliverystatus = "deliveryStatus"
+        case terminaloutcome = "terminalOutcome"
+        case result
         case prompt
     }
 }
@@ -9083,6 +9095,34 @@ public struct TasksCancelResult: Codable, Sendable {
         case cancelled
         case reason
         case task
+    }
+}
+
+public struct TasksRecoveryParams: Codable, Sendable {
+    public let taskids: [String]
+
+    public init(
+        taskids: [String])
+    {
+        self.taskids = taskids
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskids = "taskIds"
+    }
+}
+
+public struct TasksRecoveryResult: Codable, Sendable {
+    public let results: [[String: AnyCodable]]
+
+    public init(
+        results: [[String: AnyCodable]])
+    {
+        self.results = results
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case results
     }
 }
 

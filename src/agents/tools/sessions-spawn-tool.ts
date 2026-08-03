@@ -24,6 +24,7 @@ import {
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagent-attachments.js";
+import { getSubagentDeliveryBacklogPressure } from "../subagent-registry.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
@@ -397,6 +398,14 @@ export function createSessionsSpawnTool(
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+      const deliveryPressure = getSubagentDeliveryBacklogPressure();
+      if (deliveryPressure.blocked) {
+        return jsonResult({
+          status: "forbidden",
+          error: `sessions_spawn is paused because ${deliveryPressure.suspended} completed tasks have blocked delivery. Run openclaw tasks list, then retry or dismiss blocked deliveries.`,
+          ...roleContext,
+        });
+      }
       const visibleResult = await maybeSpawnVisibleSession({
         raw: params,
         task,

@@ -24,7 +24,6 @@ import {
 } from "./subagent-attachments.js";
 import {
   completeCollectorLaunchCleanup,
-  getSubagentDeliveryBacklogPressure,
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
 } from "./subagent-registry.js";
@@ -96,13 +95,6 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
-  const deliveryPressure = getSubagentDeliveryBacklogPressure();
-  if (deliveryPressure.blocked) {
-    return {
-      status: "forbidden",
-      error: `Subagent starts are paused because ${deliveryPressure.suspended} completed tasks have blocked delivery. Run openclaw tasks list, then retry or dismiss blocked deliveries.`,
-    };
-  }
   const task = params.task;
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
