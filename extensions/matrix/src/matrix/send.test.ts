@@ -875,6 +875,29 @@ describe("sendMessageMatrix mentions", () => {
     expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
   });
 
+  it.each([
+    { mention: "@room", mediaUrl: undefined },
+    { mention: "@alice:example.org", mediaUrl: undefined },
+    { mention: "@room", mediaUrl: "file:///tmp/photo.png" },
+  ])(
+    "keeps indented $mention inert in messages and media captions",
+    async ({ mention, mediaUrl }) => {
+      const { client, sendMessage } = makeClient();
+      const markdown = `    ${mention}`;
+
+      await sendMessageMatrix("room:!room:example", markdown, {
+        client,
+        cfg: {} as never,
+        ...(mediaUrl ? { mediaUrl } : {}),
+      });
+
+      const content = sentContent(sendMessage);
+      expect(content.body).toBe(markdown);
+      expect(content.formatted_body).toBe(`<pre><code>${mention}\n</code></pre>`);
+      expect(content["m.mentions"]).toEqual({});
+    },
+  );
+
   it("emits m.mentions and matrix.to anchors for qualified user mentions", async () => {
     const { client, sendMessage } = makeClient();
 
@@ -1136,6 +1159,37 @@ describe("sendSingleTextMessageMatrix", () => {
         cfg: {} as never,
       }),
     ).rejects.toThrow("Matrix single-message text exceeds limit");
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(["@room", "@alice:example.org"])(
+    "keeps indented %s inert in single-event messages",
+    async (mention) => {
+      const { client, sendMessage } = makeClient();
+      const markdown = `    ${mention}`;
+
+      await sendSingleTextMessageMatrix("room:!room:example", markdown, {
+        client,
+        cfg: {} as never,
+      });
+
+      const content = sentContent(sendMessage);
+      expect(content.body).toBe(markdown);
+      expect(content.formatted_body).toBe(`<pre><code>${mention}\n</code></pre>`);
+      expect(content["m.mentions"]).toEqual({});
+    },
+  );
+
+  it("rejects whitespace-only single-event messages", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await expect(
+      sendSingleTextMessageMatrix("room:!room:example", "   \n  ", {
+        client,
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("Matrix single-message send requires text");
 
     expect(sendMessage).not.toHaveBeenCalled();
   });
