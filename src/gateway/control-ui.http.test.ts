@@ -24,6 +24,7 @@ import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
+import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -192,6 +193,8 @@ describe("handleControlUiHttpRequest", () => {
     auth?: ResolvedGatewayAuth;
     headers?: IncomingMessage["headers"];
     config?: OpenClawConfig;
+    rateLimiter?: AuthRateLimiter;
+    remoteAddress?: string;
   }) {
     const { res, end, setHeader } = makeMockHttpResponse();
     const url = params.basePath
@@ -202,13 +205,14 @@ describe("handleControlUiHttpRequest", () => {
         url,
         method: "GET",
         headers: params.headers ?? {},
-        socket: { remoteAddress: "127.0.0.1" },
+        socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
       } as IncomingMessage,
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
         ...(params.auth ? { auth: params.auth } : {}),
         ...(params.config ? { config: params.config } : {}),
+        ...(params.rateLimiter ? { rateLimiter: params.rateLimiter } : {}),
         root: { kind: "resolved", path: params.rootPath },
       },
     );
@@ -1824,6 +1828,43 @@ describe("handleControlUiHttpRequest", () => {
         });
       },
     });
+  });
+
+  it("rate limits proxy-shaped bootstrap device-token failures", async () => {
+    const rateLimiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+    });
+
+    try {
+      await withPairedOperatorDeviceToken({
+        fn: async (operatorToken) => {
+          await withControlUiRoot({
+            fn: async (tmp) => {
+              const sendBootstrap = async (token: string) =>
+                await runBootstrapConfigRequest({
+                  rootPath: tmp,
+                  auth: { mode: "token", token: "shared-token", allowTailscale: false },
+                  headers: {
+                    authorization: `Bearer ${token}`,
+                    forwarded: "for=203.0.113.10",
+                  },
+                  rateLimiter,
+                });
+
+              expect((await sendBootstrap(operatorToken)).res.statusCode).toBe(200);
+              expect((await sendBootstrap("wrong-one")).res.statusCode).toBe(401);
+              expect((await sendBootstrap("wrong-two")).res.statusCode).toBe(401);
+              expect((await sendBootstrap(operatorToken)).res.statusCode).toBe(429);
+            },
+          });
+        },
+      });
+    } finally {
+      rateLimiter.dispose();
+    }
   });
 
   it("selects higher-scope frame tabs using paired device-token scopes", async () => {

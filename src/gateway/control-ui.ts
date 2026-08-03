@@ -47,6 +47,7 @@ import { buildAssistantMediaContentDisposition } from "./assistant-media-content
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  resolveAuthRateLimitClientIp,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
@@ -90,7 +91,7 @@ import {
   setControlUiPluginAuthCookieForRequest as setPluginAuthCookie,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { resolveRequestClientIp } from "./net.js";
+import { hasForwardedRequestHeaders, isLocalDirectRequest, resolveRequestClientIp } from "./net.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -295,9 +296,18 @@ async function authorizeControlUiReadRequest(
   const token = resolveControlUiReadAuthToken(req, {
     allowQueryToken: opts.allowQueryToken,
   });
-  const clientIp =
+  const resolvedClientIp =
     resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
     req.socket?.remoteAddress;
+  const clientIp = resolveAuthRateLimitClientIp({
+    clientIp: resolvedClientIp,
+    hasProxyHeaders: hasForwardedRequestHeaders(req),
+    isLocalClient: isLocalDirectRequest(
+      req,
+      opts.trustedProxies,
+      opts.allowRealIpFallback === true,
+    ),
+  });
   const authResult = await authorizeHttpGatewayConnect({
     auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
