@@ -1,3 +1,4 @@
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
@@ -274,14 +275,6 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
   };
 }
 
-function configuredMemoryAgentIds(config: OpenClawConfig): string[] {
-  const configured = (config.agents?.list ?? []).map((entry) => entry.id).filter(Boolean);
-  if (configured.length > 0) {
-    return [...new Set(configured)];
-  }
-  return [resolveSessionAgentIds({ config }).sessionAgentId];
-}
-
 function registerMemoryManagerWarmup(
   api: OpenClawPluginApi,
   memoryRuntime: MemoryPluginRuntime,
@@ -291,7 +284,7 @@ function registerMemoryManagerWarmup(
     if (normalizePluginsConfig(config.plugins).slots.memory !== "memory-core") {
       return;
     }
-    for (const agentId of configuredMemoryAgentIds(config)) {
+    for (const agentId of listAgentIds(config)) {
       const backend = memoryRuntime.resolveMemoryBackendConfig({ cfg: config, agentId });
       void memoryRuntime
         .getMemorySearchManager({ cfg: config, agentId })
@@ -324,11 +317,11 @@ export default definePluginEntry({
   kind: "memory",
   register(api) {
     const acquireLocalService = api.runtime.llm?.acquireLocalService;
+    const openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      api.runtime.state.openKeyedStore<T>(options);
     const withLease = api.runtime.state.withLease.bind(api.runtime.state);
-    const host = { acquireLocalService, withLease } satisfies MemoryCoreRuntimeHost;
-    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-      api.runtime.state.openKeyedStore<T>(options),
-    );
+    const host = { acquireLocalService, openKeyedStore, withLease } satisfies MemoryCoreRuntimeHost;
+    configureMemoryCoreDreamingState(openKeyedStore);
     const memoryRuntime = createLazyMemoryRuntime(host);
     registerShortTermPromotionDreaming(api);
     registerSessionBackfillGatewayMethods(api);

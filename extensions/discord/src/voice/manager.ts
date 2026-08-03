@@ -270,7 +270,6 @@ export class DiscordVoiceManager {
   >();
   private readonly admissionAllowFrom?: string[];
   private readonly ownerAllowFrom?: string[];
-  private readonly ownerAllowAll: boolean;
   private readonly speakerContext: DiscordVoiceSpeakerContextResolver;
   private readonly membership: DiscordVoiceMembershipTracker;
   private readonly allowedChannels: VoiceChannelResidency[] | null;
@@ -299,7 +298,6 @@ export class DiscordVoiceManager {
     const voiceAccess = resolveDiscordVoiceAccess(params);
     this.admissionAllowFrom = voiceAccess.admissionAllowFrom;
     this.ownerAllowFrom = voiceAccess.ownerAllowFrom;
-    this.ownerAllowAll = voiceAccess.ownerAllowAll;
     this.allowedChannels =
       params.discordConfig.voice?.allowedChannels === undefined
         ? null
@@ -310,7 +308,6 @@ export class DiscordVoiceManager {
     this.speakerContext = new DiscordVoiceSpeakerContextResolver({
       client: params.client,
       ownerAllowFrom: this.ownerAllowFrom,
-      ownerAllowAll: this.ownerAllowAll,
     });
     this.membership = new DiscordVoiceMembershipTracker(
       params.client,

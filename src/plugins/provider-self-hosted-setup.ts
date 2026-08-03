@@ -6,9 +6,13 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import {
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import {
   asObject,
@@ -28,6 +32,7 @@ import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import type {
   ProviderCatalogContext,
@@ -504,15 +509,29 @@ function buildMissingNonInteractiveModelIdMessage(params: {
   ].join("\n");
 }
 
-function buildSelfHostedProviderCredential(params: {
-  ctx: ProviderAuthMethodNonInteractiveContext;
-  providerId: string;
-  resolved: ProviderNonInteractiveApiKeyResult;
-}): ApiKeyCredential | null {
-  return params.ctx.toApiKeyCredential({
-    provider: params.providerId,
-    resolved: params.resolved,
-  });
+function isProviderOwnedSyntheticAuthMarker(
+  providerId: string,
+  resolved: ProviderNonInteractiveApiKeyResult,
+): boolean {
+  if (
+    resolved.source !== "flag" ||
+    !isNonSecretApiKeyMarker(resolved.key, { includeEnvVarName: false })
+  ) {
+    return false;
+  }
+  const normalizedProvider = normalizeProviderId(providerId);
+  const matchesProvider = (provider: string) =>
+    normalizeProviderId(provider) === normalizedProvider;
+  const normalizedValue = resolved.key.trim();
+  // A marker is only a keyless capability when its provider's own plugin declares it.
+  return listOpenClawPluginManifestMetadata().some(
+    ({ origin, manifest }) =>
+      origin === "bundled" &&
+      normalizeTrimmedStringList(manifest.providers).some(matchesProvider) &&
+      normalizeTrimmedStringList(manifest.syntheticAuthRefs).some(matchesProvider) &&
+      (normalizedValue === CUSTOM_LOCAL_AUTH_MARKER ||
+        normalizeTrimmedStringList(manifest.nonSecretAuthMarkers).includes(normalizedValue)),
+  );
 }
 
 export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(params: {
@@ -554,15 +573,8 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
     return null;
   }
 
-  const credential = buildSelfHostedProviderCredential({
-    ctx: params.ctx,
-    providerId: params.providerId,
-    resolved,
-  });
-  if (!credential) {
-    return null;
-  }
-
+  const usesSyntheticAuthMarker = isProviderOwnedSyntheticAuthMarker(params.providerId, resolved);
+  const storesCredential = !usesSyntheticAuthMarker && resolved.source !== "profile";
   const configured = buildOpenAICompatibleSelfHostedProviderConfig({
     cfg: params.ctx.config,
     providerId: params.providerId,
@@ -574,17 +586,30 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
     contextWindow: params.contextWindow,
     maxTokens: params.maxTokens,
   });
-  await upsertAuthProfileWithLock({
-    profileId: configured.profileId,
-    credential,
-    agentDir: params.ctx.agentDir,
-  });
+  // Existing profiles own their credentials; recognized synthetic markers are
+  // keyless capabilities. Neither should be serialized into a new auth profile.
+  if (storesCredential) {
+    const credential = params.ctx.toApiKeyCredential({
+      provider: params.providerId,
+      resolved,
+    });
+    if (!credential) {
+      return null;
+    }
+    await upsertAuthProfileWithLock({
+      profileId: configured.profileId,
+      credential,
+      agentDir: params.ctx.agentDir,
+    });
+  }
 
-  const withProfile = applyAuthProfileConfig(configured.config, {
-    profileId: configured.profileId,
-    provider: params.providerId,
-    mode: "api_key",
-  });
+  const withProfile = storesCredential
+    ? applyAuthProfileConfig(configured.config, {
+        profileId: configured.profileId,
+        provider: params.providerId,
+        mode: "api_key",
+      })
+    : configured.config;
   params.ctx.runtime.log(`Default ${params.providerLabel} model: ${modelId}`);
   return applyProviderDefaultModel(withProfile, configured.modelRef);
 }
