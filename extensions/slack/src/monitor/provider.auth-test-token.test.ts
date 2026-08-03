@@ -618,7 +618,9 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
-      terminalDisconnect: undefined,
+      ...(expected.lifecycle === "ready"
+        ? { running: true, terminalDisconnect: undefined }
+        : { terminalDisconnect: true }),
       ...expected,
     });
   });
@@ -631,6 +633,7 @@ describe("connected identity health", () => {
     await stopSlackMonitor(monitor);
 
     expect(setStatus).toHaveBeenCalledWith({
+      running: true,
       connected: true,
       lastConnectedAt: expect.any(Number),
       terminalDisconnect: undefined,
@@ -665,7 +668,7 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
-      terminalDisconnect: undefined,
+      terminalDisconnect: true,
       lifecycle: "blocked",
       lastError: "request_timeout",
     });
@@ -689,6 +692,7 @@ describe("connected identity health", () => {
     });
 
     expect(setStatus).toHaveBeenCalledWith({
+      running: true,
       connected: true,
       lastConnectedAt: expect.any(Number),
       terminalDisconnect: undefined,
