@@ -424,11 +424,15 @@ async function createBrowserPage(
   const evidenceStartIndex = proxy.evidence.length;
   const response = await page.goto(withGatewayUrl(baseUrl, gatewayUrl));
   expect(response?.status()).toBe(200);
+  // Source-served UI startup shares CI shard CPU. Use the existing settle
+  // budget for the first rendered interaction, not for transport assertions.
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
-  await confirmation.waitFor();
+  await confirmation.waitFor({ timeout: controlUiSettleTimeoutMs });
   expect(await confirmation.textContent()).toContain(gatewayUrl);
   expect(proxy.evidence).toHaveLength(evidenceStartIndex);
-  await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+  await confirmation
+    .getByRole("button", { name: "Confirm", exact: true })
+    .click({ timeout: controlUiSettleTimeoutMs });
   await expect
     .poll(() => proxy.evidence.length, { timeout: 15_000 })
     .toBeGreaterThan(evidenceStartIndex);
