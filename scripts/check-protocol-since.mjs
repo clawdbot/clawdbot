@@ -4,11 +4,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
 
-import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const descriptorPath = "src/gateway/methods/core-descriptors.ts";
 

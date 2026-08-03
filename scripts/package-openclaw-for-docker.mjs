@@ -10,11 +10,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
 import { terminateManagedChild } from "./lib/managed-child-process.mjs";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
-import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
-const ROOT_DIR = resolveRepoRoot(import.meta.url);
+
+const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_PACKAGE_BUILD_TIMEOUT_MS = 45 * 60 * 1000;
 const DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 5 * 60 * 1000;

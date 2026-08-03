@@ -56,7 +56,5 @@ export function parseFlagArgs<T extends FlagArgs>(
     duplicateOptionMessage?: (flag: string) => string;
     ignoreDoubleDash?: boolean;
     onUnhandledArg?: (arg: string, args: T) => "handled" | void;
-    unknownOptionMessage?: (arg: string) => string;
-    usageText?: () => string;
   },
 ): T;

@@ -42,7 +42,9 @@ function parsePluginSdkSurfaceReportArgs(argv) {
     ],
     {
       ignoreDoubleDash: false,
-      unknownOptionMessage: (arg) => `Unknown plugin SDK surface report option: ${arg}`,
+      onUnhandledArg(arg) {
+        throw new Error(`Unknown plugin SDK surface report option: ${arg}`);
+      },
     },
   );
 }

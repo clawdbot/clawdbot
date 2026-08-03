@@ -429,7 +429,9 @@ export function parseArgs(argv) {
     ),
     {
       duplicateOptionMessage: (flag) => `${flag} was provided more than once.`,
-      unknownOptionMessage: (arg) => `Unsupported argument: ${arg}`,
+      onUnhandledArg(arg) {
+        throw new Error(`Unsupported argument: ${arg}`);
+      },
     },
   );
   return helpIndex === -1 ? parsed : { ...parsed, help: true };

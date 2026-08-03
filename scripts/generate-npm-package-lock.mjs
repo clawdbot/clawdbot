@@ -18,9 +18,9 @@ import { isMainThread, parentPort, Worker, workerData } from "node:worker_thread
 import pMap from "p-map";
 import { parse as parseYaml } from "yaml";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mjs";
-import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
-const ROOT_DIR = resolveRepoRoot(import.meta.url);
+
+const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u;
 const STABLE_VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/u;
 const NPM_LOCK_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;

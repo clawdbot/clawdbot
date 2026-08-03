@@ -124,7 +124,15 @@ describe("plain gh helpers", () => {
     };
 
     expect(
-      execGhJson(["api", "repos/openclaw/openclaw"], { timeout: 60_000 }, { execFileSyncImpl }),
+      execGhJson(
+        ["api", "repos/openclaw/openclaw"],
+        {
+          killSignal: "SIGKILL",
+          stdio: ["ignore", "pipe", "inherit"],
+          timeout: 60_000,
+        },
+        { execFileSyncImpl },
+      ),
     ).toEqual({ ok: true });
     expect(calls).toEqual([
       [
@@ -132,6 +140,9 @@ describe("plain gh helpers", () => {
         ["api", "repos/openclaw/openclaw"],
         expect.objectContaining({
           encoding: "utf8",
+          killSignal: "SIGKILL",
+          maxBuffer: 32 * 1024 * 1024,
+          stdio: ["ignore", "pipe", "inherit"],
           timeout: 60_000,
         }),
       ],
@@ -143,6 +154,19 @@ describe("plain gh helpers", () => {
         { execFileSyncImpl: () => " result " },
       ),
     ).toBe(" result ");
+
+    const failure = new Error("gh read failed");
+    expect(() =>
+      execGhRead(
+        ["api", "rate_limit"],
+        {},
+        {
+          execFileSyncImpl: () => {
+            throw failure;
+          },
+        },
+      ),
+    ).toThrow(failure);
   });
 
   it("runs the shell helper with color disabled", () => {

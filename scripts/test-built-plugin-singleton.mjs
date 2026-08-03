@@ -4,12 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { installProcessWarningFilter } from "./process-warning-filter.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mjs";
 
 installProcessWarningFilter();
 
-import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const smokeEntryPath = path.join(repoRoot, "dist", "plugins", "build-smoke-entry.js");
 assert.ok(fs.existsSync(smokeEntryPath), `missing build output: ${smokeEntryPath}`);

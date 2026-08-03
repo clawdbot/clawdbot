@@ -37,8 +37,9 @@ function parseCheckArgs(argv) {
     ],
     {
       ignoreDoubleDash: false,
-      unknownOptionMessage: (arg) => `unknown argument: ${arg}`,
-      usageText: usage,
+      onUnhandledArg(arg) {
+        throw new Error(`unknown argument: ${arg}\n\n${usage()}`);
+      },
     },
   );
 }

@@ -6,7 +6,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { forceFreePort } from "../src/cli/ports.js";
 import { resolveGatewayPort } from "../src/config/config.js";
-import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mjs";
 
 type PortProcess = ReturnType<typeof forceFreePort>[number];
 
@@ -22,19 +21,13 @@ function usage(): string {
 }
 
 function parseArgs(argv: readonly string[]): { help: boolean } {
-  return parseFlagArgs(
-    argv,
-    { help: false },
-    [
-      booleanFlag("--help", "help", true, { repeatable: true }),
-      booleanFlag("-h", "help", true, { repeatable: true }),
-    ],
-    {
-      ignoreDoubleDash: false,
-      unknownOptionMessage: (arg) => `unknown argument: ${arg}`,
-      usageText: usage,
-    },
-  );
+  for (const arg of argv) {
+    if (arg === "--help" || arg === "-h") {
+      return { help: true };
+    }
+    throw new Error(`unknown argument: ${arg}\n\n${usage()}`);
+  }
+  return { help: false };
 }
 
 export const testForceTesting = {

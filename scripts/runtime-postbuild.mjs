@@ -9,6 +9,7 @@ import { buildSync } from "esbuild";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -21,7 +22,6 @@ import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mj
 /** @internal Shared repository-script contract. */
 export { listStaticExtensionAssetOutputs };
 
-import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const ROOT = resolveRepoRoot(import.meta.url);
 const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;

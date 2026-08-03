@@ -164,7 +164,7 @@ describe("full-release-validation-at-sha", () => {
   it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
     expect(source).toContain("timeout: GH_READ_TIMEOUT_MS");
-    expect(source).toContain("execGhRead(");
+    expect(source.match(/GH_READ_OPTIONS/gu)).toHaveLength(3);
     expect(source).toContain('const dispatchOutput = run("gh", dispatchArgs');
   });
 

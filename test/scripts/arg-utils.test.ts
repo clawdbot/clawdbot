@@ -138,19 +138,6 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     ).toThrow("--limit must be at least 1");
   });
 
-  it("appends lazily rendered usage to parser errors", () => {
-    let renders = 0;
-    expect(() =>
-      parseFlagArgs(["--wat"], {}, [], {
-        usageText: () => {
-          renders += 1;
-          return "Usage: example [--known]";
-        },
-      }),
-    ).toThrow("Unknown option: --wat\n\nUsage: example [--known]");
-    expect(renders).toBe(1);
-  });
-
   it("can preserve the option separator for callers that need to handle it", () => {
     const seen: string[] = [];
 

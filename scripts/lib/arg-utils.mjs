@@ -1,8 +1,6 @@
 // Shared argument parsing helpers for repository scripts.
-class FlagParseError extends Error {}
-
 function failFlagParse(message) {
-  throw new FlagParseError(message);
+  throw new Error(message);
 }
 /**
  * Read a flag value from `--flag value` or `--flag=value` arguments.
@@ -211,51 +209,44 @@ export function booleanFlag(flag, key, value = true, options = {}) {
 export function parseFlagArgs(argv, args, specs, options = {}) {
   const ignoreDoubleDash = options.ignoreDoubleDash ?? true;
   const seenFlags = new Set();
-  try {
-    for (let i = 0; i < argv.length; i += 1) {
-      const arg = argv[i];
-      if (arg === "--" && ignoreDoubleDash) {
-        continue;
-      }
-      let handled = false;
-      for (const spec of specs) {
-        const option = spec.consume(argv, i, args);
-        if (!option) {
-          continue;
-        }
-        if (typeof option.flag !== "string" || !option.flag) {
-          failFlagParse("parseFlagArgs specs must declare a flag for consumed options");
-        }
-        if (option.repeatable !== true) {
-          if (seenFlags.has(option.flag)) {
-            failFlagParse(
-              options.duplicateOptionMessage?.(option.flag) ??
-                `${option.flag} was provided more than once`,
-            );
-          }
-          seenFlags.add(option.flag);
-        }
-        option.apply(args);
-        i = option.nextIndex;
-        handled = true;
-        break;
-      }
-      if (handled) {
-        continue;
-      }
-      const fallbackResult = options.onUnhandledArg?.(arg, args);
-      if (fallbackResult === "handled") {
-        continue;
-      }
-      if (!options.allowUnknownOptions && arg.startsWith("-")) {
-        failFlagParse(options.unknownOptionMessage?.(arg) ?? `Unknown option: ${arg}`);
-      }
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--" && ignoreDoubleDash) {
+      continue;
     }
-  } catch (error) {
-    if (!(error instanceof FlagParseError) || !options.usageText) {
-      throw error;
+    let handled = false;
+    for (const spec of specs) {
+      const option = spec.consume(argv, i, args);
+      if (!option) {
+        continue;
+      }
+      if (typeof option.flag !== "string" || !option.flag) {
+        failFlagParse("parseFlagArgs specs must declare a flag for consumed options");
+      }
+      if (option.repeatable !== true) {
+        if (seenFlags.has(option.flag)) {
+          failFlagParse(
+            options.duplicateOptionMessage?.(option.flag) ??
+              `${option.flag} was provided more than once`,
+          );
+        }
+        seenFlags.add(option.flag);
+      }
+      option.apply(args);
+      i = option.nextIndex;
+      handled = true;
+      break;
     }
-    throw new Error(`${error.message}\n\n${options.usageText()}`, { cause: error });
+    if (handled) {
+      continue;
+    }
+    const fallbackResult = options.onUnhandledArg?.(arg, args);
+    if (fallbackResult === "handled") {
+      continue;
+    }
+    if (!options.allowUnknownOptions && arg.startsWith("-")) {
+      failFlagParse(`Unknown option: ${arg}`);
+    }
   }
   return args;
 }
