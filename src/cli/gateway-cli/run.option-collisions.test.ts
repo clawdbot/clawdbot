@@ -1040,6 +1040,18 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors.join("\n")).toContain("--profile <name> with a free port");
   });
 
+  it("reports forced port cleanup failures before startup", async () => {
+    forceFreePortAndWait.mockRejectedValueOnce(new Error("boom"));
+
+    await expect(
+      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--force"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Could not free port 18789: boom");
+    expect(runtimeErrors.join("\n")).toContain("openclaw gateway status --deep");
+  });
+
   it("marks service-mode gateway descendants with the live gateway pid", async () => {
     await withEnvAsync(
       {
