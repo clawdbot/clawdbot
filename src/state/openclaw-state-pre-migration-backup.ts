@@ -1,6 +1,32 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const backupLog = createSubsystemLogger("state/db");
+
+const BACKUP_DIR_MODE = 0o700;
+const BACKUP_FILE_MODE = 0o600;
+
+/**
+ * Harden a snapshot path, tolerating filesystems that cannot express POSIX modes.
+ *
+ * Same policy as `ensureOpenClawStatePermissions`: Azure Files, NFS, and Docker
+ * volumes cannot chmod, and refusing to work there would deny a recovery copy to
+ * exactly the deployments least able to take one by hand (#91919). A real
+ * permission failure on a filesystem that does support chmod still throws, and
+ * the caller deletes the snapshot rather than leave it unprotected.
+ */
+function hardenPrivatePath(target: string): void {
+  const result = applyPrivateModeSync(
+    target,
+    fs.statSync(target).isDirectory() ? BACKUP_DIR_MODE : BACKUP_FILE_MODE,
+  );
+  if (!result.applied) {
+    backupLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
+  }
+}
 
 export type PreMigrationBackupResult =
   | { status: "created"; backupPath: string }
@@ -128,20 +154,39 @@ export function createPreMigrationStateBackup(
   if (fromVersion <= 0 || fromVersion >= toVersion) {
     return { status: "skipped", reason: "no forward schema migration pending" };
   }
+  let backupPath: string | undefined;
   try {
     const backupDir = path.join(path.dirname(pathname), PRE_MIGRATION_BACKUP_DIRNAME);
-    fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(backupDir, { recursive: true, mode: BACKUP_DIR_MODE });
+    // Harden the directory BEFORE anything sensitive lands in it. `mkdirSync`
+    // applies its mode only to directories it actually creates and only through
+    // the umask, so a directory that already existed with looser permissions
+    // would otherwise stay that way. `VACUUM INTO` creates the snapshot with
+    // default permissions and it cannot be pre-created (VACUUM INTO refuses an
+    // existing target), so the private directory — not the later file chmod — is
+    // what keeps a full copy of shared state unreadable for the window between
+    // the two.
+    hardenPrivatePath(backupDir);
     const stamp = new Date(now).toISOString().replace(/[:.]/g, "-");
-    const backupPath = path.join(
+    backupPath = path.join(
       backupDir,
       `${BACKUP_FILE_PREFIX}${fromVersion}-to-v${toVersion}-${stamp}${BACKUP_FILE_SUFFIX}`,
     );
     // VACUUM INTO fails if the target already exists; the timestamp keeps the
     // name unique. Escape single quotes for the SQL string literal.
     db.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}';`); // sqlite-allow-raw -- Offline snapshot maintenance boundary; VACUUM INTO has no Kysely form.
-    fs.chmodSync(backupPath, 0o600);
+    hardenPrivatePath(backupPath);
     return { status: "created", backupPath };
   } catch (error) {
+    // A snapshot we could not protect is worse than no snapshot: it is a full
+    // copy of shared state sitting at whatever permissions it was born with.
+    if (backupPath !== undefined) {
+      try {
+        fs.rmSync(backupPath, { force: true });
+      } catch {
+        // Nothing further to try; the reason below is what the operator acts on.
+      }
+    }
     return {
       status: "failed",
       reason: error instanceof Error ? error.message : String(error),

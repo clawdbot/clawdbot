@@ -95,6 +95,45 @@ describe("createPreMigrationStateBackup", () => {
     }
   });
 
+  it("tightens a backup directory that already exists with loose permissions", () => {
+    const dir = makeStateDir();
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    seedStateDb(dbPath, 5);
+    // mkdirSync applies its mode only to directories it creates, so a directory
+    // left behind world readable would otherwise keep those permissions and the
+    // snapshot inside it would be reachable regardless of its own mode.
+    const backupDir = path.join(dir, "pre-migration-backups");
+    fs.mkdirSync(backupDir, { recursive: true });
+    fs.chmodSync(backupDir, 0o755);
+    const db = new DatabaseSync(dbPath);
+    try {
+      const result = createPreMigrationStateBackup(db, dbPath, 5, 6, Date.now());
+      expect(result.status).toBe("created");
+      expect(fs.statSync(backupDir).mode & 0o777).toBe(0o700);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reports a failure instead of aborting when the directory cannot be made", () => {
+    const dir = makeStateDir();
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    seedStateDb(dbPath, 5);
+    const db = new DatabaseSync(dbPath);
+    // A read-only state directory cannot receive the backup directory. Best
+    // effort by contract: this reports rather than throwing, so a migration that
+    // would otherwise succeed is not turned into a failed startup.
+    fs.chmodSync(dir, 0o500);
+    try {
+      const result = createPreMigrationStateBackup(db, dbPath, 5, 6, Date.now());
+      expect(result.status).toBe("failed");
+      expect(fs.existsSync(path.join(dir, "pre-migration-backups"))).toBe(false);
+    } finally {
+      fs.chmodSync(dir, 0o700);
+      db.close();
+    }
+  });
+
   it("keeps only the newest snapshots and reports what it pruned", () => {
     const dir = makeStateDir();
     const dbPath = path.join(dir, "openclaw.sqlite");
