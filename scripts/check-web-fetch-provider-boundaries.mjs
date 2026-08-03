@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 
 // Checks core web-fetch surfaces for provider-owned Firecrawl coupling.
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mjs";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const scanExtensions = new Set([".ts", ".js", ".mjs", ".cjs"]);
 const ignoredDirNames = new Set([
   ".artifacts",

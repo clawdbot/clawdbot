@@ -101,6 +101,7 @@ export abstract class MatrixClientBase {
     eventType: string,
     stateKey?: string,
   ): Promise<Record<string, unknown>>;
+  abstract getMessageWireEventType(roomId: string): Promise<"m.room.message" | "m.room.encrypted">;
   abstract downloadContent(
     mxcUrl: string,
     opts?: { allowRemote?: boolean; maxBytes?: number; readIdleTimeoutMs?: number },
@@ -352,8 +353,8 @@ export abstract class MatrixClientBase {
         client: this.client,
         verificationManager: this.verificationManager,
         recoveryKeyStore: this.recoveryKeyStore,
-        getRoomStateEvent: (roomId, eventType, stateKey = "") =>
-          this.getRoomStateEvent(roomId, eventType, stateKey),
+        isRoomEncrypted: async (roomId) =>
+          (await this.getMessageWireEventType(roomId)) === "m.room.encrypted",
         downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
       });
     }

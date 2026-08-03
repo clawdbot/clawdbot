@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { runAndroidSigningCommandSync } from "./lib/android-release-signing-process.mjs";
-
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const rootDir = resolveRepoRoot(import.meta.url);
 const defaultManifestPath = path.join(rootDir, "apps", "android", "Config", "ReleaseSigning.json");
 const requiredPropertyNames = [
   "OPENCLAW_ANDROID_STORE_FILE",
@@ -46,33 +46,43 @@ function parseArgs(argv) {
     keystorePath: process.env.OPENCLAW_ANDROID_UPLOAD_KEYSTORE || "",
     propertiesPath: process.env.OPENCLAW_ANDROID_SIGNING_PROPERTIES || "",
   };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--mode") {
-      options.mode = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--manifest") {
-      options.manifestPath = path.resolve(readOptionValue(argv, index, arg));
-      index += 1;
-    } else if (arg === "--workspace") {
-      options.workspace = path.resolve(readOptionValue(argv, index, arg));
-      index += 1;
-    } else if (arg === "--materialized-dir") {
-      options.materializedDir = path.resolve(readOptionValue(argv, index, arg));
-      index += 1;
-    } else if (arg === "--keystore") {
-      options.keystorePath = path.resolve(readOptionValue(argv, index, arg));
-      index += 1;
-    } else if (arg === "--properties") {
-      options.propertiesPath = path.resolve(readOptionValue(argv, index, arg));
-      index += 1;
-    } else if (arg === "-h" || arg === "--help") {
-      usage();
-      process.exit(0);
-    } else {
-      throw new Error(`Unknown argument: ${arg}`);
-    }
+  const helpIndex = argv.findIndex((arg) => arg === "-h" || arg === "--help");
+  parseFlagArgs(
+    helpIndex === -1 ? argv : argv.slice(0, helpIndex),
+    options,
+    [
+      stringFlag("--mode", "mode", {
+        allowInline: false,
+        missingValueMessage: "Missing value for --mode.",
+        rejectShortOptions: true,
+        repeatable: true,
+      }),
+      ...[
+        ["--manifest", "manifestPath"],
+        ["--workspace", "workspace"],
+        ["--materialized-dir", "materializedDir"],
+        ["--keystore", "keystorePath"],
+        ["--properties", "propertiesPath"],
+      ].map(([flag, key]) =>
+        stringFlag(flag, key, {
+          allowInline: false,
+          missingValueMessage: `Missing value for ${flag}.`,
+          rejectShortOptions: true,
+          repeatable: true,
+          transform: path.resolve,
+        }),
+      ),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
+        throw new Error(`Unknown argument: ${arg}`);
+      },
+    },
+  );
+  if (helpIndex !== -1) {
+    usage();
+    process.exit(0);
   }
 
   if (!options.mode) {
@@ -80,14 +90,6 @@ function parseArgs(argv) {
   }
 
   return options;
-}
-
-function readOptionValue(argv, index, option) {
-  const value = argv[index + 1] ?? "";
-  if (!value || value.startsWith("-")) {
-    throw new Error(`Missing value for ${option}.`);
-  }
-  return value;
 }
 
 function requireString(value, key) {

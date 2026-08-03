@@ -163,8 +163,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             path: "v1/logs",
           })
         : undefined;
-      if (!sdkPreloaded && (tracesEnabled || metricsEnabled)) {
-        const traceUrl = tracesEnabled
+      const traceUrl =
+        !sdkPreloaded && tracesEnabled
           ? resolveSignalOtelUrl({
               signalEndpoint: otel.tracesEndpoint,
               signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV],
@@ -173,7 +173,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               path: "v1/traces",
             })
           : undefined;
-        const metricUrl = metricsEnabled
+      const metricUrl =
+        !sdkPreloaded && metricsEnabled
           ? resolveSignalOtelUrl({
               signalEndpoint: otel.metricsEndpoint,
               signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_METRICS_ENDPOINT_ENV],
@@ -182,16 +183,19 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               path: "v1/metrics",
             })
           : undefined;
-        const traceHttpAgentOptions = resolveOtelHttpAgentOptions({
-          url: traceUrl,
-          signalIdentifier: "TRACES",
-          logger: ctx.logger,
-        });
-        const metricHttpAgentOptions = resolveOtelHttpAgentOptions({
-          url: metricUrl,
-          signalIdentifier: "METRICS",
-          logger: ctx.logger,
-        });
+      // Validate every owned signal before any SDK can export with downgraded TLS trust.
+      const logHttpAgentOptions = logsToOtlp
+        ? resolveOtelHttpAgentOptions({ url: logUrl, signalIdentifier: "LOGS" })
+        : undefined;
+      const traceHttpAgentOptions =
+        !sdkPreloaded && tracesEnabled
+          ? resolveOtelHttpAgentOptions({ url: traceUrl, signalIdentifier: "TRACES" })
+          : undefined;
+      const metricHttpAgentOptions =
+        !sdkPreloaded && metricsEnabled
+          ? resolveOtelHttpAgentOptions({ url: metricUrl, signalIdentifier: "METRICS" })
+          : undefined;
+      if (!sdkPreloaded && (tracesEnabled || metricsEnabled)) {
         const traceExporter = tracesEnabled
           ? new OTLPTraceExporter({
               ...(traceUrl ? { url: traceUrl } : {}),
@@ -281,6 +285,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         logsEnabled,
         logsToOtlp,
         logsToStdout,
+        logHttpAgentOptions,
         logUrl,
         resource,
         serviceName,

@@ -1,10 +1,18 @@
 // OpenClaw chat engine: transport-agnostic conversation over typed operations.
-import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  SystemAgentChatQuestion,
+  WizardAnswer,
+} from "../../packages/gateway-protocol/src/index.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "../wizard/session.js";
+import {
+  sanitizeWizardStepForClient,
+  WizardSession,
+  wizardStepAwaitsInput,
+  type WizardStep,
+} from "../wizard/session.js";
 import type {
   MemoryImportProviderOutcome,
   SetupMemoryImportOutcome,
@@ -132,6 +140,8 @@ type SystemAgentChatReply = {
   handoff?: SystemAgentOperation;
   /** Structured choice mirroring the awaited wizard step for card-capable clients. */
   question?: SystemAgentChatQuestion;
+  /** The awaited wizard step in full; `question` is its lossy card projection. */
+  step?: WizardStep;
 };
 
 type WizardPrompterLike = import("../wizard/prompts.js").WizardPrompter;
@@ -599,6 +609,48 @@ function parseWizardAnswer(step: WizardStep, text: string): { value: unknown } |
   return { value: step.type === "action" ? true : undefined };
 }
 
+function formatStructuredWizardAnswerForHistory(step: WizardStep, value: unknown): string {
+  if (step.sensitive === true) {
+    return "<redacted secret>";
+  }
+  if (step.type === "text") {
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      typeof value === "bigint"
+    ) {
+      return String(value);
+    }
+    return "<wizard answer>";
+  }
+  if (step.type === "confirm") {
+    return typeof value === "boolean" ? (value ? "Yes" : "No") : "<wizard answer>";
+  }
+  if (step.type === "select") {
+    return (
+      step.options?.find((option) => Object.is(option.value, value))?.label ?? "<wizard answer>"
+    );
+  }
+  if (step.type === "multiselect") {
+    if (!Array.isArray(value)) {
+      return "<wizard answer>";
+    }
+    if (value.length === 0) {
+      return "None";
+    }
+    const labels = value.map(
+      (entry) => step.options?.find((option) => Object.is(option.value, entry))?.label,
+    );
+    return labels.every((label): label is string => label !== undefined)
+      ? labels.join(", ")
+      : "<wizard answer>";
+  }
+  return "Continue";
+}
+
+export class SystemAgentWizardAnswerError extends Error {}
+
 function formatOperationError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return `That did not go through: ${message}`;
@@ -736,6 +788,12 @@ export class SystemAgentChatEngine {
     return await turn;
   }
 
+  async answerWizard(answer: WizardAnswer): Promise<SystemAgentChatReply> {
+    const turn = this.turnQueue.then(() => this.answerWizardSerialized(answer));
+    this.turnQueue = turn.catch(() => undefined);
+    return await turn;
+  }
+
   private async handleSerialized(
     text: string,
     options?: SystemAgentChatTurnOptions,
@@ -744,30 +802,57 @@ export class SystemAgentChatEngine {
     // Snapshot before resolving: wizard answers to sensitive steps (tokens,
     // passwords) must never enter the AI-visible history.
     const sensitiveTurn = this.wizardBridge?.step?.sensitive === true;
-    const resolved = await this.resolveTurn(text, options);
+    const reply = await this.resolveTurn(text, options);
+    return this.completeTurn(
+      reply,
+      sensitiveTurn ? "<redacted secret>" : redactSensitiveCommandText(text),
+    );
+  }
+
+  private async answerWizardSerialized(answer: WizardAnswer): Promise<SystemAgentChatReply> {
+    await this.requireVerifiedInference();
+    const bridge = this.wizardBridge;
+    const step = bridge?.step;
+    if (!bridge || !step) {
+      throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting an answer.");
+    }
+    if (answer.stepId !== step.id) {
+      throw new SystemAgentWizardAnswerError("The hosted wizard answer targets a stale step.");
+    }
+    const validationError = await bridge.session.answer(step.id, answer.value);
+    const text = validationError
+      ? [validationError, renderWizardStep(step)].join("\n\n")
+      : await this.pumpWizardBridge();
+    return this.completeTurn(
+      { text, action: "none" },
+      formatStructuredWizardAnswerForHistory(step, answer.value),
+    );
+  }
+
+  private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {
     // The hint belongs to the outgoing message, not to each rendered step: one
     // turn can concatenate several auto-answered notes, and a wizard that just
     // ended must not offer a cancel that can no longer happen.
     const awaitedStep = this.wizardBridge?.step;
-    const reply: SystemAgentChatReply =
-      resolved.text && awaitedStep && wizardStepAwaitsInput(awaitedStep)
-        ? { ...resolved, text: `${resolved.text}\n${WIZARD_CANCEL_HINT}` }
-        : resolved;
-    this.history.push({
-      role: "user",
-      text: sensitiveTurn ? "<redacted secret>" : redactSensitiveCommandText(text),
-    });
-    if (reply.text) {
-      this.history.push({ role: "assistant", text: reply.text });
+    const completedReply: SystemAgentChatReply =
+      reply.text && awaitedStep && wizardStepAwaitsInput(awaitedStep)
+        ? { ...reply, text: `${reply.text}\n${WIZARD_CANCEL_HINT}` }
+        : reply;
+    this.history.push({ role: "user", text: userHistoryText });
+    if (completedReply.text) {
+      this.history.push({ role: "assistant", text: completedReply.text });
     }
     // While a hosted wizard awaits a step, every turn routes to it, so the
     // awaited step is always the question this reply asks.
-    const question = wizardStepChatQuestion(this.wizardBridge?.step ?? null);
+    const step = this.wizardBridge?.step ?? null;
+    const question = wizardStepChatQuestion(step);
+    const clientStep = step ? sanitizeWizardStepForClient(step) : null;
     return {
-      ...reply,
-      ...(this.wizardBridge?.step?.sensitive === true ? { sensitive: true } : {}),
+      ...completedReply,
+      ...(step?.sensitive === true ? { sensitive: true } : {}),
       ...(this.wizardBridge ? { wizardInputPending: true } : {}),
       ...(question ? { question } : {}),
+      ...(clientStep ? { step: clientStep } : {}),
     };
   }
 

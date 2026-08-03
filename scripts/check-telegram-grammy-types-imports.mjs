@@ -2,8 +2,8 @@
 // Prevents Telegram runtime imports from grammy type-only modules.
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-
-const repoRoot = path.resolve(import.meta.dirname, "..");
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const telegramRoot = path.join(repoRoot, "extensions/telegram");
 const importSpecifierPatterns = [
   /\bimport\s+(?:type\s+)?[\s\S]*?\bfrom\s*["']([^"']+)["']/gu,

@@ -5,10 +5,10 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFiles,
   getPropertyNameText,
-  resolveRepoRoot,
   runAsScript,
   toLine,
 } from "./lib/ts-guard-utils.mjs";

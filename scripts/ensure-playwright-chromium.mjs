@@ -2,12 +2,13 @@
 // Ensures Playwright Chromium is installed or a usable system browser is available.
 import { spawnSync as spawnSyncImpl } from "node:child_process";
 import { existsSync as existsSyncImpl, realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const playwrightInstallBaseArgs = ["--dir", "ui", "exec", "playwright", "install"];
 const executableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const chromiumPackageNames = ["chromium-browser", "chromium"];

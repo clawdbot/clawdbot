@@ -59,6 +59,23 @@ function controlsHtml() {
   `;
 }
 
+function revealedSensitiveInputHtml() {
+  return `
+    <span
+      class="oc-sensitive-input"
+      data-sensitive-input
+      data-sensitive-mask-ready="true"
+      data-revealed="true"
+    >
+      <span class="oc-sensitive-mask" data-sensitive-mask hidden>
+        <span data-sensitive-mask-text>*******************************</span>
+      </span>
+      <input type="text" value="fake-client-secret-for-ui-proof" />
+      <button class="oc-sensitive-toggle" type="button" aria-label="Hide value">◎</button>
+    </span>
+  `;
+}
+
 function mediaDeviceRowsHtml() {
   return `
     <main style="width: 100%; max-width: 900px">
@@ -128,6 +145,25 @@ afterAll(async () => {
     mobileContext?.close().catch(() => {}),
   ]);
   await browser?.close().catch(() => {});
+});
+
+describeBrowserLayout("sensitive input visibility", () => {
+  it("removes the mask layer from layout when the value is revealed", async () => {
+    const page = await desktopContext.newPage();
+    try {
+      await page.setContent(
+        `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${revealedSensitiveInputHtml()}</body></html>`,
+      );
+
+      const state = await page.locator("[data-sensitive-mask]").evaluate((mask) => ({
+        hidden: (mask as HTMLElement).hidden,
+        display: getComputedStyle(mask).display,
+      }));
+      expect(state).toEqual({ hidden: true, display: "none" });
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
 });
 
 describeBrowserLayout("settings media device controls", () => {

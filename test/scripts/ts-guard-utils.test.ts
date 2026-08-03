@@ -1,9 +1,10 @@
 // Ts Guard Utils tests cover ts guard utils script behavior.
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveRepoRoot } from "../../scripts/lib/ts-guard-utils.mjs";
+import { resolveRepoRoot } from "../../scripts/lib/repo-root.mjs";
 
 /**
  * Regression tests for resolveRepoRoot().
@@ -48,5 +49,20 @@ describe("resolveRepoRoot", () => {
 
     expect(fromLib).toBe(fromScripts);
     expect(fromScripts).toBe(fromExtension);
+  });
+
+  it("resolves an unpacked workspace without git metadata", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-repo-root-"));
+    try {
+      mkdirSync(path.join(root, "scripts", "nested"), { recursive: true });
+      writeFileSync(path.join(root, "package.json"), '{"name":"openclaw"}\n');
+      writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
+
+      expect(
+        resolveRepoRoot(pathToFileURL(path.join(root, "scripts", "nested", "tool.mjs")).href),
+      ).toBe(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

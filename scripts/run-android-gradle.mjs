@@ -4,9 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const androidDir = path.join(repoRoot, "apps", "android");
 const isMain = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)

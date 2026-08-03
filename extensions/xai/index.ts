@@ -57,7 +57,7 @@ import {
 const PROVIDER_ID = "xai";
 
 const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
-  /\b(?:used all available credits|monthly spending limit|purchase more credits|raise your spending limit)\b/i;
+  /\b(?:used all available credits|run out of credits|monthly spending limit|purchase more credits|raise your spending limit|need a Grok subscription)\b/i;
 const XAI_RATE_LIMIT_RE = /\b(?:rate limit exceeded|too many requests)\b/i;
 
 const loadCodeExecutionModule = createLazyRuntimeModule(() => import("./code-execution.js"));

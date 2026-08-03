@@ -1,5 +1,6 @@
 // Runs the repository check lanes selected by CLI arguments.
 import { performance } from "node:perf_hooks";
+import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
@@ -24,26 +25,23 @@ export function usage() {
  * Parses aggregate check runner arguments.
  */
 function parseCheckArgs(argv) {
-  const args = {
-    help: false,
-    includeArchitecture: false,
-    includeTestTypes: false,
-    timed: false,
-  };
-  for (const arg of argv) {
-    if (arg === "--timed") {
-      args.timed = true;
-    } else if (arg === "--include-architecture") {
-      args.includeArchitecture = true;
-    } else if (arg === "--include-test-types") {
-      args.includeTestTypes = true;
-    } else if (arg === "--help" || arg === "-h") {
-      args.help = true;
-    } else {
-      throw new Error(`unknown argument: ${arg}\n\n${usage()}`);
-    }
-  }
-  return args;
+  return parseFlagArgs(
+    argv,
+    { help: false, includeArchitecture: false, includeTestTypes: false, timed: false },
+    [
+      booleanFlag("--timed", "timed", true, { repeatable: true }),
+      booleanFlag("--include-architecture", "includeArchitecture", true, { repeatable: true }),
+      booleanFlag("--include-test-types", "includeTestTypes", true, { repeatable: true }),
+      booleanFlag("--help", "help", true, { repeatable: true }),
+      booleanFlag("-h", "help", true, { repeatable: true }),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
+        throw new Error(`unknown argument: ${arg}\n\n${usage()}`);
+      },
+    },
+  );
 }
 
 /**

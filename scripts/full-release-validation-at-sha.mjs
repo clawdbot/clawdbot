@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { execGhRead } from "./lib/plain-gh.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
 const TRUSTED_WORKFLOW_PATH = `.github/workflows/${WORKFLOW}`;
@@ -13,6 +14,12 @@ const RELEASE_EVIDENCE_VERIFIER_PATHS = [
   ".agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs",
 ];
 const GH_READ_TIMEOUT_MS = 60_000;
+const GH_READ_OPTIONS = {
+  encoding: "utf8",
+  killSignal: "SIGKILL",
+  stdio: ["ignore", "pipe", "inherit"],
+  timeout: GH_READ_TIMEOUT_MS,
+};
 const RELEASE_BRANCH_PATTERN =
   /^(?:release\/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u;
 const RELEASE_TAG_PATTERN = /^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)\.[0-9]+)?$/u;
@@ -60,17 +67,6 @@ function runStatus(command, args, options = {}) {
     encoding: "utf8",
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
   });
-}
-
-export function runGhRead(args, params = {}) {
-  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
-  const output = execFileSyncImpl("gh", args, {
-    encoding: "utf8",
-    killSignal: "SIGKILL",
-    stdio: ["ignore", "pipe", "inherit"],
-    timeout: params.timeoutMs ?? GH_READ_TIMEOUT_MS,
-  });
-  return typeof output === "string" ? output.trim() : "";
 }
 
 function readOptionValue(argv, index, optionName) {
@@ -264,20 +260,23 @@ function collectRunId(dispatchOutput) {
 }
 
 function findLatestRunId(branch, sha) {
-  const json = runGhRead([
-    "run",
-    "list",
-    "--workflow",
-    WORKFLOW,
-    "--branch",
-    branch,
-    "--event",
-    "workflow_dispatch",
-    "--limit",
-    "20",
-    "--json",
-    "databaseId,headSha,createdAt",
-  ]);
+  const json = execGhRead(
+    [
+      "run",
+      "list",
+      "--workflow",
+      WORKFLOW,
+      "--branch",
+      branch,
+      "--event",
+      "workflow_dispatch",
+      "--limit",
+      "20",
+      "--json",
+      "databaseId,headSha,createdAt",
+    ],
+    GH_READ_OPTIONS,
+  );
   const runs = JSON.parse(json);
   const match = runs.find((runItem) => runItem.headSha === sha);
   return match?.databaseId ? String(match.databaseId) : "";
@@ -288,7 +287,7 @@ function readWorkflowRun(parentRunId, workflowSha) {
     throw new Error("parent run ID must be a positive decimal");
   }
   const workflowRun = JSON.parse(
-    runGhRead(["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}`]),
+    execGhRead(["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}`], GH_READ_OPTIONS),
   );
   if (workflowRun.head_sha !== workflowSha) {
     throw new Error(

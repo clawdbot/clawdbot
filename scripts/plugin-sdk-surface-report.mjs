@@ -4,7 +4,8 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mjs";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -13,8 +14,9 @@ import {
   privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const require = createRequire(import.meta.url);
 let ts;
 
@@ -30,19 +32,21 @@ Options:
 }
 
 function parsePluginSdkSurfaceReportArgs(argv) {
-  const args = { check: false, help: false };
-  for (const arg of argv) {
-    if (arg === "--check") {
-      args.check = true;
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      args.help = true;
-      continue;
-    }
-    throw new Error(`Unknown plugin SDK surface report option: ${arg}`);
-  }
-  return args;
+  return parseFlagArgs(
+    argv,
+    { check: false, help: false },
+    [
+      booleanFlag("--check", "check", true, { repeatable: true }),
+      booleanFlag("--help", "help", true, { repeatable: true }),
+      booleanFlag("-h", "help", true, { repeatable: true }),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
+        throw new Error(`Unknown plugin SDK surface report option: ${arg}`);
+      },
+    },
+  );
 }
 const publicEntrypointSet = new Set(publicPluginSdkEntrypoints);
 const localOnlyEntrypointSet = new Set(privateLocalOnlyPluginSdkEntrypoints);
