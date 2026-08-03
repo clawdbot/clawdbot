@@ -1,4 +1,5 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { renderTelegramHtmlText } from "./format.js";
@@ -223,6 +224,7 @@ async function sendMessageTelegramWithContext(
       mediaUrl,
       buildOutboundMediaLoadOptions({
         maxBytes: mediaMaxBytes,
+        mediaAccess: opts.mediaAccess,
         mediaLocalRoots: opts.mediaLocalRoots,
         mediaReadFile: opts.mediaReadFile,
         optimizeImages: opts.forceDocument ? false : undefined,
@@ -352,9 +354,30 @@ async function sendMessageTelegramWithContext(
       const textResult = await sendChunkedText(followUpText, "text follow-up send", {
         replyToAlreadyUsed: singleUseReplyTo && mediaUsedReplyTo,
       });
+      const mediaReplyToId = resolveAcceptedReplyToMessageId(acceptedMediaParams)?.toString();
+      const receipt = createMessageReceiptFromOutboundResults({
+        results: [{ messageId: String(mediaMessageId), chatId: resolvedChatId }, textResult],
+        kind: "text",
+        ...(acceptedMediaParams?.message_thread_id !== undefined
+          ? { threadId: String(acceptedMediaParams.message_thread_id) }
+          : {}),
+      });
+      if (mediaReplyToId) {
+        receipt.replyToId = mediaReplyToId;
+      }
+      // Text receipts restart indices; a single follow-up has no nested reply metadata.
+      receipt.parts = receipt.parts.map((part, index) => ({
+        ...part,
+        index,
+        ...(index === 0 ? { kind: "media" } : {}),
+        ...(mediaReplyToId && (index === 0 || (!textResult.receipt && !singleUseReplyTo))
+          ? { replyToId: mediaReplyToId }
+          : {}),
+      }));
       return {
         ...textResult,
         chatId: resolvedChatId,
+        receipt,
       };
     }
 

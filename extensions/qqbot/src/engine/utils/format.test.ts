@@ -1,6 +1,7 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Qqbot tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
-import { formatErrorMessage, formatDuration } from "./format.js";
+import { formatDuration } from "./format.js";
 
 describe("engine/utils/format", () => {
   describe("formatErrorMessage", () => {
@@ -36,7 +37,7 @@ describe("engine/utils/format", () => {
     });
 
     it("JSON-stringifies plain objects", () => {
-      expect(formatErrorMessage({ code: 500 })).toBe('{"code":500}');
+      expect(formatErrorMessage({ code: 500 })).toBe("status=unknown code=500");
     });
   });
 

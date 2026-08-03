@@ -1,12 +1,15 @@
 // Implements the embedded backend used by local TUI sessions.
 import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
+import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
+import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
-  buildAgentRunTerminalOutcome,
-  findAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import {
@@ -110,6 +113,13 @@ import type {
   TuiSessionCreateOptions,
 } from "./tui-backend.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
+
+const TUI_STATE_BY_TERMINAL_CLASSIFICATION = {
+  success: undefined,
+  timeout: "error",
+  cancellation: "aborted",
+  failure: "error",
+} as const;
 
 type LocalRunState = {
   sessionKey: string;
@@ -621,7 +631,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.runtimePluginRegistry =
       runtimePluginsPrewarm.status === "warmed" ? runtimePluginsPrewarm.registry : undefined;
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
-    const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
+    const max = Math.min(
+      CHAT_HISTORY_MAX_ENTRIES,
+      typeof opts.limit === "number" ? opts.limit : 200,
+    );
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
     const historyPage = await readChatHistoryPage({
@@ -1172,46 +1185,36 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private projectTerminalOutcome(
     runId: string,
     run: LocalRunState,
-    metadata: Partial<Parameters<typeof buildAgentRunTerminalOutcome>[0]> & {
+    metadata: NonNullable<
+      Parameters<typeof buildAgentRunTerminalOutcomeFromLifecycleEvent>[0]["data"]
+    > & {
       aborted?: unknown;
       phase?: unknown;
       toolErrorSummary?: unknown;
     },
     options: {
       visibleText?: string;
-      terminalOutcome?: ReturnType<typeof buildAgentRunTerminalOutcome>;
+      terminalOutcome?: AgentRunTerminalOutcome;
     } = {},
   ): boolean {
-    const aborted =
-      typeof metadata.aborted === "boolean" ? metadata.aborted : run.controller.signal.aborted;
-    const stopReason = metadata.stopReason ?? (aborted ? "aborted" : undefined);
     const terminalError =
       metadata.error && typeof metadata.error === "object" && "message" in metadata.error
         ? metadata.error.message
         : metadata.error;
     const outcome =
       options.terminalOutcome ??
-      buildAgentRunTerminalOutcome({
-        status:
-          stopReason === "timeout" || metadata.status === "timeout" || metadata.timeoutPhase
-            ? "timeout"
-            : aborted ||
-                metadata.error ||
-                metadata.phase === "error" ||
-                [metadata.status, stopReason].includes("error")
-              ? "error"
-              : "ok",
-        error: terminalError ? formatTuiErrorMessage(terminalError) : undefined,
-        stopReason,
-        livenessState: metadata.livenessState,
-        timeoutPhase: metadata.timeoutPhase,
-        providerStarted: metadata.providerStarted,
+      buildAgentRunTerminalOutcomeFromLifecycleEvent({
+        phase: metadata.phase === "error" || terminalError ? "error" : "end",
+        data: {
+          ...metadata,
+          error: terminalError ? formatTuiErrorMessage(terminalError) : undefined,
+        },
+        abortSignal: run.controller.signal,
       });
-    if (outcome.reason === "completed") {
+    const state = TUI_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(outcome)];
+    if (!state) {
       return false;
     }
-    const state =
-      outcome.reason === "aborted" || outcome.reason === "cancelled" ? "aborted" : "error";
     const diagnostic =
       state === "aborted"
         ? readToolValidationErrorSummary(metadata.toolErrorSummary)

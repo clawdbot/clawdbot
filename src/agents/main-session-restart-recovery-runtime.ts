@@ -261,8 +261,8 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
 }
 
 export function scheduleRestartAbortedMainSessionRecovery(params: {
-  cfg?: OpenClawConfig;
   delayMs?: number;
+  getConfig: () => OpenClawConfig;
   maxRetries?: number;
   shouldContinue?: () => boolean;
   stateDir?: string;
@@ -278,21 +278,28 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     params.shouldContinue?.() !== false &&
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
   const startupRecoveryCutoffMs = Date.now();
-  let startupMarked = false;
+  const markedStorePaths = new Set<string>();
   const runRecoveryAttempt = async (
     exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
   ): Promise<RecoveryCounts> => {
     return await runWithGatewayIndependentRootWorkAdmission(async () => {
-      if (!startupMarked) {
+      const cfg = params.getConfig();
+      const currentStorePaths = await resolveRestartRecoveryStorePaths({
+        cfg,
+        stateDir: params.stateDir,
+      });
+      if (currentStorePaths.some((storePath) => !markedStorePaths.has(storePath))) {
         await markStartupOrphanedMainSessionsForRecovery({
-          cfg: params.cfg,
+          cfg,
           stateDir: params.stateDir,
           updatedBeforeMs: startupRecoveryCutoffMs,
         });
-        startupMarked = true;
+        for (const storePath of currentStorePaths) {
+          markedStorePaths.add(storePath);
+        }
       }
       return await recoverRestartAbortedMainSessions({
-        cfg: params.cfg,
+        cfg,
         onExhaustedTarget: (target) => {
           exhaustedTargets.set(`${target.storePath}\u0000${target.sessionKey}`, target);
         },
@@ -309,7 +316,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       [...targets].map((target) =>
         runWithGatewayIndependentRootWorkAdmission(async () =>
           recoverExpectedRestartRecovery({
-            cfg: params.cfg,
+            cfg: params.getConfig(),
             expectedTarget: {
               canonicalSessionKey: target.canonicalSessionKey,
               sessionId: target.sessionId,

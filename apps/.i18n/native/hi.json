@@ -6459,6 +6459,11 @@
       "translated": "चयनित"
     },
     {
+      "id": "native.android.30aa827f48f2d6d0",
+      "source": "Pinned",
+      "translated": "पिन किया गया"
+    },
+    {
       "id": "native.android.4e2f2b168d8402e5",
       "source": "Home",
       "translated": "होम"
@@ -18869,6 +18874,11 @@
       "translated": "साफ़ करें"
     },
     {
+      "id": "native.apple.3b776a593deeab22",
+      "source": "These settings changed outside the app while you were editing: \\(fieldList). Choose which version to keep.",
+      "translated": "आप संपादन कर रहे थे तब ये सेटिंग्स ऐप के बाहर बदल गईं: \\(fieldList). चुनें कि किस संस्करण को रखना है।"
+    },
+    {
       "id": "native.apple.9cd2ced909f0952d",
       "source": "\\(user)@\\(host)",
       "translated": "\\(user)@\\(host)"
@@ -20594,6 +20604,51 @@
       "translated": "missing:\\(hash)"
     },
     {
+      "id": "native.apple.52b517452a108b59",
+      "source": "Gateway location",
+      "translated": "Gateway स्थान"
+    },
+    {
+      "id": "native.apple.2961fe211d71d35a",
+      "source": "Transport",
+      "translated": "Transport"
+    },
+    {
+      "id": "native.apple.3dfb5eefb5f66202",
+      "source": "Gateway URL",
+      "translated": "Gateway URL"
+    },
+    {
+      "id": "native.apple.d771ae993a61fdf7",
+      "source": "SSH target",
+      "translated": "SSH लक्ष्य"
+    },
+    {
+      "id": "native.apple.e817b77dd5751910",
+      "source": "Identity file",
+      "translated": "Identity फ़ाइल"
+    },
+    {
+      "id": "native.apple.1d7afbe829a31e8d",
+      "source": "SSH host key policy",
+      "translated": "SSH host key नीति"
+    },
+    {
+      "id": "native.apple.ba3cf88d2dadb205",
+      "source": "Gateway token",
+      "translated": "Gateway token"
+    },
+    {
+      "id": "native.apple.83779c40a38ec48e",
+      "source": "Use file version",
+      "translated": "फ़ाइल संस्करण का उपयोग करें"
+    },
+    {
+      "id": "native.apple.eab4dbc3ca4a9352",
+      "source": "Keep my edits",
+      "translated": "मेरे संपादन रखें"
+    },
+    {
       "id": "native.apple.db0fa6b60bd859f8",
       "source": ":\\(endpoint.port)",
       "translated": ":\\(endpoint.port)"
@@ -21949,6 +22004,11 @@
       "translated": "सेटअप विवरण कॉपी करें"
     },
     {
+      "id": "native.apple.c90ec3f0f60d21bc",
+      "source": "Choose a different AI…",
+      "translated": "कोई दूसरा AI चुनें…"
+    },
+    {
       "id": "native.apple.e0458fcb8c0536ea",
       "source": "No usable AI access found on this Gateway",
       "translated": "इस Gateway पर उपयोग योग्य AI एक्सेस नहीं मिला"
@@ -22179,26 +22239,6 @@
       "translated": "त्रुटि कॉपी करें"
     },
     {
-      "id": "native.apple.7dee24e5bf088dd5",
-      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
-      "translated": "\\(incomplete) \\(Self.memoryNoun(incomplete)) आयात नहीं की जा सकीं।"
-    },
-    {
-      "id": "native.apple.84189c39ea5803c6",
-      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
-      "translated": "Gateway ने एक असंगत प्रदाता योजना लौटाई। फिर से योजना बनाने की कोशिश करें।"
-    },
-    {
-      "id": "native.apple.4c9e75d64cbc5cc2",
-      "source": "The Gateway did not return a usable import plan. Try planning again.",
-      "translated": "Gateway ने उपयोग योग्य आयात योजना नहीं लौटाई। फिर से योजना बनाने की कोशिश करें।"
-    },
-    {
-      "id": "native.apple.2070bf43a67680ee",
-      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
-      "translated": "Gateway, \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)) के लिए योजना नहीं बना सका। फिर से कोशिश करें।"
-    },
-    {
       "id": "native.apple.ba758aa97c24ffe6",
       "source": "Wake up, my friend!",
       "translated": "जागो, मेरे दोस्त!"
@@ -22249,114 +22289,19 @@
       "translated": "अनुशंसित"
     },
     {
-      "id": "native.apple.78d1ad73762a7ce8",
+      "id": "native.apple.6ed12b86d399b69d",
+      "source": "Authenticate with your Gateway",
+      "translated": "अपने Gateway से प्रमाणित करें"
+    },
+    {
+      "id": "native.apple.e319780979ae71d1",
       "source": "Connect your AI",
-      "translated": "अपने AI को कनेक्ट करें"
+      "translated": "अपना AI कनेक्ट करें"
     },
     {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "वापस"
-    },
-    {
-      "id": "native.apple.7ca0977d5f73356d",
-      "source": "Bring your memories along",
-      "translated": "अपनी यादें साथ लाएँ"
-    },
-    {
-      "id": "native.apple.b57ee4f83cff23f3",
-      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
-      "translated": "OpenClaw आपके पहले से उपयोग किए जा रहे AI टूल्स से उपयोगी संदर्भ आपके नए सहायक में ला सकता है।"
-    },
-    {
-      "id": "native.apple.46cab71d748860b8",
-      "source": "Looking for memories…",
-      "translated": "यादें खोजी जा रही हैं…"
-    },
-    {
-      "id": "native.apple.c9e5f1aebe85e201",
-      "source": "Checking supported AI tools on this Mac.",
-      "translated": "इस Mac पर समर्थित AI टूल्स की जाँच की जा रही है।"
-    },
-    {
-      "id": "native.apple.77290f36f36f00e5",
-      "source": "No memories to import",
-      "translated": "आयात करने के लिए कोई यादें नहीं हैं"
-    },
-    {
-      "id": "native.apple.e5cca7b9f082ace9",
-      "source": "You can import memories later from the dashboard.",
-      "translated": "आप बाद में डैशबोर्ड से यादें आयात कर सकते हैं।"
-    },
-    {
-      "id": "native.apple.963add2f12fd18cb",
-      "source": "Import memories",
-      "translated": "यादें आयात करें"
-    },
-    {
-      "id": "native.apple.9db369e036a38a29",
-      "source": "Importing memories…",
-      "translated": "यादें आयात की जा रही हैं…"
-    },
-    {
-      "id": "native.apple.71b8e38a5e7040ef",
-      "source": "Refresh plan",
-      "translated": "योजना रीफ़्रेश करें"
-    },
-    {
-      "id": "native.apple.e87bec72cb9c9dbf",
-      "source": "Retry pending imports before refreshing the plan.",
-      "translated": "योजना रीफ़्रेश करने से पहले लंबित आयातों का फिर से प्रयास करें।"
-    },
-    {
-      "id": "native.apple.f678888102fded6e",
-      "source": "You can skip this and import later from the dashboard’s Memory import page.",
-      "translated": "आप इसे छोड़ सकते हैं और बाद में डैशबोर्ड के यादें आयात करें पेज से आयात कर सकते हैं।"
-    },
-    {
-      "id": "native.apple.36108528c6acc448",
-      "source": "\\(provider.alreadyImportedCount) already imported",
-      "translated": "\\(provider.alreadyImportedCount) पहले ही आयात की जा चुकी हैं"
-    },
-    {
-      "id": "native.apple.9b3444de8c9b2acc",
-      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
-      "translated": "\\(result.migrated) \\(self.memoryLabel(result.migrated)) आयात की गईं।"
-    },
-    {
-      "id": "native.apple.3252fea4dac8669a",
-      "source": "Couldn’t check for memories",
-      "translated": "यादों की जाँच नहीं की जा सकी"
-    },
-    {
-      "id": "native.apple.d371deb696de9e6b",
-      "source": "Retry",
-      "translated": "फिर से कोशिश करें"
-    },
-    {
-      "id": "native.apple.406ae454540725d0",
-      "source": "You can do this later from the dashboard’s Memory import page.",
-      "translated": "आप यह बाद में डैशबोर्ड के यादें आयात करें पेज से कर सकते हैं।"
-    },
-    {
-      "id": "native.apple.d1b5d99f67dae42e",
-      "source": "Your memories are ready",
-      "translated": "आपकी यादें तैयार हैं"
-    },
-    {
-      "id": "native.apple.6dbe5b174271b62a",
-      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
-      "translated": "\\(imported) \\(self.memoryLabel(imported)) को OpenClaw में आयात किया गया।"
-    },
-    {
-      "id": "native.apple.d47b887f98e13e24",
-      "source": "\\(result.migrated) imported",
-      "translated": "\\(result.migrated) आयात किए गए"
-    },
-    {
-      "id": "native.apple.6ac3d513f0ec5da7",
-      "source": "You can manage imported memories anytime from the dashboard.",
-      "translated": "आप आयात की गई यादों को डैशबोर्ड से कभी भी प्रबंधित कर सकते हैं।"
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
@@ -23584,14 +23529,14 @@
       "translated": "इस device को pairing approval की आवश्यकता है"
     },
     {
-      "id": "native.apple.b52cb4aae7ca6573",
-      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`.",
-      "translated": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+      "id": "native.apple.90b00f3f5418b439",
+      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then paste its output.",
+      "translated": "gateway host पर कॉन्फ़िगर किया गया token पेस्ट करें। gateway host पर, एक इंटरैक्टिव टर्मिनल में `openclaw gateway auth-token --show` चलाएँ, फिर उसका आउटपुट पेस्ट करें।"
     },
     {
-      "id": "native.apple.bbb87d21ce8a291e",
-      "source": "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again.",
-      "translated": "gateway host पर `gateway.auth.token` या `OPENCLAW_GATEWAY_TOKEN` जाँचें और फिर से प्रयास करें।"
+      "id": "native.apple.b79d3c42bd5438d5",
+      "source": "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then replace the token and try again.",
+      "translated": "gateway host पर, एक इंटरैक्टिव टर्मिनल में `openclaw gateway auth-token --show` चलाएँ, फिर token बदलें और पुनः प्रयास करें।"
     },
     {
       "id": "native.apple.c26f61d639591f81",
@@ -23614,14 +23559,14 @@
       "translated": "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
     },
     {
-      "id": "native.apple.e73170e4ab1dbe8f",
-      "source": "This gateway requires an auth token from the gateway host.",
-      "translated": "इस gateway को gateway host से एक auth token की आवश्यकता है।"
+      "id": "native.apple.a1cb5542806f0ec9",
+      "source": "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "इस gateway को एक auth token की आवश्यकता है। gateway host पर openclaw gateway auth-token --show चलाएँ।"
     },
     {
-      "id": "native.apple.e3f983b8c517da29",
-      "source": "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host.",
-      "translated": "Gateway token mismatch. gateway host पर gateway.auth.token या OPENCLAW_GATEWAY_TOKEN जाँचें।"
+      "id": "native.apple.e12c96574b97ed4a",
+      "source": "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "Gateway token मेल नहीं खाता। gateway host पर openclaw gateway auth-token --show चलाएँ।"
     },
     {
       "id": "native.apple.cd96754a96e5aa35",

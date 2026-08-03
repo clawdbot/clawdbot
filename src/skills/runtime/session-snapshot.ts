@@ -1,8 +1,9 @@
 // Session snapshot helpers capture and restore runtime skill state for sessions.
 import crypto from "node:crypto";
-import { stableStringify } from "../../agents/stable-stringify.js";
+import { stableStringify } from "@openclaw/normalization-core";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
 import { buildWorkspaceSkillSnapshot } from "../loading/workspace.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
@@ -45,12 +46,7 @@ function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
 
 function cacheResolvedSkills(cacheKey: string, snapshot: SkillSnapshot): SkillSnapshot {
   resolvedSkillsCache.set(cacheKey, snapshot.resolvedSkills);
-  if (resolvedSkillsCache.size > RESOLVED_SKILLS_CACHE_MAX) {
-    const oldest = resolvedSkillsCache.keys().next().value;
-    if (oldest !== undefined) {
-      resolvedSkillsCache.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(resolvedSkillsCache, RESOLVED_SKILLS_CACHE_MAX);
   return snapshot;
 }
 

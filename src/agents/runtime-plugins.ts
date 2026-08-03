@@ -1,12 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
-import {
-  installRuntimePluginRegistryAtProcessRoot,
-  loadRuntimePluginRegistryHandle,
-} from "../plugins/runtime/standalone-runtime-registry-loader.js";
 import { resolveUserPath } from "../utils.js";
 import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
 import {
@@ -24,10 +20,12 @@ type StartupScopedPluginSnapshot = NonNullable<
 
 function resolveStartupPluginIdsFromCurrentSnapshot(params: {
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
 }): string[] | undefined {
   const snapshot = getCurrentPluginMetadataSnapshot({
     config: params.config,
+    env: params.env,
     workspaceDir: params.workspaceDir,
   }) as StartupScopedPluginSnapshot | undefined;
   const pluginIds = snapshot?.startup?.pluginIds;
@@ -39,6 +37,7 @@ function resolveStartupPluginIdsFromCurrentSnapshot(params: {
 
 type AgentRuntimePluginRegistryParams = {
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
   selections?: readonly AgentHarnessPluginSelection[];
@@ -55,6 +54,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
       loadOptions: {
         config: params.config,
         activationSourceConfig: params.config,
+        ...(params.env ? { env: params.env } : {}),
         workspaceDir,
         onlyPluginIds: [],
         runtimeOptions: params.allowGatewaySubagentBinding
@@ -65,6 +65,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
   }
   const startupPluginIds = resolveStartupPluginIdsFromCurrentSnapshot({
     config: params.config,
+    env: params.env,
     workspaceDir,
   });
   const plan = resolveAgentRuntimePluginLoadPlan({
@@ -85,11 +86,12 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
     loadOptions: {
       config: plan.config,
       ...(plan.config ? { activationSourceConfig: plan.config } : {}),
+      ...(params.env ? { env: params.env } : {}),
       workspaceDir,
       ...(startupPluginIds === undefined || plan.pluginIds === undefined
         ? {}
         : { onlyPluginIds: plan.pluginIds }),
-      ...(startupPluginIds === undefined ? {} : { forceFullRuntimeForChannelPlugins: true }),
+      ...(startupPluginIds === undefined ? {} : { channelPluginLoadIntent: "full" as const }),
       runtimeOptions: params.allowGatewaySubagentBinding
         ? { allowGatewaySubagentBinding: true }
         : undefined,
@@ -100,20 +102,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
 /** Loads the registry handle owned by an agent prepared-runtime generation. */
 export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
-): PluginRegistry | undefined {
+): PluginRegistry {
   const load = resolveAgentRuntimePluginRegistryLoad(params);
-  return load ? loadRuntimePluginRegistryHandle(load) : undefined;
-}
-
-/** Installs agent runtime plugins from a standalone/gateway process composition root. */
-export function installAgentRuntimePluginRegistryAtProcessRoot(
-  params: AgentRuntimePluginRegistryParams,
-): PluginRegistry | undefined {
-  const load = resolveAgentRuntimePluginRegistryLoad({
-    ...params,
-    allowGatewaySubagentBinding:
-      params.allowGatewaySubagentBinding === true ||
-      getActivePluginRuntimeSubagentMode() === "gateway-bindable",
-  });
-  return load ? installRuntimePluginRegistryAtProcessRoot(load) : undefined;
+  return loadPluginRegistryHandle({ ...load.loadOptions, activate: false });
 }

@@ -4,12 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerPluginHttpRoute, withPluginHttpRouteRegistry } from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry } from "./registry.js";
-import {
-  pinActivePluginHttpRouteRegistry,
-  releasePinnedPluginHttpRouteRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "./runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
@@ -88,7 +83,6 @@ function createLoggedRouteHarness() {
 
 describe("registerPluginHttpRoute", () => {
   afterEach(() => {
-    releasePinnedPluginHttpRouteRegistry();
     resetPluginRuntimeStateForTest();
   });
 
@@ -257,36 +251,11 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(1);
   });
 
-  it("uses the pinned route registry when the active registry changes later", () => {
-    const startupRegistry = createEmptyPluginRegistry();
-    const laterActiveRegistry = createEmptyPluginRegistry();
-
-    setActivePluginRegistry(startupRegistry);
-    pinActivePluginHttpRouteRegistry(startupRegistry);
-    setActivePluginRegistry(laterActiveRegistry);
-
-    const unregister = registerPluginHttpRoute({
-      path: "/imessage-webhook",
-      auth: "plugin",
-      handler: vi.fn(),
-    });
-
-    expectRegisteredRouteShape(startupRegistry, {
-      path: "/imessage-webhook",
-      auth: "plugin",
-    });
-    expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
-
-    unregister();
-    expect(startupRegistry.httpRoutes).toHaveLength(0);
-  });
-
-  it("prefers the scoped route registry over the process-global pinned registry", () => {
+  it("prefers the scoped route registry over the process root", () => {
     const scopedRegistry = createEmptyPluginRegistry();
     const pinnedRegistry = createEmptyPluginRegistry();
 
     setActivePluginRegistry(pinnedRegistry);
-    pinActivePluginHttpRouteRegistry(pinnedRegistry);
 
     const unregister = withPluginHttpRouteRegistry(scopedRegistry, () =>
       registerPluginHttpRoute({

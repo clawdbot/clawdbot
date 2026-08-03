@@ -264,7 +264,6 @@ export type PluginManifestRecord = {
   rootDir: string;
   source: string;
   setupSource?: string;
-  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   manifestPath: string;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
@@ -618,9 +617,6 @@ function buildRecord(params: {
     rootDir: params.candidate.rootDir,
     source: params.candidate.source,
     setupSource: params.candidate.setupSource,
-    startupDeferConfiguredChannelFullLoadUntilAfterListen:
-      params.candidate.packageManifest?.startup?.deferConfiguredChannelFullLoadUntilAfterListen ===
-      true,
     manifestPath: params.manifestPath,
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,

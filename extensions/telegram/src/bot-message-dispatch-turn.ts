@@ -20,7 +20,7 @@ import type { TelegramReplyDelivery } from "./bot-message-dispatch-reply.js";
 import type { TelegramDispatchTurnState } from "./bot-message-dispatch.types.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
-import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
+import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 
 const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 
@@ -49,7 +49,7 @@ export async function runTelegramDispatchTurn(params: {
   const { context } = params;
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
   const beginDeliveryCorrelation = () =>
-    beginTelegramInboundEventDeliveryCorrelation(
+    telegramInboundEventDelivery.begin(
       context.ctxPayload.SessionKey,
       {
         outboundTo: context.historyKey || String(context.chatId),
@@ -241,6 +241,7 @@ export async function runTelegramDispatchTurn(params: {
                 ? params.progress.commentaryProgressEnabled
                 : undefined,
             progressPreambleEnabled: params.progress.progressPreambleEnabled,
+            commentaryPayloadsEnabled: params.progress.progressPreambleEnabled,
             reasoningPayloadsEnabled: params.draft.durableReasoningPayloadsEnabled,
             onToolStart: params.progress.handleToolStart,
             onItemEvent: params.progress.handleItemEvent,
@@ -284,6 +285,8 @@ export async function runTelegramDispatchTurn(params: {
       return false;
     }
     params.state.queuedFinal = turnResult.dispatchResult.queuedFinal;
+    params.state.noVisibleReplyFallbackEligible =
+      turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
     if ((turnResult.dispatchResult.counts?.final ?? 0) > 0) {
       params.progress.markSawFinal();
     }

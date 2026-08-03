@@ -114,6 +114,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     sessionKey,
     storePath,
   });
+  const titleBatchSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptTitleProbeBatch");
   const titlePageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
   let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
   vi.useFakeTimers();
@@ -144,7 +145,9 @@ test("startup prewarm fills session snapshot and title caches before the first l
     await vi.advanceTimersToNextTimerAsync();
     await sessionPrewarm;
     sidecar.stop();
-    expect(titlePageSpy).toHaveBeenCalled();
+    expect(titleBatchSpy).toHaveBeenCalled();
+    expect(titlePageSpy).not.toHaveBeenCalled();
+    titleBatchSpy.mockClear();
     titlePageSpy.mockClear();
     vi.useRealTimers();
     const cachedEntries = sessionAccessor.listSessionEntriesReadOnly({
@@ -160,6 +163,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     });
 
     expect(result.ok).toBe(true);
+    expect(titleBatchSpy).not.toHaveBeenCalled();
     expect(titlePageSpy).not.toHaveBeenCalled();
     const afterListEntries = sessionAccessor.listSessionEntriesReadOnly({
       agentId: "main",
@@ -171,6 +175,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
   } finally {
     sidecar?.stop();
     vi.useRealTimers();
+    titleBatchSpy.mockRestore();
     titlePageSpy.mockRestore();
   }
 });

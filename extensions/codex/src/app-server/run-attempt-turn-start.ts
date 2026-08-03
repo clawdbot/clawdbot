@@ -242,7 +242,7 @@ export async function startCodexAttemptTurn(
             threadId: resourceState.thread.threadId,
           })
         : true;
-      if (!state.timedOut && bindingReleased) {
+      if (!state.timedOut && bindingReleased && !resourceState.startupClientUnsafe) {
         const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
           threadId: resourceState.thread.threadId,
           timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,

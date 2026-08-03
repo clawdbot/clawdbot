@@ -186,7 +186,6 @@ async function tryRunGatewayRunFastPath(
     argv,
     commandPath,
     jsonOutputMode: hasJsonOutputFlag(argv),
-    routeMode: true,
   });
   if (!startupPolicy.hideBanner) {
     emitCliBanner(VERSION, { argv });
@@ -315,13 +314,30 @@ function isUnconfiguredConfigSnapshot(
   return isUnconfiguredConfigSource(snapshot.sourceConfig);
 }
 
+async function shouldStartLocalOnboarding(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig" | "path">,
+): Promise<boolean> {
+  if (isUnconfiguredConfigSnapshot(snapshot)) {
+    return true;
+  }
+  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
+    return false;
+  }
+  // Inference persists before setup finishes; only its owning receipt can
+  // distinguish interrupted local onboarding from an authored model-only config.
+  const { readLocalOnboardingStateForConfig } = await import("../state/local-onboarding-state.js");
+  return (
+    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status === "pending"
+  );
+}
+
 export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
   if (!shouldHandleBareRoot(argv)) {
     return false;
   }
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
-  return isUnconfiguredConfigSnapshot(snapshot);
+  return shouldStartLocalOnboarding(snapshot);
 }
 
 type BareRootLaunchTarget =
@@ -350,7 +366,7 @@ async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaun
   }
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
-  if (isUnconfiguredConfigSnapshot(snapshot)) {
+  if (await shouldStartLocalOnboarding(snapshot)) {
     return { kind: "onboarding" };
   }
   if (!snapshot.valid) {
@@ -1185,9 +1201,10 @@ async function runCliWithPreparedOutputMode(
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(({ readBestEffortConfig }) =>
-        readBestEffortConfig(
-          isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : undefined,
-        ),
+        readBestEffortConfig({
+          ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
+          skipPluginValidation: true,
+        }),
       );
     }
     return await bestEffortConfigPromise;
@@ -1543,11 +1560,17 @@ async function runCliWithPreparedOutputMode(
       });
       if (!shouldSkipPluginRegistration) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
-          const { registerPluginCliCommandsFromValidatedConfig } =
-            await import("../plugins/cli.js");
+          const [{ registerPluginCliCommandsFromValidatedConfig }, { resolveCliStartupPolicy }] =
+            await Promise.all([import("../plugins/cli.js"), import("./command-startup-policy.js")]);
+          const startupPolicy = resolveCliStartupPolicy({
+            argv: parseArgv,
+            commandPath: invocation.commandPath,
+            jsonOutputMode: suppressStartupProgress,
+          });
           return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
             mode: "lazy",
             primary,
+            skipPluginValidation: startupPolicy.skipConfigGuard,
           });
         });
         if (config) {

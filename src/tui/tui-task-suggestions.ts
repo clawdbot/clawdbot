@@ -6,8 +6,10 @@ import {
   type OverlayHandle,
   type SelectItem,
 } from "@earendil-works/pi-tui";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TaskSuggestion } from "../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { selectListTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
@@ -64,33 +66,30 @@ function sanitizeTaskText(text: string): string {
   return sanitizeRenderableText(text.replace(TASK_BIDI_CONTROL_RE, ""));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 /** Parses the task suggestion shape carried by Gateway list and event payloads. */
 function parseTuiTaskSuggestion(value: unknown): TaskSuggestion | null {
-  if (!isRecord(value)) {
+  const record = asOptionalObjectRecord(value);
+  if (!record) {
     return null;
   }
   const required = ["id", "title", "prompt", "tldr", "cwd", "sessionKey"] as const;
-  if (required.some((field) => typeof value[field] !== "string" || !value[field].trim())) {
+  if (required.some((field) => typeof record[field] !== "string" || !record[field].trim())) {
     return null;
   }
-  if (typeof value.createdAt !== "number" || value.createdAt < 0) {
+  if (typeof record.createdAt !== "number" || record.createdAt < 0) {
     return null;
   }
   return {
-    id: (value.id as string).trim(),
-    title: (value.title as string).trim(),
-    prompt: (value.prompt as string).trim(),
-    tldr: (value.tldr as string).trim(),
-    cwd: (value.cwd as string).trim(),
-    sessionKey: (value.sessionKey as string).trim(),
-    ...(typeof value.agentId === "string" && value.agentId.trim()
-      ? { agentId: value.agentId.trim() }
+    id: (record.id as string).trim(),
+    title: (record.title as string).trim(),
+    prompt: (record.prompt as string).trim(),
+    tldr: (record.tldr as string).trim(),
+    cwd: (record.cwd as string).trim(),
+    sessionKey: (record.sessionKey as string).trim(),
+    ...(typeof record.agentId === "string" && record.agentId.trim()
+      ? { agentId: record.agentId.trim() }
       : {}),
-    createdAt: value.createdAt,
+    createdAt: record.createdAt,
   };
 }
 
@@ -205,8 +204,6 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
   let activeActionKey: string | null = null;
   let revision = 0;
   let disposed = false;
-  let refreshInFlight: Promise<void> | null = null;
-  let refreshAgain = false;
 
   const closeActive = () => {
     if (activeOverlay) {
@@ -361,60 +358,56 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
     deps.requestRender();
   };
 
-  const refresh = async (): Promise<void> => {
-    if (disposed || !deps.client.listTaskSuggestions) {
-      return;
-    }
-    if (refreshInFlight) {
-      refreshAgain = true;
-      return await refreshInFlight;
-    }
-    refreshInFlight = (async () => {
-      do {
-        refreshAgain = false;
-        const startRevision = revision;
-        const listed = await deps.client.listTaskSuggestions?.();
-        if (disposed || !listed) {
-          return;
+  const refreshRunner = createTuiRefreshCoalescer(
+    async (requestRerun) => {
+      const startRevision = revision;
+      const listed = await deps.client.listTaskSuggestions?.();
+      if (disposed || !listed) {
+        return false;
+      }
+      // An event raced this snapshot. Retry instead of resurrecting resolved work.
+      if (revision !== startRevision) {
+        requestRerun();
+        return true;
+      }
+      suggestions.clear();
+      for (const value of listed) {
+        const suggestion = parseTuiTaskSuggestion(value);
+        if (suggestion) {
+          suggestions.set(suggestion.id, suggestion);
         }
-        // An event raced this snapshot. Retry instead of resurrecting resolved work.
-        if (revision !== startRevision) {
-          refreshAgain = true;
-          continue;
+      }
+      for (const id of hiddenIds) {
+        if (!suggestions.has(id)) {
+          hiddenIds.delete(id);
         }
-        suggestions.clear();
-        for (const value of listed) {
-          const suggestion = parseTuiTaskSuggestion(value);
-          if (suggestion) {
-            suggestions.set(suggestion.id, suggestion);
-          }
-        }
-        for (const id of hiddenIds) {
-          if (!suggestions.has(id)) {
-            hiddenIds.delete(id);
-          }
-        }
-      } while (refreshAgain);
+      }
+      return true;
+    },
+    () => {
       if (activeId && !suggestions.has(activeId)) {
         closeActive();
       }
       presentNext();
       deps.requestRender();
-    })();
-    try {
-      await refreshInFlight;
-    } finally {
-      refreshInFlight = null;
+    },
+  );
+
+  const refresh = async (): Promise<void> => {
+    if (disposed || !deps.client.listTaskSuggestions) {
+      return;
     }
+    await refreshRunner.run();
   };
 
   return {
     handleEvent(event: string, payload: unknown) {
-      if (disposed || event !== "task.suggestion" || !isRecord(payload)) {
+      const record = asOptionalObjectRecord(payload);
+      if (disposed || event !== "task.suggestion" || !record) {
         return;
       }
-      if (payload.action === "created") {
-        const suggestion = parseTuiTaskSuggestion(payload.suggestion);
+      if (record.action === "created") {
+        const suggestion = parseTuiTaskSuggestion(record.suggestion);
         if (suggestion) {
           revision += 1;
           hiddenIds.delete(suggestion.id);
@@ -423,8 +416,8 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
         }
         return;
       }
-      if (payload.action === "resolved" && typeof payload.taskId === "string") {
-        remove(payload.taskId);
+      if (record.action === "resolved" && typeof record.taskId === "string") {
+        remove(record.taskId);
         presentNext();
         deps.requestRender();
       }

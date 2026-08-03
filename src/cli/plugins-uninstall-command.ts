@@ -125,7 +125,7 @@ async function runPluginUninstallCommandUnlocked(
     return;
   }
   const { plugin, pluginId } = selection.value;
-  const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
+  const channelIds = plugin?.channelIds;
   const initialPlan = planPluginUninstall({
     config: cfg,
     pluginId,

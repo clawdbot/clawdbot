@@ -284,6 +284,41 @@ export async function waitForSlackStoredMessage(params: {
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
 }
 
+async function waitForSlackStoredMessages(params: {
+  channelId: string;
+  client: WebClient;
+  description: string;
+  messageIds: readonly string[];
+  oldestTs: string;
+  sutIdentity: SlackAuthIdentity;
+  timeoutMs: number;
+}) {
+  const startedAt = Date.now();
+  while (true) {
+    const messages = await listSlackMessages({
+      channelId: params.channelId,
+      client: params.client,
+      oldestTs: params.oldestTs,
+    });
+    const messagesById = new Map(
+      messages
+        .filter((message) => message.ts && isSutSlackMessage(message, params.sutIdentity))
+        .map((message) => [message.ts as string, message]),
+    );
+    if (params.messageIds.every((messageId) => messagesById.has(messageId))) {
+      return params.messageIds.map((messageId) => messagesById.get(messageId) as SlackMessage);
+    }
+    const remainingMs = params.timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(1_000, remainingMs));
+    });
+  }
+  throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
+}
+
 export function isExpectedSlackNativeTableMessage(
   message: SlackMessage,
   expectedAccessibleText: string,
@@ -337,14 +372,17 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
         nativeDataFallbackBaseText: probe.summaryText,
       });
     } catch {
-      const [nativeAttempt, fallbackAttempt] = instrumentation.attempts;
+      const [nativeAttempt, ...fallbackAttempts] = instrumentation.attempts;
       if (nativeAttempt?.failureCode !== "invalid_blocks") {
         throw new Error(
           `expected first Slack API failure code invalid_blocks; observed ${nativeAttempt?.failureCode ?? "none"}`,
         );
       }
+      const failedPartIndex = fallbackAttempts.findIndex((attempt) => attempt.status === "failed");
+      const failedAttempt = failedPartIndex >= 0 ? fallbackAttempts[failedPartIndex] : undefined;
+      const failedPart = failedPartIndex >= 0 ? String(failedPartIndex + 1) : "unknown";
       throw new Error(
-        `Slack fallback failed after invalid_blocks; observed ${fallbackAttempt?.failureCode ?? "no fallback API failure code"}`,
+        `Slack fallback part ${failedPart} failed after invalid_blocks; observed ${failedAttempt?.failureCode ?? "no fallback API failure code"}`,
       );
     }
   } finally {
@@ -352,10 +390,25 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
     context.sutWriteClient.chat.postMessage = originalPostMessage;
   }
 
-  const [nativeAttempt, fallbackAttempt] = instrumentation.attempts;
-  if (instrumentation.attempts.length !== 2) {
+  const [nativeAttempt, ...fallbackAttempts] = instrumentation.attempts;
+  const receiptMessageIds = sent.receipt.platformMessageIds;
+  if (receiptMessageIds.length < 2) {
     throw new Error(
-      `expected exactly two Slack API attempts; observed ${instrumentation.attempts.length}`,
+      "Slack oversized fallback receipt did not retain multiple platform message IDs",
+    );
+  }
+  if (new Set(receiptMessageIds).size !== receiptMessageIds.length) {
+    throw new Error("Slack fallback receipt retained duplicate platform message IDs");
+  }
+  if (
+    sent.receipt.primaryPlatformMessageId !== receiptMessageIds[0] ||
+    sent.messageId !== receiptMessageIds.at(-1)
+  ) {
+    throw new Error("Slack fallback receipt did not preserve first-primary and final-message IDs");
+  }
+  if (instrumentation.attempts.length !== receiptMessageIds.length + 1) {
+    throw new Error(
+      `expected one rejected native attempt plus ${receiptMessageIds.length} fallback receipt parts; observed ${instrumentation.attempts.length} Slack API attempts`,
     );
   }
   if (
@@ -368,31 +421,35 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
     );
   }
   if (
-    fallbackAttempt?.status !== "sent" ||
-    fallbackAttempt.nativeDataBlockCount !== 0 ||
-    !fallbackAttempt.formattingDisabled
+    fallbackAttempts.some(
+      (attempt) =>
+        attempt.status !== "sent" ||
+        attempt.nativeDataBlockCount !== 0 ||
+        !attempt.formattingDisabled,
+    )
   ) {
-    throw new Error("Slack fallback did not use one formatting-disabled blockless API request");
+    throw new Error("Slack fallback did not use formatting-disabled blockless API requests");
   }
-  if (fallbackAttempt.text !== probe.fallbackText) {
+  const attemptedFallbackText = fallbackAttempts.map((attempt) => attempt.text).join("");
+  if (attemptedFallbackText !== probe.fallbackText) {
     throw new Error(
-      `Slack fallback API request was incomplete: expected ${probe.fallbackText.length} characters, observed ${describeSlackObservedText(fallbackAttempt.text)}`,
+      `Slack fallback API requests were incomplete: expected ${probe.fallbackText.length} characters, observed ${describeSlackObservedText(attemptedFallbackText)}`,
     );
   }
 
-  const message = await waitForSlackStoredMessage({
+  const messages = await waitForSlackStoredMessages({
     channelId: context.channelId,
     client: context.sutReadClient,
-    description: "stored invalid_blocks fallback message",
-    matchesMessage: (candidate) => candidate.ts === sent.messageId,
+    description: "stored invalid_blocks fallback messages",
+    messageIds: receiptMessageIds,
     oldestTs,
     sutIdentity: context.sutIdentity,
     timeoutMs: context.timeoutMs,
   });
-  const storedText = message.text ?? "";
-  if (countSlackNativeDataBlocks(message.blocks) !== 0) {
+  if (messages.some((message) => countSlackNativeDataBlocks(message.blocks) !== 0)) {
     throw new Error("stored Slack fallback retained a native data block");
   }
+  const storedText = messages.map((message) => message.text ?? "").join("");
   const normalizedStoredText = normalizeSlackAccessibleText(storedText);
   if (!normalizedStoredText.includes(normalizeSlackAccessibleText(probe.firstRowText))) {
     throw new Error(
@@ -409,11 +466,16 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
       `stored Slack fallback was incomplete: expected ${probe.fallbackText.length} characters, observed ${describeSlackObservedText(storedText)}`,
     );
   }
+  const message = messages.at(-1);
+  if (!message) {
+    throw new Error("Slack fallback receipt had no stored message");
+  }
   return {
     details: [
       "direct transport",
       "first API failure=invalid_blocks",
-      "API attempts=2",
+      `API attempts=${instrumentation.attempts.length}`,
+      `fallback chunks=${receiptMessageIds.length}`,
       `data rows=${probe.dataRowCount}`,
       "fallback formatting disabled=true",
       "stored native data blocks=0",

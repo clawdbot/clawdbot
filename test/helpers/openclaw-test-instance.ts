@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { Readable } from "node:stream";
-import { WebSocket } from "ws";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
@@ -214,59 +213,19 @@ const getFreePort = async () => {
   return addr.port;
 };
 
-async function waitForPortOpen(
+async function waitForGatewayReady(
   proc: Pick<OpenClawTestProcess, "exitCode" | "signalCode">,
   chunksOut: string[],
   chunksErr: string[],
   port: number,
   timeoutMs: number,
+  fetchImpl: typeof fetch = fetch,
 ) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (hasChildExited(proc)) {
       throw new Error(
-        `gateway exited before listening (code=${String(proc.exitCode)} signal=${String(
-          proc.signalCode,
-        )})\n${formatLogs(chunksOut, chunksErr)}`,
-      );
-    }
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const socket = net.connect({ host: "127.0.0.1", port });
-        socket.once("connect", () => {
-          socket.destroy();
-          resolve();
-        });
-        socket.once("error", (err) => {
-          socket.destroy();
-          reject(err);
-        });
-      });
-      return;
-    } catch {
-      // keep polling
-    }
-
-    await sleep(10);
-  }
-  throw new Error(
-    `timeout waiting for gateway to listen on port ${port}\n${formatLogs(chunksOut, chunksErr)}`,
-  );
-}
-
-async function waitForGatewayWebSocketReady(
-  proc: Pick<OpenClawTestProcess, "exitCode" | "signalCode">,
-  chunksOut: string[],
-  chunksErr: string[],
-  port: number,
-  timeoutMs: number,
-) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (hasChildExited(proc)) {
-      throw new Error(
-        `gateway exited before websocket readiness (code=${String(proc.exitCode)} signal=${String(
+        `gateway exited before readiness (code=${String(proc.exitCode)} signal=${String(
           proc.signalCode,
         )})\n${formatLogs(chunksOut, chunksErr)}`,
       );
@@ -274,52 +233,24 @@ async function waitForGatewayWebSocketReady(
 
     const remainingMs = timeoutMs - (Date.now() - startedAt);
     try {
-      await new Promise<void>((resolve, reject) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-        const terminate = () => {
-          if (ws.readyState === WebSocket.CONNECTING) {
-            // ws reports CONNECTING termination asynchronously; keep that
-            // expected probe cleanup error observed after our retry rejects.
-            ws.once("error", () => {});
-          }
-          ws.terminate();
-        };
-        const attemptTimeout = setTimeout(
-          () => {
-            cleanup();
-            terminate();
-            reject(new Error("websocket readiness attempt timed out"));
-          },
-          Math.min(1_000, Math.max(1, remainingMs)),
-        );
-        attemptTimeout.unref?.();
-        const cleanup = () => {
-          clearTimeout(attemptTimeout);
-          ws.off("open", handleOpen);
-          ws.off("error", handleError);
-        };
-        const handleOpen = () => {
-          cleanup();
-          terminate();
-          resolve();
-        };
-        const handleError = (error: Error) => {
-          cleanup();
-          terminate();
-          reject(error);
-        };
-        ws.once("open", handleOpen);
-        ws.once("error", handleError);
+      const response = await fetchImpl(`http://127.0.0.1:${port}/readyz`, {
+        signal: AbortSignal.timeout(Math.min(1_000, Math.max(1, remainingMs))),
       });
-      return;
+      const readiness: unknown = await response.json();
+      if (response.ok && isRecord(readiness) && readiness.ready === true) {
+        return;
+      }
     } catch {
-      // The HTTP socket can accept before the WebSocket upgrade handler exists.
+      // keep polling
     }
 
-    await sleep(10);
+    const delayMs = Math.min(10, timeoutMs - (Date.now() - startedAt));
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
   }
   throw new Error(
-    `timeout waiting for gateway websocket readiness on port ${port}\n${formatLogs(chunksOut, chunksErr)}`,
+    `timeout waiting for gateway readiness on port ${port}\n${formatLogs(chunksOut, chunksErr)}`,
   );
 }
 
@@ -484,7 +415,7 @@ export async function createOpenClawTestInstance(
       child.stderr?.on("data", (d) => appendLogChunk(stderr, d));
 
       try {
-        await waitForGatewayWebSocketReady(
+        await waitForGatewayReady(
           child,
           stdout,
           stderr,
@@ -608,6 +539,5 @@ export const testing = {
   formatLogs,
   hasChildExited,
   signalOpenClawTestProcess,
-  waitForGatewayWebSocketReady,
-  waitForPortOpen,
+  waitForGatewayReady,
 };

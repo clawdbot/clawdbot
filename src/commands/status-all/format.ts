@@ -16,7 +16,7 @@ import { formatUpdateOneLiner, resolveUpdateAvailability } from "../status.updat
 
 export { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 
-export type StatusOverviewRow = {
+type StatusOverviewRow = {
   Item: string;
   Value: string;
 };

@@ -192,6 +192,25 @@ function resolveCompactionSteerRetryDelaysMs() {
     : ([1_000, 2_000, 4_000, 8_000] as const);
 }
 
+const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
+
+function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: false,
+    path: "none",
+    reason: "source_owner_changed",
+    error: "subagent source lifecycle changed before completion delivery",
+    terminal: true,
+  };
+}
+
+class SourceOwnerChangedError extends Error {
+  constructor() {
+    super("subagent source lifecycle changed before completion delivery");
+    this.name = "SourceOwnerChangedError";
+  }
+}
+
 // Wake an active requester run through transient compacting and transcript-wait
 // outcomes. Both active-wake call sites use one loop so delivery deadlines and
 // best-effort transcript retry stay consistent.
@@ -200,7 +219,8 @@ async function resolveActiveWakeWithRetries(
   message: string,
   wakeOptions: EmbeddedAgentQueueMessageOptions,
   signal?: AbortSignal,
-): Promise<EmbeddedAgentQueueMessageOutcome> {
+  isSourceSessionEffectsAllowed?: () => boolean,
+): Promise<EmbeddedAgentQueueMessageOutcome | typeof SOURCE_OWNER_CHANGED> {
   // Bound the whole active wake by the caller's delivery window. Each retry
   // passes only the remaining window into transcript-commit waiting so a
   // near-deadline retry cannot add another full timeout.
@@ -222,11 +242,22 @@ async function resolveActiveWakeWithRetries(
       deliveryTimeoutMs: remainingDeliveryTimeoutMs,
     };
   };
-  let outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+  const attemptWake = (options: EmbeddedAgentQueueMessageOptions) =>
+    isSourceSessionEffectsAllowed?.() === false
+      ? SOURCE_OWNER_CHANGED
+      : resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, options);
+  let outcome = await attemptWake(currentOptions);
   const compactionRetryDelaysMs = resolveCompactionSteerRetryDelaysMs();
   let compactionRetryIndex = 0;
   for (;;) {
+    if (outcome === SOURCE_OWNER_CHANGED) {
+      break;
+    }
     if (outcome.queued || signal?.aborted) {
+      break;
+    }
+    if (isSourceSessionEffectsAllowed?.() === false) {
+      outcome = SOURCE_OWNER_CHANGED;
       break;
     }
     if (
@@ -236,7 +267,7 @@ async function resolveActiveWakeWithRetries(
       const bestEffortOptions = { ...currentOptions };
       delete bestEffortOptions.waitForTranscriptCommit;
       currentOptions = bestEffortOptions;
-      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+      outcome = await attemptWake(currentOptions);
       continue;
     }
     if (
@@ -248,7 +279,7 @@ async function resolveActiveWakeWithRetries(
       const activeRunOptions = { ...currentOptions };
       delete activeRunOptions.sourceReplyDeliveryMode;
       currentOptions = activeRunOptions;
-      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+      outcome = await attemptWake(currentOptions);
       continue;
     }
     if (outcome.reason === "compacting") {
@@ -286,7 +317,7 @@ async function resolveActiveWakeWithRetries(
       if (!retryOptions) {
         break;
       }
-      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, retryOptions);
+      outcome = await attemptWake(retryOptions);
       continue;
     }
     break;
@@ -488,10 +519,14 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
 export async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
+  isAttemptAllowed?: () => boolean;
   run: () => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
   for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
+    if (params.isAttemptAllowed?.() === false) {
+      throw new SourceOwnerChangedError();
+    }
     if (params.signal?.aborted) {
       throw new Error("announce delivery aborted");
     }
@@ -500,6 +535,9 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
     } catch (err) {
       if (!isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
+      }
+      if (params.isAttemptAllowed?.() === false) {
+        throw new SourceOwnerChangedError();
       }
       const nextAttempt = retryIndex + 2;
       const maxAttempts = retryDelaysMs.length + 1;
@@ -511,6 +549,9 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
   }
   if (params.signal?.aborted) {
     throw new Error("announce delivery aborted");
+  }
+  if (params.isAttemptAllowed?.() === false) {
+    throw new SourceOwnerChangedError();
   }
   return await params.run();
 }
@@ -544,8 +585,10 @@ async function maybeSteerSubagentAnnounce(params: {
   requesterSessionKey: string;
   steerMessage: string;
   signal?: AbortSignal;
+  isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<
-  { status: "steered"; deliveredAt?: number; enqueuedAt?: number } | { status: "none" | "dropped" }
+  | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
+  | { status: "none" | "dropped" | "source_owner_changed" }
 > {
   if (params.signal?.aborted) {
     return { status: "none" };
@@ -579,7 +622,11 @@ async function maybeSteerSubagentAnnounce(params: {
     params.steerMessage,
     queueOptions,
     params.signal,
+    params.isSourceSessionEffectsAllowed,
   );
+  if (queueOutcome === SOURCE_OWNER_CHANGED) {
+    return { status: "source_owner_changed" };
+  }
   if (queueOutcome.queued) {
     return {
       status: "steered",
@@ -673,6 +720,7 @@ async function deliverCompletionDirect(params: {
   };
   internalEvents?: readonly AgentInternalEvent[];
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
   const content = resolveTextCompletionDirectFallback(params.internalEvents);
   if (
@@ -691,6 +739,9 @@ async function deliverCompletionDirect(params: {
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   let committedDelivery: SubagentAnnounceDeliveryResult | undefined;
   try {
+    if (params.isSourceSessionEffectsAllowed?.() === false) {
+      return sourceOwnerChangedResult();
+    }
     await subagentAnnounceDeliveryDeps.sendMessage({
       cfg: params.cfg,
       channel: params.deliveryTarget.channel,
@@ -784,6 +835,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  isSourceSessionEffectsAllowed?: () => boolean;
   requesterIsSubagent: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
@@ -885,6 +937,7 @@ async function sendSubagentAnnounceDirectly(params: {
         deliveryTarget,
         internalEvents: params.internalEvents,
         onDeliveryResult: params.onDeliveryResult,
+        isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
       });
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
@@ -921,7 +974,11 @@ async function sendSubagentAnnounceDirectly(params: {
         params.triggerMessage,
         wakeOptions,
         params.signal,
+        params.isSourceSessionEffectsAllowed,
       );
+      if (wakeOutcome === SOURCE_OWNER_CHANGED) {
+        return sourceOwnerChangedResult();
+      }
       if (wakeOutcome.queued) {
         return {
           delivered: true,
@@ -995,14 +1052,19 @@ async function sendSubagentAnnounceDirectly(params: {
           ? "completion direct announce agent call"
           : "direct announce agent call",
         signal: params.signal,
-        run: async () =>
-          await runAnnounceAgentCall({
+        isAttemptAllowed: params.isSourceSessionEffectsAllowed,
+        run: async () => {
+          if (params.isSourceSessionEffectsAllowed?.() === false) {
+            throw new SourceOwnerChangedError();
+          }
+          return await runAnnounceAgentCall({
             agentParams: directAgentParams,
             delegatedToolPolicyHandoff:
               isSubagentCompletion &&
               trustedCompletionEvent &&
               params.sourceSessionKey &&
-              requesterActivity.sessionId
+              requesterActivity.sessionId &&
+              params.isSourceSessionEffectsAllowed?.() !== false
                 ? {
                     sourceSessionKey: params.sourceSessionKey,
                     ...(trustedCompletionEvent.childSessionId
@@ -1015,9 +1077,13 @@ async function sendSubagentAnnounceDirectly(params: {
                 : undefined,
             expectFinal: true,
             timeoutMs: announceTimeoutMs,
-          }),
+          });
+        },
       });
     } catch (err) {
+      if (err instanceof SourceOwnerChangedError) {
+        return sourceOwnerChangedResult();
+      }
       if (isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err)) {
         throw err;
       }
@@ -1187,6 +1253,7 @@ export async function deliverSubagentAnnouncement(params: {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  isSourceSessionEffectsAllowed?: () => boolean;
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
@@ -1196,6 +1263,10 @@ export async function deliverSubagentAnnouncement(params: {
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
+  const sourceOwnerChanged = () => params.isSourceSessionEffectsAllowed?.() === false;
+  if (sourceOwnerChanged()) {
+    return sourceOwnerChangedResult();
+  }
   const durableGeneratedMediaHandoff =
     params.expectsCompletionMessage &&
     isAgentMediatedCompletionSourceTool(params.sourceTool) &&
@@ -1314,17 +1385,25 @@ export async function deliverSubagentAnnouncement(params: {
     expectsCompletionMessage: params.expectsCompletionMessage,
     requireDirectDelivery: params.requireDirectDelivery,
     signal: params.signal,
-    steer: async () =>
-      await maybeSteerSubagentAnnounce({
+    steer: async () => {
+      if (sourceOwnerChanged()) {
+        return { status: "source_owner_changed" };
+      }
+      return await maybeSteerSubagentAnnounce({
         deliveryTimeoutMs: resolveSubagentAnnounceTimeoutMs(
           subagentAnnounceDeliveryDeps.getRuntimeConfig(),
         ),
         requesterSessionKey: params.requesterSessionKey,
         steerMessage: params.steerMessage,
         signal: params.signal,
-      }),
-    direct: async () =>
-      await sendSubagentAnnounceDirectly({
+        isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+      });
+    },
+    direct: async () => {
+      if (sourceOwnerChanged()) {
+        return sourceOwnerChangedResult();
+      }
+      return await sendSubagentAnnounceDirectly({
         requesterSessionKey: params.requesterSessionKey,
         targetRequesterSessionKey: params.targetRequesterSessionKey,
         triggerMessage: params.triggerMessage,
@@ -1336,12 +1415,14 @@ export async function deliverSubagentAnnouncement(params: {
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
+        isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
         onDeliveryResult: params.onDeliveryResult,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
-      }),
+      });
+    },
   });
 }
 

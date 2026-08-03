@@ -1,5 +1,7 @@
 // Discord tests cover reply delivery plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +12,9 @@ const sendDurableMessageBatchMock = vi.hoisted(() =>
     async (): Promise<unknown> => ({
       status: "sent" as const,
       results: [{ messageId: "msg-1", channelId: "channel-1" }],
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ messageId: "msg-1", channelId: "channel-1" }],
+      }),
     }),
   ),
 );
@@ -97,6 +102,9 @@ describe("deliverDiscordReply", () => {
     sendDurableMessageBatchMock.mockResolvedValue({
       status: "sent",
       results: [{ messageId: "msg-1", channelId: "channel-1" }],
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ messageId: "msg-1", channelId: "channel-1" }],
+      }),
     });
     sendMessageDiscordMock.mockReset().mockResolvedValue({
       messageId: "msg-1",
@@ -161,6 +169,94 @@ describe("deliverDiscordReply", () => {
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ text: "Thinking\n\n_Because it helps_" }]);
+  });
+
+  it("preserves the accepted receipt when a later Discord delivery fails", async () => {
+    const cause = new Error("second Discord chunk failed");
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "discord", messageId: "accepted-1" }],
+    });
+    sendDurableMessageBatchMock.mockResolvedValueOnce({
+      status: "partial_failed",
+      results: [{ channel: "discord", messageId: "accepted-1" }],
+      receipt,
+      error: cause,
+      sentBeforeError: true,
+    });
+
+    let error: unknown;
+    try {
+      await deliverDiscordReply({
+        replies: [{ text: "first chunk\nsecond chunk" }],
+        target: "channel:101",
+        token: "token",
+        runtime,
+        cfg,
+        textLimit: 2000,
+        kind: "final",
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(isChannelPartialDeliveryError(error)).toBe(true);
+    expect(error).toMatchObject({
+      cause,
+      sentBeforeError: true,
+      visibleReplySent: true,
+      deliveryResult: {
+        messageIds: ["accepted-1"],
+        receipt,
+        visibleReplySent: true,
+      },
+    });
+  });
+
+  it("preserves the original failure when Discord accepted no message", async () => {
+    const cause = new Error("Discord send failed before acceptance");
+    sendDurableMessageBatchMock.mockResolvedValueOnce({ status: "failed", error: cause });
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "not delivered" }],
+        target: "channel:101",
+        token: "token",
+        runtime,
+        cfg,
+        textLimit: 2000,
+        kind: "final",
+      }),
+    ).rejects.toBe(cause);
+  });
+
+  it("preserves every accepted Discord message from a nested delivery receipt", async () => {
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [
+        { channel: "discord", messageId: "accepted-1" },
+        { channel: "discord", messageId: "accepted-2" },
+      ],
+    });
+    sendDurableMessageBatchMock.mockResolvedValueOnce({
+      status: "sent",
+      results: [{ channel: "discord", messageId: "accepted-2", receipt }],
+      receipt,
+    });
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "first chunk\nsecond chunk" }],
+        target: "channel:101",
+        token: "token",
+        runtime,
+        cfg,
+        textLimit: 2000,
+        kind: "final",
+      }),
+    ).resolves.toEqual({
+      messageIds: ["accepted-1", "accepted-2"],
+      receipt,
+      visibleReplySent: true,
+    });
   });
 
   it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {

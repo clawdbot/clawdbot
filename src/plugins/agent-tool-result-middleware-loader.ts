@@ -93,7 +93,7 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
               plugins: missingOwners.map((owner) => owner.manifest),
               diagnostics: [],
             },
-            forceFullRuntimeForChannelPlugins: true,
+            channelPluginLoadIntent: "full",
           });
 
     const missingHandlers = runtimeRegistry.agentToolResultMiddlewares

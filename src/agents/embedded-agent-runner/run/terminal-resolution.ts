@@ -87,13 +87,30 @@ export function resolveSettledTurnFinalizationRequest(input: {
     timedOut: terminalTimedOut,
     attempt: input.attempt,
   });
+  const terminalAssistant = input.attempt.currentAttemptAssistant ?? input.attempt.lastAssistant;
+  // Payload preparation renders an undelivered tool-error fallback before the
+  // model gets its final answer. It must not masquerade as an assistant reply;
+  // exact failed-call settlement is independently proven by the finalizer owner.
+  const hasOnlySyntheticToolErrorPayload = Boolean(
+    terminalAssistant?.stopReason === "toolUse" &&
+    input.attempt.lastToolError &&
+    input.attempt.assistantTexts.every((text) => text.trim().length === 0) &&
+    (input.payloadsWithToolMedia?.length ?? 0) > 0 &&
+    input.payloadsWithToolMedia?.every(
+      (payload) =>
+        payload.isError === true &&
+        Object.keys(payload).every((key) => key === "text" || key === "isError"),
+    ),
+  );
   const payloadCount = input.recoveredFinalAssistantPayloadsAfterPromptTimeout
     ? input.recoveredFinalAssistantPayloadsAfterPromptTimeout.length
-    : input.payloadsWithToolMedia?.length
-      ? input.payloadsWithToolMedia.length
-      : silentToolResultReplyPayload
-        ? 1
-        : 0;
+    : hasOnlySyntheticToolErrorPayload
+      ? 0
+      : input.payloadsWithToolMedia?.length
+        ? input.payloadsWithToolMedia.length
+        : silentToolResultReplyPayload
+          ? 1
+          : 0;
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: input.runParams.allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation: input.runParams.terminalReplyExpectation,

@@ -25,6 +25,7 @@ import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
+  resolveChannelHealthState,
 } from "../channel-health-policy.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -336,8 +337,9 @@ export async function collectGatewayHealthSnapshot(params: {
         staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
         channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
       });
-      if (!health.healthy) {
-        snapshot.healthState = health.reason;
+      const healthState = resolveChannelHealthState(snapshot, health);
+      if (healthState !== undefined) {
+        snapshot.healthState = healthState;
       }
 
       const summary = plugin.status?.buildChannelSummary

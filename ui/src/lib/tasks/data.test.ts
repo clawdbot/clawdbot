@@ -4,10 +4,12 @@ import {
   mergeTaskLists,
   newestTaskSnapshot,
   normalizeTasksCancelResult,
+  normalizeTasksGetResult,
+  normalizeTasksListResult,
   partitionTasks,
   sortTasks,
-  type TaskSummary,
 } from "./data.ts";
+import type { TaskSummary } from "./task-summary.ts";
 
 function task(overrides: Partial<TaskSummary> & Pick<TaskSummary, "id" | "status">): TaskSummary {
   return {
@@ -268,6 +270,26 @@ describe("tasks page data", () => {
     });
     expect(normalizeTasksCancelResult({ found: true })).toBeNull();
     expect(normalizeTasksCancelResult("nope")).toBeNull();
+  });
+
+  it("uses the protocol schema while preserving the required UI task id", () => {
+    const wireTask = {
+      id: " task-1 ",
+      status: "running",
+      runtime: "future-runtime",
+      runId: "run-1",
+      flowId: "flow-1",
+      parentTaskId: "parent-1",
+      sourceId: "source-1",
+    };
+
+    expect(normalizeTasksListResult({ tasks: [wireTask] })?.[0]).toEqual({
+      ...wireTask,
+      id: "task-1",
+      taskId: "task-1",
+    });
+    expect(normalizeTasksGetResult({ task: wireTask })?.taskId).toBe("task-1");
+    expect(normalizeTasksListResult({ tasks: [{ ...wireTask, updatedAt: false }] })).toBeNull();
   });
 
   it("merges upserts, applies deletes, and requests refetches for restored events", () => {

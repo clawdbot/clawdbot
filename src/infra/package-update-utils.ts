@@ -1,8 +1,5 @@
 // Inspects installed package metadata for update/install verification.
-import fsSync from "node:fs";
-import path from "node:path";
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 // Package update utilities inspect installed package metadata without trusting
 // paths outside the provided package root.
@@ -42,31 +39,4 @@ export function readInstalledPackageManifest(dir: string): Record<string, unknow
 export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
   const manifest = readInstalledPackageManifest(dir);
   return typeof manifest?.version === "string" ? manifest.version : undefined;
-}
-
-/** Read the installed package declaration that requires the OpenClaw host link. */
-export function readInstalledPackageOpenClawLinkDependencies(dir: string): Record<string, string> {
-  const manifest = readInstalledPackageManifest(dir);
-  const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
-  const dependencies = isRecord(manifest?.dependencies) ? manifest.dependencies : {};
-  const peerSpec = peerDependencies.openclaw;
-  const dependencySpec = dependencies.openclaw;
-  const spec = typeof peerSpec === "string" ? peerSpec : dependencySpec;
-  return typeof spec === "string" ? { openclaw: spec } : {};
-}
-
-/** Return true when an installed package needs an openclaw peer link repair. */
-export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
-  const linkDependencies = readInstalledPackageOpenClawLinkDependencies(dir);
-  if (!Object.hasOwn(linkDependencies, "openclaw")) {
-    return false;
-  }
-
-  try {
-    fsSync.statSync(path.join(dir, "node_modules", "openclaw"));
-    return false;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    return code === "ENOENT" || code === "ENOTDIR";
-  }
 }

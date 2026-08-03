@@ -485,13 +485,19 @@ export async function executeSystemAgentOperation(
         runtime,
         opts,
         run: async (ctx) => {
+          const gatewayHosted = ctx.deps?.setupSurface === "gateway";
           const runGatewayRestart =
-            ctx.deps?.runGatewayRestart ?? (() => runGatewayLifecycle("restart"));
+            ctx.deps?.runGatewayRestart ??
+            (() => runGatewayLifecycle("restart", gatewayHosted ? "gateway" : undefined));
           const restarted = await ctx.commit(runGatewayRestart);
           if (restarted === false) {
             throw new Error("Gateway restart did not complete");
           }
-          return { summary: "Restarted Gateway" };
+          const summary = gatewayHosted ? "Scheduled Gateway restart" : "Restarted Gateway";
+          if (gatewayHosted) {
+            ctx.runtime.log(summary);
+          }
+          return { summary };
         },
       });
     case "open-tui": {

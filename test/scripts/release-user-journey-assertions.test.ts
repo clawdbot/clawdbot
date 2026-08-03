@@ -50,7 +50,9 @@ async function waitUntil(matches: () => boolean, label: string): Promise<void> {
     if (matches()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }

@@ -4,6 +4,7 @@ import { OPENAI_QUICKSILVER_RELAY_FRAME_BYTES } from "./realtime-quicksilver-aud
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
   OpenAIQuicksilverAudioPeer,
+  type OpenAIQuicksilverAudioPeerCallbacks,
   type OpenAIQuicksilverAudioPeerContract,
 } from "./realtime-quicksilver-peer.runtime.js";
 import {
@@ -60,54 +61,7 @@ type TestableAudioPeer = {
 
 type TestableGatewayBridge = {
   pendingAudio: Buffer;
-  sideband?: {
-    socket: FakeSocket;
-    requestIds: { realtimeSessionId: string; sessionId: string; threadId: string };
-  };
-  runDelegation(params: {
-    delegationId: string;
-    prompt: string;
-    runAgentConsult: (params: {
-      prompt: string;
-      signal?: AbortSignal;
-    }) => Promise<{ text: string }>;
-    signal: AbortSignal;
-  }): Promise<void>;
-  startDelegation(delegationId: string, input: string): void;
 };
-
-function createDelegationBridge(
-  runAgentConsult: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>,
-) {
-  const logger = { debug: vi.fn(), warn: vi.fn() };
-  const bridge = new OpenAIQuicksilverGatewayBridge({
-    providerConfig: {},
-    model: "gpt-live-1-codex",
-    voice: "marin",
-    audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-    onAudio: vi.fn(),
-    onClearAudio: vi.fn(),
-    runAgentConsult,
-    logger,
-    resolveAuth: vi.fn(async () => ({
-      type: "oauth" as const,
-      token: "oauth-token",
-      accountId: "account-1",
-    })),
-  });
-  const socket = new FakeSocket("manual");
-  socket.readyState = 1;
-  const testBridge = bridge as unknown as TestableGatewayBridge;
-  testBridge.sideband = {
-    socket,
-    requestIds: {
-      realtimeSessionId: "realtime-session",
-      sessionId: "session",
-      threadId: "thread",
-    },
-  };
-  return { bridge, logger, socket, testBridge };
-}
 
 async function createInboundAudioHarness(params?: { onRtpPacket?: () => void }) {
   const { RtpHeader, RtpPacket } = await import("werift");
@@ -546,9 +500,13 @@ describe("GPT-Live werift audio peer", () => {
 });
 
 describe("GPT-Live gateway relay bridge", () => {
-  function createPendingPeerBridge() {
+  function createPendingPeerBridge(params?: {
+    onClose?: (reason: "completed" | "error") => void;
+    onError?: (error: Error) => void;
+  }) {
     let resolvePeer: ((peer: OpenAIQuicksilverAudioPeerContract) => void) | undefined;
     let rejectPeer: ((error: Error) => void) | undefined;
+    let peerCallbacks: OpenAIQuicksilverAudioPeerCallbacks | undefined;
     const peerPromise = new Promise<OpenAIQuicksilverAudioPeerContract>((resolve, reject) => {
       resolvePeer = resolve;
       rejectPeer = reject;
@@ -567,7 +525,8 @@ describe("GPT-Live gateway relay bridge", () => {
       audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
-      onClose,
+      onClose: params?.onClose ?? onClose,
+      onError: params?.onError,
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       logger: { debug: vi.fn(), warn: vi.fn() },
       resolveAuth: vi.fn(async () => ({
@@ -575,7 +534,10 @@ describe("GPT-Live gateway relay bridge", () => {
         token: "oauth-token",
         accountId: "account-1",
       })),
-      createPeer: vi.fn(() => peerPromise),
+      createPeer: vi.fn((callbacks) => {
+        peerCallbacks = callbacks;
+        return peerPromise;
+      }),
       fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
       webSocketFactory: () => new FakeSocket(),
     });
@@ -587,6 +549,7 @@ describe("GPT-Live gateway relay bridge", () => {
       peer,
       rejectPeer: (error: Error) => rejectPeer?.(error),
       resolvePeer: () => resolvePeer?.(peer),
+      triggerPeerError: (error: Error) => peerCallbacks?.onError(error),
     };
   }
 
@@ -644,6 +607,53 @@ describe("GPT-Live gateway relay bridge", () => {
     expect(peer.sendAudio).not.toHaveBeenCalled();
   });
 
+  it("keeps error precedence when onError reentrantly closes the bridge", async () => {
+    const onClose = vi.fn();
+    const bridgeRef: { current?: OpenAIQuicksilverGatewayBridge } = {};
+    const harness = createPendingPeerBridge({
+      onClose,
+      onError: () => bridgeRef.current?.close(),
+    });
+    bridgeRef.current = harness.bridge;
+    const connectionRejected = expect(harness.connection).rejects.toThrow(
+      "GPT-Live gateway relay bridge closed",
+    );
+
+    harness.triggerPeerError(new Error("media peer failed"));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+    await connectionRejected;
+  });
+
+  it("releases queued audio and rejects a late peer when onError throws", async () => {
+    const callbackError = new Error("error callback failed");
+    const onClose = vi.fn();
+    const harness = createPendingPeerBridge({
+      onClose,
+      onError: () => {
+        throw callbackError;
+      },
+    });
+    const testBridge = harness.bridge as unknown as TestableGatewayBridge;
+    harness.bridge.sendAudio(Buffer.from([0x41, 0x42]));
+    const connectionRejected = expect(harness.connection).rejects.toThrow(
+      "GPT-Live gateway relay bridge closed",
+    );
+
+    expect(() => harness.triggerPeerError(new Error("media peer failed"))).toThrow(callbackError);
+    const retainedAudioBytes = testBridge.pendingAudio.byteLength;
+    const closeReason = onClose.mock.calls[0]?.[0];
+    harness.bridge.close();
+    harness.resolvePeer();
+
+    await connectionRejected;
+    await vi.waitFor(() => expect(harness.peer.close).toHaveBeenCalledOnce());
+    expect(retainedAudioBytes).toBe(0);
+    expect(closeReason).toBe("error");
+    expect(harness.peer.sendAudio).not.toHaveBeenCalled();
+  });
+
   it("closes a sideband that opens in the abort handoff", async () => {
     const controller = new AbortController();
     const socket = new FakeSocket("manual");
@@ -694,136 +704,6 @@ describe("GPT-Live gateway relay bridge", () => {
     await expect(connection).rejects.toThrow("sideband overflow observed");
     expect(socket.closeCode).toBe(1009);
     expect(socket.closeReason).toBe("sideband startup buffer exceeded");
-  });
-
-  it("does not append failure text when the host cancels a delegation", async () => {
-    const abortError = new Error("The operation was aborted");
-    abortError.name = "AbortError";
-    const runAgentConsult = vi.fn(async () => {
-      throw abortError;
-    });
-    const { bridge, logger, socket, testBridge } = createDelegationBridge(runAgentConsult);
-    try {
-      await testBridge.runDelegation({
-        delegationId: "delegation-cancelled",
-        prompt: "stop this",
-        runAgentConsult,
-        signal: new AbortController().signal,
-      });
-
-      expect(socket.sent).toEqual([]);
-      expect(logger.warn).not.toHaveBeenCalled();
-    } finally {
-      bridge.close();
-    }
-  });
-
-  it("keeps the speakable failure response for genuine delegation errors", async () => {
-    const runAgentConsult = vi.fn(async () => {
-      throw new Error("workspace unavailable");
-    });
-    const { bridge, logger, socket, testBridge } = createDelegationBridge(runAgentConsult);
-    try {
-      await testBridge.runDelegation({
-        delegationId: "delegation-failed",
-        prompt: "do work",
-        runAgentConsult,
-        signal: new AbortController().signal,
-      });
-
-      expect(parseSent(socket)).toContainEqual({
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-failed",
-        channel: "speakable",
-        content: [
-          {
-            type: "input_text",
-            text: "The agent task failed. Tell the user it did not complete and offer to try again.",
-          },
-        ],
-      });
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("workspace unavailable"));
-    } finally {
-      bridge.close();
-    }
-  });
-
-  it("bounds gateway delegation output before sideband sends", async () => {
-    const runAgentConsult = vi.fn(async () => ({ text: "x".repeat(10_000) }));
-    const { bridge, socket, testBridge } = createDelegationBridge(runAgentConsult);
-    try {
-      await testBridge.runDelegation({
-        delegationId: "delegation-large",
-        prompt: "summarize everything",
-        runAgentConsult,
-        signal: new AbortController().signal,
-      });
-
-      const appends = parseSent(socket).filter(
-        (event) => event.type === "delegation.context.append",
-      );
-      expect(appends.length).toBeGreaterThan(0);
-      expect(appends.length).toBeLessThanOrEqual(11);
-      expect(
-        appends.map((event) => (event.content as Array<{ text: string }>)[0]?.text ?? "").join(""),
-      ).toMatch(/^x+ \[truncated\]$/);
-    } finally {
-      bridge.close();
-    }
-  });
-
-  it("keeps only the latest delegation when the superseded consult rejects on abort", async () => {
-    const resolvers: Array<(value: { text: string }) => void> = [];
-    const signals: AbortSignal[] = [];
-    const runAgentConsult = vi.fn(
-      async ({ signal }: { prompt: string; signal?: AbortSignal }) =>
-        await new Promise<{ text: string }>((resolve, reject) => {
-          signals.push(signal as AbortSignal);
-          resolvers.push(resolve);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
-            },
-            { once: true },
-          );
-        }),
-    );
-    const { bridge, socket, testBridge } = createDelegationBridge(runAgentConsult);
-    try {
-      testBridge.startDelegation("delegation-1", "first task");
-      testBridge.startDelegation("delegation-2", "second task");
-      testBridge.startDelegation("delegation-3", "latest task");
-
-      expect(runAgentConsult).toHaveBeenCalledOnce();
-      expect(signals[0]?.aborted).toBe(true);
-      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
-      expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("latest task");
-      expect(runAgentConsult.mock.calls[1]?.[0].prompt).not.toContain("second task");
-
-      resolvers[1]?.({ text: "latest result" });
-      await vi.waitFor(() =>
-        expect(parseSent(socket)).toContainEqual({
-          type: "delegation.context.append",
-          delegation_item_id: "delegation-3",
-          channel: "speakable",
-          content: [{ type: "input_text", text: "latest result" }],
-        }),
-      );
-      expect(socket.closed).toBe(false);
-    } finally {
-      bridge.close();
-    }
-  });
-
-  it("ignores delegation work after the bridge closes", () => {
-    const runAgentConsult = vi.fn(async () => ({ text: "unused" }));
-    const { bridge, testBridge } = createDelegationBridge(runAgentConsult);
-
-    bridge.close();
-    testBridge.startDelegation("delegation-late", "late task");
-
-    expect(runAgentConsult).not.toHaveBeenCalled();
   });
 
   it("bounds peer creation and closes a peer that resolves after the deadline", async () => {

@@ -117,8 +117,8 @@ export async function openUrl(url: string): Promise<boolean> {
   const command = [...resolved.argv];
   command.push(normalizedUrl);
   try {
-    await runCommandWithTimeout(command, { timeoutMs: 5_000 });
-    return true;
+    const result = await runCommandWithTimeout(command, { timeoutMs: 5_000 });
+    return result.code === 0 && result.termination === "exit";
   } catch {
     return false;
   }

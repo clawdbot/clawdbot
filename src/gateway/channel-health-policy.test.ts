@@ -2,7 +2,11 @@
  * Channel health policy regression tests.
  */
 import { describe, expect, it } from "vitest";
-import { evaluateChannelHealth, resolveChannelRestartReason } from "./channel-health-policy.js";
+import {
+  evaluateChannelHealth,
+  resolveChannelHealthState,
+  resolveChannelRestartReason,
+} from "./channel-health-policy.js";
 
 function evaluateHealth(
   account: Record<string, unknown>,
@@ -388,6 +392,22 @@ describe("evaluateChannelHealth", () => {
       });
       expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
     });
+  });
+});
+
+describe("resolveChannelHealthState", () => {
+  it("preserves authored terminal detail above the shared blocked projection", () => {
+    const snapshot = runningAccount({
+      running: false,
+      connected: false,
+      terminalDisconnect: true,
+      lifecycle: "blocked",
+      healthState: "conflict",
+    });
+    const evaluation = evaluateHealth(snapshot);
+
+    expect(evaluation).toEqual({ healthy: false, reason: "terminal-disconnect" });
+    expect(resolveChannelHealthState(snapshot, evaluation)).toBe("conflict");
   });
 });
 

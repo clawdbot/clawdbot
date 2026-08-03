@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchOllamaModels, readOllamaModelShowInfo } from "./provider-models.js";
 import { pullOllamaModel } from "./setup-pull.js";
 import { checkOllamaCloudAuth } from "./setup.js";
 
@@ -42,6 +43,45 @@ function createPullPrompter(): WizardPrompter {
   return {
     progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
   } as unknown as WizardPrompter;
+}
+
+async function expectReleaseWithoutWaitingForCapture(params: {
+  body: string;
+  status: number;
+  run: () => Promise<unknown>;
+}): Promise<void> {
+  const source = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(params.body));
+    },
+  });
+  const response = new Response(source, { status: params.status });
+  const captureClone = response.clone();
+  const release = vi.fn(async () => {});
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    response,
+    finalUrl: "http://127.0.0.1:11434/api/test",
+    release,
+  });
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      params.run(),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error("Ollama cleanup waited for a captured response clone"));
+        }, 500);
+      }),
+    ]);
+    expect(response.bodyUsed).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+    await captureClone.body?.cancel().catch(() => undefined);
+  }
 }
 
 async function waitForSocketClose(closed: Promise<void> | undefined): Promise<void> {
@@ -109,6 +149,53 @@ describe("Ollama setup response cleanup", () => {
 
     expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "model inspection error",
+      body: "ollama unavailable",
+      status: 503,
+      run: async () => {
+        await readOllamaModelShowInfo("http://127.0.0.1:11434", "gemma4:e2b").catch(
+          () => undefined,
+        );
+      },
+    },
+    {
+      name: "model discovery error",
+      body: "ollama unavailable",
+      status: 503,
+      run: async () => {
+        await fetchOllamaModels("http://127.0.0.1:11434");
+      },
+    },
+    {
+      name: "auth probe fallback",
+      body: "ollama unavailable",
+      status: 503,
+      run: async () => {
+        await checkOllamaCloudAuth("http://127.0.0.1:11434");
+      },
+    },
+    {
+      name: "pull response error",
+      body: "ollama unavailable",
+      status: 503,
+      run: async () => {
+        await pullOllamaModel("http://127.0.0.1:11434", "gemma4:e2b", createPullPrompter());
+      },
+    },
+    {
+      name: "pull stream error",
+      body: '{"error":"disk full"}\n',
+      status: 200,
+      run: async () => {
+        await pullOllamaModel("http://127.0.0.1:11434", "gemma4:e2b", createPullPrompter());
+      },
+    },
+  ])("releases a $name while capture retains a response clone", async ({ body, run, status }) => {
+    await expectReleaseWithoutWaitingForCapture({ body, run, status });
   });
 
   it.each([

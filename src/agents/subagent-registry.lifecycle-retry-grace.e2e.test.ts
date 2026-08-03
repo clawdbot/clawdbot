@@ -79,7 +79,7 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
     if (next === "throw") {
       throw new Error("announce delivery failed");
     }
-    return {};
+    return { result: { payloads: [{ text: "completion delivered" }] } };
   }
   return {};
 });
@@ -163,19 +163,20 @@ describe("subagent registry lifecycle error grace", () => {
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../infra/agent-events.js").onAgentEvent,
     });
-    const loadSubagentRegistryRuntimeForTest = async () => ({
-      countActiveDescendantRuns: mod.countActiveDescendantRuns,
-      countPendingDescendantRuns: mod.countPendingDescendantRuns,
-      countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
-      hasDescendantRunAwaitingSettle: announceRead.hasDescendantRunAwaitingSettle,
-      getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
-      isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
-      listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
-      replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
-      resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
-      shouldIgnorePostCompletionAnnounceForSession:
-        mod.shouldIgnorePostCompletionAnnounceForSession,
-    });
+    const loadSubagentRegistryRuntimeForTest = async () =>
+      ({
+        countActiveDescendantRuns: mod.countActiveDescendantRuns,
+        countPendingDescendantRuns: mod.countPendingDescendantRuns,
+        countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
+        hasDescendantRunAwaitingSettle: announceRead.hasDescendantRunAwaitingSettle,
+        getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
+        isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
+        listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
+        replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
+        resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
+        shouldIgnorePostCompletionAnnounceForSession:
+          mod.shouldIgnorePostCompletionAnnounceForSession,
+      }) as unknown as typeof import("./subagent-registry-runtime.js");
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
@@ -187,6 +188,7 @@ describe("subagent registry lifecycle error grace", () => {
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      loadSessionEntry: ({ sessionKey }) => sessionStore[sessionKey],
       getRequesterSessionActivity: (requesterSessionKey: string) => {
         const entry = sessionStore[requesterSessionKey];
         return {
@@ -239,6 +241,32 @@ describe("subagent registry lifecycle error grace", () => {
       await flushAsync();
     }
     throw new Error(`run ${runId} did not reach cleanupHandled=false in time`);
+  };
+
+  const waitForDeliveredCleanup = async (runId: string) => {
+    let lastRun: ReturnType<typeof mod.listSubagentRunsForRequester>[number] | undefined;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const run = mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .find((candidate) => candidate.runId === runId);
+      lastRun = run;
+      if (
+        run?.delivery?.status === "delivered" &&
+        typeof run.cleanupCompletedAt === "number" &&
+        run.requesterSettleWake === undefined
+      ) {
+        return;
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      await flushAsync();
+    }
+    throw new Error(
+      `run ${runId} did not finish delivered cleanup in time: ${JSON.stringify({
+        cleanupCompletedAt: lastRun?.cleanupCompletedAt,
+        delivery: lastRun?.delivery,
+        requesterSettleWake: lastRun?.requesterSettleWake,
+      })}`,
+    );
   };
 
   const waitForAgentCallCount = async (expectedCount: number) => {
@@ -330,7 +358,7 @@ describe("subagent registry lifecycle error grace", () => {
           (inputProvenance as { sourceSessionKey?: unknown }).sourceSessionKey === childSessionKey
         );
       })
-      .map((request) => {
+      .flatMap((request) => {
         const internalEvents = request.params?.internalEvents;
         const event =
           Array.isArray(internalEvents) &&
@@ -338,7 +366,7 @@ describe("subagent registry lifecycle error grace", () => {
           typeof internalEvents[0] === "object"
             ? (internalEvents[0] as { result?: string })
             : undefined;
-        return event?.result ?? "";
+        return typeof event?.result === "string" ? [event.result] : [];
       });
   }
 
@@ -575,6 +603,7 @@ describe("subagent registry lifecycle error grace", () => {
 
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("ok");
+    await waitForDeliveredCleanup("run-timeout-cancel");
 
     // Advance past the original grace window; no timeout completion or
     // requester-settle wake should be emitted after successful delivery.

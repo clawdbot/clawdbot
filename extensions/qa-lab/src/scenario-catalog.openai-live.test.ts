@@ -60,6 +60,43 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
+  it("includes the live inbound voice talkback scenario", () => {
+    const scenario = readQaScenarioById("inbound-voice-talkback-live");
+    const config = readQaScenarioExecutionConfig("inbound-voice-talkback-live") as
+      | {
+          requiredProviderMode?: string;
+          requiredProvider?: string;
+          requiredModel?: string;
+          expectedMarker?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/media/inbound-voice-talkback-live.yaml");
+    expect(scenario.coverage?.primary).toEqual(["media.inbound-media-store"]);
+    expect(scenario.execution.channel).toBe("qa-channel");
+    expect(scenario.gatewayConfigPatch?.tools).toEqual({
+      media: {
+        models: [
+          {
+            provider: "openai",
+            model: "gpt-4o-transcribe",
+            capabilities: ["audio"],
+          },
+        ],
+        audio: {
+          enabled: true,
+          echoTranscript: false,
+        },
+      },
+    });
+    expect(config?.requiredProviderMode).toBe("live-frontier");
+    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.requiredModel).toBe("gpt-5.4");
+    expect(config?.expectedMarker).toBe("MATRIX QA VOICE PREFLIGHT OK");
+    expect(JSON.stringify(scenario.execution.flow)).toContain("./voice-preflight.fixture.js");
+    expect(JSON.stringify(scenario.execution.flow)).not.toContain("./live-transports/matrix/");
+  });
+
   it("includes the Kitchen Sink live OpenAI plugin gauntlet", () => {
     const scenario = readQaScenarioById("kitchen-sink-live-openai");
     const config = readQaScenarioExecutionConfig("kitchen-sink-live-openai") as

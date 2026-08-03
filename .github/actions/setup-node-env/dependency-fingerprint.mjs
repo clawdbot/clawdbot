@@ -55,7 +55,7 @@ function canonicalize(value) {
   }
   return Object.fromEntries(
     Object.entries(value)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([key, child]) => [key, canonicalize(child)]),
   );
 }
@@ -128,7 +128,7 @@ function trackedPackageManifests(workspace) {
   return result.stdout
     .split("\0")
     .filter((entry) => entry === "package.json" || entry.endsWith("/package.json"))
-    .sort();
+    .toSorted();
 }
 
 function computeDependencyFingerprint({ workspace, frozenLockfile }) {
@@ -145,7 +145,7 @@ function computeDependencyFingerprint({ workspace, frozenLockfile }) {
     try {
       manifest = JSON.parse(source);
     } catch (error) {
-      throw new Error(`invalid JSON in ${relativePath}: ${error.message}`);
+      throw new Error(`invalid JSON in ${relativePath}: ${error.message}`, { cause: error });
     }
     return { manifest, relativePath };
   });

@@ -3,8 +3,8 @@ import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runExec } from "../process/exec.js";
 
-// Machine display names prefer macOS ComputerName when available and fall back
-// to hostname for deterministic tests and non-macOS hosts.
+// Prefer macOS ComputerName/LocalHostName with hostname fallback; machine
+// identity is process-stable, so retain the first outcome until restart.
 let cachedPromise: Promise<string> | null = null;
 
 async function tryScutil(key: "ComputerName" | "LocalHostName") {

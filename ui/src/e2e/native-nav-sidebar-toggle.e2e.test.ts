@@ -106,7 +106,10 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
         }
       });
     }
-    const gateway = await installMockGateway(page, options.scenario);
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+      ...options.scenario,
+    });
     const response = await page.goto(server.baseUrl);
     expect(response?.status()).toBe(200);
     // The brand row only becomes visible on desktop widths; drawer widths keep

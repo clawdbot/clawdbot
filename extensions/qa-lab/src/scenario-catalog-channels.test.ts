@@ -59,6 +59,29 @@ describe("qa scenario catalog channel contracts", () => {
     expect(readQaScenarioById("memory-tools-channel-context").execution.channel).toBe("qa-channel");
   });
 
+  it("keeps stored inbound audio proof on the real QA Channel and Gateway flow", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("inbound-media-store-audio-transcription"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.coverage?.primary).toEqual(["media.inbound-media-store"]);
+    expect(scenario.coverage?.secondary).toEqual(["channels.inbound-media-normalization"]);
+    expect(scenario.execution.channel).toBe("qa-channel");
+    expect(scenario.execution.providerMode).toBe("mock-openai");
+    expect(flow).toContain('"sendInbound"');
+    expect(flow).toContain('"contentBase64"');
+    expect(flow).toContain('"mediaFactCarrier":"media-store-url"');
+    expect(flow).toContain("String(candidate.text ?? '').trim() === config.expectedMarker");
+    expect(flow).toContain("String(message.text ?? '').trim() === config.expectedMarker");
+    expect(flow).toContain("conversationOutbound.length === 1");
+    expect(flow).not.toContain(".includes(config.expectedMarker)");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      tools: { media: { audio: { echoTranscript: false } } },
+    });
+    expect(flow).not.toContain('"call":"runAgentPrompt"');
+  });
+
   it("marks live transport modules as live-driver-only", () => {
     for (const scenarioId of [
       "matrix-approval-exec-metadata-single-event",

@@ -51,6 +51,16 @@ function runGenerateImage(params: GenerateImageParams) {
   return generateImage({ ...params, cfg }, runtimeDeps);
 }
 
+function createBufferedImageProvider(id: string, buffers: Buffer[]): ImageGenerationProvider {
+  return {
+    id,
+    capabilities: { generate: {}, edit: { enabled: false } },
+    generateImage: async () => ({
+      images: buffers.map((buffer) => ({ buffer, mimeType: "image/png" })),
+    }),
+  };
+}
+
 describe("image-generation runtime", () => {
   beforeEach(() => {
     providers = [];
@@ -286,6 +296,63 @@ describe("image-generation runtime", () => {
     ]);
     expect(warnings).toContain(
       "image-generation candidate failed: openai/gpt-image-1: OpenAI API key missing",
+    );
+  });
+
+  it("falls through when an image provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedImageProvider("empty", [Buffer.from("partial"), Buffer.alloc(0)]),
+      createBufferedImageProvider("valid", [Buffer.from("png-bytes")]),
+    ];
+
+    const result = await runGenerateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            mediaModels: {
+              image: { primary: "empty/img-v1", fallbacks: ["valid/img-v2"] },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+    });
+
+    expect(result.provider).toBe("valid");
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("png-bytes"));
+    expect(result.attempts).toEqual([
+      {
+        provider: "empty",
+        model: "img-v1",
+        error: "Image generation provider returned an empty image buffer at index 1.",
+      },
+    ]);
+  });
+
+  it("fails visibly when every image provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedImageProvider("empty-primary", [Buffer.alloc(0)]),
+      createBufferedImageProvider("empty-fallback", [Buffer.alloc(0)]),
+    ];
+
+    await expect(
+      runGenerateImage({
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                image: {
+                  primary: "empty-primary/img-v1",
+                  fallbacks: ["empty-fallback/img-v2"],
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "draw a cat",
+      }),
+    ).rejects.toThrow(
+      "All image generation models failed (2): empty-primary/img-v1: Image generation provider returned an empty image buffer at index 0. | empty-fallback/img-v2: Image generation provider returned an empty image buffer at index 0.",
     );
   });
 

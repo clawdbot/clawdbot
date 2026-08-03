@@ -34,6 +34,11 @@ import {
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import {
+  loadStoredHiddenSessionCatalogIds,
+  SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+  storeHiddenSessionCatalogIds,
+} from "../../components/app-sidebar-session-types.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
@@ -226,6 +231,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData: ConfigRouteData | null = null;
 
   @state() private settings = loadSettings();
+  @state() private hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
   @state() private sessionObserverModels: ModelCatalogEntry[] = [];
@@ -353,9 +359,17 @@ export class ConfigPage extends OpenClawLightDomElement {
         );
       },
     );
+  private readonly hiddenSessionCatalogsChanged = () => {
+    this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
+  };
 
   override connectedCallback() {
     super.connectedCallback();
+    this.hiddenSessionCatalogsChanged();
+    window.addEventListener(
+      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+      this.hiddenSessionCatalogsChanged,
+    );
     this.customThemeImportOwner.connect(
       this.context.gateway.connection.gatewayUrl,
       this.context.theme.serverSelection,
@@ -365,6 +379,10 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    window.removeEventListener(
+      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+      this.hiddenSessionCatalogsChanged,
+    );
     this.customThemeImportOwner.retireImport();
     this.systemInfoPolling.stop();
     this.invalidateSystemInfoRequest();
@@ -1016,6 +1034,16 @@ export class ConfigPage extends OpenClawLightDomElement {
       sidebarLiveActivity:
         this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
+      hiddenSessionCatalogIds: this.hiddenSessionCatalogIds,
+      setSessionCatalogHidden: (catalogId, hidden) => {
+        const next = new Set(this.hiddenSessionCatalogIds);
+        if (hidden) {
+          next.add(catalogId);
+        } else {
+          next.delete(catalogId);
+        }
+        storeHiddenSessionCatalogIds(next);
+      },
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,

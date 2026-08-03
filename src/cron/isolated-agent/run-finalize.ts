@@ -159,8 +159,8 @@ export async function finalizeCronRun(params: {
       output_tokens: output,
     };
     const bucketTotalTokens = input + output + cacheRead + cacheWrite;
-    // Embedded runs accumulate billing buckets across calls, while usage.total
-    // may be replaced with the final provider-call total for context tracking.
+    // Keep telemetry totals consistent when a provider reports only a partial
+    // aggregate alongside the normalized billing buckets.
     const aggregateTotalTokens =
       typeof usage.total === "number" && Number.isFinite(usage.total)
         ? Math.max(bucketTotalTokens, usage.total)

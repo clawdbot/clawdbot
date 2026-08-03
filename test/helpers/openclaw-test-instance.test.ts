@@ -1,9 +1,7 @@
 // OpenClaw test instance tests cover spawned test instance lifecycle.
 import fs from "node:fs/promises";
-import net from "node:net";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
 import { createOpenClawTestInstance, testing } from "./openclaw-test-instance.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -42,69 +40,54 @@ describe("openclaw test instance", () => {
 
   it("fails startup waits immediately after signaled gateway exits", async () => {
     await expect(
-      testing.waitForPortOpen({ exitCode: null, signalCode: "SIGTERM" }, [], [], 1, 10_000),
-    ).rejects.toThrow("gateway exited before listening");
+      testing.waitForGatewayReady({ exitCode: null, signalCode: "SIGTERM" }, [], [], 1, 10_000),
+    ).rejects.toThrow("gateway exited before readiness");
   });
 
-  it("waits for a websocket upgrade instead of treating raw TCP as ready", async () => {
-    const server = net.createServer();
-    const sockets = new Set<net.Socket>();
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.once("close", () => sockets.delete(socket));
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP listener address");
-    }
+  it("waits until the gateway readiness probe reports ready", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response('{"ready":false,"failing":["startup-sidecars"]}', { status: 503 }),
+      )
+      .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }));
 
-    try {
-      await expect(
-        testing.waitForGatewayWebSocketReady(
-          { exitCode: null, signalCode: null },
-          [],
-          [],
-          address.port,
-          50,
-        ),
-      ).rejects.toThrow("timeout waiting for gateway websocket readiness");
-    } finally {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
-    }
+    await expect(
+      testing.waitForGatewayReady(
+        { exitCode: null, signalCode: null },
+        [],
+        [],
+        12345,
+        1_000,
+        fetchImpl,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://127.0.0.1:12345/readyz");
   });
 
-  it("returns once a websocket upgrade is available", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await new Promise<void>((resolve, reject) => {
-      server.once("listening", resolve);
-      server.once("error", reject);
+  it("keeps stalled readiness probes inside the startup deadline", async () => {
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
     });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected WebSocket listener address");
-    }
+    const startedAt = Date.now();
 
-    try {
-      await expect(
-        testing.waitForGatewayWebSocketReady(
-          { exitCode: null, signalCode: null },
-          [],
-          [],
-          address.port,
-          1_000,
-        ),
-      ).resolves.toBeUndefined();
-    } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
-    }
+    await expect(
+      testing.waitForGatewayReady(
+        { exitCode: null, signalCode: null },
+        [],
+        [],
+        12345,
+        25,
+        fetchImpl,
+      ),
+    ).rejects.toThrow("timeout waiting for gateway readiness");
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(Date.now() - startedAt).toBeLessThan(500);
   });
 
   it("signals test instance process groups on POSIX", () => {

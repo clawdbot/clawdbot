@@ -133,12 +133,15 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         onDirectoryError: (error) => {
           ctx.log?.warn?.(`[${account.accountId}] Buzz directory refresh failed: ${error.message}`);
         },
+        onRoomDirectoryChanged: ctx.invalidateDirectoryCache,
       });
+      ctx.invalidateDirectoryCache?.();
       connectedAt = Date.now();
       activeBuses.set(account.accountId, bus);
       ctx.setStatus({
         accountId: account.accountId,
         running: true,
+        lifecycle: "ready",
         configured: true,
         enabled: account.enabled,
         baseUrl: account.relayUrl,
@@ -168,6 +171,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       ctx.setStatus({
         accountId: account.accountId,
         running: false,
+        ...(cycleError ? { lifecycle: "recovering" as const } : {}),
         ...(cycleError ? { lastError: cycleError.message } : {}),
       });
     }

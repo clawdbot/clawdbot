@@ -26,14 +26,18 @@ let lifecycleHandler:
 
 const sessionStore = vi.hoisted(
   () =>
-    new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
+    new Proxy<Record<string, { sessionId: string; lifecycleRevision: string; updatedAt: number }>>(
       {},
       {
         get(target, prop, receiver) {
           if (typeof prop !== "string" || prop in target) {
             return Reflect.get(target, prop, receiver);
           }
-          return { sessionId: `sess-${prop}`, updatedAt: 1 };
+          return {
+            sessionId: `sess-${prop}`,
+            lifecycleRevision: `revision-${prop}`,
+            updatedAt: 1,
+          };
         },
       },
     ),
@@ -78,8 +82,12 @@ vi.mock("../config/sessions.js", () => {
   };
 });
 
-vi.mock("../config/sessions/session-accessor.js", () => ({
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  listSessionEntriesReadOnly: () =>
+    Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
   loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
+  loadSessionEntryReadOnly: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
   patchSessionEntry: async () => null,
 }));
 
@@ -184,6 +192,9 @@ describe("subagent registry steer restarts", () => {
 
   beforeEach(() => {
     vi.useRealTimers();
+    for (const key of Object.keys(sessionStore)) {
+      delete sessionStore[key];
+    }
     lifecycleHandler = undefined;
     mod.testing.setDepsForTest({
       ensureContextEnginesInitialized: () => {},
@@ -257,6 +268,11 @@ describe("subagent registry steer restarts", () => {
       Pick<RegisterSubagentRunInput, "spawnMode" | "requesterOrigin" | "expectsCompletionMessage">
     >,
   ): void => {
+    sessionStore[params.childSessionKey] = {
+      sessionId: `sess-${params.childSessionKey}`,
+      lifecycleRevision: `revision-${params.childSessionKey}`,
+      updatedAt: 1,
+    };
     mod.registerSubagentRun({
       runId: params.runId,
       childSessionKey: params.childSessionKey,
@@ -579,8 +595,7 @@ describe("subagent registry steer restarts", () => {
 
   it("updates task to the dispatched steer message when provided", () => {
     // Regression test: orphan-session recovery
-    // (`recoverOrphanedSubagentSessions` -> `resumeOrphanedSession` /
-    // `buildResumeMessage` in `subagent-orphan-recovery.ts`) rewraps
+    // Registry restart recovery rewraps
     // `entry.task` into the [Subagent Task] block. If steer replacement did
     // not update `task` to the new message, a gateway restart classified as
     // resumable-fresh would re-run the stale pre-steer instruction and lose
@@ -729,6 +744,74 @@ describe("subagent registry steer restarts", () => {
     }
     next.execution.endedAt = next.execution.startedAt + 30_000;
     expect(mod.getSubagentSessionRuntimeMs(next, next.execution.endedAt)).toBe(150_000);
+  });
+
+  it("rejects a replacement owned by a retired Gateway lifecycle", () => {
+    registerRun({
+      runId: "run-retired-generation-old",
+      childSessionKey: "agent:main:subagent:retired-generation",
+      task: "keep the current owner",
+    });
+
+    expect(
+      mod.replaceSubagentRunAfterSteer({
+        previousRunId: "run-retired-generation-old",
+        nextRunId: "run-retired-generation-new",
+        lifecycleGeneration: "retired-generation",
+      }),
+    ).toBe(false);
+    expect(listMainRuns()).toEqual([
+      expect.objectContaining({ runId: "run-retired-generation-old" }),
+    ]);
+  });
+
+  it("stamps the captured Gateway lifecycle on a replacement run", () => {
+    registerRun({
+      runId: "run-current-generation-old",
+      childSessionKey: "agent:main:subagent:current-generation",
+      task: "continue under the dispatch owner",
+    });
+
+    expect(
+      mod.replaceSubagentRunAfterSteer({
+        previousRunId: "run-current-generation-old",
+        nextRunId: "run-current-generation-new",
+        lifecycleGeneration: "test-generation",
+      }),
+    ).toBe(true);
+    expect(listMainRuns()).toEqual([
+      expect.objectContaining({
+        runId: "run-current-generation-new",
+        execution: expect.objectContaining({ lifecycleGeneration: "test-generation" }),
+      }),
+    ]);
+  });
+
+  it("rolls back a generation-owned replacement when persistence fails", () => {
+    registerRun({
+      runId: "run-generation-persist-old",
+      childSessionKey: "agent:main:subagent:generation-persist",
+      task: "preserve the source owner",
+    });
+    mod.testing.setDepsForTest({
+      ensureContextEnginesInitialized: () => {},
+      loadAgentRuntimePluginRegistryHandle: () => undefined,
+      resolveContextEngine: async () => noopContextEngine,
+      persistSubagentRunsToDiskOrThrow: () => {
+        throw new Error("disk unavailable");
+      },
+    });
+
+    expect(
+      mod.replaceSubagentRunAfterSteer({
+        previousRunId: "run-generation-persist-old",
+        nextRunId: "run-generation-persist-new",
+        lifecycleGeneration: "test-generation",
+      }),
+    ).toBe(false);
+    expect(listMainRuns()).toEqual([
+      expect.objectContaining({ runId: "run-generation-persist-old" }),
+    ]);
   });
 
   it("clears completion delivery metadata when replacing for steer restart", () => {

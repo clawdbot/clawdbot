@@ -1,5 +1,6 @@
 // Defines lifecycle-owned cache primitives for plugin metadata.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 
 /** Result shape for cache lookups that need to distinguish a miss from cached `undefined`. */
 type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
@@ -28,7 +29,7 @@ export class PluginLruCache<T> {
       typeof value === "number"
         ? normalizeMaxEntries(value, this.#defaultMaxEntries)
         : this.#defaultMaxEntries;
-    this.#evictOldestEntries();
+    pruneMapToMaxSize(this.#entries, this.#maxEntries);
   }
 
   clear(): void {
@@ -58,17 +59,7 @@ export class PluginLruCache<T> {
       this.#entries.delete(cacheKey);
     }
     this.#entries.set(cacheKey, value);
-    this.#evictOldestEntries();
-  }
-
-  #evictOldestEntries(): void {
-    while (this.#entries.size > this.#maxEntries) {
-      const oldestEntry = this.#entries.keys().next();
-      if (oldestEntry.done) {
-        break;
-      }
-      this.#entries.delete(oldestEntry.value);
-    }
+    pruneMapToMaxSize(this.#entries, this.#maxEntries);
   }
 }
 

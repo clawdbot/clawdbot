@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { request } from "node:http";
 import { createServer } from "node:net";
-import { expectDefined } from "../../packages/normalization-core/src/expect.js";
+import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 
 export async function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {

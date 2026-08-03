@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
+import { SessionWriteLockStaleError } from "../../agents/session-write-lock-error.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -379,6 +380,55 @@ describe("executeAgentTurn: terminal failures", () => {
           event.data.stopReason === "restart",
       ),
     ).toBe(true);
+  });
+
+  it("hands a confirmed restart lease loss to the replacement owner", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const abortForRestart = vi.spyOn(replyOperation, "abortForRestart");
+    abortForRestart.mockImplementationOnce(() => {
+      Object.defineProperty(replyOperation, "result", {
+        value: { kind: "aborted", code: "aborted_for_restart" } as const,
+        configurable: true,
+      });
+      return true;
+    });
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error("embedded runner failed", {
+        cause: new SessionWriteLockStaleError({
+          lockPath: "sqlite:session-write:agent:main:main",
+          owner: "replacement gateway",
+          staleReasons: ["lease-lost"],
+        }),
+      }),
+    );
+    const confirmRestartRecoveryArmedAfterLeaseLoss = vi.fn(async () => true);
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ replyOperation }),
+      confirmRestartRecoveryArmedAfterLeaseLoss,
+      isRestartRecoveryArmed: () => false,
+    });
+
+    expect(result).toEqual({ kind: "final", payload: { text: SILENT_REPLY_TOKEN } });
+    expect(confirmRestartRecoveryArmedAfterLeaseLoss).toHaveBeenCalledOnce();
+    expect(abortForRestart).toHaveBeenCalledOnce();
+    expect(failMock).not.toHaveBeenCalled();
+    expect(
+      emitAgentEvent.mock.calls.filter(
+        ([event]) =>
+          event.stream === "lifecycle" &&
+          event.data.phase === "end" &&
+          event.data.stopReason === "restart",
+      ),
+    ).toHaveLength(1);
+    expect(
+      emitAgentEvent.mock.calls.some(
+        ([event]) => event.stream === "lifecycle" && event.data.phase === "error",
+      ),
+    ).toBe(false);
   });
 
   it("preserves restart ownership when an aborted embedded runner resolves normally", async () => {

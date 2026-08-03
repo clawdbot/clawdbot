@@ -3,11 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertTrustedWorkflowHarness,
   parseArgs,
   releaseProfileForTarget,
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
+  runGhRead,
   shouldDeleteTemporaryWorkflowRef,
 } from "../../scripts/full-release-validation-at-sha.mjs";
 
@@ -160,10 +162,61 @@ describe("full-release-validation-at-sha", () => {
     expect(source).not.toContain('["run", "watch"');
   });
 
+  it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {
+    const calls: unknown[][] = [];
+    expect(
+      runGhRead(["api", "repos/openclaw/openclaw/actions/runs/123"], {
+        execFileSyncImpl: (...args: unknown[]) => {
+          calls.push(args);
+          return " result ";
+        },
+      }),
+    ).toBe("result");
+    expect(calls).toEqual([
+      [
+        "gh",
+        ["api", "repos/openclaw/openclaw/actions/runs/123"],
+        expect.objectContaining({
+          killSignal: "SIGKILL",
+          timeout: 60_000,
+        }),
+      ],
+    ]);
+
+    const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
+    expect(source).toContain(
+      'runGhRead(["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}`])',
+    );
+    expect(source).toContain('const dispatchOutput = run("gh", dispatchArgs');
+  });
+
+  it("rejects incomplete trusted release harnesses before dispatch", () => {
+    const workflowPath = ".github/workflows/full-release-validation.yml";
+    const verifierPath = "scripts/release-ci-summary.mjs";
+    const checked: string[] = [];
+    expect(
+      assertTrustedWorkflowHarness("a".repeat(40), (relativePath) => {
+        checked.push(relativePath);
+        return relativePath === workflowPath || relativePath === verifierPath;
+      }),
+    ).toBe(verifierPath);
+    expect(checked).toEqual([workflowPath, verifierPath]);
+    expect(() => assertTrustedWorkflowHarness("a".repeat(40), () => false)).toThrow(workflowPath);
+    expect(() =>
+      assertTrustedWorkflowHarness("a".repeat(40), (relativePath) => relativePath === workflowPath),
+    ).toThrow("supported release evidence verifier");
+
+    const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
+    expect(source.indexOf("assertTrustedWorkflowHarness(workflowSha);")).toBeLessThan(
+      source.indexOf('run("git", ["push", "origin", `${workflowSha}:${remoteBranchRef}`]'),
+    );
+  });
+
   it("retains a failed parent workflow ref for GitHub reruns", () => {
     expect(
       shouldDeleteTemporaryWorkflowRef({
         dryRun: false,
+        evidenceVerified: false,
         keepBranch: false,
         parentConclusion: "failure",
       }),
@@ -171,6 +224,7 @@ describe("full-release-validation-at-sha", () => {
     expect(
       shouldDeleteTemporaryWorkflowRef({
         dryRun: false,
+        evidenceVerified: true,
         keepBranch: false,
         parentConclusion: "success",
       }),
@@ -178,10 +232,19 @@ describe("full-release-validation-at-sha", () => {
     expect(
       shouldDeleteTemporaryWorkflowRef({
         dryRun: true,
+        evidenceVerified: false,
         keepBranch: false,
         parentConclusion: "",
       }),
     ).toBe(true);
+    expect(
+      shouldDeleteTemporaryWorkflowRef({
+        dryRun: false,
+        evidenceVerified: false,
+        keepBranch: false,
+        parentConclusion: "success",
+      }),
+    ).toBe(false);
   });
 
   it("supports current and legacy verifier locations in trusted workflow checkouts", () => {

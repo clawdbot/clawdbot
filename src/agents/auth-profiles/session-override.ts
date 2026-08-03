@@ -12,6 +12,10 @@ import {
   resolveAuthProfileOrder,
 } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
+import {
+  isActiveUnusableWindow,
+  isModelScopedCooldownReason,
+} from "../auth-profiles/usage-state.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 
 const sessionAccessorLoader = createLazyImportLoader(
@@ -28,6 +32,8 @@ type SessionAuthProfileOverrideState = Pick<
   SessionEntry,
   "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
 >;
+type SessionAuthProfileOverrideSnapshot = SessionAuthProfileOverrideState &
+  Pick<SessionEntry, "sessionId">;
 
 function applySessionAuthProfileOverrideState(
   entry: SessionEntry,
@@ -52,33 +58,85 @@ function applySessionAuthProfileOverrideState(
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 
+function matchesSessionAuthProfileOverrideSnapshot(
+  entry: SessionEntry,
+  snapshot: SessionAuthProfileOverrideSnapshot,
+): boolean {
+  return (
+    entry.sessionId === snapshot.sessionId &&
+    entry.authProfileOverride === snapshot.authProfileOverride &&
+    entry.authProfileOverrideSource === snapshot.authProfileOverrideSource &&
+    entry.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount
+  );
+}
+
+function synchronizeSessionEntry(entry: SessionEntry, latest: SessionEntry): void {
+  for (const key of Object.keys(entry)) {
+    if (!Object.hasOwn(latest, key)) {
+      Reflect.deleteProperty(entry, key);
+    }
+  }
+  Object.assign(entry, latest);
+}
+
 async function persistSessionAuthProfileOverrideState(params: {
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   state: SessionAuthProfileOverrideState;
   storePath?: string;
-}): Promise<void> {
-  const { sessionEntry, sessionStore, sessionKey, state, storePath } = params;
+  expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
+}): Promise<SessionEntry | undefined> {
+  const { sessionEntry, sessionStore, sessionKey, state, storePath, expectedSnapshot } = params;
   const updatedAt = Date.now();
-  applySessionAuthProfileOverrideState(sessionEntry, state, updatedAt);
-  sessionStore[sessionKey] = sessionEntry;
   if (!storePath) {
-    return;
+    if (expectedSnapshot && !Object.hasOwn(sessionStore, sessionKey)) {
+      return undefined;
+    }
+    const latest = sessionStore[sessionKey] ?? sessionEntry;
+    if (expectedSnapshot && !matchesSessionAuthProfileOverrideSnapshot(latest, expectedSnapshot)) {
+      synchronizeSessionEntry(sessionEntry, latest);
+      return latest;
+    }
+    const target = expectedSnapshot ? latest : sessionEntry;
+    applySessionAuthProfileOverrideState(target, state, updatedAt);
+    if (target !== sessionEntry) {
+      synchronizeSessionEntry(sessionEntry, target);
+    }
+    sessionStore[sessionKey] = target;
+    return target;
+  }
+  if (!expectedSnapshot) {
+    applySessionAuthProfileOverrideState(sessionEntry, state, updatedAt);
+    sessionStore[sessionKey] = sessionEntry;
   }
   const persisted = await (
     await loadSessionAccessor()
   ).patchSessionEntry(
     { storePath, sessionKey },
-    (current) => ({
-      ...state,
-      updatedAt: Math.max(current.updatedAt ?? 0, updatedAt),
-    }),
-    { fallbackEntry: sessionEntry },
+    (current) => {
+      // Compare inside the canonical SQLite writer so a concurrent /model pin
+      // cannot be erased by a stale automatic-selection snapshot.
+      if (
+        expectedSnapshot &&
+        !matchesSessionAuthProfileOverrideSnapshot(current, expectedSnapshot)
+      ) {
+        return null;
+      }
+      return {
+        ...state,
+        updatedAt: Math.max(current.updatedAt ?? 0, updatedAt),
+      };
+    },
+    expectedSnapshot ? undefined : { fallbackEntry: sessionEntry },
   );
   if (persisted) {
+    if (expectedSnapshot) {
+      synchronizeSessionEntry(sessionEntry, persisted);
+    }
     sessionStore[sessionKey] = persisted;
   }
+  return persisted ?? (expectedSnapshot ? undefined : sessionEntry);
 }
 
 // Current session overrides are only valid when the selected provider can use
@@ -123,6 +181,27 @@ function uniqueProviders(provider: string, acceptedProviderIds?: readonly string
     acceptedProviderIds && acceptedProviderIds.length > 0 ? acceptedProviderIds : [provider];
   candidates.forEach(push);
   return [...providers];
+}
+
+function isProfileGloballyInCooldown(
+  store: ReturnType<typeof ensureAuthProfileStore>,
+  profileId: string,
+): boolean {
+  if (!isProfileInCooldown(store, profileId)) {
+    return false;
+  }
+  const usage = store.usageStats?.[profileId];
+  if (!usage) {
+    return true;
+  }
+  const now = Date.now();
+  return (
+    isActiveUnusableWindow(usage.disabledUntil, now) ||
+    (isActiveUnusableWindow(usage.blockedUntil, now) &&
+      (usage.blockedScope !== "model" || !usage.blockedModel)) ||
+    (isActiveUnusableWindow(usage.cooldownUntil, now) &&
+      (!isModelScopedCooldownReason(usage.cooldownReason) || !usage.cooldownModel))
+  );
 }
 
 /** Clears an auth-profile override from a session and persists it when possible. */
@@ -229,6 +308,46 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (order.length === 0) {
+    return undefined;
+  }
+
+  if (
+    (source !== "user" || !current) &&
+    order.every((profileId) => isProfileGloballyInCooldown(store, profileId))
+  ) {
+    // An automatic pin must not trap later turns on an unavailable provider.
+    if (current) {
+      const latest = await persistSessionAuthProfileOverrideState({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        state: {
+          authProfileOverride: undefined,
+          authProfileOverrideSource: undefined,
+          authProfileOverrideCompactionCount: undefined,
+        },
+        storePath,
+        expectedSnapshot: {
+          sessionId: sessionEntry.sessionId,
+          authProfileOverride: sessionEntry.authProfileOverride,
+          authProfileOverrideSource: sessionEntry.authProfileOverrideSource,
+          authProfileOverrideCompactionCount: sessionEntry.authProfileOverrideCompactionCount,
+        },
+      });
+      const latestProfileId = latest?.authProfileOverride;
+      const latestSource =
+        latest?.authProfileOverrideSource ??
+        (typeof latest?.authProfileOverrideCompactionCount === "number"
+          ? "auto"
+          : latestProfileId
+            ? "user"
+            : undefined);
+      return latestProfileId &&
+        latestSource === "user" &&
+        isProfileForProvider({ cfg, providers, profileId: latestProfileId, store })
+        ? latestProfileId
+        : undefined;
+    }
     return undefined;
   }
 

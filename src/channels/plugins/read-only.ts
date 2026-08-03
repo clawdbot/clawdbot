@@ -13,6 +13,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -27,6 +28,7 @@ import {
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
@@ -59,6 +61,7 @@ type ReadOnlyChannelPluginOptions = {
   activationSourceConfig?: OpenClawConfig;
   includePersistedAuthState?: boolean;
   includeSetupFallbackPlugins?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 type ReadOnlyChannelPluginResolution = {
@@ -103,15 +106,10 @@ function rememberReadOnlyChannelPluginResolution(
     readOnlyChannelPluginResolutionCache.delete(key);
   }
   readOnlyChannelPluginResolutionCache.set(key, cloneReadOnlyChannelPluginResolution(resolution));
-  while (
-    readOnlyChannelPluginResolutionCache.size > MAX_READ_ONLY_CHANNEL_PLUGIN_RESOLUTION_CACHE_SIZE
-  ) {
-    const oldestKey = readOnlyChannelPluginResolutionCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    readOnlyChannelPluginResolutionCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(
+    readOnlyChannelPluginResolutionCache,
+    MAX_READ_ONLY_CHANNEL_PLUGIN_RESOLUTION_CACHE_SIZE,
+  );
 }
 
 function resolveReadOnlyChannelPluginResolutionCacheKey(params: {
@@ -717,13 +715,15 @@ export function resolveReadOnlyChannelPluginsForConfig(
   if (cached) {
     return cloneReadOnlyChannelPluginResolution(cached);
   }
-  const manifestRecords = resolvePluginMetadataSnapshot({
-    config: cfg,
-    stateDir: options.stateDir,
-    workspaceDir,
-    env,
-    allowWorkspaceScopedCurrent: true,
-  }).plugins;
+  const manifestRecords =
+    options.metadataSnapshot?.plugins ??
+    resolvePluginMetadataSnapshot({
+      config: cfg,
+      stateDir: options.stateDir,
+      workspaceDir,
+      env,
+      allowWorkspaceScopedCurrent: true,
+    }).plugins;
   const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
   const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
   const activationSourceConfig = options.activationSourceConfig ?? cfg;

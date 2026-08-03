@@ -1,4 +1,4 @@
-import { stableStringify } from "../stable-stringify.js";
+import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeToolName } from "../tool-policy.js";
 import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
