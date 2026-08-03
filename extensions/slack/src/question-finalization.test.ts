@@ -2,7 +2,6 @@
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
 import {
-  createOutboundTestPlugin,
   createTestRegistry,
   resetGlobalHookRunner,
   resetPluginRuntimeStateForTest,
@@ -35,6 +34,7 @@ vi.mock("./send.js", async (importOriginal) => ({
   updateMessageSlack: hoisted.update,
 }));
 
+import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import { sendMessageSlack } from "./send.js";
 
@@ -319,7 +319,7 @@ describe("Slack question finalization", () => {
       createTestRegistry([
         {
           pluginId: "slack",
-          plugin: createOutboundTestPlugin({ id: "slack", outbound: slackOutbound }),
+          plugin: slackPlugin,
           source: "test",
         },
       ]),
@@ -390,6 +390,7 @@ describe("Slack question finalization", () => {
 
     await hoisted.registration?.finalize("Answered: One");
 
+    expect(hoisted.update).toHaveBeenCalledOnce();
     expect(hoisted.update).toHaveBeenCalledWith(
       expect.objectContaining({ channelId: "C123", messageTs: questionMessageId }),
     );
