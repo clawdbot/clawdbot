@@ -6,7 +6,7 @@ import { resolveAgentDir } from "./agent-scope-config.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { supportsModelTools } from "./model-tool-support.js";
-import { summarizeSpawnError } from "./spawn-pipeline.js";
+import { summarizeSpawnError } from "./spawn-error.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "./spawn-plan.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {

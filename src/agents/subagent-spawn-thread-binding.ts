@@ -9,7 +9,7 @@ import {
 } from "../channels/thread-bindings-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { summarizeSpawnError } from "./spawn-pipeline.js";
+import { summarizeSpawnError } from "./spawn-error.js";
 import { prepareSpawnThreadBinding } from "./spawn-plan.js";
 import { getSessionBindingService } from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";

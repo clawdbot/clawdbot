@@ -34,10 +34,6 @@ type SpawnPipelineResult<TState> =
       runId?: string;
     };
 
-export function summarizeSpawnError(error: unknown): string {
-  return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
-}
-
 type SpawnPipelineParams<TState> = {
   adapter: SpawnBackendAdapter<TState>;
   admissionReservation?: { release: () => void };

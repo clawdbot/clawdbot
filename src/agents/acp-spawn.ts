@@ -73,11 +73,8 @@ import {
 } from "./inherited-tool-deny.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
-import {
-  runSpawnPipeline,
-  type SpawnBackendAdapter,
-  summarizeSpawnError,
-} from "./spawn-pipeline.js";
+import { summarizeSpawnError } from "./spawn-error.js";
+import { runSpawnPipeline, type SpawnBackendAdapter } from "./spawn-pipeline.js";
 import {
   mintSpawnSessionKey,
   prepareSpawnThreadBinding,

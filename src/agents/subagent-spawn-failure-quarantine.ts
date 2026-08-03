@@ -1,6 +1,6 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { summarizeSpawnError } from "./spawn-pipeline.js";
+import { summarizeSpawnError } from "./spawn-error.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   hasSubagentRunIdentity,

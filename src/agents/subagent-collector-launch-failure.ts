@@ -5,7 +5,7 @@ import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../process/gateway-work-admission.js";
-import { summarizeSpawnError } from "./spawn-pipeline.js";
+import { summarizeSpawnError } from "./spawn-error.js";
 import {
   completeCollectorLaunchCleanup,
   settleFailedQueuedSubagentLaunch,

@@ -4,7 +4,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
-import { summarizeSpawnError } from "./spawn-pipeline.js";
+import { summarizeSpawnError } from "./spawn-error.js";
 import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveGatewaySessionStoreTarget } from "./subagent-spawn.runtime.js";
