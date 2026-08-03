@@ -73,6 +73,41 @@ describe("Markdown code-block clipboard feedback", () => {
     expect(button.getAttribute("aria-label")).toBe("Copy code");
   });
 
+  it("ignores an older clipboard attempt that finishes after the latest denied copy", async () => {
+    vi.useFakeTimers();
+    let resolveFirstWrite!: () => void;
+    const firstWrite = new Promise<void>((resolve) => {
+      resolveFirstWrite = resolve;
+    });
+    const writeText = vi
+      .fn()
+      .mockReturnValueOnce(firstWrite)
+      .mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: () => false,
+    });
+    const button = renderCodeCopyButton();
+
+    button.click();
+    button.click();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(button.getAttribute("aria-label")).toBe("Copy failed");
+
+    resolveFirstWrite();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(button.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy failed");
+    expect(button.getAttribute("aria-label")).toBe("Copy failed");
+    expect(button.classList.contains("copied")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(button.getAttribute("aria-label")).toBe("Copy code");
+  });
+
   it.each([
     { name: "a previous denied copy", firstSucceeds: false, firstResetAtMs: 2_000 },
     { name: "a previous successful copy", firstSucceeds: true, firstResetAtMs: 1_500 },
