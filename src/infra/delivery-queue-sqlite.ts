@@ -1,6 +1,10 @@
 // Stores durable delivery queue entries in SQLite.
+import type { Insertable } from "kysely";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  type OpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -12,6 +16,7 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 // Queue-specific wrappers own payload shape; this layer owns SQLite state.
 type QueueStatus = "pending" | "failed" | "completed";
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
+type DeliveryQueueTable = OpenClawStateKyselyDatabase["delivery_queue_entries"];
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const PERMANENT_COMPLETION_RECOVERY_STATE = "completed_permanent";
 const BOUNDED_COMPLETION_RECOVERY_STATE = "completed_bounded";
@@ -25,7 +30,7 @@ export type DeliveryQueueCompletionRetention =
     }>;
 
 /** Indexed metadata extracted from queue payloads for diagnostics and recovery. */
-type DeliveryQueueRowMetadata = {
+export type DeliveryQueueRowMetadata = {
   entryKind?: string;
   sessionKey?: string;
   channel?: string;
@@ -54,7 +59,7 @@ export type DeliveryQueueEntryState = {
   recoveryState?: string;
 };
 
-type UpsertDeliveryQueueEntryParams = {
+export type UpsertDeliveryQueueEntryParams = {
   queueName: string;
   entry: DeliveryQueueEntryState;
   metadata?: DeliveryQueueRowMetadata;
@@ -64,6 +69,14 @@ type UpsertDeliveryQueueEntryParams = {
   reviveFailedOrCorruptPending?: boolean;
   updatePendingOnly?: boolean;
   completeExisting?: boolean;
+};
+
+export type BoundDeliveryQueueEntry = {
+  row: Insertable<DeliveryQueueTable>;
+  insertOnly: boolean;
+  reviveFailedOrCorruptPending: boolean;
+  updatePendingOnly: boolean;
+  completeExisting: boolean;
 };
 
 type FailPendingDeliveryQueueEntryResult = { status: "failed" } | { status: "not_pending" };
@@ -134,34 +147,48 @@ function metadata(queueName: string, entry: DeliveryQueueEntryState): DeliveryQu
   };
 }
 
-function upsertDeliveryQueueEntryInDatabase(
+/** Canonically serializes a queue row before a transaction acquires the write lock. */
+export function bindDeliveryQueueEntry(
   params: UpsertDeliveryQueueEntryParams,
-  database: ReturnType<typeof openStateDatabase>,
-): boolean {
-  const now = Date.now();
+  now = Date.now(),
+): BoundDeliveryQueueEntry {
   const status = params.status ?? "pending";
   const meta = params.metadata ?? metadata(params.queueName, params.entry);
+  return {
+    insertOnly: params.insertOnly === true,
+    reviveFailedOrCorruptPending: params.reviveFailedOrCorruptPending === true,
+    updatePendingOnly: params.updatePendingOnly === true,
+    completeExisting: params.completeExisting === true,
+    row: {
+      queue_name: params.queueName,
+      id: params.entry.id,
+      status,
+      entry_kind: meta.entryKind ?? null,
+      session_key: meta.sessionKey ?? null,
+      channel: meta.channel ?? null,
+      target: meta.target ?? null,
+      account_id: meta.accountId ?? null,
+      retry_count: params.entry.retryCount,
+      last_attempt_at: params.entry.lastAttemptAt ?? null,
+      last_error: params.entry.lastError ?? null,
+      recovery_state: params.entry.recoveryState ?? null,
+      platform_send_started_at: params.entry.platformSendStartedAt ?? null,
+      entry_json: JSON.stringify(params.entry),
+      enqueued_at: params.entry.enqueuedAt,
+      updated_at: now,
+      failed_at: status === "failed" ? now : null,
+    },
+  };
+}
+
+/** Mutates only the exact supplied shared-state handle; never opens or hardens a file. */
+export function upsertBoundDeliveryQueueEntryInDatabase(
+  bound: BoundDeliveryQueueEntry,
+  database: OpenClawStateDatabase,
+): boolean {
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  const insert = queueDb.insertInto("delivery_queue_entries").values({
-    queue_name: params.queueName,
-    id: params.entry.id,
-    status,
-    entry_kind: meta.entryKind ?? null,
-    session_key: meta.sessionKey ?? null,
-    channel: meta.channel ?? null,
-    target: meta.target ?? null,
-    account_id: meta.accountId ?? null,
-    retry_count: params.entry.retryCount,
-    last_attempt_at: params.entry.lastAttemptAt ?? null,
-    last_error: params.entry.lastError ?? null,
-    recovery_state: params.entry.recoveryState ?? null,
-    platform_send_started_at: params.entry.platformSendStartedAt ?? null,
-    entry_json: JSON.stringify(params.entry),
-    enqueued_at: params.entry.enqueuedAt,
-    updated_at: now,
-    failed_at: status === "failed" ? now : null,
-  });
-  const query = params.insertOnly
+  const insert = queueDb.insertInto("delivery_queue_entries").values(bound.row);
+  const query = bound.insertOnly
     ? insert.onConflict((conflict) => conflict.columns(["queue_name", "id"]).doNothing())
     : insert.onConflict((conflict) => {
         const update = conflict.columns(["queue_name", "id"]).doUpdateSet({
@@ -181,11 +208,11 @@ function upsertDeliveryQueueEntryInDatabase(
           updated_at: (eb) => eb.ref("excluded.updated_at"),
           failed_at: (eb) => eb.ref("excluded.failed_at"),
         });
-        if (!params.reviveFailedOrCorruptPending) {
-          if (params.updatePendingOnly) {
+        if (!bound.reviveFailedOrCorruptPending) {
+          if (bound.updatePendingOnly) {
             return update.where("delivery_queue_entries.status", "=", "pending");
           }
-          if (params.completeExisting) {
+          if (bound.completeExisting) {
             return update.where("delivery_queue_entries.status", "in", ["pending", "failed"]);
           }
           return update;
@@ -203,6 +230,40 @@ function upsertDeliveryQueueEntryInDatabase(
         );
       });
   return executeSqliteQuerySync(database.db, query).numAffectedRows === 1n;
+}
+
+/** Reads one row from the exact supplied handle for cross-owner invariant validation. */
+export function loadDeliveryQueueEntryInDatabase(
+  database: OpenClawStateDatabase,
+  queueName: string,
+  id: string,
+): DeliveryQueueEntryState | null {
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select([
+        "id",
+        "entry_json",
+        "enqueued_at",
+        "retry_count",
+        "last_attempt_at",
+        "last_error",
+        "platform_send_started_at",
+        "recovery_state",
+      ])
+      .where("queue_name", "=", queueName)
+      .where("id", "=", id),
+  ) as QueueRow | undefined;
+  return row ? inflate(row) : null;
+}
+
+function upsertDeliveryQueueEntryInDatabase(
+  params: UpsertDeliveryQueueEntryParams,
+  database: OpenClawStateDatabase,
+): boolean {
+  return upsertBoundDeliveryQueueEntryInDatabase(bindDeliveryQueueEntry(params), database);
 }
 
 /** Insert or replace a delivery queue entry under a queue namespace. */
@@ -378,6 +439,15 @@ export function loadDeliveryQueueEntry(
       .where("status", "=", "pending"),
   ) as QueueRow | undefined;
   return row ? inflate(row) : null;
+}
+
+/** Load a queue entry regardless of pending/failed/completed status. */
+export function loadDeliveryQueueEntryAnyStatus(
+  queueName: string,
+  id: string,
+  stateDir?: string,
+): DeliveryQueueEntryState | null {
+  return loadDeliveryQueueEntryInDatabase(openStateDatabase(stateDir), queueName, id);
 }
 
 /** Read row status without hiding dead-lettered entries. */

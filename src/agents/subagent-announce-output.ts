@@ -427,12 +427,6 @@ type ChildCompletionRow = {
     resultText?: string | null;
     fallbackResultText?: string | null;
   };
-  delivery?: {
-    payload?: {
-      frozenResultText?: string | null;
-      fallbackFrozenResultText?: string | null;
-    };
-  };
 };
 
 type ChildCompletionSection = {
@@ -442,11 +436,8 @@ type ChildCompletionSection = {
 };
 
 function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
-  const primary = child.completion?.resultText ?? child.delivery?.payload?.frozenResultText;
-  const fallback =
-    child.completion?.fallbackResultText ??
-    child.delivery?.payload?.fallbackFrozenResultText ??
-    child.frozenResultText;
+  const primary = child.completion?.resultText;
+  const fallback = child.completion?.fallbackResultText ?? child.frozenResultText;
   if (child.execution.outcome?.status === "ok") {
     return selectDeliverableSessionsReply(primary, fallback);
   }
@@ -456,9 +447,7 @@ function selectChildCompletionResultText(child: ChildCompletionRow): string | un
 function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
   return [
     child.completion?.resultText,
-    child.delivery?.payload?.frozenResultText,
     child.completion?.fallbackResultText,
-    child.delivery?.payload?.fallbackFrozenResultText,
     child.frozenResultText,
   ].some((value) => Boolean(value?.trim()));
 }
@@ -574,12 +563,6 @@ export function dedupeLatestChildCompletionRows(
       resultText?: string | null;
       fallbackResultText?: string | null;
     };
-    delivery?: {
-      payload?: {
-        frozenResultText?: string | null;
-        fallbackFrozenResultText?: string | null;
-      };
-    };
   }>,
 ) {
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
@@ -605,12 +588,6 @@ export function filterCurrentDirectChildCompletionRows(
     completion?: {
       resultText?: string | null;
       fallbackResultText?: string | null;
-    };
-    delivery?: {
-      payload?: {
-        frozenResultText?: string | null;
-        fallbackFrozenResultText?: string | null;
-      };
     };
   }>,
   params: {

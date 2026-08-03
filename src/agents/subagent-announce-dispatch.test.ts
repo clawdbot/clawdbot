@@ -138,16 +138,16 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
-  it("does not fallback-steer after terminal completion direct failure", async () => {
+  it("does not fallback-steer after an ambiguous completion direct failure", async () => {
     const steer = vi.fn(async () => ({ status: "steered" }) as const);
     const direct = vi.fn(async () => ({
       delivered: false,
       path: "direct" as const,
       error: "media send may have partially succeeded",
-      terminal: true,
+      disposition: "ambiguous" as const,
     }));
 
-    // Terminal direct failures can represent partial media delivery; fallback
+    // Ambiguous direct failures can represent partial media delivery; fallback
     // steering would risk duplicate or contradictory completion messages.
     const result = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: true,

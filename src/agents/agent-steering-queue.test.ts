@@ -20,7 +20,6 @@ function payload(runId: string, overrides: Partial<PendingFinalDeliveryPayload> 
     endedAt: 2_000,
     outcome: { status: "ok" },
     expectsCompletionMessage: true,
-    frozenResultText: `result for ${runId}`,
     ...overrides,
   } satisfies PendingFinalDeliveryPayload;
 }
@@ -242,9 +241,10 @@ describe("agent steering queue", () => {
         delivery: {
           status: "suspended",
           suspendedAt: 2_500,
-          suspendedReason: "retry-limit",
-          payload: payload("run-1", { frozenResultText: "kept result" }),
+          suspendedReason: "expiry",
+          payload: payload("run-1"),
         },
+        completion: { required: true, resultText: "kept result" },
       }),
     ]);
 
@@ -288,10 +288,12 @@ describe("agent steering queue", () => {
         runId: "run-1",
         delivery: {
           status: "suspended",
-          payload: payload("run-1", {
-            frozenResultText: "NO_REPLY",
-            fallbackFrozenResultText: "findings captured before the wake",
-          }),
+          payload: payload("run-1"),
+        },
+        completion: {
+          required: true,
+          resultText: "NO_REPLY",
+          fallbackResultText: "findings captured before the wake",
         },
       }),
     ]);
@@ -317,9 +319,9 @@ describe("agent steering queue", () => {
             status: "pending",
             payload: payload(`run-${index + 1}`, {
               task: `task ${index + 1}`,
-              frozenResultText: "x".repeat(6_000),
             }),
           },
+          completion: { required: true, resultText: "x".repeat(6_000) },
         }),
       ),
     );
@@ -402,7 +404,6 @@ describe("agent steering queue", () => {
         payload: payload("emoji-run", {
           label: emojiLabel,
           task: emojiLabel,
-          frozenResultText: "done",
         }),
       },
     });

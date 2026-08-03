@@ -7,7 +7,12 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const deliverSpy = vi.fn(
   async (
     _params: Record<string, unknown>,
-  ): Promise<{ delivered: boolean; path: string; terminal?: boolean; reason?: string }> => ({
+  ): Promise<{
+    delivered: boolean;
+    path: string;
+    disposition?: "ambiguous" | "permanent_failure" | "intentional_non_delivery";
+    reason?: string;
+  }> => ({
     delivered: true,
     path: "direct",
   }),
@@ -627,12 +632,16 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     }
   });
 
-  it("does not retry a terminal delivery failure", async () => {
+  it("does not retry an ambiguous delivery failure", async () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({ runId: "run-a" }),
       makeSettledChild({ runId: "run-b" }),
     ]);
-    deliverSpy.mockResolvedValueOnce({ delivered: false, path: "direct", terminal: true });
+    deliverSpy.mockResolvedValueOnce({
+      delivered: false,
+      path: "direct",
+      disposition: "ambiguous",
+    });
 
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
 

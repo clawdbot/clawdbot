@@ -24,7 +24,9 @@ import {
   mergeTaskLists,
   normalizeTaskEventPayload,
   normalizeTasksCancelResult,
+  normalizeTasksGetResult,
   normalizeTasksListResult,
+  normalizeTasksRecoveryResult,
 } from "../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
@@ -273,6 +275,71 @@ class TasksPage extends OpenClawLightDomElement {
     }
   }
 
+  private async recoverTask(taskId: string, action: "retry" | "dismiss") {
+    const client = this.client;
+    const gateway = this.gatewaySource;
+    if (
+      !gateway ||
+      this.context.gateway !== gateway ||
+      !this.connected ||
+      !client ||
+      this.cancellingTaskIds.has(taskId)
+    ) {
+      return;
+    }
+    const epoch = this.operationEpoch;
+    this.cancellingTaskIds = new Set([...this.cancellingTaskIds, taskId]);
+    this.error = null;
+    try {
+      const payload =
+        action === "retry"
+          ? await client.request("tasks.retry", { taskIds: [taskId] })
+          : await client.request("tasks.dismiss", { taskIds: [taskId] });
+      if (!this.isCancelScopeCurrent(gateway, client, epoch)) {
+        return;
+      }
+      const result = normalizeTasksRecoveryResult(payload)?.results[0];
+      if (!result?.ok) {
+        this.error = result?.reason?.trim() || t("tasksPage.recoveryFailed");
+        return;
+      }
+      if (result.task) {
+        this.tasks = applyTaskEvent(this.tasks, {
+          action: "upserted",
+          task: result.task,
+        }).tasks;
+      }
+    } catch (error) {
+      if (this.isCancelScopeCurrent(gateway, client, epoch)) {
+        this.error = formatTaskError(error, t("tasksPage.recoveryFailed"));
+      }
+    } finally {
+      if (this.isCancelScopeCurrent(gateway, client, epoch)) {
+        const next = new Set(this.cancellingTaskIds);
+        next.delete(taskId);
+        this.cancellingTaskIds = next;
+      }
+    }
+  }
+
+  private async copyTaskResult(taskId: string) {
+    const client = this.client;
+    if (!client || !this.connected) {
+      return;
+    }
+    try {
+      const detail = normalizeTasksGetResult(await client.request("tasks.get", { taskId }));
+      const result = detail?.result ?? detail?.progressSummary;
+      if (!result) {
+        this.error = t("tasksPage.recoveryFailed");
+        return;
+      }
+      await navigator.clipboard.writeText(result);
+    } catch (error) {
+      this.error = formatTaskError(error, t("tasksPage.recoveryFailed"));
+    }
+  }
+
   override render() {
     const fallbackAgentId = resolveSessionNavigationAgentId(this.context);
     return html`
@@ -313,6 +380,9 @@ class TasksPage extends OpenClawLightDomElement {
         cancellingTaskIds: this.cancellingTaskIds,
         sessionRow: (sessionKey) => findUiSessionRow(this.context, sessionKey),
         onCancel: (taskId) => void this.cancelTask(taskId),
+        onRetry: (taskId) => void this.recoverTask(taskId, "retry"),
+        onDismiss: (taskId) => void this.recoverTask(taskId, "dismiss"),
+        onCopyResult: (taskId) => void this.copyTaskResult(taskId),
         onNavigateToChat: (sessionKey) => {
           const face = resolveSessionPreferredFaceForKey(this.context, sessionKey);
           this.context.navigate(

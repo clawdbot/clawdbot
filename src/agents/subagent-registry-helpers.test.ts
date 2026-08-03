@@ -258,7 +258,7 @@ describe("logAnnounceGiveUp", () => {
     vi.useRealTimers();
   });
 
-  it("includes the last delivery error in retry-limit warnings", () => {
+  it("includes the last delivery error in expiry warnings", () => {
     vi.useFakeTimers();
     vi.setSystemTime(9_000);
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -271,10 +271,10 @@ describe("logAnnounceGiveUp", () => {
       },
     });
 
-    logAnnounceGiveUp(entry, "retry-limit");
+    logAnnounceGiveUp(entry, "expiry");
 
     expect(logSpy).toHaveBeenCalledWith(
-      '[warn] Subagent announce give up (retry-limit) run=run-1 child=agent:main:subagent:child requester=agent:main:main retries=3 endedAgo=5s deliveryError="direct-primary: routed-dispatch-did-not-queue-final"',
+      '[warn] Subagent announce give up (expiry) run=run-1 child=agent:main:subagent:child requester=agent:main:main retries=3 endedAgo=5s deliveryError="direct-primary: routed-dispatch-did-not-queue-final"',
     );
     logSpy.mockRestore();
   });

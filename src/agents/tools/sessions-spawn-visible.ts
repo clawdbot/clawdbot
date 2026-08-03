@@ -20,7 +20,11 @@ import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
 import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
-import { countActiveRunsForSession, registerSubagentRun } from "../subagent-registry.js";
+import {
+  countActiveRunsForSession,
+  getSubagentDeliveryBacklogPressure,
+  registerSubagentRun,
+} from "../subagent-registry.js";
 import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagent-spawn-plan.js";
 import { resolveSubagentTargetPolicy } from "../subagent-target-policy.js";
@@ -161,6 +165,13 @@ export async function maybeSpawnVisibleSession(params: {
   }
 
   const cfg = params.options?.config ?? getRuntimeConfig();
+  const deliveryPressure = getSubagentDeliveryBacklogPressure();
+  if (deliveryPressure.blocked) {
+    return {
+      status: "forbidden",
+      error: `sessions_spawn is paused because ${deliveryPressure.suspended} completed tasks have blocked delivery. Run openclaw tasks list, then retry or dismiss blocked deliveries.`,
+    };
+  }
   const ownership = resolveSubagentSpawnOwnership({
     cfg,
     agentSessionKey: params.options?.agentSessionKey,

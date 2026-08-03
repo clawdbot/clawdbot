@@ -481,6 +481,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.proposals.evaluate", "skills", "operator.admin", "2026.7", { controlPlaneWrite: true }],
   // Additive hook status RPC appends so older advertised method indices stay stable.
   ["hooks.status", "hooks-status", "operator.read", "2026.7"],
+  // Additive task recovery RPCs append so older advertised method indices stay stable.
+  ["tasks.retry", "tasks", "operator.write", "2026.7"],
+  ["tasks.dismiss", "tasks", "operator.write", "2026.7"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

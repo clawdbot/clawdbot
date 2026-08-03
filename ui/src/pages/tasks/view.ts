@@ -31,6 +31,9 @@ type TasksProps = {
   cancellingTaskIds: ReadonlySet<string>;
   sessionRow: (sessionKey: string) => GatewaySessionRow | undefined;
   onCancel: (taskId: string) => void;
+  onRetry: (taskId: string) => void;
+  onDismiss: (taskId: string) => void;
+  onCopyResult: (taskId: string) => void;
   onNavigateToChat: (sessionKey: string) => void;
 };
 
@@ -76,6 +79,7 @@ function renderTask(task: TaskSummary, props: TasksProps) {
   const detail = taskDetail(task);
   const title = taskTitle(task);
   const cancelling = props.cancellingTaskIds.has(task.id);
+  const blocked = task.deliveryStatus === "failed" && task.terminalOutcome === "blocked";
   return html`
     <div class="list-item" data-task-id=${task.id}>
       <div class="list-main">
@@ -90,6 +94,14 @@ function renderTask(task: TaskSummary, props: TasksProps) {
             : nothing}
         </div>
         ${detail ? html`<div class="list-sub">${detail}</div>` : nothing}
+        ${blocked
+          ? html`<div class="callout warn">
+              ${t("tasksPage.deliveryBlocked")}
+              ${task.duplicateRisk
+                ? html`<div class="muted">${t("tasksPage.duplicateRisk")}</div>`
+                : nothing}
+            </div>`
+          : nothing}
       </div>
       <div class="list-meta">
         ${timestamp > 0
@@ -106,6 +118,34 @@ function renderTask(task: TaskSummary, props: TasksProps) {
             >
               ${cancelling ? t("tasksPage.cancelling") : t("common.cancel")}
             </button>`
+          : nothing}
+        ${blocked && props.canCancel
+          ? html`
+              <button
+                class="btn"
+                type="button"
+                ?disabled=${cancelling || !props.connected}
+                @click=${() => props.onCopyResult(task.taskId)}
+              >
+                ${t("tasksPage.copyResult")}
+              </button>
+              <button
+                class="btn"
+                type="button"
+                ?disabled=${cancelling || !props.connected || !task.canRetryDelivery}
+                @click=${() => props.onRetry(task.taskId)}
+              >
+                ${t("tasksPage.retryDelivery")}
+              </button>
+              <button
+                class="btn"
+                type="button"
+                ?disabled=${cancelling || !props.connected || !task.canDismissDelivery}
+                @click=${() => props.onDismiss(task.taskId)}
+              >
+                ${t("tasksPage.dismissDelivery")}
+              </button>
+            `
           : nothing}
       </div>
     </div>

@@ -74,6 +74,8 @@ export function createSubagentRegistryLifecycleDelivery(
       deliveryState.deliveredAt = deliveredAt;
       deliveryState.lastDropReason = undefined;
     }
+    deliveryState.disposition =
+      delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
   };
 
   const hasPriorRequesterDeliveryMirror = async (entry: SubagentRunRecord): Promise<boolean> => {
@@ -376,13 +378,6 @@ export function createSubagentRegistryLifecycleDelivery(
       }
       completion.resultText = nextFrozen;
       completion.capturedAt = capturedAt;
-      const delivery = entry.delivery;
-      if (delivery?.payload) {
-        delivery.payload = {
-          ...delivery.payload,
-          frozenResultText: nextFrozen,
-        };
-      }
       changed = true;
     }
     if (changed) {
@@ -439,9 +434,6 @@ export function createSubagentRegistryLifecycleDelivery(
       expectsCompletionMessage:
         entry.delivery?.payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
       spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
-      frozenResultText: entry.delivery?.payload?.frozenResultText ?? entry.completion?.resultText,
-      fallbackFrozenResultText:
-        entry.delivery?.payload?.fallbackFrozenResultText ?? entry.completion?.fallbackResultText,
       wakeOnDescendantSettle:
         entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
       terminalReply: entry.delivery?.payload?.terminalReply ?? entry.completion?.terminalReply,
@@ -475,8 +467,6 @@ export function createSubagentRegistryLifecycleDelivery(
       startedAt: entry.execution.startedAt,
       endedAt: entry.execution.endedAt,
       outcome: entry.execution.outcome,
-      frozenResultText: entry.completion?.resultText,
-      fallbackFrozenResultText: entry.completion?.fallbackResultText,
       terminalReply: entry.completion?.terminalReply,
     };
     return true;

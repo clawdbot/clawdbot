@@ -222,7 +222,12 @@ function startPendingSessionDeliveryRuntime(params: {
             ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
           }),
         log: logRecovery,
-        onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
+        onSettled: async (entry, outcome) => {
+          const { settleCorrelatedSubagentDelivery } =
+            await import("../agents/subagent-completion-delivery.js");
+          await settleCorrelatedSubagentDelivery(entry, outcome);
+          removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
+        },
       });
       try {
         await recoverPendingRestartContinuationDeliveries({

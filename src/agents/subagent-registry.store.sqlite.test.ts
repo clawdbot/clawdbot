@@ -277,7 +277,7 @@ describe("subagent registry sqlite store", () => {
         delivery: {
           status: "suspended",
           suspendedAt: 275,
-          suspendedReason: "retry-limit",
+          suspendedReason: "expiry",
         },
         task: "x".repeat(8_192),
       });

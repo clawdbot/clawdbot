@@ -12,6 +12,7 @@ import {
 type TaskLedgerStatus = TaskSummary["status"];
 
 const TASK_PROMPT_MAX_CHARS = 4_000;
+const TASK_RESULT_MAX_CHARS = 4_000;
 
 const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
   queued: "queued",
@@ -51,6 +52,14 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
   const prompt = opts?.includePrompt
     ? sanitizeTaskPromptText(task.task, TASK_PROMPT_MAX_CHARS) || undefined
     : undefined;
+  const result = opts?.includePrompt
+    ? sanitizeTaskStatusText(task.progressSummary, { maxChars: TASK_RESULT_MAX_CHARS }) || undefined
+    : undefined;
+  const recoverableDelivery =
+    task.runtime === "subagent" &&
+    task.status === "succeeded" &&
+    task.deliveryStatus === "failed" &&
+    task.terminalOutcome === "blocked";
   const toolUseCount =
     typeof task.toolUseCount === "number" && Number.isInteger(task.toolUseCount)
       ? Math.max(0, task.toolUseCount)
@@ -79,6 +88,12 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
+    deliveryStatus: task.deliveryStatus,
+    ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
+    ...(recoverableDelivery
+      ? { canRetryDelivery: true, canDismissDelivery: true, duplicateRisk: true }
+      : {}),
+    ...(result ? { result } : {}),
     ...(prompt ? { prompt } : {}),
   };
 }

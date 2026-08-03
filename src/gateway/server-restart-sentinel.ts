@@ -1,6 +1,10 @@
 // Gateway restart sentinel recovery.
 // Resumes pending restart continuations and outbound delivery after process restart.
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import {
+  resolveCorrelatedSubagentDelivery,
+  settleCorrelatedSubagentDelivery,
+} from "../agents/subagent-completion-delivery.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
@@ -183,6 +187,7 @@ export async function deliverQueuedSessionDelivery(params: {
   entry: QueuedSessionDelivery;
   stateDir?: string;
 }) {
+  params = { ...params, entry: resolveCorrelatedSubagentDelivery(params.entry) };
   const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
@@ -392,7 +397,10 @@ async function drainRestartContinuationQueue(params: {
           entry,
           ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
         }),
-      onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
+      onSettled: async (entry, outcome) => {
+        await settleCorrelatedSubagentDelivery(entry, outcome);
+        removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
+      },
       selectEntry: (entry) => ({
         match: entry.id === params.entryId,
         bypassBackoff: true,
@@ -427,7 +435,10 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
       }),
     log: params.log ?? log,
     maxEnqueuedAt: params.maxEnqueuedAt,
-    onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
+    onSettled: async (entry, outcome) => {
+      await settleCorrelatedSubagentDelivery(entry, outcome);
+      removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
+    },
   });
 }
 

@@ -17,6 +17,8 @@ import {
   discardSuspendedPendingFinalDelivery,
   isSuspendedPendingFinalDelivery,
   resolveSuspendedDeliveryExpiryMs,
+  SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
+  SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT,
 } from "./subagent-registry-suspended-delivery.js";
 export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import {
@@ -39,8 +41,6 @@ import {
 
 const SESSION_RUN_TTL_MS = 5 * 60_000;
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
-const SUSPENDED_DELIVERY_HARD_CAP = 50;
-const SUSPENDED_DELIVERY_PRESSURE_TARGET = 10;
 const restartRecoveryLoader = createLazyImportLoader(
   () => import("./subagent-registry-restart-recovery.js"),
 );
@@ -278,23 +278,12 @@ export function createSubagentRegistrySweeper(params: {
       const suspendedEntries = runEntries.filter(([, entry]) =>
         isSuspendedPendingFinalDelivery(entry),
       );
-      const pressureDiscardRunIds = new Set<string>();
-      if (suspendedEntries.length > SUSPENDED_DELIVERY_HARD_CAP) {
-        const pressureCount = Math.max(
-          0,
-          suspendedEntries.length - SUSPENDED_DELIVERY_PRESSURE_TARGET,
-        );
-        for (const [runId] of suspendedEntries
-          .toSorted((a, b) => (a[1].delivery?.suspendedAt ?? 0) - (b[1].delivery?.suspendedAt ?? 0))
-          .slice(0, pressureCount)) {
-          pressureDiscardRunIds.add(runId);
-        }
+      if (suspendedEntries.length >= SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT) {
         params.warn("subagent suspended delivery backlog exceeded pressure cap", {
           suspendedCount: suspendedEntries.length,
-          softCap: 25,
-          hardCap: SUSPENDED_DELIVERY_HARD_CAP,
-          pressureTarget: SUSPENDED_DELIVERY_PRESSURE_TARGET,
-          pressureDiscardCount: pressureDiscardRunIds.size,
+          softCap: SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT,
+          hardCap: SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
+          admissionBlocked: suspendedEntries.length >= SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
         });
       }
       for (const [runId, entry] of runEntries) {
@@ -311,13 +300,13 @@ export function createSubagentRegistrySweeper(params: {
         }
         if (isSuspendedPendingFinalDelivery(entry)) {
           const expired =
-            now - (entry.delivery?.suspendedAt ?? now) >= resolveSuspendedDeliveryExpiryMs(entry);
-          if (expired || pressureDiscardRunIds.has(runId)) {
+            now - (entry.delivery?.suspendedAt ?? now) >= resolveSuspendedDeliveryExpiryMs();
+          if (expired) {
             await discardSuspendedPendingFinalDelivery({
               runId,
               entry,
               now,
-              reason: expired ? "expired" : "pressure-pruned",
+              reason: "expired",
               resumedRuns,
               clearPendingLifecycleError: params.clearPendingLifecycleError,
               clearPendingLifecycleTimeout: params.clearPendingLifecycleTimeout,

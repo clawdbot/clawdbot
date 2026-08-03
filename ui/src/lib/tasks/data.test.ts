@@ -6,6 +6,7 @@ import {
   normalizeTasksCancelResult,
   normalizeTasksGetResult,
   normalizeTasksListResult,
+  normalizeTasksRecoveryResult,
   partitionTasks,
   sortTasks,
 } from "./data.ts";
@@ -270,6 +271,44 @@ describe("tasks page data", () => {
     });
     expect(normalizeTasksCancelResult({ found: true })).toBeNull();
     expect(normalizeTasksCancelResult("nope")).toBeNull();
+  });
+
+  it("normalizes bounded completion-delivery recovery results", () => {
+    expect(
+      normalizeTasksRecoveryResult({
+        results: [
+          {
+            taskId: "task-1",
+            ok: true,
+            duplicateRisk: true,
+            task: {
+              id: "task-1",
+              taskId: "task-1",
+              status: "completed",
+              deliveryStatus: "session_queued",
+              terminalOutcome: "succeeded",
+            },
+          },
+        ],
+      }),
+    ).toEqual({
+      results: [
+        {
+          taskId: "task-1",
+          ok: true,
+          duplicateRisk: true,
+          task: {
+            id: "task-1",
+            taskId: "task-1",
+            status: "completed",
+            deliveryStatus: "session_queued",
+            terminalOutcome: "succeeded",
+          },
+        },
+      ],
+    });
+    expect(normalizeTasksRecoveryResult({ results: [] })).toEqual({ results: [] });
+    expect(normalizeTasksRecoveryResult({ results: [{ taskId: "task-1" }] })).toBeNull();
   });
 
   it("uses the protocol schema while preserving the required UI task id", () => {
