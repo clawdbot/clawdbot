@@ -2752,6 +2752,63 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     } as OpenClawConfig;
   }
 
+  it("requires canonical command authorization before rotating durable session state", async () => {
+    const sessionKey = "agent:main:whatsapp:group:owner-only-reset";
+    const storePath = await createStorePath("openclaw-group-reset-owner-only-");
+    const existingSessionId = "existing-owner-session";
+    await seedSessionStore({ storePath, sessionKey, sessionId: existingSessionId });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "whatsapp", label: "WhatsApp" }),
+            commands: { enforceOwnerForCommands: true },
+          },
+        },
+      ]),
+    );
+
+    try {
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        commands: { ownerAllowFrom: ["owner"] },
+      } as OpenClawConfig;
+      const baseContext = {
+        Body: "/new /model openai/gpt-5",
+        RawBody: "/new /model openai/gpt-5",
+        CommandBody: "/new /model openai/gpt-5",
+        From: "120363406150318674@g.us",
+        To: "bot",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+      };
+
+      const denied = await initSessionState({
+        ctx: { ...baseContext, SenderId: "non-owner" },
+        cfg,
+        // Ingress admission alone must not bypass the channel's owner-only command policy.
+        commandAuthorized: true,
+      });
+      expect(denied.resetTriggered).toBe(false);
+      expect(denied.sessionId).toBe(existingSessionId);
+
+      const owner = await initSessionState({
+        ctx: { ...baseContext, SenderId: "owner" },
+        cfg,
+        commandAuthorized: true,
+      });
+      expect(owner.resetTriggered).toBe(true);
+      expect(owner.isNewSession).toBe(true);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
   it("applies WhatsApp group reset authorization across sender variants", async () => {
     const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
     const existingSessionId = "existing-session-123";

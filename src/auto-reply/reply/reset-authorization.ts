@@ -10,7 +10,7 @@ export function isResetAuthorizedForContext(params: {
   commandAuthorized: boolean;
 }): boolean {
   const auth = resolveCommandAuthorization(params);
-  if (!params.commandAuthorized && !auth.isAuthorizedSender) {
+  if (!auth.isAuthorizedSender) {
     return false;
   }
   const provider = params.ctx.Provider;
