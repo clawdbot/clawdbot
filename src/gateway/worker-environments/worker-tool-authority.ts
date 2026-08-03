@@ -1,3 +1,4 @@
+import { resolveExecElevatedMode } from "../../agents/bash-tools.exec-support.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -95,6 +96,7 @@ export function resolveWorkerToolAuthority(params: {
     sessionKey: sandboxSessionKey,
     execOverrides: turn.execOverrides,
     sandboxAvailable: sandbox.sandboxed,
+    elevatedRequested: resolveExecElevatedMode({ defaults: turn.bashElevated }) !== "off",
   });
   // Node exec combines Gateway policy with node-owned approval state. A cloud worker
   // cannot honor that route, so only Gateway/sandbox-local unconditional exec transfers.

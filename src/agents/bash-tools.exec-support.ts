@@ -5,7 +5,11 @@ import { resolveAgentConfig } from "./agent-scope-config.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
 import { type ExecProcessOutcome, resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type {
+  ExecElevatedDefaults,
+  ExecToolDefaults,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
 
@@ -54,27 +58,28 @@ export function resolveExecReviewerDefaults(params: {
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
 }
 
+export function resolveExecElevatedMode(params: {
+  defaults?: ExecElevatedDefaults;
+  requested?: boolean;
+}): "full" | "ask" | "off" {
+  const defaultMode =
+    params.defaults?.defaultLevel === "full"
+      ? "full"
+      : params.defaults?.defaultLevel === "ask" || params.defaults?.defaultLevel === "on"
+        ? "ask"
+        : "off";
+  if (typeof params.requested === "boolean") {
+    return params.requested ? (defaultMode === "full" ? "full" : "ask") : "off";
+  }
+  return params.defaults?.enabled && params.defaults.allowed ? defaultMode : "off";
+}
+
 export function createExecHostResolver(defaults?: ExecToolDefaults) {
   return (params: ExecToolArgs): ExecHost => {
-    const elevatedDefaults = defaults?.elevated;
-    const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
-    const elevatedDefaultMode =
-      elevatedDefaults?.defaultLevel === "full"
-        ? "full"
-        : elevatedDefaults?.defaultLevel === "ask"
-          ? "ask"
-          : elevatedDefaults?.defaultLevel === "on"
-            ? "ask"
-            : "off";
-    const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
-    const elevatedMode =
-      typeof params.elevated === "boolean"
-        ? params.elevated
-          ? elevatedDefaultMode === "full"
-            ? "full"
-            : "ask"
-          : "off"
-        : effectiveDefaultMode;
+    const elevatedMode = resolveExecElevatedMode({
+      defaults: defaults?.elevated,
+      requested: params.elevated,
+    });
     const requestedTarget = requireValidExecTarget(params.host);
     return resolveExecTarget({
       configuredTarget: defaults?.host,

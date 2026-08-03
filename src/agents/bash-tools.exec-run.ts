@@ -47,6 +47,7 @@ import {
 import {
   buildExecForegroundResult,
   createExecHostResolver,
+  resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
 import {
@@ -197,24 +198,10 @@ export function createExecTool(
             )
         : null;
       const elevatedDefaults = defaults?.elevated;
-      const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
-      const elevatedDefaultMode =
-        elevatedDefaults?.defaultLevel === "full"
-          ? "full"
-          : elevatedDefaults?.defaultLevel === "ask"
-            ? "ask"
-            : elevatedDefaults?.defaultLevel === "on"
-              ? "ask"
-              : "off";
-      const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
-      const elevatedMode =
-        typeof params.elevated === "boolean"
-          ? params.elevated
-            ? elevatedDefaultMode === "full"
-              ? "full"
-              : "ask"
-            : "off"
-          : effectiveDefaultMode;
+      const elevatedMode = resolveExecElevatedMode({
+        defaults: elevatedDefaults,
+        requested: params.elevated,
+      });
       const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {

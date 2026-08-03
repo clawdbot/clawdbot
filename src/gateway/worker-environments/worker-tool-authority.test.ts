@@ -112,6 +112,61 @@ describe("resolveWorkerToolAuthority", () => {
     ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
   });
 
+  it.each(["on", "ask", "full"] as const)(
+    "applies the host approval floor for sandboxed default elevation: %s",
+    (defaultLevel) => {
+      vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
+        version: 1,
+        defaults: { security: "allowlist", ask: "on-miss" },
+        agents: {},
+      });
+
+      expect(
+        authority({
+          sessionKey: "agent:main:worker-sandboxed-elevated",
+          config: {
+            agents: { defaults: { sandbox: { mode: "all" } } },
+            tools: { exec: { host: "auto", mode: "full" } },
+          },
+          bashElevated: { enabled: true, allowed: true, defaultLevel },
+        }),
+      ).toEqual(["read", "write", "edit", "apply_patch"]);
+    },
+  );
+
+  it.each(["on", "ask", "full"] as const)(
+    "keeps unconditional shell authority after default elevation routes to the Gateway: %s",
+    (defaultLevel) => {
+      expect(
+        authority({
+          sessionKey: "agent:main:worker-sandboxed-elevated",
+          config: {
+            agents: { defaults: { sandbox: { mode: "all" } } },
+            tools: { exec: { host: "auto", mode: "full" } },
+          },
+          bashElevated: { enabled: true, allowed: true, defaultLevel },
+        }),
+      ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
+    },
+  );
+
+  it.each([
+    ["off", { enabled: true, allowed: true, defaultLevel: "off" as const }],
+    ["disallowed", { enabled: true, allowed: false, defaultLevel: "on" as const }],
+  ])("does not route sandbox-local exec through Gateway elevation when %s", (_label, elevated) => {
+    expect(
+      authority({
+        sessionKey: "agent:main:worker-sandboxed-not-elevated",
+        config: {
+          agents: { defaults: { sandbox: { mode: "all" } } },
+          tools: { exec: { host: "sandbox", mode: "full" } },
+        },
+        bashElevated: elevated,
+      }),
+    ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
+    expect(execApprovals.loadExecApprovals).not.toHaveBeenCalled();
+  });
+
   it("uses scheduled owner group policy without reapplying fresh sender overlays", () => {
     const config = {
       tools: {
