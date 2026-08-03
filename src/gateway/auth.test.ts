@@ -517,8 +517,14 @@ describe("gateway auth", () => {
     });
 
     expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter" });
-    expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
-    expect(limiter.reset).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+    expect(limiter.check).toHaveBeenCalledWith(
+      "identity:forwarded-loopback:127.0.0.1",
+      "shared-secret",
+    );
+    expect(limiter.reset).toHaveBeenCalledWith(
+      "identity:forwarded-loopback:127.0.0.1",
+      "shared-secret",
+    );
   });
 
   it("rejects a cross-origin page before verifying Tailscale avatar identity", async () => {

@@ -152,10 +152,11 @@ export function resolveAuthRateLimitClientIp(params: {
   hasProxyHeaders: boolean;
   isLocalClient: boolean;
 }): string | undefined {
-  if (params.hasProxyHeaders && !params.isLocalClient && isLoopbackAddress(params.clientIp)) {
-    return buildRateLimitIdentityKey("forwarded-loopback", params.clientIp);
+  const clientIp = params.clientIp;
+  if (params.hasProxyHeaders && !params.isLocalClient && isLoopbackAddress(clientIp)) {
+    return buildRateLimitIdentityKey("forwarded-loopback", clientIp);
   }
-  return params.clientIp;
+  return clientIp;
 }
 
 function resolvePruneIntervalMs(value: number | undefined): number {
