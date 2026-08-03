@@ -19,9 +19,9 @@ vi.mock("../agents/subagent-registry.js", () => ({
   getLatestSubagentRunByChildSessionKey,
   hasSubagentRunIdentity,
 }));
-vi.mock("../infra/agent-events.js", () => ({
+vi.mock("../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/agent-run-registry.js")>()),
   getAgentRunContext,
-  onAgentEvent: vi.fn(),
 }));
 vi.mock("./session-utils-store.js", () => ({
   loadSessionEntryReadOnly,
