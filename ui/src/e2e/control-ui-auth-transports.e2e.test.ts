@@ -450,6 +450,22 @@ async function closeContext(context: BrowserContext): Promise<void> {
   await context.close();
 }
 
+async function captureChromiumScreenshot(page: Page, fileName: string): Promise<void> {
+  const session = await page.context().newCDPSession(page);
+  try {
+    // The live dashboard keeps rendering while RPCs settle. Capture the current
+    // Chromium surface directly so proof does not wait on unrelated UI activity.
+    const result = await session.send("Page.captureScreenshot", {
+      captureBeyondViewport: false,
+      format: "png",
+      fromSurface: true,
+    });
+    await writeFile(path.join(artifactDir, fileName), Buffer.from(result.data, "base64"));
+  } finally {
+    await session.detach();
+  }
+}
+
 async function waitForConnectionEvidence(
   predicate: (entry: ProxyConnectionEvidence) => boolean,
 ): Promise<ProxyConnectionEvidence> {
@@ -559,6 +575,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     });
     expect(trustedEvidence.identityInjected).toBe(true);
     expect(trustedEvidence.requiredHeaderInjected).toBe(true);
+    await captureChromiumScreenshot(connected.page, "01-trusted-proxy-connected.png");
     expect(connectedErrors).toEqual([]);
     await closeContext(connected.context);
 
@@ -574,6 +591,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     expect(untrustedEvidence.gatewayResult?.errorReason).toBe(expectedReason);
     expect(untrustedEvidence.identityInjected).toBe(false);
     expect(untrustedEvidence.requiredHeaderInjected).toBe(false);
+    await captureChromiumScreenshot(rejected.page, "02-untrusted-proxy-rejected.png");
     expect(rejectedErrors).toEqual([]);
 
     await writeFile(
@@ -606,6 +624,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
         entry.browserOrigin === allowedOrigin &&
         entry.gatewayResult?.ok === true,
     );
+    await captureChromiumScreenshot(allowed.page, "03-allowed-origin-connected.png");
     expect(allowedErrors).toEqual([]);
     await closeContext(allowed.context);
 
@@ -621,6 +640,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
         (entry.gatewayResult?.errorCode === ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED ||
           entry.upstreamHandshakeStatus === 403),
     );
+    await captureChromiumScreenshot(rejected.page, "04-rejected-origin-recovery.png");
     expect(rejectedErrors).toEqual([]);
 
     await writeFile(
