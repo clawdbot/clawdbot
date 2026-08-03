@@ -94,6 +94,15 @@ describe("resolveWorkerToolAuthority", () => {
     expect(authority(overrides)).toEqual(["read", "write", "edit", "apply_patch"]);
   });
 
+  it("gates worker shell tools when the configured sandbox host is unavailable", () => {
+    expect(authority({ config: { tools: { exec: { host: "sandbox", mode: "full" } } } })).toEqual([
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+    ]);
+  });
+
   it("uses the source sandbox state when resolving worker exec authority", () => {
     expect(
       authority({

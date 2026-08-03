@@ -277,6 +277,7 @@ export function createExecTool(
         effectiveHost: host,
         security,
         ask: modePolicy.ask,
+        sandboxAvailable: Boolean(defaults?.sandbox),
         configuredMode: defaults?.mode,
         explicitSecurity,
       });

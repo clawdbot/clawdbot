@@ -147,6 +147,15 @@ describe("resolveExecDefaults", () => {
     ).toEqual(disposition);
   });
 
+  it("classifies an explicit sandbox without a runtime as unavailable", () => {
+    expect(
+      resolveExecDefaults({
+        cfg: withDefaultAgent({ tools: { exec: { host: "sandbox", mode: "full" } } }),
+        sandboxAvailable: false,
+      }).executionDisposition,
+    ).toEqual({ kind: "unavailable" });
+  });
+
   it("ignores host approval defaults when auto resolves to sandbox", () => {
     vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
       version: 1,

@@ -124,6 +124,7 @@ function resolveExplicitExecPolicy(params: {
 
 export type ExecExecutionDisposition =
   | { kind: "denied" }
+  | { kind: "unavailable" }
   | { kind: "sandbox-local" }
   | { kind: "host-unconditional"; host: Exclude<ExecHost, "sandbox"> }
   | { kind: "host-authority-required"; host: Exclude<ExecHost, "sandbox"> };
@@ -133,10 +134,14 @@ export function resolveExecExecutionDisposition(params: {
   effectiveHost: ExecHost;
   security: ExecSecurity;
   ask: ExecAsk;
+  sandboxAvailable: boolean;
   configuredMode?: ExecMode;
   explicitSecurity?: ExecSecurity;
 }): ExecExecutionDisposition {
   if (params.effectiveHost === "sandbox") {
+    if (!params.sandboxAvailable) {
+      return { kind: "unavailable" };
+    }
     return params.configuredMode === "deny" || params.explicitSecurity === "deny"
       ? { kind: "denied" }
       : { kind: "sandbox-local" };
@@ -267,6 +272,7 @@ export function resolveExecDefaults(params: {
       effectiveHost: resolved.effectiveHost,
       security,
       ask,
+      sandboxAvailable,
       configuredMode: explicitPolicy.mode,
       explicitSecurity: explicitPolicy.security,
     }),
