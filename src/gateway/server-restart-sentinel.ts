@@ -38,6 +38,7 @@ import {
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
+  type SettleSessionDeliveryFn,
   type SessionDeliveryRecoveryLogger,
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
@@ -70,6 +71,12 @@ const CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS = 900;
 const RESTART_CONTINUATION_BUSY_RETRY_ERROR =
   "restart continuation deferred because previous run is still shutting down";
 let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
+
+/** Settles every queue entry through its durable producer before cron cleanup. */
+export const settleQueuedSessionDelivery: SettleSessionDeliveryFn = async (entry, outcome) => {
+  await settleCorrelatedSubagentDelivery(entry, outcome);
+  await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
+};
 
 type QueuedAgentTurnSessionDelivery = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
 
@@ -397,10 +404,7 @@ async function drainRestartContinuationQueue(params: {
           entry,
           ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
         }),
-      onSettled: async (entry, outcome) => {
-        await settleCorrelatedSubagentDelivery(entry, outcome);
-        await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
-      },
+      onSettled: settleQueuedSessionDelivery,
       selectEntry: (entry) => ({
         match: entry.id === params.entryId,
         bypassBackoff: true,
@@ -435,10 +439,7 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
       }),
     log: params.log ?? log,
     maxEnqueuedAt: params.maxEnqueuedAt,
-    onSettled: async (entry, outcome) => {
-      await settleCorrelatedSubagentDelivery(entry, outcome);
-      await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id);
-    },
+    onSettled: settleQueuedSessionDelivery,
   });
 }
 
