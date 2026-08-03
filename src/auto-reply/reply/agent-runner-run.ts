@@ -220,6 +220,12 @@ export async function runReplyAgent(
   let shouldQueueAfterSteerRejection = false;
   let beforeAgentReplyDispatchedForSteer = false;
   if (effectiveShouldSteer && isActive) {
+    const steerPrompt =
+      followupRun.currentInboundEventKind === "room_event"
+        ? (followupRun.currentInboundContext?.text ??
+          followupRun.transcriptPrompt ??
+          followupRun.prompt)
+        : followupRun.prompt;
     // Steer against the operation that owns THIS session's run slot. A native
     // command continuation whose slot adoption was skipped (#104844) still
     // carries a source-keyed reservation; steering by its stale sessionId
@@ -257,7 +263,7 @@ export async function runReplyAgent(
     const hookResult = await runBeforeAgentReplyForTurn({
       runId: steerRunId,
       trigger,
-      event: { cleanedBody: followupRun.prompt },
+      event: { cleanedBody: steerPrompt },
       context: {
         runId: steerRunId,
         agentId: followupRun.run.agentId,
@@ -290,7 +296,7 @@ export async function runReplyAgent(
     }
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
-      followupRun.prompt,
+      steerPrompt,
       {
         steeringMode: "all",
         isInboundUserMessage: true,

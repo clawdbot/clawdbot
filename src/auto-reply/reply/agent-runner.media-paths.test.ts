@@ -462,6 +462,44 @@ describe("runReplyAgent media path normalization", () => {
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
+  it("steers room events with their current inbound context", async () => {
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+    }));
+    const roomEventPrompt = [
+      "[OpenClaw room event]",
+      "inbound_event_kind: room_event",
+      "Current event:\n#123 Alice: stop the current task",
+    ].join("\n\n");
+    const followupRun = createMockFollowupRun({ prompt: "[OpenClaw room event]" });
+    followupRun.currentInboundEventKind = "room_event";
+    followupRun.currentInboundContext = { text: roomEventPrompt };
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isActive: true,
+        followupRun,
+      }),
+    );
+
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
+      "session",
+      roomEventPrompt,
+      {
+        steeringMode: "all",
+        isInboundUserMessage: true,
+        taskSuggestionDeliveryMode: undefined,
+      },
+    );
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
   it("steers ordered current-turn images with the active prompt", async () => {
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,

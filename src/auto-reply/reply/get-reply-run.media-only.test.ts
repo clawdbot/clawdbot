@@ -2463,7 +2463,7 @@ describe("runPreparedReply media-only handling", () => {
     );
   });
 
-  it("queues active room events as followups instead of steering fake prompts", async () => {
+  it("steers active room events with their runtime context", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const abortController = new AbortController();
@@ -2498,7 +2498,7 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     const call = requireLastRunReplyAgentCall();
-    expect(call.shouldSteer).toBe(false);
+    expect(call.shouldSteer).toBe(true);
     expect(call.shouldFollowup).toBe(true);
     expect(call.isActive).toBe(true);
     expect(call.resolvedQueue.mode).toBe("steer");
