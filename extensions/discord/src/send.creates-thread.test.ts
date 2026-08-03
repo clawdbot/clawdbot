@@ -248,6 +248,9 @@ describe("sendMessageDiscord", () => {
     expect(postMock).toHaveBeenCalledTimes(3);
     expect(thrown).toBeInstanceOf(DiscordThreadInitialMessageError);
     expect(hasDiscordMessageCreateAmbiguity(thrown)).toBe(true);
+    expect(requireRecord(thrown, "thread initial message error").message).toContain(
+      "delivery of the remaining initial content could not be confirmed",
+    );
     expect(requireRecord(thrown, "thread initial message error").initialMessageDelivery).toEqual({
       starterMessageDelivered: true,
       deliveredChunkCount: 1,
@@ -512,6 +515,9 @@ describe("sendMessageDiscord", () => {
     expect(postMock).toHaveBeenCalledTimes(4);
     expect(thrown).toBeInstanceOf(DiscordThreadInitialMessageError);
     expect(hasDiscordMessageCreateAmbiguity(thrown)).toBe(true);
+    expect(requireRecord(thrown, "thread initial message error").message).toContain(
+      "delivery of the remaining initial content could not be confirmed",
+    );
     expect(requireRecord(thrown, "thread initial message error").initialMessageDelivery).toEqual({
       starterMessageDelivered: false,
       deliveredChunkCount: 1,
@@ -571,6 +577,7 @@ describe("sendMessageDiscord", () => {
     expect(thrown).toBeInstanceOf(DiscordThreadInitialMessageError);
     const error = requireRecord(thrown, "thread initial message error");
     expect(error.name).toBe("DiscordThreadInitialMessageError");
+    expect(error.message).toContain("initial message delivery could not be confirmed");
     expect(error.initialMessageError).toBe("missing access");
     expect(error.thread).toEqual({ id: "t1", name: "thread", type: ChannelType.PublicThread });
   });

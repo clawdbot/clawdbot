@@ -2559,7 +2559,8 @@ describe("handleDiscordMessagingAction", () => {
       ok: true,
       partial: true,
       thread,
-      warning: "Discord thread was created, but its initial content was only partially delivered.",
+      warning:
+        "Discord thread was created, but delivery of the remaining initial content could not be confirmed.",
       initialMessageError: "missing access",
       initialMessageDelivery: {
         starterMessageDelivered: true,
@@ -2568,6 +2569,50 @@ describe("handleDiscordMessagingAction", () => {
         failedChunkDelivery: "unknown",
         failedChunkIndex: 1,
         totalChunkCount: 2,
+      },
+    });
+  });
+
+  it("reports unconfirmed delivery when the first initial content chunk is ambiguous", async () => {
+    const thread = { id: "T1", name: "thread", type: 11 };
+    createThreadDiscord.mockRejectedValueOnce(
+      new DiscordThreadInitialMessageError(
+        thread as ConstructorParameters<typeof DiscordThreadInitialMessageError>[0],
+        new Error("response lost"),
+        {
+          starterMessageDelivered: false,
+          deliveredChunkCount: 0,
+          deliveredMessageIds: [],
+          failedChunkDelivery: "unknown",
+          failedChunkIndex: 0,
+          totalChunkCount: 1,
+        },
+      ),
+    );
+
+    const result = await handleMessagingAction(
+      "threadCreate",
+      {
+        channelId: "C1",
+        name: "thread",
+        content: "Initial post",
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toEqual({
+      ok: true,
+      partial: true,
+      thread,
+      warning: "Discord thread was created, but initial message delivery could not be confirmed.",
+      initialMessageError: "response lost",
+      initialMessageDelivery: {
+        starterMessageDelivered: false,
+        deliveredChunkCount: 0,
+        deliveredMessageIds: [],
+        failedChunkDelivery: "unknown",
+        failedChunkIndex: 0,
+        totalChunkCount: 1,
       },
     });
   });

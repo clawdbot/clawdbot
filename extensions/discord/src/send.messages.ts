@@ -81,9 +81,23 @@ function resolveDefaultThreadAutoArchiveDuration(channel?: APIChannel): number |
   return channel.default_auto_archive_duration;
 }
 
+function describeDiscordThreadInitialMessageFailure(
+  delivery?: DiscordThreadInitialMessageDelivery,
+): string {
+  if (delivery?.failedChunkDelivery === "unknown") {
+    return delivery.deliveredChunkCount > 0
+      ? "Discord thread was created, but delivery of the remaining initial content could not be confirmed"
+      : "Discord thread was created, but initial message delivery could not be confirmed";
+  }
+  return delivery && delivery.deliveredChunkCount > 0
+    ? "Discord thread was created, but its initial content was only partially delivered"
+    : "Discord thread was created, but sending the initial message failed";
+}
+
 export class DiscordThreadInitialMessageError extends Error {
   readonly initialMessageDelivery?: DiscordThreadInitialMessageDelivery;
   readonly initialMessageError: string;
+  readonly initialMessageWarning: string;
   readonly thread: APIChannel;
 
   constructor(
@@ -92,11 +106,9 @@ export class DiscordThreadInitialMessageError extends Error {
     initialMessageDelivery?: DiscordThreadInitialMessageDelivery,
   ) {
     const initialMessageError = formatErrorMessage(error);
-    const deliveryFailure =
-      initialMessageDelivery && initialMessageDelivery.deliveredChunkCount > 0
-        ? "Discord thread was created, but its initial content was only partially delivered"
-        : "Discord thread was created, but sending the initial message failed";
-    super(`${deliveryFailure}: ${initialMessageError}`, { cause: error });
+    const initialMessageWarning =
+      describeDiscordThreadInitialMessageFailure(initialMessageDelivery);
+    super(`${initialMessageWarning}: ${initialMessageError}`, { cause: error });
     this.name = "DiscordThreadInitialMessageError";
     this.initialMessageDelivery = initialMessageDelivery
       ? {
@@ -105,6 +117,7 @@ export class DiscordThreadInitialMessageError extends Error {
         }
       : undefined;
     this.initialMessageError = initialMessageError;
+    this.initialMessageWarning = initialMessageWarning;
     this.thread = thread;
   }
 }
