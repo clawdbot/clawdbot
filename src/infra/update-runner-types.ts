@@ -160,4 +160,5 @@ export type RunStepOptions = {
   progress?: UpdateStepProgress;
   stepIndex: number;
   totalSteps: number;
+  results?: UpdateStepResult[];
 };
