@@ -4,7 +4,34 @@
 // localhost). On plain-HTTP deployments (e.g. LAN access) `navigator.clipboard`
 // is undefined, so calling it throws synchronously rather than rejecting. Guard
 // the secure-context path and fall back to the legacy execCommand copy so the
-// copy buttons keep working over HTTP. Returns whether the copy succeeded.
+// copy buttons keep working over HTTP.
+const clipboardFeedbackTimers = new WeakMap<HTMLElement, number>();
+
+export function replaceClipboardFeedback(
+  element: HTMLElement,
+  reset: () => void,
+  show?: () => void,
+  durationMs = 0,
+): void {
+  // One copy owns one timer; an earlier result must never erase a newer result.
+  window.clearTimeout(clipboardFeedbackTimers.get(element));
+  clipboardFeedbackTimers.delete(element);
+  reset();
+  if (!show) {
+    return;
+  }
+
+  show();
+  clipboardFeedbackTimers.set(
+    element,
+    window.setTimeout(() => {
+      clipboardFeedbackTimers.delete(element);
+      reset();
+    }, durationMs),
+  );
+}
+
+/** Returns whether the copy succeeded. */
 export async function copyToClipboard(text: string): Promise<boolean> {
   if (!text) {
     return false;

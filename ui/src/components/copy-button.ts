@@ -1,7 +1,7 @@
 // Control UI chat module implements copy as markdown behavior.
 import { html, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
+import { copyToClipboard, replaceClipboardFeedback } from "../lib/clipboard.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
@@ -38,6 +38,12 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
             return;
           }
 
+          const resetFeedback = () => {
+            delete btn.dataset.error;
+            delete btn.dataset.copied;
+            setButtonLabel(btn, idleLabel);
+          };
+          replaceClipboardFeedback(btn, resetFeedback);
           btn.dataset.copying = "1";
           btn.setAttribute("aria-busy", "true");
           btn.disabled = true;
@@ -51,30 +57,15 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
           btn.removeAttribute("aria-busy");
           btn.disabled = false;
 
-          if (!copied) {
-            btn.dataset.error = "1";
-            setButtonLabel(btn, t("common.copyFailed"));
-
-            window.setTimeout(() => {
-              if (!btn.isConnected) {
-                return;
-              }
-              delete btn.dataset.error;
-              setButtonLabel(btn, idleLabel);
-            }, ERROR_FOR_MS);
-            return;
-          }
-
-          btn.dataset.copied = "1";
-          setButtonLabel(btn, t("common.copied"));
-
-          window.setTimeout(() => {
-            if (!btn.isConnected) {
-              return;
-            }
-            delete btn.dataset.copied;
-            setButtonLabel(btn, idleLabel);
-          }, COPIED_FOR_MS);
+          replaceClipboardFeedback(
+            btn,
+            resetFeedback,
+            () => {
+              btn.dataset[copied ? "copied" : "error"] = "1";
+              setButtonLabel(btn, t(copied ? "common.copied" : "common.copyFailed"));
+            },
+            copied ? COPIED_FOR_MS : ERROR_FOR_MS,
+          );
         }}
       >
         <span class="chat-copy-btn__icon" aria-hidden="true">

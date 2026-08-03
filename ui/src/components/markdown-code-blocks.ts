@@ -14,7 +14,7 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { t } from "../i18n/index.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
+import { copyToClipboard, replaceClipboardFeedback } from "../lib/clipboard.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml, isMarkdownBlockArtText } from "./markdown-text.ts";
 
@@ -78,8 +78,12 @@ export function handleMarkdownCodeBlockCopy(event: Event): void {
     if (!copied) {
       return;
     }
-    button.classList.add("copied");
-    setTimeout(() => button.classList.remove("copied"), 1500);
+    replaceClipboardFeedback(
+      button,
+      () => button.classList.remove("copied"),
+      () => button.classList.add("copied"),
+      1500,
+    );
   });
 }
 

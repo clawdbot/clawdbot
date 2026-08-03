@@ -241,6 +241,79 @@ describe("openclaw-file-preview-modal", () => {
     });
   });
 
+  it("replaces failed copy feedback when the next copy succeeds", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockRejectedValueOnce(new Error("clipboard denied"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
+    const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: vi.fn(() => false),
+    });
+
+    try {
+      const modal = await renderPreview();
+      const button = modal.shadowRoot?.querySelector<HTMLButtonElement>(".chat-copy-btn");
+      expect(button).toBeInstanceOf(HTMLButtonElement);
+
+      button!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(button?.dataset.error).toBe("1");
+
+      await vi.advanceTimersByTimeAsync(750);
+      writeText.mockResolvedValueOnce(undefined);
+      button!.click();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(button?.dataset.error).toBeUndefined();
+      expect(button?.dataset.copied).toBe("1");
+      expect(button?.getAttribute("aria-label")).toBe("Copied!");
+
+      await vi.advanceTimersByTimeAsync(1_250);
+      expect(button?.dataset.copied).toBe("1");
+      expect(button?.getAttribute("aria-label")).toBe("Copied!");
+
+      await vi.advanceTimersByTimeAsync(250);
+      expect(button?.dataset.copied).toBeUndefined();
+      expect(button?.getAttribute("aria-label")).toBe("Copy file");
+    } finally {
+      if (originalExecCommand) {
+        Object.defineProperty(document, "execCommand", originalExecCommand);
+      } else {
+        Reflect.deleteProperty(document, "execCommand");
+      }
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the newest successful copy visible for its full feedback interval", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
+
+    try {
+      const modal = await renderPreview();
+      const button = modal.shadowRoot?.querySelector<HTMLButtonElement>(".chat-copy-btn");
+      expect(button).toBeInstanceOf(HTMLButtonElement);
+
+      button!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(500);
+      button!.click();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(button?.dataset.copied).toBe("1");
+      expect(button?.getAttribute("aria-label")).toBe("Copied!");
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(button?.dataset.copied).toBeUndefined();
+      expect(button?.getAttribute("aria-label")).toBe("Copy file");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rerenders default copy when the locale changes", async () => {
     const modal = await renderPreview();
     i18n.registerTranslation("pt-BR", {

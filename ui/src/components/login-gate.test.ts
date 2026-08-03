@@ -100,3 +100,66 @@ describe("login gate failure recovery", () => {
     ]);
   });
 });
+
+describe("login gate connection command accessibility", () => {
+  it("copies the command when its card background is clicked", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
+    const element = await mountFailure("connection refused", null);
+    const command = element.querySelector<HTMLElement>(".login-gate__command");
+    expect(command).toBeInstanceOf(HTMLElement);
+
+    command!.click();
+
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledOnce();
+      expect(writeText).toHaveBeenCalledWith("openclaw gateway run");
+    });
+  });
+
+  it("keeps the command and its copy affordance as separate keyboard controls", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
+    const element = await mountFailure("connection refused", null);
+    const command = element.querySelector<HTMLElement>(".login-gate__command");
+    const action = command?.querySelector<HTMLButtonElement>(".login-gate__command-action");
+    const copy = command?.querySelector<HTMLButtonElement>(".chat-copy-btn");
+
+    expect(action).toBeInstanceOf(HTMLButtonElement);
+    expect(copy).toBeInstanceOf(HTMLButtonElement);
+    expect(action?.contains(copy ?? null)).toBe(false);
+    action!.focus();
+    expect(document.activeElement).toBe(action);
+    action!.click();
+
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("openclaw gateway run");
+    });
+  });
+
+  it.each(["Enter", " "])("preserves the copy button's %s keyboard activation", async (key) => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
+    const element = await mountFailure("connection refused", null);
+    const help = element.querySelector<HTMLDetailsElement>(".login-gate__help");
+    expect(help).toBeInstanceOf(HTMLDetailsElement);
+    help!.open = true;
+    const button = element.querySelector<HTMLButtonElement>(".login-gate__command .chat-copy-btn");
+    expect(button).toBeInstanceOf(HTMLButtonElement);
+    expect(button?.closest('[role="button"]')).toBeNull();
+
+    button!.focus();
+    expect(document.activeElement).toBe(button);
+    const activation = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    button!.dispatchEvent(activation);
+
+    expect(activation.defaultPrevented).toBe(false);
+    // jsdom does not synthesize native button activation from keyboard events.
+    button!.click();
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledOnce();
+      expect(button?.dataset.copied).toBe("1");
+      expect(button?.getAttribute("aria-label")).toBe("Copied!");
+    });
+  });
+});

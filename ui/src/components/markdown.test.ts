@@ -494,30 +494,33 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(code?.textContent).toBe(`${blockArt}\n`);
     });
 
-    it("copies fenced block art with its quiet-zone whitespace intact", async () => {
+    it("preserves block-art whitespace and the newest copy feedback", async () => {
+      vi.useFakeTimers();
       const writeText = vi.fn(async () => undefined);
-      const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: { writeText },
-      });
+      vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(`\`\`\`\n${blockArt}\n\`\`\``));
+      document.body.append(fragment);
+
       try {
-        const fragment = htmlFragment(toSanitizedMarkdownHtml(`\`\`\`\n${blockArt}\n\`\`\``));
         const button = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
-        if (!button) {
-          throw new Error("expected code copy button");
-        }
-
+        expect(button).toBeInstanceOf(HTMLButtonElement);
         fragment.addEventListener("click", handleMarkdownCodeBlockCopy);
-        button.click();
 
-        await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(blockArt));
+        button!.click();
+        await vi.advanceTimersByTimeAsync(500);
+        button!.click();
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(button?.classList.contains("copied")).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(500);
+        expect(button?.classList.contains("copied")).toBe(false);
+        expect(writeText).toHaveBeenCalledWith(blockArt);
+        expect(writeText).toHaveBeenCalledTimes(2);
       } finally {
-        if (originalClipboard) {
-          Object.defineProperty(navigator, "clipboard", originalClipboard);
-        } else {
-          Reflect.deleteProperty(navigator, "clipboard");
-        }
+        fragment.remove();
+        vi.unstubAllGlobals();
+        vi.useRealTimers();
       }
     });
 

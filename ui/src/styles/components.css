@@ -323,9 +323,23 @@ openclaw-session-owner-chip {
   border-color: var(--accent);
 }
 
-.login-gate__command:focus-visible {
+.login-gate__command:focus-within {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.login-gate__command-action {
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: copy;
+  text-align: start;
+}
+
+.login-gate__command-action:focus-visible {
+  outline: none;
 }
 
 .login-gate__command code {
