@@ -153,7 +153,12 @@ export function resolveAuthRateLimitClientIp(params: {
   isLocalClient: boolean;
 }): string | undefined {
   const clientIp = params.clientIp;
-  if (params.hasProxyHeaders && !params.isLocalClient && isLoopbackAddress(clientIp)) {
+  if (
+    clientIp !== undefined &&
+    params.hasProxyHeaders &&
+    !params.isLocalClient &&
+    isLoopbackAddress(clientIp)
+  ) {
     return buildRateLimitIdentityKey("forwarded-loopback", clientIp);
   }
   return clientIp;
