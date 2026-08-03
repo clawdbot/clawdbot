@@ -58,7 +58,7 @@ describe("doctor open-policy allowFrom repair", () => {
     expect(GoogleChatConfigSchema.safeParse(result.config.channels?.googlechat).success).toBe(true);
   });
 
-  it.each([
+  it.each<{ label: string; config: GoogleChatConfig }>([
     {
       label: "root",
       config: { dmPolicy: "open", allowFrom: ["*"] },
@@ -83,20 +83,15 @@ describe("doctor open-policy allowFrom repair", () => {
         accounts: { work: { dmPolicy: "open", allowFrom: ["*"] } },
       },
     },
-  ] satisfies Array<{ label: string; config: GoogleChatConfig }>)(
-    "preserves schema-valid googlechat $label DM access",
-    ({ config }) => {
-      expect(GoogleChatConfigSchema.safeParse(config).success).toBe(true);
+  ])("preserves schema-valid googlechat $label DM access", ({ config }) => {
+    expect(GoogleChatConfigSchema.safeParse(config).success).toBe(true);
 
-      const result = maybeRepairOpenPolicyAllowFrom({ channels: { googlechat: config } });
+    const result = maybeRepairOpenPolicyAllowFrom({ channels: { googlechat: config } });
 
-      expect(result.changes).toEqual([]);
-      expect(result.config.channels?.googlechat).toEqual(config);
-      expect(GoogleChatConfigSchema.safeParse(result.config.channels?.googlechat).success).toBe(
-        true,
-      );
-    },
-  );
+    expect(result.changes).toEqual([]);
+    expect(result.config.channels?.googlechat).toEqual(config);
+    expect(GoogleChatConfigSchema.safeParse(result.config.channels?.googlechat).success).toBe(true);
+  });
 
   it("repairs nested-only matrix dm allowFrom", () => {
     const result = maybeRepairOpenPolicyAllowFrom({
