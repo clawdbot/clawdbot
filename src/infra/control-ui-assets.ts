@@ -289,7 +289,7 @@ function summarizeCommandOutput(text: string): string | undefined {
 
 export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
-  opts?: { timeoutMs?: number },
+  opts?: { timeoutMs?: number; onBuildStart?: () => void },
 ): Promise<EnsureControlUiAssetsResult> {
   const health = await resolveControlUiDistIndexHealth({ argv1: process.argv[1] });
   const indexFromDist = health.indexPath;
@@ -323,9 +323,13 @@ export async function ensureControlUiAssetsBuilt(
     };
   }
 
-  runtime.log(
-    "Control UI assets missing; building them now (rerun `pnpm ui:build` after UI changes, or use `pnpm ui:dev` while developing the Control UI)…",
-  );
+  if (opts?.onBuildStart) {
+    opts.onBuildStart();
+  } else {
+    runtime.log(
+      "Control UI assets missing; building them now (rerun `pnpm ui:build` after UI changes, or use `pnpm ui:dev` while developing the Control UI)…",
+    );
+  }
 
   const build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
     cwd: repoRoot,

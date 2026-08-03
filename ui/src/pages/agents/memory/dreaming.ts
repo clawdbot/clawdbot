@@ -175,13 +175,6 @@ type DreamingConfigCapability = Pick<
   "lookupSchemaPath" | "patch" | "state"
 >;
 
-function confirmDreamingAction(message: string): boolean {
-  if (typeof globalThis.confirm !== "function") {
-    return true;
-  }
-  return globalThis.confirm(message);
-}
-
 function isMemoryWikiEnabled(state: DreamingState): boolean {
   return isPluginEnabledInConfigSnapshot(state.configSnapshot, MEMORY_WIKI_PLUGIN_ID, {
     enabledByDefault: false,
@@ -464,18 +457,6 @@ async function runDreamDiaryAction(
   },
 ): Promise<boolean> {
   if (!state.client || !state.connected || state.dreamDiaryActionLoading) {
-    return false;
-  }
-  if (
-    method === "doctor.memory.repairDreamingArtifacts" &&
-    !confirmDreamingAction(t("dreaming.actions.confirmRepair"))
-  ) {
-    return false;
-  }
-  if (
-    method === "doctor.memory.dedupeDreamDiary" &&
-    !confirmDreamingAction(t("dreaming.actions.confirmDedupe"))
-  ) {
     return false;
   }
   state.dreamDiaryActionLoading = true;

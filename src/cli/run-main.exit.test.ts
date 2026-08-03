@@ -2419,7 +2419,11 @@ describe("runCli exit behavior", () => {
     await runCli(argv);
 
     expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
-    expect(loadConfigMock).toHaveBeenCalledWith({ isolateEnv: true, observe: false });
+    expect(loadConfigMock).toHaveBeenCalledWith({
+      isolateEnv: true,
+      observe: false,
+      skipPluginValidation: true,
+    });
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
@@ -2723,7 +2727,7 @@ describe("runCli exit behavior", () => {
       expect.anything(),
       undefined,
       undefined,
-      { mode: "lazy", primary: "memory" },
+      { mode: "lazy", primary: "memory", skipPluginValidation: true },
     );
     expect(stderrDuringPluginRegistration).toBe(true);
     expect(stderrDuringParse).toBe(true);
@@ -2828,7 +2832,7 @@ describe("runCli exit behavior", () => {
       expect.anything(),
       undefined,
       undefined,
-      { mode: "lazy", primary: "memory" },
+      { mode: "lazy", primary: "memory", skipPluginValidation: false },
     );
     expect(stderrDuringPluginRegistration).toBe(false);
     expect(loggingState.forceConsoleToStderr).toBe(false);

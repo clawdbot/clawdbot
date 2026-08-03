@@ -648,6 +648,12 @@ async function drainRetainedWorkerClients(): Promise<void> {
   return await drain;
 }
 
+/** Waits for provider creation to settle, then closes every retained worker client. */
+export async function drainRetainedLocalEmbeddingWorkerClients(): Promise<void> {
+  await workerProviderCreationTail;
+  await drainRetainedWorkerClients();
+}
+
 /** Create the public local embedding provider backed by the child worker client. */
 export async function createLocalEmbeddingWorkerProvider(
   options: EmbeddingProviderOptions,

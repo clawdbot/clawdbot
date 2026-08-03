@@ -2,6 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
@@ -51,5 +52,41 @@ describe("chat pane read markers", () => {
       { unread: false },
       { agentId: "main" },
     );
+  });
+
+  it.each([
+    {
+      name: "read-only scope",
+      methods: ["sessions.patch"],
+      scopes: ["operator.read"],
+    },
+    {
+      name: "unadvertised sessions.patch",
+      methods: ["sessions.create"],
+      scopes: ["operator.write"],
+    },
+  ])("does not mutate unread state with $name", ({ methods, scopes }) => {
+    const patch = vi.fn().mockResolvedValue(null);
+    const { pane, state } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: { patch } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes },
+      features: { methods },
+    } as ApplicationGatewaySnapshot["hello"];
+    const row = {
+      key: "agent:main:current",
+      kind: "direct" as const,
+      updatedAt: 20,
+      unread: true,
+    };
+
+    pane.markSessionRead(row);
+    pane.markSessionRead(row);
+
+    expect(patch).not.toHaveBeenCalled();
+    expect(state.chatError).toBeNull();
+    expect(state.lastError).toBeNull();
   });
 });

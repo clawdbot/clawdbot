@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
@@ -985,11 +986,25 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .command("wiki")
     .description("Inspect and initialize the memory wiki vault")
     .option("--agent <id>", "Agent id for agent-scoped wiki vaults");
-  wiki.hook("preAction", () => {
-    const requestedAgentId = wiki.opts<WikiCommandOptions>().agent?.trim() || undefined;
+  wiki.hook("preAction", (_thisCommand, actionCommand) => {
+    const needsAgent = actionCommand.options.some((option) => option.long === "--agent");
+    const requestedAgentId =
+      actionCommand.opts<WikiCommandOptions>().agent?.trim() ||
+      wiki.opts<WikiCommandOptions>().agent?.trim() ||
+      undefined;
     const currentAppConfig = registration.getAppConfig?.();
-    const config = resolveConfig(requestedAgentId, currentAppConfig);
-    const agentId = config.agentId ?? requestedAgentId;
+    let agentId = requestedAgentId;
+    if (needsAgent && registration.config.vault.scope === "agent" && !agentId) {
+      try {
+        agentId = resolveDefaultAgentId(currentAppConfig ?? {});
+      } catch {
+        throw new Error(
+          "No default memory-wiki agent is configured. Pass --agent <id>, or add an agent with `openclaw agents add`.",
+        );
+      }
+    }
+    const config = needsAgent ? resolveConfig(agentId, currentAppConfig) : registration.config;
+    agentId = config.agentId ?? agentId;
     commandContext = {
       config,
       ...(currentAppConfig ? { appConfig: currentAppConfig } : {}),
@@ -1000,6 +1015,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
   wiki
     .command("status")
     .description("Show wiki vault status")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Print JSON")
     .action(async (opts: WikiStatusCommandOptions) => {
       const { agentId, appConfig, config } = requireCommandContext();
@@ -1009,6 +1025,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
   wiki
     .command("doctor")
     .description("Audit wiki vault setup and report actionable fixes")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Print JSON")
     .action(async (opts: WikiDoctorCommandOptions) => {
       const { agentId, appConfig, config } = requireCommandContext();
@@ -1018,6 +1035,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
   wiki
     .command("init")
     .description("Initialize the wiki vault layout")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Print JSON")
     .action(async (opts: WikiInitCommandOptions) => {
       const { config } = requireCommandContext();
@@ -1027,6 +1045,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
   wiki
     .command("compile")
     .description("Refresh generated wiki indexes")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Print JSON")
     .action(async (opts: WikiCompileCommandOptions) => {
       const { appConfig, config } = requireCommandContext();
@@ -1036,6 +1055,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
   wiki
     .command("lint")
     .description("Lint the wiki vault and write a report")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Print JSON")
     .action(async (opts: WikiLintCommandOptions) => {
       const { appConfig, config } = requireCommandContext();
@@ -1046,6 +1066,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .command("ingest")
     .description("Ingest a local file into the wiki sources folder")
     .argument("<path>", "Local file path to ingest")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--title <title>", "Override the source title")
     .option("--json", "Print JSON")
     .action(async (inputPath: string, opts: WikiIngestCommandOptions) => {
@@ -1058,6 +1079,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .command("import")
     .description("Import an unpacked OKF bundle into wiki concept pages")
     .argument("<path>", "OKF bundle directory")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Print JSON")
     .action(async (bundlePath: string, opts: WikiOkfImportCommandOptions) => {
       const { config } = requireCommandContext();
@@ -1069,6 +1091,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       .command("search")
       .description("Search wiki pages and, when configured, the active memory corpus")
       .argument("<query>", "Search query")
+      .option("--agent <id>", "Agent id (default: configured default agent)")
       .option("--max-results <n>", "Maximum results", (value: string) =>
         parseWikiPositiveIntegerOption(value, "--max-results"),
       )
@@ -1095,6 +1118,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       .command("get")
       .description("Read a wiki page by id or relative path, with optional active-memory fallback")
       .argument("<lookup>", "Relative path or page id")
+      .option("--agent <id>", "Agent id (default: configured default agent)")
       .option("--from <n>", "Start line", (value: string) =>
         parseWikiPositiveIntegerOption(value, "--from"),
       )
@@ -1124,6 +1148,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       .command("synthesis")
       .description("Create or refresh a synthesis page with managed summary content")
       .argument("<title>", "Synthesis title")
+      .option("--agent <id>", "Agent id (default: configured default agent)")
       .option("--body <text>", "Summary body text")
       .option("--body-file <path>", "Read summary body text from a file"),
   )
@@ -1148,7 +1173,8 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     apply
       .command("metadata")
       .description("Update metadata on an existing page")
-      .argument("<lookup>", "Relative path or page id"),
+      .argument("<lookup>", "Relative path or page id")
+      .option("--agent <id>", "Agent id (default: configured default agent)"),
   )
     .option("--clear-confidence", "Remove any stored confidence value")
     .option("--json", "Print JSON")
@@ -1174,6 +1200,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
   bridge
     .command("import")
     .description("Sync bridge-backed memory artifacts into wiki source pages")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Print JSON")
     .action(async (opts: WikiBridgeImportCommandOptions) => {
       const { agentId, appConfig, config } = requireCommandContext();
@@ -1199,6 +1226,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .command("import")
     .description("Import a ChatGPT export into draft wiki source pages")
     .requiredOption("--export <path>", "ChatGPT export directory or conversations.json path")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--dry-run", "Preview changes without writing", false)
     .option("--json", "Print JSON")
     .action(async (opts: WikiChatGptImportCommandOptions) => {
@@ -1214,6 +1242,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .command("rollback")
     .description("Roll back a previously applied ChatGPT import run")
     .argument("<run-id>", "Import run id")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Print JSON")
     .action(async (runId: string, opts: WikiChatGptRollbackCommandOptions) => {
       const { config } = requireCommandContext();

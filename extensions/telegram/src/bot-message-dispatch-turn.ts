@@ -241,6 +241,7 @@ export async function runTelegramDispatchTurn(params: {
                 ? params.progress.commentaryProgressEnabled
                 : undefined,
             progressPreambleEnabled: params.progress.progressPreambleEnabled,
+            commentaryPayloadsEnabled: params.progress.progressPreambleEnabled,
             reasoningPayloadsEnabled: params.draft.durableReasoningPayloadsEnabled,
             onToolStart: params.progress.handleToolStart,
             onItemEvent: params.progress.handleItemEvent,

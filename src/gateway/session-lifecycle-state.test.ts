@@ -198,10 +198,10 @@ describe("session lifecycle state", () => {
       abortedLastRun: true,
     },
     {
-      name: "timeout",
+      name: "signal-only cancellation",
       data: { phase: "end", endedAt: 1_800, aborted: true },
-      status: "timeout",
-      abortedLastRun: false,
+      status: "killed",
+      abortedLastRun: true,
     },
     {
       name: "provider timeout",
@@ -244,7 +244,7 @@ describe("session lifecycle state", () => {
         livenessState: "paused",
         stopReason: "end_turn",
       },
-      status: "timeout",
+      status: "failed",
       abortedLastRun: false,
     },
   ] as const)("persists $name terminal state", async ({ data, status, abortedLastRun }) => {

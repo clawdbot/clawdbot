@@ -738,8 +738,7 @@
     "realtimeVoiceProviders": ["google"],
     "speechProviders": ["google"],
     "videoGenerationProviders": ["google"],
-    "webSearchProviders": ["gemini"],
-    "usageProviders": ["google-gemini-cli"]
+    "webSearchProviders": ["gemini"]
   },
   "mediaUnderstandingProviderMetadata": {
     "google": {

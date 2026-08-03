@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  buildAgentRunTerminalOutcome,
+  classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
@@ -265,25 +265,17 @@ export function resolveTaskTerminalOutcome(params: {
   return params.status === "succeeded" ? "succeeded" : undefined;
 }
 
+const TASK_STATUS_BY_TERMINAL_CLASSIFICATION = {
+  success: "succeeded",
+  timeout: "timed_out",
+  cancellation: "cancelled",
+  failure: "failed",
+} as const;
+
 export function mapAgentRunTerminalOutcomeToTaskStatus(
   outcome: AgentRunTerminalOutcome,
 ): Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled"> {
-  switch (outcome.reason) {
-    case "completed":
-      return "succeeded";
-    case "hard_timeout":
-    case "timed_out":
-      return "timed_out";
-    case "cancelled":
-    case "aborted":
-      return "cancelled";
-    case "blocked":
-    case "abandoned":
-    case "failed":
-      return "failed";
-    default:
-      return outcome.reason satisfies never;
-  }
+  return TASK_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(outcome)];
 }
 
 export function resolveTaskLifecycleTerminalError(params: {
@@ -296,28 +288,6 @@ export function resolveTaskLifecycleTerminalError(params: {
   return params.runtime === "subagent" && params.status === "cancelled"
     ? SUBAGENT_KILL_TASK_ERROR
     : params.error;
-}
-
-export function buildTaskLifecycleTerminalOutcome(params: {
-  phase: "end" | "error";
-  data?: Record<string, unknown>;
-  startedAt?: number;
-  endedAt?: number;
-}): AgentRunTerminalOutcome {
-  const status =
-    params.phase === "error" ? "error" : params.data?.aborted === true ? "timeout" : "ok";
-  // Lifecycle events carry runner/provider terminal facts. Keep the precedence
-  // centralized so task projections match agent.wait and gateway snapshots.
-  return buildAgentRunTerminalOutcome({
-    status,
-    error: params.data?.error,
-    stopReason: params.data?.stopReason,
-    livenessState: params.data?.livenessState,
-    timeoutPhase: params.data?.timeoutPhase,
-    providerStarted: params.data?.providerStarted,
-    startedAt: params.startedAt,
-    endedAt: params.endedAt,
-  });
 }
 
 export function appendTaskEvent(event: {

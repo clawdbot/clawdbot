@@ -257,44 +257,51 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return loadedSkillCommands;
   };
 
-  const commandResult = await (
-    await loadCommandsRuntime()
-  ).handleCommands({
-    ctx: sessionState.sessionCtx,
-    rootCtx: params.ctx,
-    cfg: params.cfg,
-    command,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    directives: clearInlineDirectives(sessionState.triggerBodyNormalized),
-    elevated: {
-      enabled: false,
-      allowed: false,
-      failures: [],
-    },
-    sessionEntry: sessionState.sessionEntry,
-    previousSessionEntry: sessionState.previousSessionEntry,
-    sessionStore: sessionState.sessionStore,
-    sessionKey: sessionState.sessionKey,
-    storePath: sessionState.storePath,
-    sessionScope: sessionState.sessionScope,
-    workspaceDir: params.workspaceDir,
-    opts: params.opts,
-    defaultGroupActivation: () => "always",
-    resolvedThinkLevel: undefined,
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolvedElevatedLevel: "off",
-    blockReplyChunking: undefined,
-    resolvedBlockStreamingBreak: "text_end",
-    resolveDefaultThinkingLevel: async () => undefined,
-    provider: params.provider,
-    model: params.model,
-    contextTokens: params.agentCfg?.contextTokens ?? 0,
-    isGroup: sessionState.isGroup,
-    loadSkillCommands: loadNativeSkillCommands,
-    typing: params.typing,
-  });
+  // Compact needs the canonical model owner before consuming a provider-specific transcript.
+  const compactNeedsModelSelection =
+    command.isAuthorizedSender &&
+    (command.commandBodyNormalized === "/compact" ||
+      command.commandBodyNormalized.startsWith("/compact "));
+  const commandResult = compactNeedsModelSelection
+    ? { shouldContinue: true, reply: undefined }
+    : await (
+        await loadCommandsRuntime()
+      ).handleCommands({
+        ctx: sessionState.sessionCtx,
+        rootCtx: params.ctx,
+        cfg: params.cfg,
+        command,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        directives: clearInlineDirectives(sessionState.triggerBodyNormalized),
+        elevated: {
+          enabled: false,
+          allowed: false,
+          failures: [],
+        },
+        sessionEntry: sessionState.sessionEntry,
+        previousSessionEntry: sessionState.previousSessionEntry,
+        sessionStore: sessionState.sessionStore,
+        sessionKey: sessionState.sessionKey,
+        storePath: sessionState.storePath,
+        sessionScope: sessionState.sessionScope,
+        workspaceDir: params.workspaceDir,
+        opts: params.opts,
+        defaultGroupActivation: () => "always",
+        resolvedThinkLevel: undefined,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "off",
+        resolvedElevatedLevel: "off",
+        blockReplyChunking: undefined,
+        resolvedBlockStreamingBreak: "text_end",
+        resolveDefaultThinkingLevel: async () => undefined,
+        provider: params.provider,
+        model: params.model,
+        contextTokens: params.agentCfg?.contextTokens ?? 0,
+        isGroup: sessionState.isGroup,
+        loadSkillCommands: loadNativeSkillCommands,
+        typing: params.typing,
+      });
   const commandSessionMetadataChanges = takeCommandSessionMetadataChangesFromTargets([
     sessionState.sessionCtx,
     params.ctx,

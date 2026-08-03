@@ -4,10 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { createInitialNodesState, loadNodes } from "../../lib/nodes/index.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import {
+  createInitialNodesState,
+  loadNodes,
+  type InventoryRemovalRequest,
+} from "../../lib/nodes/index.ts";
 import type { NodesRouteData } from "./nodes-page.ts";
 import "./nodes-page.ts";
-import type { InventoryRemovalPrompt } from "./view.types.ts";
+
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 type TestNodesPage = HTMLElement & {
   context: ApplicationContext;
@@ -19,7 +25,6 @@ type TestNodesPage = HTMLElement & {
   presence: PresenceEntry[];
   lastError: string | null;
   chatError: string | null;
-  inventoryRemovalPrompt: InventoryRemovalPrompt | null;
   routeData?: NodesRouteData;
   subscriptions: {
     hostConnected: () => void;
@@ -34,6 +39,10 @@ type TestNodesPage = HTMLElement & {
     initialBind?: boolean,
   ) => void;
   ensureInitialData: () => void;
+  confirmInventoryRemoval: (prompt: {
+    kind: "entry";
+    entry: InventoryRemovalRequest;
+  }) => Promise<void>;
 };
 
 function deferred<T>() {
@@ -235,23 +244,29 @@ describe("NodesPage gateway lifecycle", () => {
     page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
   });
 
-  it("drops a pending removal prompt when the connection resets", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+  it("cancels a pending removal confirmation when the connection resets", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
     const page = document.createElement("openclaw-nodes-page") as TestNodesPage;
     page.client = client;
     page.connected = true;
     page.context = {
       runtimeConfig: { state: { configSnapshot: null, configLoading: false } },
     } as unknown as ApplicationContext;
-    page.inventoryRemovalPrompt = {
+    const pending = page.confirmInventoryRemoval({
       kind: "entry",
       entry: { id: "device-1", name: "Browser", removeNode: false, removeDevice: true },
-    };
+    });
+    await Promise.resolve();
+    const signal = vi.mocked(showConfirmDialog).mock.calls[0]?.[0].signal;
 
-    // Disconnect resets server state; the confirm must not survive onto a
-    // different gateway that reuses the same device ids.
     page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
+    confirmation.resolve(true);
+    await pending;
 
-    expect(page.inventoryRemovalPrompt).toBeNull();
+    expect(signal?.aborted).toBe(true);
+    expect(request).not.toHaveBeenCalled();
   });
 });

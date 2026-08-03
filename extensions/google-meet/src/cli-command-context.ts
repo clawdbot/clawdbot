@@ -1,26 +1,40 @@
 import type { Command } from "commander";
 import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import type { GoogleMeetCalendarLookupResult } from "./calendar.js";
 import type { CreateOptions, MeetArtifactOptions, ResolveSpaceOptions } from "./cli-shared.js";
 import type { GoogleMeetConfig } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
-type GoogleMeetOAuthTokenOptions = {
-  clientId?: string;
-  clientSecret?: string;
-  refreshToken?: string;
-  accessToken?: string;
-  expiresAt?: number;
-};
+export function addGoogleMeetOAuthOptions(command: Command): Command {
+  return command
+    .option("--access-token <token>", "Access token override")
+    .option("--refresh-token <token>", "Refresh token override")
+    .option("--client-id <id>", "OAuth client id override")
+    .option("--client-secret <secret>", "OAuth client secret override")
+    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds");
+}
 
-type GoogleMeetArtifactTokenOptions = GoogleMeetOAuthTokenOptions & {
-  meeting?: string;
-  conferenceRecord?: string;
-  pageSize?: number;
-  includeTranscriptEntries?: boolean;
-  allConferenceRecords?: boolean;
-  includeDocumentBodies?: boolean;
-  mergeDuplicateParticipants?: boolean;
+export function addGoogleMeetMeetingOption(command: Command): Command {
+  return command.option("--meeting <value>", "Meet URL, meeting code, or spaces/{id}");
+}
+
+export function addGoogleMeetCalendarOptions(command: Command): Command {
+  return command
+    .option("--today", "Find a Meet link on today's calendar")
+    .option("--event <query>", "Find a matching calendar event with a Meet link")
+    .option("--calendar <id>", "Calendar id for --today or --event", "primary");
+}
+
+export function addGoogleMeetArtifactOptions(command: Command): Command {
+  const withMeeting = addGoogleMeetMeetingOption(command).option(
+    "--conference-record <name>",
+    "Conference record name or id",
+  );
+  return addGoogleMeetOAuthOptions(addGoogleMeetCalendarOptions(withMeeting))
+    .option("--page-size <n>", "Max resources per Meet API page")
+    .option("--all-conference-records", "Fetch every conference record for --meeting");
+}
+
+type GoogleMeetCliArtifactParams = Record<string, unknown> & {
   lateAfterMinutes?: number;
   earlyBeforeMinutes?: number;
 };
@@ -32,23 +46,7 @@ export type GoogleMeetCliCommandContext = {
   callGateway: typeof callGatewayFromCli;
   operationTimeoutMs: number;
   resolveMeetingInput: (config: GoogleMeetConfig, value?: string) => string;
-  resolveOAuthTokenOptions: (
-    config: GoogleMeetConfig,
-    options: ResolveSpaceOptions,
-  ) => GoogleMeetOAuthTokenOptions;
-  resolveTokenOptions: (
-    config: GoogleMeetConfig,
-    options: ResolveSpaceOptions,
-  ) => GoogleMeetOAuthTokenOptions & { meeting: string };
-  resolveMeetingForToken: (params: {
-    config: GoogleMeetConfig;
-    options: ResolveSpaceOptions;
-    accessToken: string;
-    configuredMeeting?: string;
-  }) => Promise<{ meeting: string; calendarEvent?: GoogleMeetCalendarLookupResult }>;
-  resolveArtifactTokenOptions: (
-    config: GoogleMeetConfig,
-    options: MeetArtifactOptions,
-  ) => GoogleMeetArtifactTokenOptions;
+  resolveCliParams: (options: ResolveSpaceOptions) => Record<string, unknown>;
+  resolveCliArtifactParams: (options: MeetArtifactOptions) => GoogleMeetCliArtifactParams;
   hasCreateOAuth: (config: GoogleMeetConfig, options: CreateOptions) => boolean;
 };

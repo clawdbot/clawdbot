@@ -626,6 +626,10 @@ async function resolveAndValidateIP(
 
 /** Maximum number of redirects to follow in safeFetch. */
 const MAX_SAFE_REDIRECTS = 5;
+export function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
 /**
  * Fetch a URL with redirect: "manual", validating each redirect target
  * against the hostname allowlist and optional DNS-resolved IP (anti-SSRF).
@@ -711,7 +715,7 @@ async function safeFetch(params: {
       redirect: "manual",
     });
 
-    if (![301, 302, 303, 307, 308].includes(res.status)) {
+    if (!isRedirectStatus(res.status)) {
       return res;
     }
 

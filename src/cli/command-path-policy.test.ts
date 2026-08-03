@@ -212,7 +212,6 @@ describe("command-path-policy", () => {
     }
     for (const commandPath of [
       ["agents", "bind"],
-      ["agents", "bindings"],
       ["agents", "unbind"],
       ["agents", "set-identity"],
       ["agents", "delete"],
@@ -222,6 +221,28 @@ describe("command-path-policy", () => {
         networkProxy: "bypass",
       });
     }
+    expectResolvedPolicy(["agents", "bindings"], {
+      configGuard: "skip",
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+  });
+
+  it.each([
+    ["approvals", "pending"],
+    ["commitments"],
+    ["skills"],
+    ["skills", "list"],
+    ["skills", "check"],
+    ["gateway", "stability"],
+    ["gateway", "usage-cost"],
+  ])("keeps read-only cold path %s out of startup config and plugins", (...commandPath) => {
+    expectResolvedPolicy(commandPath, {
+      configGuard: "skip",
+      loadPlugins: "never",
+      ...(commandPath[0] === "commitments" ? { ensureCliPath: false } : {}),
+      networkProxy: "bypass",
+    });
   });
 
   it("resolves mixed startup-only rules", () => {
@@ -329,6 +350,45 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
+    for (const commandPath of [
+      ["hooks"],
+      ["hooks", "list"],
+      ["hooks", "info"],
+      ["hooks", "check"],
+      ["skills", "info"],
+    ]) {
+      expectResolvedPolicy(commandPath, {
+        configGuard: "skip",
+        loadPlugins: "never",
+        networkProxy: "bypass",
+      });
+    }
+    for (const commandPath of [
+      ["skills", "search"],
+      ["memory", "search"],
+    ]) {
+      expectResolvedPolicy(commandPath, {
+        configGuard: "skip",
+        loadPlugins: "never",
+      });
+    }
+    const memoryStatusPolicy = resolveCliCommandPathPolicy(["memory", "status"]);
+    expectConfigGuardResolver(memoryStatusPolicy);
+    expect(memoryStatusPolicy.loadPlugins).toBe("never");
+    expect(
+      memoryStatusPolicy.configGuard({
+        argv: ["node", "openclaw", "memory", "status"],
+        commandPath: ["memory", "status"],
+      }),
+    ).toBe("skip");
+    for (const flag of ["--index", "--fix"]) {
+      expect(
+        memoryStatusPolicy.configGuard({
+          argv: ["node", "openclaw", "memory", "status", flag],
+          commandPath: ["memory", "status"],
+        }),
+      ).toBe("run");
+    }
   });
 
   it("keeps routed and Commander config reads ahead of observing startup guards", () => {

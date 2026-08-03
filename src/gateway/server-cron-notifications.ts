@@ -24,7 +24,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 
@@ -49,6 +49,7 @@ type CronFailureAlertParams = {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: unknown;
+  ssrfPolicy?: SsrFPolicy;
   job: CronJob;
   text: string;
   runAtMs?: number;
@@ -213,6 +214,7 @@ async function postCronWebhookStrict(params: {
   webhookUrl: string;
   webhookToken?: string;
   payload: unknown;
+  ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
   deadlineAtMs?: number;
   onDeliveryAccepted?: () => void;
@@ -230,6 +232,7 @@ async function postCronWebhookStrict(params: {
   const result = await fetchWithSsrFGuard({
     url: params.webhookUrl,
     timeoutMs: requestTimeoutMs,
+    policy: params.ssrfPolicy,
     ...(params.signal ? { signal: params.signal } : {}),
     init: {
       method: "POST",
@@ -276,6 +279,7 @@ async function postCronWebhook(params: {
   webhookUrl: string;
   webhookToken?: string;
   payload: unknown;
+  ssrfPolicy?: SsrFPolicy;
   logContext: Record<string, unknown>;
   blockedLog: string;
   failedLog: string;
@@ -313,6 +317,7 @@ export async function sendGatewayCronWebhook(params: {
   abortSignal?: AbortSignal;
   deadlineAtMs?: number;
   webhookToken?: unknown;
+  ssrfPolicy?: SsrFPolicy;
   onDeliveryAccepted?: () => void;
 }): Promise<void> {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
@@ -330,6 +335,7 @@ export async function sendGatewayCronWebhook(params: {
       postCronWebhookStrict({
         webhookUrl,
         webhookToken: normalizeOptionalString(params.webhookToken),
+        ssrfPolicy: params.ssrfPolicy,
         payload: buildCronFinishedWebhookPayload(event),
         ...(params.abortSignal ? { signal: params.abortSignal } : {}),
         ...(params.deadlineAtMs !== undefined ? { deadlineAtMs: params.deadlineAtMs } : {}),
@@ -380,6 +386,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
       await postCronWebhook({
         webhookUrl,
         webhookToken,
+        ssrfPolicy: params.ssrfPolicy,
         payload: {
           jobId: params.job.id,
           jobName: params.job.name,
@@ -440,6 +447,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: unknown;
+  ssrfPolicy?: SsrFPolicy;
   globalFailureDestination?: CronFailureDestinationConfig;
 }): void {
   const webhookToken = normalizeOptionalString(params.webhookToken);
@@ -486,6 +494,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
           postCronWebhook({
             webhookUrl: webhookTarget.url,
             webhookToken,
+            ssrfPolicy: params.ssrfPolicy,
             payload,
             logContext: { jobId: params.evt.jobId, source: webhookTarget.source },
             blockedLog: "cron: webhook delivery blocked by SSRF guard",
@@ -503,6 +512,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     logger: params.logger,
     resolveCronAgent: params.resolveCronAgent,
     webhookToken,
+    ssrfPolicy: params.ssrfPolicy,
     globalFailureDestination: params.globalFailureDestination,
   });
 }
@@ -514,6 +524,7 @@ function dispatchCronFailureDestinationNotifications(params: {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: string;
+  ssrfPolicy?: SsrFPolicy;
   globalFailureDestination?: CronFailureDestinationConfig;
 }): void {
   if (params.evt.status !== "error" || !params.job || params.job.delivery?.bestEffort === true) {
@@ -538,6 +549,7 @@ function dispatchCronFailureDestinationNotifications(params: {
             postCronWebhook({
               webhookUrl,
               webhookToken: params.webhookToken,
+              ssrfPolicy: params.ssrfPolicy,
               payload: failurePayload,
               logContext: { jobId: params.evt.jobId },
               blockedLog: "cron: failure destination webhook blocked by SSRF guard",

@@ -317,7 +317,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       workspace: WORKSPACE,
       workspaceGit: true,
-      featureMethods: ["chat.metadata", "chat.startup", "system.info"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "system.info"],
       methodResponses: {
         "system.info": {
           machineName: "Peters-Mac-Studio",

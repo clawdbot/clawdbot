@@ -1,5 +1,9 @@
 import type { Command } from "commander";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
@@ -18,6 +22,7 @@ import { resolveHookEntries } from "../hooks/policy.js";
 import type { HookEntry } from "../hooks/types.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { loadGatewayStartupPluginPlanWithMetadata } from "../plugins/channel-plugin-ids.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -46,6 +51,8 @@ type HooksUpdateOptions = {
   dryRun?: boolean;
 };
 
+const GATEWAY_HOOKS_STATUS_TIMEOUT_MS = 1_500;
+
 function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntry[]): HookEntry[] {
   return resolveHookEntries([...pluginEntries, ...workspaceEntries]);
 }
@@ -54,10 +61,40 @@ function buildHooksReport(config: OpenClawConfig): HookStatusReport {
   // Plugin-managed and workspace hooks share one resolved policy view for status/actions.
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const workspaceEntries = loadWorkspaceHookEntries(workspaceDir, { config });
-  const pluginReport = buildPluginDiagnosticsReport({ config, workspaceDir });
+  // Native plugin hooks only exist after registration. Match the Gateway's startup
+  // plan so active hooks remain visible without executing unrelated installed plugins.
+  const startup = loadGatewayStartupPluginPlanWithMetadata({
+    config,
+    workspaceDir,
+    env: process.env,
+  });
+  const pluginReport = buildPluginDiagnosticsReport({
+    config,
+    workspaceDir,
+    onlyPluginIds: startup.plan.pluginIds,
+    metadataSnapshot: startup.metadataSnapshot,
+  });
   const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
   const entries = mergeHookEntries(pluginEntries, workspaceEntries);
   return buildWorkspaceHookStatus(workspaceDir, { config, entries });
+}
+
+async function loadHooksReport(): Promise<HookStatusReport> {
+  const config = getRuntimeConfig({ skipPluginValidation: true });
+  try {
+    const { callGateway } = await import("../gateway/call.js");
+    return await callGateway<HookStatusReport>({
+      config,
+      method: "hooks.status",
+      params: {},
+      timeoutMs: GATEWAY_HOOKS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    });
+  } catch {
+    // Transport, auth, and older-Gateway failures all retain the existing local report path.
+    return buildHooksReport(config);
+  }
 }
 
 function resolveHookForToggle(
@@ -507,11 +544,14 @@ export function registerHooksCli(program: Command): void {
   const hooks = program
     .command("hooks")
     .description("Manage internal agent hooks")
+    .option("--json", "Output as JSON", false)
     .addHelpText(
       "after",
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.openclaw.ai/cli/hooks")}\n`,
     );
+  const hasJsonOutput = (opts: { json?: boolean } | undefined): boolean =>
+    Boolean(opts?.json || hooks.opts<{ json?: boolean }>().json);
 
   hooks
     .command("list")
@@ -519,11 +559,11 @@ export function registerHooksCli(program: Command): void {
     .option("--eligible", "Show only eligible hooks", false)
     .option("--json", "Output as JSON", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
-    .action(async (opts) =>
+    .action(async (opts: HooksListOptions) =>
       runOneShotHooksCliAction(async () => {
-        const config = getRuntimeConfig();
-        const report = buildHooksReport(config);
-        writeHooksOutput(formatHooksList(report, opts), opts.json);
+        const report = await loadHooksReport();
+        const json = hasJsonOutput(opts);
+        writeHooksOutput(formatHooksList(report, { ...opts, json }), json);
       }),
     );
 
@@ -531,11 +571,11 @@ export function registerHooksCli(program: Command): void {
     .command("info <name>")
     .description("Show detailed information about a hook")
     .option("--json", "Output as JSON", false)
-    .action(async (name, opts) =>
+    .action(async (name, opts: HookInfoOptions) =>
       runOneShotHooksCliAction(async () => {
-        const config = getRuntimeConfig();
-        const report = buildHooksReport(config);
-        writeHooksOutput(formatHookInfo(report, name, opts), opts.json);
+        const report = await loadHooksReport();
+        const json = hasJsonOutput(opts);
+        writeHooksOutput(formatHookInfo(report, name, { ...opts, json }), json);
         return report.hooks.some((hook) => hook.name === name || hook.hookKey === name) ? 0 : 1;
       }),
     );
@@ -544,11 +584,11 @@ export function registerHooksCli(program: Command): void {
     .command("check")
     .description("Check hooks eligibility status")
     .option("--json", "Output as JSON", false)
-    .action(async (opts) =>
+    .action(async (opts: HooksCheckOptions) =>
       runOneShotHooksCliAction(async () => {
-        const config = getRuntimeConfig();
-        const report = buildHooksReport(config);
-        writeHooksOutput(formatHooksCheck(report, opts), opts.json);
+        const report = await loadHooksReport();
+        const json = hasJsonOutput(opts);
+        writeHooksOutput(formatHooksCheck(report, { ...opts, json }), json);
       }),
     );
 
@@ -614,11 +654,11 @@ export function registerHooksCli(program: Command): void {
       await runPluginUpdateCommand({ id, opts });
     });
 
-  hooks.action(async () =>
+  hooks.action(async (opts: HooksListOptions) =>
     runOneShotHooksCliAction(async () => {
-      const config = getRuntimeConfig();
-      const report = buildHooksReport(config);
-      defaultRuntime.log(formatHooksList(report, {}));
+      const report = await loadHooksReport();
+      const json = hasJsonOutput(opts);
+      writeHooksOutput(formatHooksList(report, { ...opts, json }), json);
     }),
   );
 }

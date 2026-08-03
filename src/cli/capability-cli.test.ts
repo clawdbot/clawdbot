@@ -5,12 +5,14 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { CAPABILITY_METADATA, registerCapabilityCli } from "./capability-cli.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runCap(...argv: string[]): Promise<void> {
   return runRegisteredCli({ register: registerCapabilityCli as (program: Command) => void, argv });
@@ -1943,34 +1945,158 @@ describe("capability cli", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-generate-"));
+    const tempDir = tempDirs.make("openclaw-video-generate-");
     const outputBase = path.join(tempDir, "result");
-
-    await runCapability(
-      "video",
-      "generate",
-      "--prompt",
-      "friendly lobster",
-      "--output",
-      outputBase,
-      "--json",
-    );
-
     const outputPath = `${outputBase}.mp4`;
-    const fetchCalls = fetchMock.mock.calls as unknown as Array<[string, { signal?: unknown }]>;
-    const fetchCall = fetchCalls[0];
-    expect(fetchCall?.[0]).toBe("https://example.com/generated-video.mp4");
-    expect(fetchCall?.[1]?.signal).toBeInstanceOf(AbortSignal);
-    expect(await fs.readFile(outputPath, "utf8")).toBe("video-bytes");
-    const output = firstJsonOutput();
-    const outputs = output?.outputs as Array<Record<string, unknown>>;
-    expect(output?.capability).toBe("video.generate");
-    expect(output?.provider).toBe("vydra");
-    expect(outputs).toHaveLength(1);
-    expect(outputs[0]?.path).toBe(outputPath);
-    expect(outputs[0]?.mimeType).toBe("video/mp4");
-    expect(outputs[0]?.size).toBe(11);
+    await fs.writeFile(outputPath, "previous-video");
+    await fs.chmod(outputPath, 0o640);
+
+    try {
+      await runCapability(
+        "video",
+        "generate",
+        "--prompt",
+        "friendly lobster",
+        "--output",
+        outputBase,
+        "--json",
+      );
+
+      const fetchCalls = fetchMock.mock.calls as unknown as Array<[string, { signal?: unknown }]>;
+      const fetchCall = fetchCalls[0];
+      expect(fetchCall?.[0]).toBe("https://example.com/generated-video.mp4");
+      expect(fetchCall?.[1]?.signal).toBeInstanceOf(AbortSignal);
+      expect(await fs.readFile(outputPath, "utf8")).toBe("video-bytes");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(tempDir)).toEqual(["result.mp4"]);
+      const output = firstJsonOutput();
+      const outputs = output?.outputs as Array<Record<string, unknown>>;
+      expect(output?.capability).toBe("video.generate");
+      expect(output?.provider).toBe("vydra");
+      expect(outputs).toHaveLength(1);
+      expect(outputs[0]?.path).toBe(outputPath);
+      expect(outputs[0]?.mimeType).toBe("video/mp4");
+      expect(outputs[0]?.size).toBe(11);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
+
+  it("preserves an existing --output and removes its temp when a video stream fails", async () => {
+    primeGeneratedVideoUrl("https://example.com/broken-video.mp4");
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("partial-video"));
+        controller.error(new Error("video stream exploded"));
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(stream, {
+            status: 200,
+            headers: { "content-type": "video/mp4" },
+          }),
+      ),
+    );
+    const tempDir = tempDirs.make("openclaw-video-stream-fail-");
+    const outputBase = path.join(tempDir, "result");
+    const outputPath = `${outputBase}.mp4`;
+    await fs.writeFile(outputPath, "keep-existing-video");
+
+    try {
+      await expect(
+        runCapability(
+          "video",
+          "generate",
+          "--prompt",
+          "friendly lobster",
+          "--output",
+          outputBase,
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains("video stream exploded");
+      expect(await fs.readFile(outputPath, "utf8")).toBe("keep-existing-video");
+      expect(await fs.readdir(tempDir)).toEqual(["result.mp4"]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { kind: "image", extension: ".png", original: "existing-image", byte: 0x49 },
+    { kind: "video", extension: ".mp4", original: "existing-video", byte: 0x56 },
+  ])(
+    "preserves an existing buffered $kind --output when publication fails",
+    async ({ kind, extension, original, byte }) => {
+      const buffer = Buffer.alloc(2_048, byte);
+      if (kind === "image") {
+        mocks.generateImage.mockResolvedValue({
+          provider: "openai",
+          model: "gpt-image-2",
+          attempts: [],
+          images: [{ buffer, mimeType: "image/png", fileName: "generated.png" }],
+        });
+      } else {
+        mocks.generateVideo.mockResolvedValue({
+          provider: "openai",
+          model: "sora-2",
+          attempts: [],
+          videos: [{ buffer, mimeType: "video/mp4", fileName: "generated.mp4" }],
+        });
+      }
+
+      const tempDir = tempDirs.make(`openclaw-buffered-${kind}-fail-`);
+      const outputBase = path.join(tempDir, "result");
+      const outputPath = `${outputBase}${extension}`;
+      await fs.writeFile(outputPath, original);
+      await fs.chmod(outputPath, 0o640);
+
+      const writeFile = fs.writeFile.bind(fs);
+      const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        const [filePath, data, options] = args;
+        if (
+          typeof filePath === "string" &&
+          Buffer.isBuffer(data) &&
+          data.byteLength === buffer.byteLength &&
+          path.dirname(filePath) === tempDir
+        ) {
+          await writeFile(filePath, data.subarray(0, 17), options);
+          throw new Error("injected buffered media write failure");
+        }
+        await writeFile(...args);
+      });
+
+      try {
+        await expect(
+          runCapability(
+            kind,
+            "generate",
+            "--prompt",
+            "friendly lobster",
+            "--output",
+            outputBase,
+            "--json",
+          ),
+        ).rejects.toThrow("exit 1");
+
+        expectRuntimeErrorContains("injected buffered media write failure");
+        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+        expect(await fs.readFile(outputPath, "utf8")).toBe(original);
+        if (process.platform !== "win32") {
+          expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o640);
+        }
+        expect(await fs.readdir(tempDir)).toEqual([`result${extension}`]);
+      } finally {
+        writeFileSpy.mockRestore();
+      }
+    },
+  );
 
   it("blocks private-network url-only generated video downloads by default", async () => {
     mocks.loadConfig.mockReturnValue({});
@@ -2224,8 +2350,10 @@ describe("capability cli", () => {
     expect(enqueued).toBeLessThanOrEqual(4);
   });
 
-  it("buffers an empty-body url-only generated video without error", async () => {
-    // Boundary: a 0-byte body is trivially under the cap and must not error.
+  it.each([
+    { mode: "buffered", withOutput: false },
+    { mode: "streamed", withOutput: true },
+  ])("rejects an empty-body url-only generated video in $mode mode", async ({ withOutput }) => {
     mocks.loadConfig.mockReturnValue({});
     primeGeneratedVideoUrl("https://example.com/empty-video.mp4");
     const fetchMock = vi.fn(
@@ -2236,12 +2364,58 @@ describe("capability cli", () => {
         }),
     );
     vi.stubGlobal("fetch", fetchMock);
+    const tempDir = withOutput ? tempDirs.make("openclaw-empty-video-") : undefined;
+    const outputBase = tempDir ? path.join(tempDir, "result") : undefined;
+    const outputPath = outputBase ? `${outputBase}.mp4` : undefined;
+    if (outputPath) {
+      await fs.writeFile(outputPath, "keep-existing-video");
+    }
 
-    await runCapability("video", "generate", "--prompt", "friendly lobster", "--json");
+    try {
+      await expect(
+        runCapability(
+          "video",
+          "generate",
+          "--prompt",
+          "friendly lobster",
+          ...(outputBase ? ["--output", outputBase] : []),
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
 
-    const output = firstJsonOutput();
-    expect(output?.capability).toBe("video.generate");
-    expect(runtimeErrorMessages().join("\n")).not.toContain("exceeds");
+      expectRuntimeErrorContains("Generated media output is empty");
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      if (tempDir && outputPath) {
+        expect(await fs.readFile(outputPath, "utf8")).toBe("keep-existing-video");
+        expect(await fs.readdir(tempDir)).toEqual(["result.mp4"]);
+      }
+    } finally {
+      if (tempDir) {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("rejects successful textual responses from generated video URLs", async () => {
+    mocks.loadConfig.mockReturnValue({});
+    primeGeneratedVideoUrl("https://example.com/not-a-video.mp4");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("render still processing", {
+            status: 200,
+            headers: { "content-type": "text/plain" },
+          }),
+      ),
+    );
+
+    await expect(
+      runCapability("video", "generate", "--prompt", "friendly lobster", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("vydra generated video download: malformed video response");
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
   it("rejects partial image generate count before provider dispatch", async () => {
@@ -2729,6 +2903,74 @@ describe("capability cli", () => {
 
     expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
   });
+
+  it.each(["local", "gateway"] as const)(
+    "preserves an existing %s TTS --output when the final copy fails",
+    async (transport) => {
+      const tempDir = tempDirs.make(`openclaw-tts-${transport}-copy-fail-`);
+      const sourcePath = path.join(tempDir, "source.mp3");
+      const outputDir = path.join(tempDir, "output");
+      const outputPath = path.join(outputDir, "speech.mp3");
+      await fs.mkdir(outputDir);
+      await fs.writeFile(sourcePath, Buffer.alloc(2_048, 0x41));
+      await fs.writeFile(outputPath, "existing-speech");
+      await fs.chmod(outputPath, 0o640);
+
+      if (transport === "gateway") {
+        mocks.callGateway.mockResolvedValueOnce({
+          audioPath: sourcePath,
+          provider: "openai",
+          outputFormat: "mp3",
+          voiceCompatible: false,
+        } as never);
+      } else {
+        mocks.textToSpeech.mockResolvedValueOnce({
+          success: true,
+          audioPath: sourcePath,
+          provider: "openai",
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          attempts: [],
+        });
+      }
+
+      const copyFile = fs.copyFile.bind(fs);
+      const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
+        const [source, destination] = args;
+        if (typeof destination === "string" && path.dirname(destination) === outputDir) {
+          const bytes = await fs.readFile(source);
+          await fs.writeFile(destination, bytes.subarray(0, 17));
+          throw new Error("injected TTS copy failure");
+        }
+        await copyFile(...args);
+      });
+
+      try {
+        await expect(
+          runCapability(
+            "tts",
+            "convert",
+            `--${transport}`,
+            "--text",
+            "hello",
+            "--output",
+            outputPath,
+            "--json",
+          ),
+        ).rejects.toThrow("exit 1");
+
+        expectRuntimeErrorContains("injected TTS copy failure");
+        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+        expect(await fs.readFile(outputPath, "utf8")).toBe("existing-speech");
+        if (process.platform !== "win32") {
+          expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o640);
+        }
+        expect(await fs.readdir(outputDir)).toEqual(["speech.mp3"]);
+      } finally {
+        copyFileSpy.mockRestore();
+      }
+    },
+  );
 
   it("uses only embedding providers for embedding creation", async () => {
     await runCapability("embedding", "create", "--text", "hello", "--json");

@@ -42,6 +42,7 @@ export type ChatModelControlsProps = {
   modelSelectionRuntimeId?: string;
   modelSwitching: boolean;
   modelsLoading?: boolean;
+  mutationDisabledReason?: string;
   showFastMode?: boolean;
   sending: boolean;
   sessionKey: string;
@@ -254,17 +255,20 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     busy ||
     props.modelSwitching ||
     (props.modelsLoading && selectOptions.length === 0) ||
-    !props.gatewayAvailable;
+    !props.gatewayAvailable ||
+    Boolean(props.mutationDisabledReason);
   const thinkingDisabled =
     !props.connected ||
     busy ||
     props.modelSwitching ||
     !props.gatewayAvailable ||
-    (thinking.options.length === 0 && thinking.currentOverride === "");
+    (thinking.options.length === 0 && thinking.currentOverride === "") ||
+    Boolean(props.mutationDisabledReason);
   return renderChatModelReasoningSelect({
     defaultModelLabel: formatCombinedPickerModelLabel(pickerDefaultLabel),
     disabled,
-    fastMode,
+    disabledReason: props.mutationDisabledReason,
+    fastMode: { ...fastMode, disabled: fastMode.disabled || disabled },
     modelSelectionLocked: props.modelSelectionLocked === true,
     modelOptions,
     onRequestUpdate: props.onRequestUpdate,
@@ -369,6 +373,7 @@ function renderChatModelReasoningSelect(params: {
   defaultModelLabel: string;
   fastMode: ChatFastModeSelectState;
   disabled: boolean;
+  disabledReason?: string;
   modelSelectionLocked: boolean;
   modelOptions: ChatModelProviderOption[];
   selectedModelValue: string;
@@ -388,6 +393,7 @@ function renderChatModelReasoningSelect(params: {
   const {
     defaultModelLabel,
     disabled,
+    disabledReason,
     fastMode,
     modelSelectionLocked,
     modelOptions,
@@ -641,6 +647,7 @@ function renderChatModelReasoningSelect(params: {
           "chat.selectors.thinkingLevel",
         )}: ${triggerTitle}"
         aria-disabled=${disabled ? "true" : "false"}
+        title=${disabledReason ?? triggerTitle}
         @click=${(event: MouseEvent) => {
           if (disabled) {
             event.preventDefault();

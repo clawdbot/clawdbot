@@ -14,17 +14,27 @@ import {
   coerceSecretRef,
   ensureAuthProfileStore,
   listProfilesForProvider,
-  normalizeGithubCopilotDomain,
   normalizeOptionalSecretInput,
   resolveDefaultSecretProviderAlias,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveFirstGithubToken } from "./auth.js";
-import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
+import {
+  normalizeGithubCopilotDomain,
+  PUBLIC_GITHUB_COPILOT_DOMAIN,
+  resolveGithubCopilotDomain,
+} from "./domain.js";
 import { createGithubCopilotDynamicModelHooks } from "./dynamic-models.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 import { DEFAULT_COPILOT_MODEL, resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
 import { PROVIDER_ID } from "./models.js";
+import {
+  buildGithubCopilotAuthDoctorHint,
+  formatGithubCopilotApiKey,
+  loginGithubCopilotOAuth,
+  parseGithubCopilotApiKey,
+  refreshGithubCopilotOAuth,
+} from "./oauth.js";
 import {
   buildGithubCopilotReplayPolicy,
   sanitizeGithubCopilotReplayHistory,
@@ -684,7 +694,10 @@ export default definePluginEntry({
       prepareDynamicModel: dynamicModels.prepareDynamicModel,
       resolveDynamicModel: dynamicModels.resolveDynamicModel,
       preferRuntimeResolvedModel: dynamicModels.preferRuntimeResolvedModel,
-      formatApiKey: (credential) => (credential.type === "oauth" ? credential.refresh.trim() : ""),
+      formatApiKey: formatGithubCopilotApiKey,
+      loginOAuth: loginGithubCopilotOAuth,
+      refreshOAuth: async (credential) => refreshGithubCopilotOAuth(credential),
+      buildAuthDoctorHint: buildGithubCopilotAuthDoctorHint,
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,
@@ -702,11 +715,16 @@ export default definePluginEntry({
         };
       },
       prepareRuntimeAuth: async (ctx) => {
+        const source = parseGithubCopilotApiKey(ctx.apiKey);
         const { resolveCopilotRuntimeAuth } = await loadGithubCopilotRuntime();
         const auth = await resolveCopilotRuntimeAuth({
-          githubToken: ctx.apiKey,
+          githubToken: source.githubToken,
           env: ctx.env,
-          githubDomain: resolveGithubCopilotDomain({ env: ctx.env, config: ctx.config }),
+          githubDomain: resolveGithubCopilotDomain({
+            env: ctx.env,
+            explicit: source.githubDomain,
+            config: ctx.config,
+          }),
         });
         return {
           apiKey: auth.apiKey,

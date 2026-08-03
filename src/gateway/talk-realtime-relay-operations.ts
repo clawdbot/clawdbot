@@ -222,11 +222,14 @@ export function submitTalkRealtimeRelayToolResult(params: {
   options?: RealtimeVoiceToolResultOptions;
 }): void | Promise<void> {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  if (session.completedAgentToolCalls.has(params.callId)) {
+  if (session.toolCalls.isAgentCompleted(params.callId)) {
+    return;
+  }
+  if (!session.toolCalls.tryAdmit([params.callId])) {
     return;
   }
   const pendingFinal = session.pendingFinalToolResults.get(params.callId);
-  const cancelledAgentCall = session.cancelledAgentToolCalls.has(params.callId);
+  const cancelledAgentCall = session.toolCalls.hasCancelled(params.callId);
   if (pendingFinal && !cancelledAgentCall) {
     return pendingFinal;
   }
@@ -253,8 +256,8 @@ export function submitTalkRealtimeRelayToolResult(params: {
         result: providerResult,
         options: suppressedToolResultOptions(session),
         onAccepted: () => {
-          session.cancelledAgentToolCalls.delete(params.callId);
-          session.completedAgentToolCalls.add(params.callId);
+          session.toolCalls.deleteCancelled(params.callId);
+          session.toolCalls.markAgentCompleted([params.callId]);
         },
       });
     const pendingProvider = session.pendingProviderToolResults.get(params.callId);
@@ -280,7 +283,9 @@ export function submitTalkRealtimeRelayToolResult(params: {
     }
     if (final) {
       clearRelayAgentToolCall(session, params.callId);
-      session.completedAgentToolCalls.add(params.callId);
+      if (!session.toolCalls.markAgentCompleted([params.callId])) {
+        return;
+      }
     }
     broadcastToolResultToOwner(session, {
       callId: params.callId,
@@ -336,7 +341,7 @@ export function registerTalkRealtimeRelayAgentRun(params: {
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
   const callId = params.callId?.trim();
-  if (callId && session.completedAgentToolCalls.has(callId)) {
+  if (callId && session.toolCalls.isAgentCompleted(callId)) {
     // Provider cancellation can win while chat.send is still acknowledging. Abort
     // the late run before it can escape the relay's call-ownership tombstone.
     abortChatRunById(session.context, {
@@ -345,6 +350,9 @@ export function registerTalkRealtimeRelayAgentRun(params: {
       stopReason: "realtime provider cancelled tool call",
     });
     throw new Error("Realtime provider cancelled the tool call before run registration");
+  }
+  if (callId && !session.toolCalls.tryAdmit([callId])) {
+    throw new Error("Realtime relay tool-call session limit exceeded");
   }
   if (!session.sessionKey) {
     bindRelaySessionKey(session, params.sessionKey);
@@ -385,15 +393,27 @@ export function cancelTalkRealtimeRelayProviderToolCall(
   // A native call can alias an already-started forced consult. Cancellation owns
   // the forced handle because that is where the browser run was registered.
   const relayCallId = forcedConsult?.id ?? mappedRelayCallId;
+  if (
+    session.toolCalls.isAgentCompleted(relayCallId) ||
+    session.toolCalls.isAgentCompleted(mappedRelayCallId) ||
+    session.toolCalls.isProviderCompleted(providerCallId)
+  ) {
+    return undefined;
+  }
   if (forcedConsult) {
     session.harness.forcedConsults.markCancelled(forcedConsult);
-    session.cancelledAgentToolCalls.set(relayCallId, ensureRelayTurn(session));
+    if (!session.toolCalls.markCancelled([relayCallId], ensureRelayTurn(session))) {
+      return undefined;
+    }
   } else {
-    session.cancelledAgentToolCalls.delete(relayCallId);
+    session.toolCalls.deleteCancelled(relayCallId);
   }
-  session.completedAgentToolCalls.add(relayCallId);
-  session.completedAgentToolCalls.add(mappedRelayCallId);
-  session.completedProviderToolResults.add(providerCallId);
+  if (
+    !session.toolCalls.markAgentCompleted([relayCallId, mappedRelayCallId]) ||
+    !session.toolCalls.markProviderCompleted([providerCallId])
+  ) {
+    return undefined;
+  }
 
   const runId = session.activeAgentToolCalls.get(relayCallId);
   const sessionKey = runId ? session.activeAgentRuns.get(runId) : undefined;
@@ -487,13 +507,19 @@ export function cancelTalkRealtimeRelayTurn(params: {
   const reason = params.reason ?? "client-cancelled";
   cancelForcedConsults(session);
   for (const callId of session.activeAgentToolCalls.keys()) {
-    session.cancelledAgentToolCalls.set(callId, turnId);
+    if (!session.toolCalls.markCancelled([callId], turnId)) {
+      return;
+    }
   }
   for (const forcedConsult of session.harness.forcedConsults.handles()) {
     if (session.harness.forcedConsults.isCancelled(forcedConsult)) {
-      session.cancelledAgentToolCalls.set(forcedConsult.id, turnId);
-      for (const nativeCallId of session.harness.forcedConsults.nativeCallIds(forcedConsult)) {
-        session.cancelledAgentToolCalls.set(nativeCallId, turnId);
+      if (
+        !session.toolCalls.markCancelled(
+          [forcedConsult.id, ...session.harness.forcedConsults.nativeCallIds(forcedConsult)],
+          turnId,
+        )
+      ) {
+        return;
       }
     }
   }
@@ -518,7 +544,7 @@ export function resetTalkRealtimeRelayContinuity(
   session.toolResultEpoch += 1;
   const retiredCallIds = new Set<string>([
     ...session.activeAgentToolCalls.keys(),
-    ...session.cancelledAgentToolCalls.keys(),
+    ...session.toolCalls.cancelledCallIds(),
     ...session.providerToolCallIds.keys(),
     ...session.providerToolCallIds.values(),
     ...session.pendingFinalToolResults.keys(),
@@ -532,14 +558,14 @@ export function resetTalkRealtimeRelayContinuity(
       retiredCallIds.add(nativeCallId);
     }
   }
-  for (const callId of retiredCallIds) {
-    session.completedAgentToolCalls.add(callId);
+  if (!session.toolCalls.markAgentCompleted(retiredCallIds)) {
+    return undefined;
   }
-  session.cancelledAgentToolCalls.clear();
+  session.toolCalls.clearCancelled();
   session.providerToolCallIds.clear();
   session.relayToolCallIdsByProviderId.clear();
   session.pendingFinalToolResults.clear();
-  session.completedProviderToolResults.clear();
+  session.toolCalls.clearProviderCompleted();
   session.pendingProviderToolResults.clear();
   session.pendingWorkingToolResults.clear();
   session.forcedTerminalProviderResults.clear();

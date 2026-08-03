@@ -98,7 +98,10 @@ import {
   runQaSuiteWithInfraRetry,
 } from "./suite-launch.runtime.js";
 import { resolveQaSuiteScenarioChannel, resolveQaSuiteScenarioChannels } from "./suite-planning.js";
-import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
+import {
+  readQaSuiteFailedOrSkippedScenarioCountFromFile,
+  resolveQaReportOnlyOptionalScenarioNames as resolveQaReportOnlyOptionalScenarioNamesFromCatalog,
+} from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
@@ -815,22 +818,7 @@ function resolveQaReportOnlyOptionalScenarioNames(params: {
   if (params.explicitScenarioSelection || params.scenarioIds.length > 0) {
     return undefined;
   }
-  return new Set(
-    readQaScenarioPack()
-      .scenarios.filter((scenario) => {
-        if (scenario.execution.kind !== "flow") {
-          return false;
-        }
-        const toolCoverage = scenario.execution.config?.toolCoverage;
-        return (
-          typeof toolCoverage === "object" &&
-          toolCoverage !== null &&
-          "required" in toolCoverage &&
-          toolCoverage.required === false
-        );
-      })
-      .map((scenario) => scenario.title),
-  );
+  return resolveQaReportOnlyOptionalScenarioNamesFromCatalog(readQaScenarioPack().scenarios);
 }
 
 export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
@@ -1381,6 +1369,16 @@ export async function runQaCharacterEvalCommand(opts: {
   });
   process.stdout.write(`QA character eval report: ${result.reportPath}\n`);
   process.stdout.write(`QA character eval summary: ${result.summaryPath}\n`);
+  const failedCandidateCount = result.runs.filter((run) => run.status === "fail").length;
+  const failedJudgeCount = result.judgments.filter(
+    (judgment) => judgment.rankings.length === 0,
+  ).length;
+  if (failedCandidateCount > 0 || failedJudgeCount > 0) {
+    process.stderr.write(
+      `QA character eval failed: ${failedCandidateCount} candidate(s), ${failedJudgeCount} judge(s).\n`,
+    );
+    process.exitCode = 1;
+  }
 }
 
 export async function runQaManualLaneCommand(opts: {

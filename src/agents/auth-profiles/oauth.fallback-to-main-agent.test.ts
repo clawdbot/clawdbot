@@ -43,7 +43,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   buildProviderAuthDoctorHintWithPlugin: async () => null,
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveProviderOAuthCredentialWithPlugin: async () => ({ status: "unhandled" }),
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({

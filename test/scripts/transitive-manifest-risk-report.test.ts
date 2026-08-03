@@ -208,8 +208,9 @@ describe("transitive-manifest-risk-report", () => {
       version: "1.0.0",
       registryBaseUrl: "https://registry.example.test",
       fetchImpl: async (url, init) => {
+        const requestUrl = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
         fetchCalls.push({
-          url: String(url),
+          url: requestUrl,
           accept: new Headers(init?.headers).get("accept"),
           signal: init?.signal instanceof AbortSignal ? init.signal : null,
         });

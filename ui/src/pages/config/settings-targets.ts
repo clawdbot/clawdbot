@@ -148,6 +148,7 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.sidebarPrefs.hint",
       "configView.sidebarPrefs.liveActivity",
       "configView.sidebarPrefs.liveActivityHint",
+      "chat.sidebar.hiddenSessionSections",
       "configView.sessionObserver.title",
       "configView.sessionObserver.hint",
       "configView.sessionObserver.toggle",

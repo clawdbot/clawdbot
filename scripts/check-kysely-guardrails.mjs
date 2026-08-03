@@ -493,7 +493,7 @@ async function collectKyselyGuardrails() {
 /**
  * Runs the Kysely guardrail check.
  */
-export async function main() {
+async function main() {
   const violations = await collectKyselyGuardrails();
   if (violations.length === 0) {
     console.log("Kysely guardrails OK");

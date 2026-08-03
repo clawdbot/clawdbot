@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSafeGatewayRestartPreflight } from "../../infra/restart-coordinator.js";
@@ -18,7 +18,9 @@ import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentPluginMetadataTestSnapshot,
   readLastSystemAgentAuditEntry,
+  type SystemAgentPluginMetadataTestSnapshot,
 } from "../../system-agent/system-agent.test-helpers.js";
 import type {
   SystemAgentVerifiedInferenceBinding,
@@ -155,6 +157,7 @@ const verifiedConfig: OpenClawConfig = {
 };
 let verifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
 let verifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function requireVerifiedInferenceFixture(): SystemAgentVerifiedInferenceBinding {
@@ -215,10 +218,20 @@ function seededSession(overrides?: Partial<SystemAgentChatSession>): SystemAgent
   };
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
   const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
   verifiedInference = fixture.binding;
   verifiedInferenceDeps = fixture.deps;
+});
+
+afterAll(() => {
+  pluginMetadataSnapshot?.restore();
+  verifiedInference = undefined;
+  verifiedInferenceDeps = undefined;
+});
+
+beforeEach(() => {
   setupInferenceMocks.verifySetupInference.mockResolvedValue({
     ok: true,
     modelRef: "openai/gpt-5.5",
@@ -260,11 +273,10 @@ beforeEach(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.resetAllMocks();
-  verifiedInference = undefined;
-  verifiedInferenceDeps = undefined;
   resetPluginStateStoreForTests();
   resetCommandQueueStateForTest();
   vi.unstubAllEnvs();
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
 });
 
 async function callChat(

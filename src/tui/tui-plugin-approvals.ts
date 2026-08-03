@@ -9,6 +9,7 @@ import {
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { isApprovalStaleError } from "../infra/approval-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { selectListTheme, theme } from "./theme/theme.js";
 import type { TuiApprovalDecision, TuiBackend, TuiPluginApproval } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
@@ -218,8 +219,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
   let expiryTimer: ApprovalTimer | null = null;
   let disposed = false;
   let mutationVersion = 0;
-  let refreshAgain = false;
-  let refreshInFlight: Promise<void> | null = null;
+  const refreshRunner = createTuiRefreshCoalescer(async () => await refreshOnce());
   const mutations = new Map<string, ApprovalMutation>();
   const resolvingIds = new Set<string>();
   const dismissedIds = new Set<string>();
@@ -240,7 +240,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
   };
 
   const recordMutation = (id: string, approval: TuiPluginApproval | null) => {
-    if (!refreshInFlight) {
+    if (!refreshRunner.isRunning()) {
       return;
     }
     mutationVersion += 1;
@@ -435,7 +435,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
     queue = [...next.values()].toSorted((left, right) => left.createdAtMs - right.createdAtMs);
   };
 
-  const refreshOnce = async () => {
+  async function refreshOnce(): Promise<void> {
     if (disposed || !deps.client.listPluginApprovals) {
       return;
     }
@@ -459,27 +459,13 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
     }
     presentNext();
     deps.requestRender();
-  };
+  }
 
   const refreshApprovals = async (): Promise<void> => {
     if (disposed || !deps.client.listPluginApprovals) {
       return;
     }
-    if (refreshInFlight) {
-      refreshAgain = true;
-      return await refreshInFlight;
-    }
-    refreshInFlight = (async () => {
-      do {
-        refreshAgain = false;
-        await refreshOnce();
-      } while (refreshAgain);
-    })();
-    try {
-      await refreshInFlight;
-    } finally {
-      refreshInFlight = null;
-    }
+    await refreshRunner.run();
   };
 
   return {
