@@ -1,14 +1,15 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { captureEnv, setTestEnvValue } from "../../../../src/test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const TEST_TIMEOUT_MS = 30_000;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const ENV_KEYS = [
   "HOME",
   "USERPROFILE",
@@ -27,7 +28,7 @@ const ENV_KEYS = [
 
 async function setupTempHome() {
   const env = captureEnv([...ENV_KEYS]);
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rpc-models-"));
+  const home = tempDirs.make("openclaw-rpc-models-");
   const stateDir = path.join(home, ".openclaw");
   const workspace = path.join(home, "workspace");
   const bundledPlugins = path.join(home, "empty-bundled-plugins");
@@ -134,11 +135,7 @@ describe("gateway RPC model catalog", () => {
             await started.server.close({ reason: "gateway RPC model catalog proof complete" });
           }
         } finally {
-          try {
-            await fs.rm(temp.home, { force: true, recursive: true });
-          } finally {
-            temp.env.restore();
-          }
+          temp.env.restore();
         }
       }
     },
