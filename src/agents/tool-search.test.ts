@@ -197,6 +197,9 @@ describe("Tool Search", () => {
   });
 
   it("accepts bounded structured batch queries in the tool schema", () => {
+    expect(JSON.stringify(limitSearchTool.parameters)).toContain(
+      "serialized query strings may use at most 512 UTF-8 bytes in total",
+    );
     expect(
       Value.Check(limitSearchTool.parameters, {
         queries: [
@@ -279,10 +282,21 @@ describe("Tool Search", () => {
     ).rejects.toThrow("batch queries may request at most 50 results in total");
   });
 
-  it("bounds the query text echoed by a batch response", async () => {
+  it("preserves scalar query length compatibility while bounding batch query echo", async () => {
+    const longScalarQuery = "q".repeat(4097);
+    expect(Value.Check(limitSearchTool.parameters, { query: longScalarQuery })).toBe(true);
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [pluginTool("fake_long_query", "long scalar query surface")],
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ catalogRef }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
+      "long query search tool",
+    );
     await expect(
-      limitSearchTool.execute("call-long-query", { query: "q".repeat(4097) }),
-    ).rejects.toThrow("query must not exceed 4096 characters");
+      searchTool.execute("call-long-query", { query: longScalarQuery }),
+    ).resolves.toBeDefined();
     await expect(
       limitSearchTool.execute("call-long-batch-query", {
         queries: [{ query: "q".repeat(512) }, { query: "r" }],
@@ -420,14 +434,48 @@ describe("Tool Search", () => {
     expect(scalar.details).toEqual([
       expect.objectContaining({ description: `${longDescription}0` }),
     ]);
+    const fullRanking = await searchTool.execute("call-untruncated-ranking", {
+      query: "large surface",
+      limit: 10,
+    });
+    const rankedIds = (fullRanking.details as Array<{ id: string }>).map(
+      (candidate) => candidate.id,
+    );
 
     const result = await searchTool.execute("call-bounded-response", {
       queries: Array.from({ length: 5 }, () => ({ query: "large surface", limit: 10 })),
     });
     const details = resultDetails(result);
     expect(details.truncated).toBe(true);
-    expect(JSON.stringify(details, null, 2).length).toBeLessThanOrEqual(16_000);
+    expect(JSON.stringify(details, null, 2).length).toBeLessThanOrEqual(4_000);
     expect(JSON.stringify(details)).not.toContain("description ".repeat(20));
+    const retainedCounts = (details.results as Array<{ candidates: unknown[] }>).map(
+      (group) => group.candidates.length,
+    );
+    expect(Math.max(...retainedCounts) - Math.min(...retainedCounts)).toBeLessThanOrEqual(1);
+    expect(retainedCounts.every((count) => count > 0)).toBe(true);
+    for (const group of details.results as Array<{ candidates: Array<{ id: string }> }>) {
+      expect(group.candidates.map((candidate) => candidate.id)).toEqual(
+        rankedIds.slice(0, group.candidates.length),
+      );
+    }
+
+    const manyGroups = resultDetails(
+      await searchTool.execute("call-bounded-many-groups", {
+        queries: Array.from({ length: 16 }, () => ({ query: "large surface", limit: 1 })),
+      }),
+    );
+    expect(JSON.stringify(manyGroups, null, 2).length).toBeLessThanOrEqual(4_000);
+    for (const group of manyGroups.results as Array<{
+      candidates: Array<{ id: string }>;
+      truncated?: true;
+    }>) {
+      if (group.candidates.length === 0) {
+        expect(group.truncated).toBe(true);
+      } else {
+        expect(group.candidates[0]?.id).toBe(rankedIds[0]);
+      }
+    }
   });
 
   it("searches batch queries independently while preserving scalar results", async () => {

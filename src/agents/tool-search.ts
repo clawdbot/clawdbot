@@ -38,9 +38,9 @@ import {
 } from "./tool-search-runtime.js";
 import {
   MAX_TOOL_SEARCH_BATCH_QUERIES,
+  MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
   MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
   MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
-  MAX_TOOL_SEARCH_QUERY_GRAPHEMES,
   MAX_TOOL_SEARCH_RESULTS,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -86,7 +86,11 @@ export type {
 } from "./tool-search-types.js";
 
 type ToolSearchCandidate = Awaited<ReturnType<ToolSearchRuntime["search"]>>[number];
-type ToolSearchBatchGroup = { query: string; candidates: ToolSearchCandidate[] };
+type ToolSearchBatchGroup = {
+  query: string;
+  candidates: ToolSearchCandidate[];
+  truncated?: true;
+};
 const MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS = 180;
 
 function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandidate {
@@ -104,7 +108,7 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
   results: ToolSearchBatchGroup[];
   truncated?: true;
 } {
-  const bounded = results.map((result) => ({
+  const bounded: ToolSearchBatchGroup[] = results.map((result) => ({
     ...result,
     candidates: result.candidates.map(compactBatchCandidate),
   }));
@@ -112,18 +116,29 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
   const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
   while (JSON.stringify(render(), null, 2).length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
     const removable = bounded
-      .map((result, index) => ({ index, candidate: result.candidates.at(-1) }))
+      .map((result, index) => ({
+        index,
+        rank: result.candidates.length,
+        candidate: result.candidates.at(-1),
+      }))
       .filter(
-        (item): item is { index: number; candidate: ToolSearchCandidate } =>
+        (item): item is { index: number; rank: number; candidate: ToolSearchCandidate } =>
           item.candidate !== undefined,
       )
       .toSorted(
-        (a, b) => JSON.stringify(b.candidate).length - JSON.stringify(a.candidate).length,
+        (a, b) =>
+          b.rank - a.rank ||
+          JSON.stringify(b.candidate).length - JSON.stringify(a.candidate).length ||
+          a.index - b.index,
       )[0];
     if (!removable) {
       break;
     }
-    bounded[removable.index]?.candidates.pop();
+    const group = bounded[removable.index];
+    group?.candidates.pop();
+    if (group) {
+      group.truncated = true;
+    }
     truncated = true;
   }
   return render();
@@ -242,7 +257,6 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         query: Type.Optional(
           Type.String({
             minLength: 1,
-            maxLength: MAX_TOOL_SEARCH_QUERY_GRAPHEMES,
             description:
               "Single search query, in English. Do not set this when queries is present.",
           }),
@@ -265,7 +279,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             {
               minItems: 1,
               maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES,
-              description: `Independent searches. Do not set query when this is present. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}.`,
+              description: `Independent searches. Do not set query when this is present. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
             },
           ),
         ),

@@ -238,8 +238,10 @@ Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
 query uses the same effective catalog, ranking, filtering, and per-query limit
 as an ordinary search; a candidate may appear in more than one result group.
 Descriptions are compacted before output. If the complete batch would exceed
-the 16,000-character response budget, lower-ranked candidates are removed and
-the response includes `truncated: true`.
+the 4,000-character response budget, lower-ranked candidates are removed and
+the response includes `truncated: true`. A result group that lost candidates
+also includes `truncated: true`, so an empty truncated group cannot be mistaken
+for a query that had no matches.
 Omitted per-query limits use `searchDefaultLimit`. The effective limits in one
 batch may request at most 50 candidates in total. A batch accepts at most 16
 queries, with at most 512 characters per query and 512 UTF-8 bytes across the
