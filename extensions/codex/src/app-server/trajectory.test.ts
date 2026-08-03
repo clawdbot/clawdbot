@@ -10,6 +10,12 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildEmptyToolTelemetry,
+  createProjector,
+  registerCodexEventProjectorTestLifecycle,
+  turnCompleted,
+} from "./event-projector.test-harness.js";
+import {
   type CodexHostTrajectoryRecorder,
   createCodexTrajectoryRecorder,
   recordCodexTrajectoryCompletion,
@@ -31,6 +37,8 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+registerCodexEventProjectorTestLifecycle();
 
 function expectTrajectoryRecorder(
   recorder: ReturnType<typeof createCodexTrajectoryRecorder>,
@@ -257,24 +265,25 @@ describe("Codex trajectory recorder", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("records the canonical assistant stop reason on model completion", async () => {
+  it("records the app-server projected assistant stop reason on model completion", async () => {
     const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
+    const projector = await createProjector();
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "truncated" }]),
+    );
+    const result = projector.buildResult(buildEmptyToolTelemetry());
 
     recordCodexTrajectoryCompletion(recorder, {
       attempt: {} as never,
       threadId: "thread-1",
       turnId: "turn-1",
       timedOut: false,
-      result: {
-        terminal: { kind: "ok" },
-        assistantTexts: ["truncated"],
-        lastAssistant: { stopReason: "length" },
-        messagesSnapshot: [],
-      } as never,
+      result,
     });
     await recorder.flush();
 
-    expect(events[0]?.data?.stopReason).toBe("length");
+    expect(result.lastAssistant?.stopReason).toBe("stop");
+    expect(events[0]?.data?.stopReason).toBe("stop");
   });
 
   it("preserves usage when truncating oversized model completion events", async () => {
