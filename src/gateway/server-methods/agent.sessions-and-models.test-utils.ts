@@ -5,6 +5,8 @@ import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -401,6 +403,62 @@ describe("gateway agent handler", () => {
         label: "plugin:memory-core",
       });
       expectRecordFields(run.completion, { required: true });
+    });
+  });
+
+  it("stamps the requester lifecycle revision at gateway admission and survives a later reset", async () => {
+    await withTestDir({ prefix: "openclaw-gateway-plugin-subagent-revision-" }, async (root) => {
+      useTestStateDir(root);
+      resetSubagentRegistryForTests({ persist: false });
+      const requesterSessionKey = "agent:main:telegram:direct:123";
+      const storePath = resolveStorePath(undefined, { agentId: "main" });
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: requesterSessionKey, storePath },
+        {
+          sessionId: "requester-session",
+          lifecycleRevision: "admission-revision",
+          updatedAt: 1,
+        },
+      );
+      const previousConfig = mocks.loadConfigReturn;
+      mocks.loadConfigReturn = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { list: [{ id: "main", default: true }] },
+      };
+      try {
+        await registerPluginSubagentRunFromGateway({
+          cfg: {
+            session: { mainKey: "main", scope: "per-sender" },
+            agents: { list: [{ id: "main", default: true }] },
+          },
+          runId: "plugin-subagent-revision-run",
+          childSessionKey: "agent:main:subagent:plugin-revision",
+          task: "background plugin subagent task",
+          requester: {
+            sessionKey: requesterSessionKey,
+            origin: { channel: "telegram", to: "123", accountId: "work" },
+          },
+          pluginId: "memory-core",
+        });
+
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: requesterSessionKey, storePath },
+          {
+            sessionId: "requester-session",
+            lifecycleRevision: "replacement-revision",
+            updatedAt: 2,
+          },
+        );
+
+        const run = requireValue(
+          getSubagentRunByChildSessionKey("agent:main:subagent:plugin-revision"),
+          "expected requester-bound plugin subagent run",
+        );
+        expect(run.expectedRequesterLifecycleRevision).toBe("admission-revision");
+        expect(run.requesterSessionKey).toBe(requesterSessionKey);
+      } finally {
+        mocks.loadConfigReturn = previousConfig;
+      }
     });
   });
 

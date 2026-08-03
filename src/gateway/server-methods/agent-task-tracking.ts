@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { loadRequesterLifecycleRevision } from "../../agents/subagent-requester-lifecycle.js";
 import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
@@ -215,6 +216,12 @@ export async function registerPluginSubagentRunFromGateway(params: {
     cleanup: "keep",
     ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
     expectsCompletionMessage: params.requester !== undefined,
+    ...(params.requester !== undefined
+      ? {
+          expectedRequesterLifecycleRevision:
+            loadRequesterLifecycleRevision(requesterSessionKey),
+        }
+      : {}),
     spawnMode: "run",
   });
 }
