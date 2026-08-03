@@ -395,7 +395,7 @@ describe("AcpSessionManager cancelSession", () => {
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
     expectRecordFields(mockCallArg(runtimeState.close), {
       handle: expect.objectContaining({ runtimeSessionName: "runtime-1" }),
-      reason: "session-actor-superseded",
+      reason: "session-reset",
       discardPersistentState: true,
     });
   });
