@@ -470,17 +470,19 @@ export function clearRecoverableDelegatesChainTokensFold(sessionKey: string): nu
 export function annotateQueuedDelegatesInheritedPolicy(
   sessionKey: string,
   policy: { inheritedSilent?: boolean; inheritedWake?: boolean },
+  queuedCreatedAtOrBefore?: number,
 ): number {
   if (policy.inheritedSilent !== true && policy.inheritedWake !== true) {
     return 0;
   }
   let annotated = 0;
   for (const flow of listQueuedPendingFlows(sessionKey)) {
+    if (queuedCreatedAtOrBefore !== undefined && flow.createdAt > queuedCreatedAtOrBefore) {
+      continue;
+    }
     const delegate = decodeDelegateFlow(flow);
-    // Mirror the spawn-time inheritance rule (`canInheritMode`) and
-    // `requeuePendingDelegate`: an explicit `normal` delegate inherits too, so
-    // the annotation is the complete record of what the hedge must replay.
-    if (!delegate || (delegate.mode !== undefined && delegate.mode !== "normal")) {
+    // Persisted normal/default mode is represented by an omitted `mode`.
+    if (!delegate || delegate.mode !== undefined) {
       continue;
     }
     const result = delegateFlowRecords.update({

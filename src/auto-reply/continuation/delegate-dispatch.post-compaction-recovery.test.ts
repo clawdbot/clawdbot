@@ -219,6 +219,7 @@ import {
   MissingDelegateArtifactPolicyError,
   UnavailableDelegateArtifactPolicyError,
 } from "../../agents/delegate-artifacts.js";
+import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   noopTracer,
@@ -680,6 +681,13 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
     });
 
     expect(result).toMatchObject({ sessions: 1, dispatched: 1, failed: 0 });
+    expect(hasRecordedDelegateArtifactCompletionForProducerMock).toHaveBeenCalledWith({
+      flowId,
+      producerSessionKey: deriveContinuationDelegateChildSessionKeyFromParent(
+        sessionKey,
+        flowId as string,
+      ),
+    });
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(assertDelegateArtifactPolicyPreparedMock).not.toHaveBeenCalled();
     expect(removeUnacceptedDelegateArtifactPolicyMock).not.toHaveBeenCalled();

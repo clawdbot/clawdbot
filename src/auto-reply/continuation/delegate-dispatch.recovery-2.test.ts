@@ -217,6 +217,7 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
 }));
 
 import { UnavailableDelegateArtifactPolicyError } from "../../agents/delegate-artifacts.js";
+import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   noopTracer,
@@ -407,9 +408,13 @@ describe("recoverPendingContinuationDelegates", () => {
       config: continuationConfig({ enabled: true, crossSessionTargeting: "enabled" }),
     });
 
-    expect(hasRecordedDelegateArtifactCompletionForProducerMock).toHaveBeenCalledWith(
-      expect.objectContaining({ flowId: delegate?.flowId }),
-    );
+    expect(hasRecordedDelegateArtifactCompletionForProducerMock).toHaveBeenCalledWith({
+      flowId: delegate?.flowId,
+      producerSessionKey: deriveContinuationDelegateChildSessionKeyFromParent(
+        sessionKey,
+        delegate?.flowId ?? "",
+      ),
+    });
     expect(result).toMatchObject({ rejected: 0 });
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(mockFlows.get(delegate?.flowId ?? "")).toMatchObject({ status: "succeeded" });

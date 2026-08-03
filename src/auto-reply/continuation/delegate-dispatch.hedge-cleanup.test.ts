@@ -222,7 +222,11 @@ import {
   stagePostCompactionTaskFlowDelegate,
   stagedPostCompactionDelegateCount,
 } from "./delegate-store-post-compaction.js";
-import { cancelPendingDelegates, enqueuePendingDelegate } from "./delegate-store.js";
+import {
+  cancelPendingDelegates,
+  enqueuePendingDelegate,
+  pendingDelegateCount,
+} from "./delegate-store.js";
 import { dispatchStagedPostCompactionDelegates } from "./post-compaction-staged-dispatch.js";
 import { hasLiveContinuationTimerRefs, resetContinuationStateForTests } from "./state.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
@@ -902,5 +906,69 @@ describe("hedge timer ref/handle cleanup", () => {
     expect(normalHop).toBeDefined();
     expect(normalHop?.silentAnnounce).toBeUndefined();
     expect(normalHop?.wakeOnReturn).toBeUndefined();
+  });
+
+  it("does not let an armed hedge claim a delegate queued after it was armed", async () => {
+    const sessionKey = "agent:main:hedge-created-at-scope";
+    const chainState = {
+      currentChainCount: 0,
+      chainStartedAt: Date.now(),
+      accumulatedChainTokens: 0,
+    };
+    enqueuePendingDelegate(sessionKey, { task: "silent chain hop", delayMs: 60_000 });
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState,
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig(),
+      inheritedSilent: true,
+      inheritedWake: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    enqueuePendingDelegate(sessionKey, { task: "immediate silent hop" });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.runAllTimersAsync();
+
+    expect(pendingDelegateCount(sessionKey)).toBe(1);
+    expect(
+      spawnSubagentDirectMock.mock.calls.some(([request]) =>
+        (request as { task: string }).task.includes("immediate silent hop"),
+      ),
+    ).toBe(false);
+    expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(false);
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState,
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig(),
+      inheritedSilent: true,
+      inheritedWake: true,
+    });
+
+    const spawnedByTask = new Map(
+      spawnSubagentDirectMock.mock.calls.map(([request]) => [
+        (request as { task: string }).task,
+        request as Record<string, unknown>,
+      ]),
+    );
+    const silentHop = [...spawnedByTask.entries()].find(([task]) =>
+      task.includes("silent chain hop"),
+    )?.[1];
+    const immediateHop = [...spawnedByTask.entries()].find(([task]) =>
+      task.includes("immediate silent hop"),
+    )?.[1];
+    expect(silentHop).toMatchObject({
+      silentAnnounce: true,
+      wakeOnReturn: true,
+    });
+    expect(immediateHop).toMatchObject({
+      silentAnnounce: true,
+      wakeOnReturn: true,
+    });
   });
 });
