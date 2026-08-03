@@ -100,4 +100,20 @@ describe("chat history attachment card labels", () => {
     );
     expect(attachments[0]?.attachment.label).toBe("plain-name.docx");
   });
+
+  it("strips only the terminal managed UUID suffix, preserving a UUID-shaped segment in the original name", () => {
+    // Legacy record (no persisted fileName) whose original filename itself
+    // contains a "---<uuid>"-shaped segment before the terminal managed suffix.
+    const attachments = extractTranscriptAttachments(
+      userMessageWithMedia([
+        {
+          path: `media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890-final---${MANAGED_UUID}.docx`,
+          contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        },
+      ]),
+    );
+    expect(attachments[0]?.attachment.label).toBe(
+      "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890-final.docx",
+    );
+  });
 });

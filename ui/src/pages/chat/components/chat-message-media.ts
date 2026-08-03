@@ -361,11 +361,13 @@ function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
 }
 
 // Collision-safe managed inbound URIs store the original filename plus a
-// "---<uuid>" suffix in the basename (e.g. media://inbound/report---<uuid>.pdf).
-// Restore the original filename for display without rewriting the stored URI.
+// terminal "---<uuid>" storage suffix in the basename
+// (e.g. media://inbound/report---<uuid>.pdf). Restore the original filename by
+// removing only that final generated segment, so an original name that itself
+// contains a "---<uuid>"-shaped part is preserved; the stored URI is unchanged.
 const MANAGED_INBOUND_MEDIA_PREFIX = "media://inbound/";
 const MANAGED_INBOUND_UUID_SUFFIX_PATTERN =
-  /---[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  /---[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\.[^/]*$|$)/i;
 
 function labelForMediaPath(mediaPath: string): string {
   const trimmed = mediaPath.trim();
