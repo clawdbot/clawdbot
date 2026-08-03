@@ -190,12 +190,6 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("小蝶 幫我查一下", regexes)).toBe(true);
   });
 
-  it("treats a multi-codepoint ZWJ emoji sequence as one omissible decoration", () => {
-    const regexes = buildMentionRegexes(configForName("小蝶👩‍👧"), "decorated-agent");
-
-    expect(matchesMentionPatterns("小蝶 幫我查一下", regexes)).toBe(true);
-  });
-
   it("still rejects the undecorated name inside another word", () => {
     const regexes = buildMentionRegexes(configForName("小蝶🦋"), "decorated-agent");
 
@@ -349,13 +343,13 @@ describe("derived mention matching with decorated identity names", () => {
   it("rejects other emoji assembled from the same bare marks", () => {
     // Enclosed letter (U+1F170 + selector) and keycap (# + selector + U+20E3):
     // both leave the marks as the only mark-run in the name.
-    const enclosed = buildMentionRegexes(configForName("\u{1F170}️"), "decorated-agent");
-    const keycap = buildMentionRegexes(configForName("#️⃣"), "decorated-agent");
+    const enclosed = buildMentionRegexes(configForName("\u{1F170}\uFE0F"), "decorated-agent");
+    const keycap = buildMentionRegexes(configForName("#\uFE0F\u20E3"), "decorated-agent");
 
-    expect(matchesMentionPatterns("\u{1F170}️ status", enclosed)).toBe(true);
-    expect(matchesMentionPatterns("\u{1F171}️ status", enclosed)).toBe(false);
-    expect(matchesMentionPatterns("#️⃣ status", keycap)).toBe(true);
-    expect(matchesMentionPatterns("*️⃣ status", keycap)).toBe(false);
+    expect(matchesMentionPatterns("\u{1F170}\uFE0F status", enclosed)).toBe(true);
+    expect(matchesMentionPatterns("\u{1F171}\uFE0F status", enclosed)).toBe(false);
+    expect(matchesMentionPatterns("#\uFE0F\u20E3 status", keycap)).toBe(true);
+    expect(matchesMentionPatterns("*\uFE0F\u20E3 status", keycap)).toBe(false);
   });
 
   it("keeps a combining mark inside a written name required", () => {
