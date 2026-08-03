@@ -7,7 +7,6 @@ import {
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { transitionPendingSkillProposalToStale } from "./apply-transition.js";
-import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
@@ -206,10 +205,6 @@ async function reconcilePendingCreateProposal(
           () => null,
         );
         if (targetContent === null) {
-          return current;
-        }
-        const proposalTargetContent = stripProposalFrontmatterForSkill(current.content);
-        if (targetContent === proposalTargetContent) {
           return current;
         }
         const transition = transitionPendingSkillProposalToStale({

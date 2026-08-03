@@ -474,12 +474,12 @@ describe("skill workshop proposals", () => {
       description: "Becomes stale before proposal inspection.",
       content: "# Inspected Manual Skill\n",
     });
-    await writeSkill({
-      dir: listed.record.target.skillDir,
-      name: "listed-manual-skill",
-      description: "Installed without the proposal.",
-      body: "# Listed Manual Skill\n\nAlready active.\n",
-    });
+    await fs.mkdir(listed.record.target.skillDir, { recursive: true });
+    await fs.writeFile(
+      listed.record.target.skillFile,
+      stripProposalFrontmatterForSkill(listed.content),
+      "utf8",
+    );
     await writeSkill({
       dir: inspected.record.target.skillDir,
       name: "inspected-manual-skill",
@@ -1029,7 +1029,7 @@ describe("skill workshop proposals", () => {
     expect(manifest.proposals).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: proposal.record.id, status: "applied" }),
-        expect.objectContaining({ id: sibling.record.id, status: "pending" }),
+        expect.objectContaining({ id: sibling.record.id, status: "stale" }),
       ]),
     );
     await expect(
