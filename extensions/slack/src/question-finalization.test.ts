@@ -212,7 +212,8 @@ describe("Slack question finalization", () => {
 
     const client = createSlackSendTestClient();
     let messageCount = 0;
-    client.chat.postMessage.mockImplementation(async () => ({
+    client.chat.postMessage = vi.fn(async () => ({
+      ok: true,
       ts: `171234.${String(++messageCount).padStart(3, "0")}`,
     }));
     const results: OutboundDeliveryResult[] = [];
