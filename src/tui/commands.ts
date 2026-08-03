@@ -139,11 +139,11 @@ const TUI_COMMAND_ROWS = [
   [
     "goal",
     undefined,
-    "/goal [status|start|edit|pause|resume|complete|block|clear]",
+    "/goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear",
     undefined,
     { shared: true },
   ],
-  ["btw", undefined, "/btw [side question]", undefined, { shared: true }],
+  ["btw", undefined, "/btw <side question>", undefined, { shared: true }],
   ["queue", undefined, "/queue [mode]", undefined, { shared: true }],
   ["stop", undefined, "/stop", undefined, { shared: true }],
   ["new", "Spawn a new isolated session", "/new or /reset"],

@@ -115,7 +115,7 @@ Session controls:
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
 - `/usage <off|tokens|full|reset>` (`reset`/`inherit`/`clear`/`default` clears the session override)
-- `/goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
+- `/goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
 - `/btw <side question>` (alias: `/side`; asks without changing future session context)
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`

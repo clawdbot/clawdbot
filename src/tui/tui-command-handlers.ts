@@ -601,7 +601,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (args) {
         await sendMessage(raw);
       } else {
-        chatLog.addSystem("Usage: /btw [side question]");
+        chatLog.addSystem("Usage: /btw <side question>");
       }
     },
     queue: async (_args, raw) => await sendMessage(raw),

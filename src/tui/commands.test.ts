@@ -212,6 +212,15 @@ describe("helpText", () => {
     },
   );
 
+  it.each([{}, { local: true }])("shows required arguments in shared command help", (options) => {
+    const output = helpText(options);
+
+    expect(output).toContain("/goal start <objective>");
+    expect(output).toContain("/goal edit <objective>");
+    expect(output).toContain("/btw <side question>");
+    expect(output).not.toContain("/btw [side question]");
+  });
+
   it("does not advertise Gateway-owned commands in local mode", () => {
     const output = helpText({ local: true });
 
