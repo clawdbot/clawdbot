@@ -53,9 +53,12 @@ type RenderedColor = {
 
 function parseRenderedColor(color: string): RenderedColor {
   const trimmed = color.trim();
-  const hex = /^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/iu.exec(trimmed);
+  const shortHex = /^#([a-f\d])([a-f\d])([a-f\d])$/iu.exec(trimmed);
+  const hex = shortHex ?? /^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/iu.exec(trimmed);
   if (hex) {
-    const channels = hex.slice(1).map((channel) => Number.parseInt(channel, 16));
+    const channels = hex
+      .slice(1)
+      .map((channel) => Number.parseInt(shortHex ? channel.repeat(2) : channel, 16));
     const [red, green, blue] = channels;
     if (red !== undefined && green !== undefined && blue !== undefined) {
       return { alpha: 1, blue, green, red };
@@ -81,7 +84,7 @@ function parseRenderedColor(color: string): RenderedColor {
     }
   }
 
-  throw new Error(`Expected a browser-rendered RGB or six-digit theme color, received ${color}`);
+  throw new Error(`Expected a browser-rendered RGB or theme hex color, received ${color}`);
 }
 
 function compositeColor(foreground: RenderedColor, background: RenderedColor): RenderedColor {
