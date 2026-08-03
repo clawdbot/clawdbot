@@ -254,19 +254,13 @@ openclaw tui --local --session agent:mxc-test:main
 ## Cleanup
 
 If you used the exact sample above, remove the test agent and MXC plugin
-configuration by patching the config back to the default-only shape:
+configuration:
 
 ```powershell
+openclaw agents delete mxc-test --force
+
 $mxcCleanupPatch = @'
 {
-  agents: {
-    list: [
-      {
-        id: "main",
-        workspace: "~/.openclaw/workspace",
-      },
-    ],
-  },
   plugins: {
     entries: {
       mxc: null,
