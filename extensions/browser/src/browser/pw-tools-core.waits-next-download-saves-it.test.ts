@@ -205,6 +205,71 @@ describe("pw-tools-core", () => {
     });
   });
 
+  it("times out an in-flight save and prevents late output publication", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const targetPath = path.join(tempDir, "file.bin");
+      let releaseSave!: () => void;
+      const saveReleased = new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      });
+      let finishSave!: () => void;
+      const saveFinished = new Promise<void>((resolve) => {
+        finishSave = resolve;
+      });
+      const cancel = vi.fn(async () => {
+        throw new Error("cancel failed");
+      });
+      const saveAs = vi.fn(async (outPath: string) => {
+        await saveReleased;
+        await fs.writeFile(outPath, "late-content", "utf8");
+        finishSave();
+      });
+
+      const promise = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        path: targetPath,
+        timeoutMs: 500,
+      });
+
+      await Promise.resolve();
+      harness.expectArmed();
+      harness.trigger({
+        url: () => "https://example.com/file.bin",
+        suggestedFilename: () => "file.bin",
+        saveAs,
+        cancel,
+      });
+
+      await vi.waitFor(() => expect(saveAs).toHaveBeenCalledOnce());
+      const outcome = await Promise.race([
+        promise.then(
+          () => ({ kind: "resolved" as const }),
+          (error: unknown) => ({ kind: "rejected" as const, error }),
+        ),
+        new Promise<{ kind: "hung" }>((resolve) => {
+          setTimeout(() => resolve({ kind: "hung" }), 750);
+        }),
+      ]);
+
+      releaseSave();
+      await saveFinished;
+      await promise.catch(() => {});
+
+      expect(outcome.kind).toBe("rejected");
+      if (outcome.kind === "rejected") {
+        expect(outcome.error).toEqual(new Error("Timeout waiting for download"));
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+      await vi.waitFor(async () => {
+        await expectPathMissing(requireSaveAsPath(saveAs));
+      });
+      await expectPathMissing(targetPath);
+      expect(harness.activeHandlerCount()).toBe(0);
+    });
+  });
+
   it("creates missing explicit download output parents through the safe output directory path", async () => {
     await withTempDir(async (tempDir) => {
       const harness = createDownloadEventHarness();

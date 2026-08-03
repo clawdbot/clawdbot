@@ -165,7 +165,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option(
       "--timeout-ms <ms>",
-      "How long to wait for the download to start (default: 120000)",
+      "How long to wait for the download to start and save (default: 120000)",
       (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (ref: string, outPath: string, opts, cmd) => {
