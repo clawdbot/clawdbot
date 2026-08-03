@@ -5084,6 +5084,7 @@ public struct SessionRow: Codable, Sendable {
     public let model: String?
     public let modelprovider: String?
     public let tooloverrides: [String: AnyCodable]?
+    public let effectivereasoninglevel: String?
 
     public init(
         key: String,
@@ -5146,7 +5147,8 @@ public struct SessionRow: Codable, Sendable {
         estimatedcostusd: Double? = nil,
         model: String? = nil,
         modelprovider: String? = nil,
-        tooloverrides: [String: AnyCodable]? = nil)
+        tooloverrides: [String: AnyCodable]? = nil,
+        effectivereasoninglevel: String? = nil)
     {
         self.key = key
         self.sessionid = sessionid
@@ -5209,6 +5211,7 @@ public struct SessionRow: Codable, Sendable {
         self.model = model
         self.modelprovider = modelprovider
         self.tooloverrides = tooloverrides
+        self.effectivereasoninglevel = effectivereasoninglevel
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -5273,6 +5276,7 @@ public struct SessionRow: Codable, Sendable {
         case model
         case modelprovider = "modelProvider"
         case tooloverrides = "toolOverrides"
+        case effectivereasoninglevel = "effectiveReasoningLevel"
     }
 }
 
