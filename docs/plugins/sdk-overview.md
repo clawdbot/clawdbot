@@ -123,8 +123,11 @@ ignores model-selected account ids for same-channel capture, binds the trusted
 inbound account, and records it as the session owner for later lifecycle
 actions. Providers that support an omitted account implement `resolveAccountId`
 so OpenClaw records the canonical account before starting or persisting live
-capture. Provider aliases are lookup names only and must not be used for this
-declaration.
+capture. For configured auto-start, an account-bound provider must declare
+exactly one binding channel and supply a nonempty source account or resolve one
+with this hook. OpenClaw rejects ambiguous or unresolved ownership before it
+persists the start or invokes the provider. Provider aliases are lookup names
+only and must not be used for this declaration.
 
 Worker providers must also declare their id in `contracts.workerProviders`.
 Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.
