@@ -257,6 +257,32 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     // MARK: - WKUIDelegate
 
+    /// Bridges JavaScript `window.alert` calls used by the Control UI to report
+    /// failed destructive actions. Untrusted frames are completed without UI.
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptAlertPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping @MainActor @Sendable () -> Void)
+    {
+        guard Self.shouldAllowJavaScriptControlUIDialog(
+            isOwnedWebView: self.ownsJavaScriptControlUIDialog(webView),
+            from: frame.request.url,
+            isMainFrame: frame.isMainFrame,
+            dashboardURL: self.currentURL)
+        else {
+            completionHandler()
+            return
+        }
+        let alert = Self.makeJavaScriptAlert(message: message, host: frame.request.url?.host)
+        if let window {
+            alert.beginSheetModal(for: window) { _ in completionHandler() }
+            return
+        }
+        alert.runModal()
+        completionHandler()
+    }
+
     /// Bridges JavaScript `window.confirm` calls in the embedded Control UI to a
     /// native confirmation sheet; without this callback, WebKit treats every
     /// confirm as Cancel and destructive dashboard actions silently stop.
@@ -266,7 +292,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping @MainActor @Sendable (Bool) -> Void)
     {
-        guard webView === self.webView || self.linkBrowser.owns(webView) else {
+        guard Self.shouldAllowJavaScriptControlUIDialog(
+            isOwnedWebView: self.ownsJavaScriptControlUIDialog(webView),
+            from: frame.request.url,
+            isMainFrame: frame.isMainFrame,
+            dashboardURL: self.currentURL)
+        else {
             completionHandler(false)
             return
         }
@@ -280,6 +311,40 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return
         }
         completionHandler(Self.javaScriptConfirmResult(for: alert.runModal()))
+    }
+
+    /// Bridges JavaScript `window.prompt` calls used for session and group names.
+    /// Cancel maps to nil exactly as it does in a browser.
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptTextInputPanelWithPrompt prompt: String,
+        defaultText: String?,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping @MainActor @Sendable (String?) -> Void)
+    {
+        guard Self.shouldAllowJavaScriptControlUIDialog(
+            isOwnedWebView: self.ownsJavaScriptControlUIDialog(webView),
+            from: frame.request.url,
+            isMainFrame: frame.isMainFrame,
+            dashboardURL: self.currentURL)
+        else {
+            completionHandler(nil)
+            return
+        }
+        let dialog = Self.makeJavaScriptPromptAlert(
+            prompt: prompt,
+            defaultText: defaultText,
+            host: frame.request.url?.host)
+        let finish: @MainActor @Sendable (NSApplication.ModalResponse) -> Void = { response in
+            completionHandler(Self.javaScriptPromptResult(
+                for: response,
+                text: dialog.textField.stringValue))
+        }
+        if let window {
+            dialog.alert.beginSheetModal(for: window, completionHandler: finish)
+            return
+        }
+        finish(dialog.alert.runModal())
     }
 
     /// Bridges `<input type="file">` clicks in the embedded Control UI to a native
@@ -646,6 +711,17 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         guard let sourceURL, sameOrigin(sourceURL, dashboardURL) else { return false }
         let allowedPath = Self.allowedPath(for: dashboardURL)
         return allowedPath == "/" || sourceURL.path.hasPrefix(allowedPath)
+    }
+
+    static func shouldAllowJavaScriptControlUIDialog(
+        isOwnedWebView: Bool = true,
+        from sourceURL: URL?,
+        isMainFrame: Bool,
+        dashboardURL: URL) -> Bool
+    {
+        isOwnedWebView &&
+            isMainFrame &&
+            self.isTrustedLinkSource(sourceURL, dashboardURL: dashboardURL)
     }
 
     static func shouldAllowEditorURLLaunch(
@@ -1032,7 +1108,7 @@ extension DashboardWindowController {
             lhs.port == rhs.port
     }
 
-    private static func makeJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
+    private static func makeJavaScriptDialog(message: String, host: String?) -> NSAlert {
         let alert = NSAlert()
         alert.messageText = "OpenClaw Dashboard"
         if let host, !host.isEmpty {
@@ -1040,9 +1116,40 @@ extension DashboardWindowController {
         } else {
             alert.informativeText = message
         }
+        return alert
+    }
+
+    private func ownsJavaScriptControlUIDialog(_ webView: WKWebView) -> Bool {
+        webView === self.webView
+    }
+
+    private static func makeJavaScriptAlert(message: String, host: String?) -> NSAlert {
+        let alert = self.makeJavaScriptDialog(message: message, host: host)
+        alert.addButton(withTitle: "OK")
+        return alert
+    }
+
+    private static func makeJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
+        let alert = self.makeJavaScriptDialog(message: message, host: host)
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
         return alert
+    }
+
+    private static func makeJavaScriptPromptAlert(
+        prompt: String,
+        defaultText: String?,
+        host: String?)
+        -> (alert: NSAlert, textField: NSTextField)
+    {
+        let alert = self.makeJavaScriptDialog(message: prompt, host: host)
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let textField = NSTextField(string: defaultText ?? "")
+        textField.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
+        alert.accessoryView = textField
+        alert.window.initialFirstResponder = textField
+        return (alert, textField)
     }
 
     private static func javaScriptConfirmResult(
@@ -1050,6 +1157,14 @@ extension DashboardWindowController {
         -> Bool
     {
         response == .alertFirstButtonReturn
+    }
+
+    private static func javaScriptPromptResult(
+        for response: NSApplication.ModalResponse,
+        text: String)
+        -> String?
+    {
+        response == .alertFirstButtonReturn ? text : nil
     }
 
     /// Commands are deliverable when a document is live or a load is in flight
@@ -1608,6 +1723,36 @@ extension DashboardWindowController {
 
     static func _testJavaScriptConfirmResult(for response: NSApplication.ModalResponse) -> Bool {
         self.javaScriptConfirmResult(for: response)
+    }
+
+    static func _testJavaScriptAlert(message: String, host: String?) -> NSAlert {
+        self.makeJavaScriptAlert(message: message, host: host)
+    }
+
+    static func _testJavaScriptPromptAlert(
+        prompt: String,
+        defaultText: String?,
+        host: String?)
+        -> (alert: NSAlert, textField: NSTextField)
+    {
+        self.makeJavaScriptPromptAlert(prompt: prompt, defaultText: defaultText, host: host)
+    }
+
+    static func _testJavaScriptPromptResult(
+        for response: NSApplication.ModalResponse,
+        text: String)
+        -> String?
+    {
+        self.javaScriptPromptResult(for: response, text: text)
+    }
+
+    func _testOwnsJavaScriptControlUIDialog(_ webView: WKWebView) -> Bool {
+        self.ownsJavaScriptControlUIDialog(webView)
+    }
+
+    var _testLinkBrowserOwnsJavaScriptControlUIDialog: Bool {
+        guard let webView = self.linkBrowser.activeWebView else { return false }
+        return self.ownsJavaScriptControlUIDialog(webView)
     }
 }
 #endif
