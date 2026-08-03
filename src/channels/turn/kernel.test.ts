@@ -696,6 +696,49 @@ describe("channel turn kernel", () => {
     expect(delivered.visibleReplySent).toBe(true);
   });
 
+  it("sends a visible fallback when an assembled dispatch returns no visible reply", async () => {
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      noVisibleReplyFallbackEligible: true,
+    })) as unknown as DispatchReplyWithBufferedBlockDispatcher;
+    const deliver = vi.fn(async () => ({ visibleReplySent: true }));
+
+    const result = await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "slack",
+      accountId: "acct",
+      agentId: "main",
+      routeSessionKey: "agent:main:slack:channel:thread",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({
+        Provider: "slack",
+        Surface: "slack",
+        ChatType: "channel",
+      }),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: { deliver },
+    });
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("internal runtime issue"),
+        isError: true,
+        isStatusNotice: true,
+      }),
+      { kind: "final" },
+    );
+    expectDispatched(result);
+    expect(result.dispatchResult).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      noVisibleReplyFallbackEligible: true,
+      observedReplyDelivery: true,
+    });
+  });
+
   it("maps durable hook cancellation to typed routed suppression", async () => {
     sendDurableMessageBatch.mockResolvedValueOnce({
       status: "suppressed",

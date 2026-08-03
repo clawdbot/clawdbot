@@ -20,6 +20,10 @@ import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import { recordInboundSession } from "../session.js";
 import { isChannelPartialDeliveryError } from "./delivery-result.js";
 import {
+  hasVisibleChannelTurnDispatch,
+  type ChannelTurnDispatchResultLike,
+} from "./dispatch-result.js";
+import {
   deliverInboundReplyWithMessageSendContext,
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
@@ -358,6 +362,124 @@ function createObserveOnlyDeliveryAdapter(): ChannelEventDeliveryAdapter {
   };
 }
 
+function shouldSendNoVisibleReplyFallback(params: {
+  admission: DispatchableChannelTurn["admission"];
+  result: ChannelTurnResult;
+}): boolean {
+  if (!params.result.dispatched || params.admission?.kind === "observeOnly") {
+    return false;
+  }
+  const dispatchResult = params.result.dispatchResult as ChannelTurnDispatchResultLike & {
+    noVisibleReplyFallbackEligible?: unknown;
+  };
+  return (
+    dispatchResult?.noVisibleReplyFallbackEligible === true &&
+    !hasVisibleChannelTurnDispatch(dispatchResult)
+  );
+}
+
+function markFallbackReplyObserved(result: ChannelTurnResult): ChannelTurnResult {
+  if (!result.dispatched) {
+    return result;
+  }
+  return {
+    ...result,
+    dispatchResult: {
+      ...(result.dispatchResult as Record<string, unknown>),
+      observedReplyDelivery: true,
+    } as typeof result.dispatchResult,
+  };
+}
+
+async function deliverNoVisibleReplyFallback(params: {
+  cfg: DispatchableChannelTurn["cfg"];
+  channel: string;
+  accountId: string | undefined;
+  agentId: string;
+  ctxPayload: DispatchableChannelTurn["ctxPayload"];
+  delivery: AnyChannelDeliveryAdapter;
+}): Promise<ChannelDeliveryResult | void> {
+  const payload: ReplyPayload = {
+    text: "⚠️ I hit an internal runtime issue before I could send the answer. Please try again, or use /new if this thread keeps failing.",
+    isError: true,
+    isStatusNotice: true,
+  };
+  const info: ChannelDeliveryInfo = { kind: "final" };
+  const preparedPayload = params.delivery.preparePayload
+    ? await params.delivery.preparePayload(payload, info)
+    : payload;
+  if (preparedPayload === null) {
+    const suppression = createSuppressedChannelDeliveryResult({ reason: "no_visible_payload" });
+    await runChannelDeliveryObserver({
+      onDelivered: params.delivery.onDelivered,
+      payload,
+      info,
+      result: suppression,
+    });
+    return suppression;
+  }
+
+  const durable = "durable" in params.delivery ? params.delivery.durable : undefined;
+  const durableOptions =
+    typeof durable === "function" ? await durable(preparedPayload, info) : durable;
+  if (durableOptions) {
+    const durableResult = await deliverInboundReplyWithMessageSendContext({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+      agentId: params.agentId,
+      ctxPayload: params.ctxPayload,
+      payload: preparedPayload,
+      info,
+      ...durableOptions,
+    });
+    throwIfDurableInboundReplyDeliveryFailed(durableResult);
+    if (isDurableInboundReplyDeliveryHandled(durableResult)) {
+      await runChannelDeliveryObserver({
+        onDelivered: params.delivery.onDelivered,
+        payload: preparedPayload,
+        info,
+        result: durableResult.delivery,
+      });
+      return durableResult.delivery;
+    }
+  }
+
+  const result =
+    "deliverWithProviderMessageSending" in params.delivery &&
+    params.delivery.deliverWithProviderMessageSending
+      ? await params.delivery.deliverWithProviderMessageSending(preparedPayload, info)
+      : "deliver" in params.delivery && params.delivery.deliver
+        ? await params.delivery.deliver(preparedPayload, info)
+        : undefined;
+  await runChannelDeliveryObserver({
+    onDelivered: params.delivery.onDelivered,
+    payload: preparedPayload,
+    info,
+    result,
+  });
+  return result;
+}
+
+async function maybeDeliverNoVisibleReplyFallback(params: {
+  cfg: DispatchableChannelTurn["cfg"];
+  channel: string;
+  accountId: string | undefined;
+  agentId: string;
+  ctxPayload: DispatchableChannelTurn["ctxPayload"];
+  admission: DispatchableChannelTurn["admission"];
+  delivery: AnyChannelDeliveryAdapter;
+  result: ChannelTurnResult;
+}): Promise<ChannelTurnResult> {
+  if (!shouldSendNoVisibleReplyFallback(params)) {
+    return params.result;
+  }
+  const fallback = await deliverNoVisibleReplyFallback(params);
+  return isExplicitlyNonVisibleChannelDelivery(fallback)
+    ? params.result
+    : markFallbackReplyObserved(params.result);
+}
+
 async function dispatchChannelTurnWithDeliveryOwner(
   ...args:
     | [params: AssembledChannelTurn, ownership: "legacy-dispatcher"]
@@ -415,7 +537,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
     });
     return messageSentEmitter;
   };
-  return await runPreparedChannelTurnCore(
+  const result = await runPreparedChannelTurnCore(
     {
       channel: params.channel,
       accountId: params.accountId,
@@ -641,6 +763,16 @@ async function dispatchChannelTurnWithDeliveryOwner(
     },
     { suppressObserveOnlyDispatch: false },
   );
+  return await maybeDeliverNoVisibleReplyFallback({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    agentId: params.agentId,
+    ctxPayload: params.ctxPayload,
+    admission: params.admission,
+    delivery,
+    result,
+  });
 }
 
 export async function dispatchAssembledChannelTurn(
