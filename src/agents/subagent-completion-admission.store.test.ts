@@ -220,7 +220,8 @@ describe("atomic subagent completion admission store", () => {
       lastError: "requester unavailable",
       payload: {
         requesterSessionKey: input.task.requesterSessionKey,
-        childSessionKey: input.task.childSessionKey,
+        requesterDisplayKey: input.subagent.requesterDisplayKey,
+        childSessionKey: input.subagent.childSessionKey,
         childRunId: input.subagent.runId,
         task: input.task.task,
         endedAt: input.task.endedAt,
