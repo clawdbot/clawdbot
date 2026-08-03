@@ -47,9 +47,9 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
     accountMap = false,
     rootScope = true,
   ): void => {
-    rootScope &&= node === normalized || typeof node.$id !== "string";
+    let withinRootScope = rootScope && (node === normalized || typeof node.$id !== "string");
     if (typeof node.$ref === "string") {
-      const match = rootScope
+      const match = withinRootScope
         ? /^#\/(\$defs|definitions)\/([A-Za-z0-9_.-]+)$/.exec(node.$ref)
         : null;
       const definitions = match?.[1] ? normalized[match[1]] : undefined;
@@ -70,14 +70,14 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
       Object.assign(node, structuredClone(target), owner);
       delete node.$ref;
       changed = true;
-      rootScope = node === normalized;
+      withinRootScope = node === normalized;
     }
 
     for (const key of ["allOf", "anyOf", "oneOf"] as const) {
       const variants = node[key];
       for (const variant of Array.isArray(variants) ? variants : []) {
         if (isRecord(variant)) {
-          normalizeNode(variant, accountMap, rootScope);
+          normalizeNode(variant, accountMap, withinRootScope);
         }
       }
     }
@@ -93,7 +93,7 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
       ];
       for (const entry of entries) {
         if (isRecord(entry)) {
-          normalizeNode(entry, false, rootScope);
+          normalizeNode(entry, false, withinRootScope);
         }
       }
       return;
@@ -114,7 +114,7 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
     // Account maps are containers; only each account entry owns heartbeat visibility.
     const accounts = properties.accounts;
     if (isRecord(accounts)) {
-      normalizeNode(accounts, true, rootScope);
+      normalizeNode(accounts, true, withinRootScope);
     }
   };
 

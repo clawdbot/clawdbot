@@ -709,78 +709,63 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     },
   );
 
-  it.each([
-    {
-      label: "patterned accounts",
-      accounts: {
-        type: "object",
-        patternProperties: {
-          "^work$": {
-            type: "object",
-            properties: { appId: { type: "string" } },
-            additionalProperties: false,
-          },
-        },
-        additionalProperties: false,
-      },
-    },
-    {
-      label: "composed accounts",
-      accounts: {
-        allOf: [
-          {
-            type: "object",
-            additionalProperties: {
+  it.each(["patterned", "composed"] as const)(
+    "accepts core-owned heartbeat visibility for %s accounts",
+    (shape) => {
+      const registry = createExternalFeishuSchemaRegistry();
+      const properties = requireExternalFeishuChannelProperties(registry);
+      const account = (properties.accounts as Record<string, unknown>).additionalProperties;
+      properties.accounts =
+        shape === "patterned"
+          ? {
               type: "object",
-              properties: { appId: { type: "string" } },
+              patternProperties: { "^work$": account },
               additionalProperties: false,
-            },
+            }
+          : { allOf: [{ type: "object", additionalProperties: account }] };
+      mockLoadPluginManifestRegistry.mockReturnValue(registry);
+
+      const result = validateConfigObjectRawWithPlugins({
+        channels: {
+          feishu: {
+            appId: "app-id",
+            appSecret: "secret",
+            accounts: { work: { heartbeatVisibility: { showOk: true } } },
           },
-        ],
-      },
-    },
-  ])("accepts core-owned heartbeat visibility for $label", ({ accounts }) => {
-    const registry = createExternalFeishuSchemaRegistry();
-    requireExternalFeishuChannelProperties(registry).accounts = accounts;
-    mockLoadPluginManifestRegistry.mockReturnValue(registry);
-
-    const result = validateConfigObjectRawWithPlugins({
-      channels: {
-        feishu: {
-          appId: "app-id",
-          appSecret: "secret",
-          accounts: { work: { heartbeatVisibility: { showOk: true } } },
         },
-      },
-    });
+      });
+      expect(result.ok).toBe(true);
+    },
+  );
 
-    expect(result.ok).toBe(true);
-  });
-
-  it.each(["root", "account"] as const)(
-    "normalizes direct local %s schema references without changing shared definitions",
+  it.each(["root", "account", "composed"] as const)(
+    "normalizes %s local schema references without changing shared definitions",
     (scope) => {
       const registry = createExternalFeishuSchemaRegistry();
       const channel = expectDefined(registry.plugins[0]?.channelConfigs?.feishu, "Feishu channel");
       const schema = channel.schema;
-      let definition: Record<string, unknown>;
+      const accounts = requireExternalFeishuChannelProperties(registry).accounts as Record<
+        string,
+        unknown
+      >;
+      const account = accounts.additionalProperties as Record<string, unknown>;
+      const definitions = [schema, account];
 
       if (scope === "root") {
-        definition = schema;
         channel.schema = {
           $id: "https://example.com/external-feishu",
           $schema: "http://json-schema.org/draft-07/schema#",
           $ref: "#/$defs/Channel",
-          $defs: { Channel: definition },
+          $defs: { Channel: schema },
         };
-      } else {
-        const accounts = requireExternalFeishuChannelProperties(registry).accounts as Record<
-          string,
-          unknown
-        >;
-        definition = accounts.additionalProperties as Record<string, unknown>;
-        schema.definitions = { Account: definition };
+      } else if (scope === "account") {
+        schema.definitions = { Account: account };
         accounts.additionalProperties = { $ref: "#/definitions/Account" };
+      } else {
+        const root = { anyOf: [schema] };
+        accounts.additionalProperties = { $ref: "#/$defs/Account" };
+        channel.schema = { $ref: "#/$defs/Root", $defs: { Root: root, Account: account } };
+        definitions.push(root);
       }
       mockLoadPluginManifestRegistry.mockReturnValue(registry);
 
@@ -798,58 +783,11 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
           },
         }).ok,
       ).toBe(false);
-      expect(definition).not.toHaveProperty("properties.heartbeatVisibility");
+      for (const definition of definitions) {
+        expect(definition).not.toHaveProperty("properties.heartbeatVisibility");
+      }
     },
   );
-
-  it("normalizes account references within a referenced composed channel schema", () => {
-    const registry = createExternalFeishuSchemaRegistry();
-    const channel = expectDefined(registry.plugins[0]?.channelConfigs?.feishu, "Feishu channel");
-    const account = {
-      type: "object",
-      properties: { appId: { type: "string" } },
-      additionalProperties: false,
-    };
-    const root = {
-      anyOf: [
-        {
-          type: "object",
-          properties: {
-            appId: { type: "string" },
-            appSecret: { type: "string" },
-            accounts: {
-              type: "object",
-              additionalProperties: { $ref: "#/$defs/Account" },
-            },
-          },
-          required: ["appId", "appSecret"],
-          additionalProperties: false,
-        },
-      ],
-    };
-    channel.schema = {
-      $ref: "#/$defs/Root",
-      $defs: { Root: root, Account: account },
-    };
-    mockLoadPluginManifestRegistry.mockReturnValue(registry);
-
-    const config = {
-      appId: "app-id",
-      appSecret: "secret",
-      heartbeatVisibility: { showOk: true },
-      accounts: { work: { heartbeatVisibility: { showAlerts: false } } },
-    };
-    expect(validateConfigObjectRawWithPlugins({ channels: { feishu: config } }).ok).toBe(true);
-    expect(
-      validateConfigObjectRawWithPlugins({
-        channels: {
-          feishu: { ...config, accounts: { work: { heartbeatVisibility: { showAlerts: 0 } } } },
-        },
-      }).ok,
-    ).toBe(false);
-    expect(root.anyOf[0]?.properties).not.toHaveProperty("heartbeatVisibility");
-    expect(account.properties).not.toHaveProperty("heartbeatVisibility");
-  });
 
   it.each([{}, true])(
     "validates open channel/account heartbeat settings without rejecting custom fields (%j)",
