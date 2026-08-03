@@ -41,11 +41,11 @@ export function execGhRead(
   options?: ExecFileSyncOptions,
   params?: { execFileSyncImpl?: ExecGhReadImpl },
 ): string | Uint8Array<ArrayBuffer>;
-export function execGhJson<T = unknown>(
+export function execGhJson(
   args: readonly string[],
   options?: ExecFileSyncOptions,
   params?: { execFileSyncImpl?: ExecGhReadImpl },
-): T;
+): unknown;
 export function execGhApiRead(
   endpoint: string,
   options: ExecFileSyncOptionsWithStringEncoding,

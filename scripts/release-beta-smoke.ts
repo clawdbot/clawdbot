@@ -11,7 +11,7 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mjs";
 
-interface Options {
+type Options = {
   beta: string;
   model: string;
   providerMode: string;
@@ -19,7 +19,7 @@ interface Options {
   repo: string;
   skipParallels: boolean;
   skipTelegram: boolean;
-}
+};
 
 export type RunOptions = {
   capture?: boolean;
@@ -74,13 +74,15 @@ export function parseArgs(argv: string[]): Options {
     helpIndex === -1 ? cliArgs : cliArgs.slice(0, helpIndex),
     options,
     [
-      ...[
-        ["--beta", "beta"],
-        ["--model", "model"],
-        ["--provider-mode", "providerMode"],
-        ["--ref", "ref"],
-        ["--repo", "repo"],
-      ].map(([flag, key]) =>
+      ...(
+        [
+          ["--beta", "beta"],
+          ["--model", "model"],
+          ["--provider-mode", "providerMode"],
+          ["--ref", "ref"],
+          ["--repo", "repo"],
+        ] as const
+      ).map(([flag, key]) =>
         stringFlag(flag, key, {
           allowInline: false,
           rejectShortOptions: true,
