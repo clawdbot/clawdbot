@@ -29,6 +29,15 @@ type UpdateRunSelfUpgradeSummary = {
     cancelledSessionPurged?: boolean;
     status?: string;
   };
+  targetWizardFlow?: {
+    activeSession?: {
+      duplicateStartRejected?: boolean;
+      purged?: boolean;
+    };
+    authenticated?: boolean;
+    status?: string;
+    terminalStatus?: { purged?: boolean };
+  };
 };
 
 function formatErrorMessage(error: unknown) {
@@ -70,6 +79,7 @@ export function resolveUpdateRunSelfUpgradePermission(
 export function formatUpdateRunSelfUpgradeDetails(summary: UpdateRunSelfUpgradeSummary) {
   return [
     `wizard=${summary.wizardFlow?.status ?? "unknown"}:${summary.wizardFlow?.authenticated === true ? "authenticated" : "unauthenticated"}:${summary.wizardFlow?.duplicateStartRejected === true ? "exclusive" : "overlap-unknown"}:${summary.wizardFlow?.cancelledSessionPurged === true ? "purged" : "cleanup-unknown"}`,
+    `target-wizard=${summary.targetWizardFlow?.status ?? "unknown"}:${summary.targetWizardFlow?.authenticated === true ? "authenticated" : "unauthenticated"}:${summary.targetWizardFlow?.terminalStatus?.purged === true ? "terminal-status" : "status-unknown"}:${summary.targetWizardFlow?.activeSession?.duplicateStartRejected === true ? "exclusive" : "overlap-unknown"}:${summary.targetWizardFlow?.activeSession?.purged === true ? "purged" : "cleanup-unknown"}`,
     `source=${summary.source?.version ?? "unknown"}`,
     `target=${summary.target?.tag ?? "unknown"}:${summary.target?.resolvedVersion ?? "unknown"}`,
     `installed=${summary.installedVersion ?? "unknown"}`,
@@ -168,6 +178,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
       artifacts: [
         { kind: "summary", filePath: path.join("lane", "summary.json") },
         { kind: "rpc", filePath: path.join("lane", "wizard-flow.json") },
+        { kind: "rpc", filePath: path.join("lane", "target-wizard-flow.json") },
         { kind: "rpc", filePath: path.join("lane", "update-rpc.json") },
         { kind: "sentinel", filePath: path.join("lane", "update-status.json") },
         {

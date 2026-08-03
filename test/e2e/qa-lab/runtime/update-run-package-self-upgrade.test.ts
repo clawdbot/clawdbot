@@ -101,6 +101,35 @@ describe("update.run package self-upgrade producer", () => {
     );
   });
 
+  it("proves the current target setup lifecycle after updating", async () => {
+    const script = await fs.readFile(
+      path.join(
+        process.cwd(),
+        "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh",
+      ),
+      "utf8",
+    );
+
+    expect(script).toContain("Exercising current target Gateway wizard RPC lifecycle");
+    expect(script).toContain(
+      'gateway_call wizard.status "$target_status_session_params" \\\n  "$TARGET_WIZARD_STATUS_JSON" "$TARGET_WIZARD_STATUS_ERR"',
+    );
+    expect(script).toContain(
+      'gateway_call wizard.next "$target_active_next_params" \\\n  "$TARGET_WIZARD_NEXT_JSON" "$TARGET_WIZARD_NEXT_ERR"',
+    );
+    expect(script).toContain('grep -Fq "wizard already running" "$TARGET_WIZARD_DUPLICATE_ERR"');
+    expect(script).toContain(
+      'gateway_call wizard.cancel "$target_active_session_params" \\\n  "$TARGET_WIZARD_CANCEL_JSON" "$TARGET_WIZARD_CANCEL_ERR"',
+    );
+    expect(script).toContain('grep -Fq "wizard not found" "$TARGET_WIZARD_PURGED_STATUS_ERR"');
+    expect(script.indexOf("Invoking authenticated Gateway RPC update.run")).toBeLessThan(
+      script.indexOf("Exercising current target Gateway wizard RPC lifecycle"),
+    );
+    expect(script.indexOf("Exercising current target Gateway wizard RPC lifecycle")).toBeLessThan(
+      script.indexOf("post_restart_observed_at_ms="),
+    );
+  });
+
   it("falls back to the exact tag clone when commit or tag objects are missing", async () => {
     const script = await fs.readFile(
       path.join(process.cwd(), "scripts/e2e/update-run-package-self-upgrade-docker.sh"),
@@ -127,13 +156,22 @@ describe("update.run package self-upgrade producer", () => {
           duplicateStartRejected: true,
           status: "passed",
         },
+        targetWizardFlow: {
+          activeSession: {
+            duplicateStartRejected: true,
+            purged: true,
+          },
+          authenticated: true,
+          status: "passed",
+          terminalStatus: { purged: true },
+        },
         restartSentinel: {
           message: "QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
           status: "ok",
         },
       }),
     ).toBe(
-      "wizard=passed:authenticated:exclusive:purged; source=2026.4.26; target=latest:2026.7.2; installed=2026.7.2; sentinel=ok:QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
+      "wizard=passed:authenticated:exclusive:purged; target-wizard=passed:authenticated:terminal-status:exclusive:purged; source=2026.4.26; target=latest:2026.7.2; installed=2026.7.2; sentinel=ok:QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE",
     );
   });
 });
