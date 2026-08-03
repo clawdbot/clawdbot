@@ -1040,7 +1040,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       const pingProvider = primaryResult.provider;
       const pingRuntime = primaryResult.runtime;
       const pingTimeoutMs = resolveEmbeddingTimeoutMs({
-        kind: "batch",
+        kind: "query",
         providerId: pingProvider.id,
         providerRuntime: pingRuntime
           ? {
@@ -1048,12 +1048,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
               inlineBatchTimeoutMs: pingRuntime.inlineBatchTimeoutMs,
             }
           : undefined,
-        configuredBatchTimeoutSeconds: this.settings.sync.embeddingBatchTimeoutSeconds,
       });
       await runEmbeddingOperationWithTimeout({
         timeoutMs: pingTimeoutMs,
         message: `memory embeddings recovery ping timed out after ${Math.round(pingTimeoutMs / 1000)}s`,
-        run: async (signal) => await pingProvider.embedBatch(["ping"], { signal }),
+        run: async (signal) => await pingProvider.embedQuery("ping", { signal }),
       });
       const previousProvider = this.provider;
       this.applyProviderResult(primaryResult);

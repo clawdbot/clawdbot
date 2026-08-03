@@ -61,6 +61,9 @@ let providerCreationFailure: string | null = null;
 let providerNullResult: string | null = null;
 let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
+let providerProbeGate: Promise<void> | null = null;
+let providerQueryCalls = 0;
+let providerQueryTimeoutMs: number | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
 const originalMemoryIndexStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -196,9 +199,22 @@ vi.mock("./embeddings.js", async (importOriginal) => {
               throw providerCloseFailure;
             }
           },
-          embedQuery: async (text: string) => embedText(text),
-          embedBatch: async (texts: string[]) => {
+          embedQuery: async (text: string, options?: { signal?: AbortSignal }) => {
+            providerQueryCalls += 1;
+            await providerProbeGate;
+            if (options?.signal?.aborted) {
+              const reason = options.signal.reason;
+              throw reason instanceof Error ? reason : new Error("embedding aborted");
+            }
+            return embedText(text);
+          },
+          embedBatch: async (texts: string[], options?: { signal?: AbortSignal }) => {
             embedBatchCalls += 1;
+            await providerProbeGate;
+            if (options?.signal?.aborted) {
+              const reason = options.signal.reason;
+              throw reason instanceof Error ? reason : new Error("embedding aborted");
+            }
             embeddedBatchTexts.push(...texts);
             return texts.map(embedText);
           },
@@ -294,6 +310,14 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                   },
                 }
               : {}),
+        ...(providerQueryTimeoutMs !== null
+          ? {
+              runtime: {
+                id: providerId,
+                inlineQueryTimeoutMs: providerQueryTimeoutMs,
+              },
+            }
+          : {}),
       };
     },
   };
@@ -348,6 +372,9 @@ describe("memory index", () => {
     providerNullResult = null;
     providerCloseGate = null;
     providerInitGate = null;
+    providerProbeGate = null;
+    providerQueryCalls = 0;
+    providerQueryTimeoutMs = null;
     providerCalls = [];
     forceNoProvider = false;
 
@@ -4183,6 +4210,70 @@ describe("memory index", () => {
         }
       ).provider?.id,
     ).toBe("mock");
+  });
+
+  it("uses the query timeout for recovery from a mismatched fallback search", async () => {
+    const cfg = createCfg({
+      provider: "openai",
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    const fields = manager as unknown as {
+      provider: {
+        id: string;
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("primary provider unavailable");
+    };
+
+    await expect(manager.search("alpha")).resolves.toEqual([]);
+    expect(fields.provider?.id).toBe("fallback-provider");
+
+    const batchCallsBeforeRecovery = embedBatchCalls;
+    const queryCallsBeforeRecovery = providerQueryCalls;
+    let releaseProbe: () => void = () => {};
+    providerProbeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    providerQueryTimeoutMs = 10;
+    vi.useFakeTimers();
+
+    let searchSettled = false;
+    const recoverySearch = manager.search("alpha").then(
+      () => {
+        searchSettled = true;
+      },
+      () => {
+        searchSettled = true;
+      },
+    );
+    try {
+      for (let attempt = 0; attempt < 20 && providerQueryCalls === queryCallsBeforeRecovery;) {
+        await Promise.resolve();
+        attempt += 1;
+      }
+      expect(providerQueryCalls).toBe(queryCallsBeforeRecovery + 1);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(searchSettled).toBe(true);
+      await expect(recoverySearch).resolves.toBeUndefined();
+      expect(embedBatchCalls).toBe(batchCallsBeforeRecovery);
+      expect(fields.provider?.id).toBe("fallback-provider");
+    } finally {
+      releaseProbe();
+      providerProbeGate = null;
+      providerQueryTimeoutMs = null;
+      await Promise.allSettled([recoverySearch]);
+      vi.useRealTimers();
+    }
   });
 
   it("clears identity dirty after status resolves the indexed fallback provider", async () => {

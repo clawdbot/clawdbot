@@ -15,9 +15,10 @@ type ProviderCall = {
 
 const providerState = vi.hoisted(() => ({
   calls: [] as ProviderCall[],
+  embedQueryCalls: 0,
   embedBatchCalls: 0,
   creationFailure: null as string | null,
-  embedBatchGate: null as Promise<void> | null,
+  embedQueryGate: null as Promise<void> | null,
 }));
 
 vi.mock("./embeddings.js", () => ({
@@ -48,15 +49,18 @@ vi.mock("./embeddings.js", () => ({
         id: providerId,
         model,
         close: async () => {},
-        embedQuery: async () => [1, 0, 0, 0],
-        embedBatch: async (_texts: string[], callOptions?: { signal?: AbortSignal }) => {
-          providerState.embedBatchCalls += 1;
-          await providerState.embedBatchGate;
+        embedQuery: async (_text: string, callOptions?: { signal?: AbortSignal }) => {
+          providerState.embedQueryCalls += 1;
+          await providerState.embedQueryGate;
           const signal = callOptions?.signal;
           if (signal?.aborted) {
             const reason = signal.reason;
             throw reason instanceof Error ? reason : new Error("embedding aborted");
           }
+          return [1, 0, 0, 0];
+        },
+        embedBatch: async (_texts: string[]) => {
+          providerState.embedBatchCalls += 1;
           return [[1, 0, 0, 0]];
         },
       },
@@ -139,9 +143,10 @@ function createRecoveryHarness(): RecoveryHarness {
 describe("memory manager primary provider recovery", () => {
   beforeEach(() => {
     providerState.calls = [];
+    providerState.embedQueryCalls = 0;
     providerState.embedBatchCalls = 0;
     providerState.creationFailure = null;
-    providerState.embedBatchGate = null;
+    providerState.embedQueryGate = null;
   });
 
   it("restores the configured primary provider and retires the fallback provider", async () => {
@@ -153,7 +158,8 @@ describe("memory manager primary provider recovery", () => {
     expect(providerState.calls).toEqual([
       { provider: "openai", model: "mock-embed", fallback: "none" },
     ]);
-    expect(providerState.embedBatchCalls).toBe(1);
+    expect(providerState.embedQueryCalls).toBe(1);
+    expect(providerState.embedBatchCalls).toBe(0);
     expect(manager.provider?.id).toBe("mock");
     expect(manager.fallbackFrom).toBeUndefined();
     expect(manager.providerKey).toBe("mock-provider-key");
@@ -164,25 +170,27 @@ describe("memory manager primary provider recovery", () => {
     const manager = createRecoveryHarness();
     const fallbackProvider = manager.provider;
     let releaseEmbeddingPing: () => void = () => {};
-    providerState.embedBatchGate = new Promise<void>((resolve) => {
+    providerState.embedQueryGate = new Promise<void>((resolve) => {
       releaseEmbeddingPing = resolve;
     });
 
     const firstRecovery = manager.attemptPrimaryProviderRecovery({});
-    await vi.waitFor(() => expect(providerState.embedBatchCalls).toBe(1));
+    await vi.waitFor(() => expect(providerState.embedQueryCalls).toBe(1));
     const secondRecovery = manager.attemptPrimaryProviderRecovery({});
 
     expect(providerState.calls).toEqual([
       { provider: "openai", model: "mock-embed", fallback: "none" },
     ]);
-    expect(providerState.embedBatchCalls).toBe(1);
+    expect(providerState.embedQueryCalls).toBe(1);
+    expect(providerState.embedBatchCalls).toBe(0);
 
     releaseEmbeddingPing();
     await expect(Promise.all([firstRecovery, secondRecovery])).resolves.toEqual([true, true]);
     expect(providerState.calls).toEqual([
       { provider: "openai", model: "mock-embed", fallback: "none" },
     ]);
-    expect(providerState.embedBatchCalls).toBe(1);
+    expect(providerState.embedQueryCalls).toBe(1);
+    expect(providerState.embedBatchCalls).toBe(0);
     expect(manager.provider?.id).toBe("mock");
     expect(manager.fallbackFrom).toBeUndefined();
     expect(manager.retireProvider).toHaveBeenCalledTimes(1);
@@ -207,13 +215,13 @@ describe("memory manager primary provider recovery", () => {
     const manager = createRecoveryHarness();
     const fallbackProvider = manager.provider;
     let releaseEmbeddingPing: () => void = () => {};
-    providerState.embedBatchGate = new Promise<void>((resolve) => {
+    providerState.embedQueryGate = new Promise<void>((resolve) => {
       releaseEmbeddingPing = resolve;
     });
     const controller = new AbortController();
 
     const firstRecovery = manager.attemptPrimaryProviderRecovery({ signal: controller.signal });
-    await vi.waitFor(() => expect(providerState.embedBatchCalls).toBe(1));
+    await vi.waitFor(() => expect(providerState.embedQueryCalls).toBe(1));
     const secondRecovery = manager.attemptPrimaryProviderRecovery({});
     controller.abort(new Error("search deadline exceeded"));
 
@@ -221,7 +229,8 @@ describe("memory manager primary provider recovery", () => {
     expect(providerState.calls).toEqual([
       { provider: "openai", model: "mock-embed", fallback: "none" },
     ]);
-    expect(providerState.embedBatchCalls).toBe(1);
+    expect(providerState.embedQueryCalls).toBe(1);
+    expect(providerState.embedBatchCalls).toBe(0);
 
     releaseEmbeddingPing();
     await expect(secondRecovery).resolves.toBe(true);
@@ -235,13 +244,13 @@ describe("memory manager primary provider recovery", () => {
     const manager = createRecoveryHarness();
     const fallbackProvider = manager.provider;
     let releaseEmbeddingPing: () => void = () => {};
-    providerState.embedBatchGate = new Promise<void>((resolve) => {
+    providerState.embedQueryGate = new Promise<void>((resolve) => {
       releaseEmbeddingPing = resolve;
     });
     const controller = new AbortController();
 
     const recovery = manager.attemptPrimaryProviderRecovery({ signal: controller.signal });
-    await vi.waitFor(() => expect(providerState.embedBatchCalls).toBe(1));
+    await vi.waitFor(() => expect(providerState.embedQueryCalls).toBe(1));
     expect(manager.activeManagerOperations).toBe(1);
 
     let idleSettled = false;
