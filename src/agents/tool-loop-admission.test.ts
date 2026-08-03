@@ -60,8 +60,11 @@ describe("whole-batch tool-loop admission", () => {
       });
     }
 
+    const unrelatedSiblings = Array.from({ length: 20 }, (_, index) =>
+      call(`safe-sibling-${index}`, "write", {}),
+    );
     const intervention = await admitToolCallBatch(
-      [call("safe-sibling", "write", {}), call("repeated", "process", pollArgs)],
+      [...unrelatedSiblings, call("repeated", "process", pollArgs)],
       ctx,
     );
 
@@ -72,12 +75,15 @@ describe("whole-batch tool-loop admission", () => {
       detector: "known_poll_no_progress",
       count: 20,
     });
-    expect(state.toolCallHistory).toHaveLength(22);
-    expect(state.toolCallHistory?.slice(-2).map((record) => record.outcomeKind)).toEqual([
-      "tool-loop-veto",
-      "tool-loop-veto",
-    ]);
-    expect(consumeBatchAdmittedToolCall("safe-sibling", ctx.runId)).toBe(false);
+    expect(state.toolCallHistory).toHaveLength(21);
+    expect(state.toolCallHistory?.at(-1)).toMatchObject({
+      toolName: "process",
+      outcomeKind: "tool-loop-veto",
+    });
+    expect(consumeBatchAdmittedToolCall("safe-sibling-0", ctx.runId)).toBe(false);
+    await expect(
+      admitToolCallBatch([call("recovery-write", "write", {})], ctx),
+    ).resolves.toBeUndefined();
   });
 
   it("blocks a batch that crosses the critical threshold within its own candidates", async () => {

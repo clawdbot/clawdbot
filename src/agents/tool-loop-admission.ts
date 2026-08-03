@@ -159,9 +159,16 @@ export async function admitToolCallBatch(
     );
     if (intervention) {
       // Preserve only denial evidence. No call in this batch executed, but a
-      // recovery retry must still see the threshold crossed by its siblings.
+      // recovery retry must still see same-action siblings that crossed the
+      // threshold. Unrelated skipped actions remain valid recovery choices.
       for (const rejectedCall of calls) {
-        recordLoopVeto(sessionState, rejectedCall);
+        const rejectedActionKey = hashToolCall(
+          normalizeToolName(rejectedCall.toolCall.name || "tool"),
+          rejectedCall.args,
+        );
+        if (rejectedActionKey === intervention.actionKey) {
+          recordLoopVeto(sessionState, rejectedCall);
+        }
       }
       return intervention;
     }
