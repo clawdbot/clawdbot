@@ -102,7 +102,10 @@ function stringArray(value: unknown): string[] {
 
 function parseJsonFrame(data: RawData): Record<string, unknown> | null {
   try {
-    return asRecord(JSON.parse(data.toString()));
+    const text = Array.isArray(data)
+      ? Buffer.concat(data).toString("utf8")
+      : Buffer.from(data).toString("utf8");
+    return asRecord(JSON.parse(text));
   } catch {
     return null;
   }
@@ -403,6 +406,7 @@ async function createBrowserPage(
   gatewayUrl: string,
 ): Promise<{
   context: BrowserContext;
+  evidenceStartIndex: number;
   page: Page;
 }> {
   await mkdir(artifactDir, { recursive: true });
@@ -415,18 +419,18 @@ async function createBrowserPage(
   openContexts.add(context);
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);
-  const proxyConnectionsBeforeConfirmation = proxy.evidence.length;
+  const evidenceStartIndex = proxy.evidence.length;
   const response = await page.goto(withGatewayUrl(baseUrl, gatewayUrl));
   expect(response?.status()).toBe(200);
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
   await confirmation.waitFor();
   expect(await confirmation.textContent()).toContain(gatewayUrl);
-  expect(proxy.evidence).toHaveLength(proxyConnectionsBeforeConfirmation);
+  expect(proxy.evidence).toHaveLength(evidenceStartIndex);
   await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect
     .poll(() => proxy.evidence.length, { timeout: 15_000 })
-    .toBeGreaterThan(proxyConnectionsBeforeConfirmation);
-  return { context, page };
+    .toBeGreaterThan(evidenceStartIndex);
+  return { context, evidenceStartIndex, page };
 }
 
 async function warmControlUiSource(baseUrl: string): Promise<void> {
@@ -472,9 +476,11 @@ async function captureChromiumScreenshot(page: Page, fileName: string): Promise<
 
 async function waitForConnectionEvidence(
   predicate: (entry: ProxyConnectionEvidence) => boolean,
+  evidenceStartIndex: number,
 ): Promise<ProxyConnectionEvidence> {
-  await expect.poll(() => proxy.evidence.some(predicate), { timeout: 15_000 }).toBe(true);
-  const entry = proxy.evidence.find(predicate);
+  const currentPageEvidence = () => proxy.evidence.slice(evidenceStartIndex);
+  await expect.poll(() => currentPageEvidence().some(predicate), { timeout: 15_000 }).toBe(true);
+  const entry = currentPageEvidence().find(predicate);
   if (!entry) {
     throw new Error("expected reverse-proxy connection evidence");
   }
@@ -570,6 +576,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
         entry.route === "trusted" &&
         entry.gatewayResult?.ok === true &&
         entry.gatewayResult.helloType === "hello-ok",
+      connected.evidenceStartIndex,
     );
     expect(trustedEvidence.browserConnect).toMatchObject({
       authFields: [],
@@ -590,6 +597,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     await waitForVisibleFailure(rejected.page, "unauthorized");
     const untrustedEvidence = await waitForConnectionEvidence(
       (entry) => entry.route === "untrusted" && entry.gatewayResult?.ok === false,
+      rejected.evidenceStartIndex,
     );
     expect(untrustedEvidence.gatewayResult?.message).toContain("unauthorized");
     expect(untrustedEvidence.gatewayResult?.errorReason).toBe(expectedReason);
@@ -627,6 +635,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
         entry.route === "trusted" &&
         entry.browserOrigin === allowedOrigin &&
         entry.gatewayResult?.ok === true,
+      allowed.evidenceStartIndex,
     );
     await captureChromiumScreenshot(allowed.page, "03-allowed-origin-connected.png");
     expect(allowedErrors).toEqual([]);
@@ -643,6 +652,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
         entry.browserOrigin === rejectedOrigin &&
         (entry.gatewayResult?.errorCode === ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED ||
           entry.upstreamHandshakeStatus === 403),
+      rejected.evidenceStartIndex,
     );
     await captureChromiumScreenshot(rejected.page, "04-rejected-origin-recovery.png");
     expect(rejectedErrors).toEqual([]);
