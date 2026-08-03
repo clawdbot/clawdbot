@@ -106,7 +106,7 @@ describe("FeishuConfigSchema webhook validation", () => {
     ).toMatchObject({ success: true, data: { webhookPath: "/hook/?tenant=alpha" } });
     expect(FeishuChannelConfigSchema.schema).toMatchObject({
       properties: {
-        webhookPath: { type: "string" },
+        webhookPath: { default: "/feishu/events", type: "string" },
         accounts: {
           additionalProperties: { properties: { webhookPath: { type: "string" } } },
         },

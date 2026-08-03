@@ -269,7 +269,7 @@ const FeishuConfigSchemaBase = z
     verificationToken: buildSecretInputSchema().optional(),
     domain: FeishuDomainSchema.optional().default("feishu"),
     connectionMode: FeishuConnectionModeSchema.optional().default("websocket"),
-    webhookPath: FeishuWebhookPathSchema.optional().default(DEFAULT_FEISHU_WEBHOOK_PATH),
+    webhookPath: FeishuWebhookPathSchema.optional().prefault(DEFAULT_FEISHU_WEBHOOK_PATH),
     ...FeishuSharedConfigShape,
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     reactionNotifications: ReactionNotificationModeSchema.optional().default("own"),
