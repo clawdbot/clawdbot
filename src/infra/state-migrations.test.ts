@@ -6,9 +6,13 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { readMemoryHostEventRecords } from "../memory-host-sdk/events.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
-import type { PluginDoctorStateMigrationContext } from "../plugins/doctor-contract-registry.js";
+import type {
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationContext,
+} from "../plugins/doctor-contract-registry.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -881,6 +885,88 @@ describe("state migrations", () => {
     expect(repaired.changes).toContain("doctor-only plugin state migrated");
     expect(detectLegacyState).toHaveBeenCalledTimes(2);
     expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("restores retained Memory Core host events only for explicit plugin-only Doctor repair", async () => {
+    const root = await fs.realpath(await createTempDir());
+    const stateDir = path.join(root, ".openclaw");
+    const workspaceDir = path.join(root, "workspace");
+    const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
+    const env = createEnv(stateDir);
+    const cfg = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    } as OpenClawConfig;
+    const event = {
+      type: "memory.recall.recorded",
+      timestamp: "2026-07-01T00:00:00.000Z",
+      query: "retained before upgrade",
+      resultCount: 0,
+      results: [],
+    } as const;
+    await fs.mkdir(path.dirname(eventPath), { recursive: true });
+    await fs.writeFile(eventPath, `${JSON.stringify(event)}\n`, "utf8");
+
+    const { stateMigrations } = (await import(
+      /* @vite-ignore */ new URL(
+        "../../extensions/memory-core/doctor-contract-api.ts",
+        import.meta.url,
+      ).href
+    )) as { stateMigrations: PluginDoctorStateMigration[] };
+    const migration = stateMigrations.find(
+      (candidate) => candidate.id === "memory-core-host-events-jsonl-to-sqlite",
+    );
+    expect(migration).toBeDefined();
+    if (!migration) {
+      throw new Error("Expected the bundled Memory Core host-event Doctor migration");
+    }
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: migration.id,
+          label: migration.label,
+          doctorOnly: migration.doctorOnly,
+          detectLegacyState: (params) =>
+            migration.detectLegacyState({
+              ...params,
+              context: params.context as PluginDoctorStateMigrationContext,
+            }),
+          migrateLegacyState: async (params) => {
+            const result = await migration.migrateLegacyState({
+              ...params,
+              context: params.context as PluginDoctorStateMigrationContext,
+            });
+            return { changes: result.changes, warnings: result.warnings };
+          },
+        },
+      },
+    ];
+
+    const automatic = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+    expect(automatic.warnings).toEqual([]);
+    expect(automatic.changes).not.toContain(
+      "Migrated Memory Core host events -> SQLite plugin state (1 new row(s))",
+    );
+    await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([]);
+    await expect(fs.stat(eventPath)).resolves.toBeDefined();
+
+    const repaired = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(repaired.warnings).toEqual([]);
+    expect(repaired.changes).toContain(
+      "Migrated Memory Core host events -> SQLite plugin state (1 new row(s))",
+    );
+    await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([event]);
+    await expectMissingPath(eventPath);
+    await expect(fs.stat(`${eventPath}.migrated`)).resolves.toBeDefined();
   });
 
   it("runs doctor-only repairs after the automatic migration check", async () => {
