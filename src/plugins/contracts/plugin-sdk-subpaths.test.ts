@@ -1363,8 +1363,17 @@ describe("plugin-sdk subpath exports", () => {
     >();
   });
 
-  it("keeps runtime entry subpaths importable", async () => {
+  it("keeps the supported root SDK contract importable through core", async () => {
     const coreSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core");
+
+    expect(coreSdk.definePluginEntry).toBe(coreDirectSdk.definePluginEntry);
+    expect(coreSdk.optionalStringEnum).toBe(coreDirectSdk.optionalStringEnum);
+    expect(coreSdk.prepareMemorySystemPromptAddition).toBe(
+      coreDirectSdk.prepareMemorySystemPromptAddition,
+    );
+  });
+
+  it("keeps focused SDK subpaths importable", async () => {
     const channelActionsSdk = await importResolvedPluginSdkSubpath(
       "openclaw/plugin-sdk/channel-actions",
     );
@@ -1383,11 +1392,7 @@ describe("plugin-sdk subpath exports", () => {
       representativeModules.push(await importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${id}`));
     }
 
-    expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
-    expect(coreSdk.optionalStringEnum).toBe(coreDirectSdk.optionalStringEnum);
-    expect(coreSdk.prepareMemorySystemPromptAddition).toBe(
-      coreDirectSdk.prepareMemorySystemPromptAddition,
-    );
+    expect(pluginEntrySdk.definePluginEntry).toBe(coreDirectSdk.definePluginEntry);
     expect(channelActionsSdk.optionalStringEnum).toBe(channelActionsDirectSdk.optionalStringEnum);
     expect(channelActionsSdk.stringEnum).toBe(channelActionsDirectSdk.stringEnum);
     expectSourceMentions("error-runtime", [
@@ -1450,6 +1455,15 @@ describe("plugin-sdk subpath exports", () => {
       const mod = representativeModules[index];
       expect(typeof mod).toBe("object");
       expect(Object.keys(mod as object).length, `subpath ${id} should resolve`).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps deprecated public SDK shims importable during migrations", async () => {
+    expect(deprecatedPublicPluginSdkEntrypoints.length).toBeGreaterThan(0);
+
+    for (const subpath of deprecatedPublicPluginSdkEntrypoints) {
+      const mod = await importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${subpath}`);
+      expect(typeof mod, `deprecated subpath ${subpath} should resolve`).toBe("object");
     }
   });
 

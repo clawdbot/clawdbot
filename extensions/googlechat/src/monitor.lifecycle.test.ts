@@ -47,6 +47,7 @@ describe("Google Chat monitor lifecycle", () => {
 
     expect(mocks.registerTarget).toHaveBeenCalledOnce();
     expect(statusSink).toHaveBeenCalledWith({
+      running: true,
       connected: true,
       lifecycle: "ready",
       lastConnectedAt: expect.any(Number),
