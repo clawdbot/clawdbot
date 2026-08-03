@@ -17,6 +17,7 @@ import {
   loadExactSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntry,
+  replaceTranscriptEvents,
   replaceSessionEntry,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
@@ -25,6 +26,12 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
+import {
+  captureCurrentPluginMetadataSnapshotState,
+  restoreCurrentPluginMetadataSnapshotState,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createDeferred } from "../test-utils/deferred.js";
@@ -201,20 +208,22 @@ async function writeMainSessionTranscript(
   if (!storePath) {
     throw new Error("session store path was not initialized");
   }
-  for (const event of events) {
-    if (typeof event === "string" && !event.trim()) {
-      continue;
-    }
-    await appendTranscriptEvent(
-      {
-        agentId: opts?.agentId ?? "main",
-        sessionId,
-        sessionKey: opts?.sessionKey ?? "agent:main:main",
-        storePath,
-      },
-      typeof event === "string" ? (JSON.parse(event) as unknown) : event,
-    );
-  }
+  // These fixtures always seed a complete fresh transcript. Replace it in one
+  // transaction so large history cases do not pay one SQLite commit per event.
+  const transcriptEvents = events
+    .filter((event) => typeof event !== "string" || event.trim())
+    .map((event) => (typeof event === "string" ? JSON.parse(event) : event)) as Parameters<
+    typeof replaceTranscriptEvents
+  >[1];
+  await replaceTranscriptEvents(
+    {
+      agentId: opts?.agentId ?? "main",
+      sessionId,
+      sessionKey: opts?.sessionKey ?? "agent:main:main",
+      storePath,
+    },
+    transcriptEvents,
+  );
 }
 
 async function withDirectChatSession(
@@ -1229,6 +1238,7 @@ describe("gateway server chat", () => {
         },
       },
       async (state) => {
+        const previousPluginMetadata = captureCurrentPluginMetadataSnapshotState();
         openDirectChatSession();
         try {
           const config = {
@@ -1358,6 +1368,14 @@ describe("gateway server chat", () => {
           const { createGatewayAgentModelCatalogProjector } =
             await import("./server-methods/models-list-result.js");
           const persistedConfig = getRuntimeConfig();
+          // Direct handlers bypass Gateway startup, so publish its process-lifecycle handoff once.
+          // Otherwise every route projector rediscovers the full plugin metadata graph.
+          const pluginMetadata = resolvePluginMetadataSnapshot({ config, env: process.env });
+          setCurrentPluginMetadataSnapshot(pluginMetadata, {
+            config,
+            compatibleConfigs: [persistedConfig],
+            env: process.env,
+          });
           expect(persistedConfig.auth?.order?.openai).toEqual([
             "openai:api",
             "openai:chatgpt",
@@ -1384,7 +1402,9 @@ describe("gateway server chat", () => {
           });
 
           expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
-          expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "work" });
+          expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
+            agentId: "work",
+          });
           expect(responses).toHaveLength(1);
           expect(responses[0]?.ok).toBe(true);
           const payload = responses[0]?.payload as
@@ -1460,6 +1480,7 @@ describe("gateway server chat", () => {
           }
         } finally {
           testState.sessionStorePath = undefined;
+          restoreCurrentPluginMetadataSnapshotState(previousPluginMetadata);
         }
       },
     );
