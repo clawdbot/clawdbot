@@ -462,6 +462,52 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("captures a requester lifecycle revision already replaced before gateway admission", async () => {
+    await withTestDir({ prefix: "openclaw-gateway-plugin-subagent-revision-" }, async (root) => {
+      useTestStateDir(root);
+      resetSubagentRegistryForTests({ persist: false });
+      const requesterSessionKey = "agent:main:telegram:direct:123";
+      const storePath = resolveStorePath(undefined, { agentId: "main" });
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: requesterSessionKey, storePath },
+        {
+          sessionId: "requester-session",
+          lifecycleRevision: "replacement-revision",
+          updatedAt: 1,
+        },
+      );
+      const previousConfig = mocks.loadConfigReturn;
+      mocks.loadConfigReturn = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { list: [{ id: "main", default: true }] },
+      };
+      try {
+        await registerPluginSubagentRunFromGateway({
+          cfg: {
+            session: { mainKey: "main", scope: "per-sender" },
+            agents: { list: [{ id: "main", default: true }] },
+          },
+          runId: "plugin-subagent-revision-run",
+          childSessionKey: "agent:main:subagent:plugin-revision",
+          task: "background plugin subagent task",
+          requester: {
+            sessionKey: requesterSessionKey,
+            origin: { channel: "telegram", to: "123", accountId: "work" },
+          },
+          pluginId: "memory-core",
+        });
+
+        const run = requireValue(
+          getSubagentRunByChildSessionKey("agent:main:subagent:plugin-revision"),
+          "expected requester-bound plugin subagent run",
+        );
+        expect(run.expectedRequesterLifecycleRevision).toBe("replacement-revision");
+      } finally {
+        mocks.loadConfigReturn = previousConfig;
+      }
+    });
+  });
+
   it("registers normally when a follow-up to a paused session names its own requester", async () => {
     await withTestDir(
       { prefix: "openclaw-gateway-plugin-subagent-own-requester-" },
