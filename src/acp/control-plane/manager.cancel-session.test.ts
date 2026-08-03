@@ -392,9 +392,9 @@ describe("AcpSessionManager cancelSession", () => {
       detailCode: "SESSION_ACTOR_SUPERSEDED",
     });
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
-    expectRecordFields(mockCallArg(runtimeState.close, 1), {
-      handle: expect.objectContaining({ runtimeSessionName: "runtime-2" }),
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(runtimeState.close), {
+      handle: expect.objectContaining({ runtimeSessionName: "runtime-1" }),
       reason: "session-actor-superseded",
       discardPersistentState: true,
     });
@@ -449,8 +449,6 @@ describe("AcpSessionManager cancelSession", () => {
       sessionKey,
       reason: "session-reset",
     });
-    const upsertsBeforeStaleControlsSettle = hoisted.upsertAcpSessionMetaMock.mock.calls.length;
-
     await manager.runTurn({
       provenance: "system",
       cfg: baseCfg,
@@ -463,6 +461,7 @@ describe("AcpSessionManager cancelSession", () => {
     expectRecordFields(mockCallArg(runtimeState.runTurn), {
       handle: expect.objectContaining({ runtimeSessionName: "runtime-2" }),
     });
+    const upsertsAfterFreshTurn = hoisted.upsertAcpSessionMetaMock.mock.calls.length;
 
     releaseControls.resolve();
     await expect(staleTurn).rejects.toMatchObject({
@@ -470,9 +469,7 @@ describe("AcpSessionManager cancelSession", () => {
       detailCode: "SESSION_ACTOR_SUPERSEDED",
     });
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
-    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(
-      upsertsBeforeStaleControlsSettle + 3,
-    );
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(upsertsAfterFreshTurn);
     expectRecordFields(mockCallArg(runtimeState.close), {
       handle: expect.objectContaining({ runtimeSessionName: "runtime-1" }),
       reason: "session-reset",
