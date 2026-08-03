@@ -1,4 +1,5 @@
 import type { InternalToolBatchCall, ToolLoopIntervention } from "@openclaw/agent-core";
+import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
   beforeToolCallLog as log,
   loadBeforeToolCallRuntime,
@@ -18,6 +19,7 @@ type ToolLoopCall = {
 async function evaluateToolLoopCall(
   call: ToolLoopCall,
   ctx: HookContext,
+  stateOverride?: SessionState,
 ): Promise<ToolLoopIntervention | undefined> {
   if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
     return undefined;
@@ -25,10 +27,12 @@ async function evaluateToolLoopCall(
   const toolName = normalizeToolName(call.toolName || "tool");
   const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop } =
     await loadBeforeToolCallRuntime();
-  const sessionState = getDiagnosticSessionState({
-    sessionKey: ctx.sessionKey,
-    sessionId: ctx.sessionId,
-  });
+  const sessionState =
+    stateOverride ??
+    getDiagnosticSessionState({
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
+    });
   const result = detectToolCallLoop(
     sessionState,
     toolName,
@@ -116,17 +120,45 @@ export async function admitToolCallBatch(
   calls: InternalToolBatchCall[],
   ctx: HookContext,
 ): Promise<ToolLoopIntervention | undefined> {
+  if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
+    return undefined;
+  }
+  const { getDiagnosticSessionState, recordToolCall } = await loadBeforeToolCallRuntime();
+  const sessionState = getDiagnosticSessionState({
+    sessionKey: ctx.sessionKey,
+    sessionId: ctx.sessionId,
+  });
+  const projectedState: SessionState = {
+    ...sessionState,
+    toolCallHistory: [...(sessionState.toolCallHistory ?? [])],
+  };
   for (const call of calls) {
+    const toolName = normalizeToolName(call.toolCall.name || "tool");
     const intervention = await evaluateToolLoopCall(
       {
-        toolName: call.toolCall.name,
+        toolName,
         params: call.args,
         toolCallId: call.toolCall.id,
       },
       ctx,
+      projectedState,
     );
     if (intervention) {
       return intervention;
+    }
+    recordToolCall(
+      projectedState,
+      toolName,
+      call.args,
+      call.toolCall.id,
+      ctx.loopDetection,
+      ctx.runId ? { runId: ctx.runId } : undefined,
+    );
+    const projectedCall = projectedState.toolCallHistory?.at(-1);
+    if (projectedCall) {
+      // A later sibling must assume this candidate makes no progress. The
+      // projection is discarded unless the whole batch passes admission.
+      projectedCall.outcomeKind = "tool-loop-veto";
     }
   }
   for (const call of calls) {

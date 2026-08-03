@@ -76,6 +76,45 @@ describe("whole-batch tool-loop admission", () => {
     expect(consumeBatchAdmittedToolCall("safe-sibling", ctx.runId)).toBe(false);
   });
 
+  it("blocks a batch that crosses the critical threshold within its own candidates", async () => {
+    const state = getDiagnosticSessionState({
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
+    });
+    const pollArgs = { action: "poll", sessionId: "process-2" };
+    for (let index = 0; index < 19; index += 1) {
+      const toolCallId = `prior-${index}`;
+      recordToolCall(state, "process", pollArgs, toolCallId, ctx.loopDetection, {
+        runId: ctx.runId,
+      });
+      recordToolCallOutcome(state, {
+        toolName: "process",
+        toolParams: pollArgs,
+        toolCallId,
+        result: {
+          content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
+          details: { status: "running" },
+        },
+        config: ctx.loopDetection,
+        runId: ctx.runId,
+      });
+    }
+
+    const intervention = await admitToolCallBatch(
+      [call("candidate-20", "process", pollArgs), call("candidate-21", "process", pollArgs)],
+      ctx,
+    );
+
+    expect(intervention).toMatchObject({
+      kind: "critical-tool-loop",
+      toolCallId: "candidate-21",
+      detector: "known_poll_no_progress",
+      count: 20,
+    });
+    expect(state.toolCallHistory).toHaveLength(19);
+    expect(consumeBatchAdmittedToolCall("candidate-20", ctx.runId)).toBe(false);
+  });
+
   it("records an admitted call once and skips only its duplicate single-call loop policy", async () => {
     const admitted = call("admitted", "read", { path: "/tmp/a" });
 
