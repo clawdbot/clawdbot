@@ -1,5 +1,5 @@
 // Mattermost tests cover monitor plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
