@@ -562,6 +562,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     await connected.page.screenshot({
       fullPage: true,
       path: path.join(artifactDir, "01-trusted-proxy-connected.png"),
+      timeout: controlUiSettleTimeoutMs,
     });
     expect(connectedErrors).toEqual([]);
     await closeContext(connected.context);
@@ -581,6 +582,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     await rejected.page.screenshot({
       fullPage: true,
       path: path.join(artifactDir, "02-untrusted-proxy-rejected.png"),
+      timeout: controlUiSettleTimeoutMs,
     });
     expect(rejectedErrors).toEqual([]);
 
@@ -617,6 +619,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     await allowed.page.screenshot({
       fullPage: true,
       path: path.join(artifactDir, "03-allowed-origin-connected.png"),
+      timeout: controlUiSettleTimeoutMs,
     });
     expect(allowedErrors).toEqual([]);
     await closeContext(allowed.context);
@@ -636,6 +639,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     await rejected.page.screenshot({
       fullPage: true,
       path: path.join(artifactDir, "04-rejected-origin-recovery.png"),
+      timeout: controlUiSettleTimeoutMs,
     });
     expect(rejectedErrors).toEqual([]);
 
