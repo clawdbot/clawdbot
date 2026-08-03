@@ -1,3 +1,4 @@
+import { hasTerminalDelegateArtifactPolicyForProducer } from "../../agents/delegate-artifacts.js";
 import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
 import {
   getSubagentRunByChildSessionKey,
@@ -5,7 +6,12 @@ import {
   isSubagentRunLive,
 } from "../../agents/subagent-registry-read.js";
 
-export function partitionKnownAcceptedDelegateChildren<T extends { flowId?: string }>(params: {
+export function partitionKnownAcceptedDelegateChildren<
+  T extends {
+    flowId?: string;
+    returnOptions?: { artifacts?: "forbidden" | "optional" | "required" };
+  },
+>(params: {
   delegates: T[];
   parentSessionKey: (delegate: T) => string;
 }): {
@@ -25,9 +31,22 @@ export function partitionKnownAcceptedDelegateChildren<T extends { flowId?: stri
       params.parentSessionKey(delegate),
       delegate.flowId,
     );
+    const managedArtifacts =
+      delegate.returnOptions?.artifacts === "optional" ||
+      delegate.returnOptions?.artifacts === "required";
     const accepted =
       isSubagentRunLive(getSubagentRunByChildSessionKey(childSessionKey)) ||
-      hasLiveContinuationDelegateChildRun({ childSessionKey, flowId: delegate.flowId });
+      hasLiveContinuationDelegateChildRun({ childSessionKey, flowId: delegate.flowId }) ||
+      // The registry only knows live runs, so an accepted child that finished
+      // before its acceptance commit was re-driven (or before a restart) would
+      // otherwise be re-spawned or reported as a spawn failure. Its terminal
+      // artifact policy, bound to this exact producer, is the durable proof
+      // that the child genuinely ran.
+      (managedArtifacts &&
+        hasTerminalDelegateArtifactPolicyForProducer({
+          flowId: delegate.flowId,
+          producerSessionKey: childSessionKey,
+        }));
     if (accepted) {
       acceptedDelegates.push(delegate);
       acceptedChildSessionKeysByFlowId.set(delegate.flowId, childSessionKey);

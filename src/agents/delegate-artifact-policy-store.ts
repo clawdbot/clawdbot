@@ -153,6 +153,32 @@ export function assertDelegateArtifactPolicyPrepared(
   }
 }
 
+/**
+ * Whether the managed child bound to this flow already reached a terminal
+ * artifact policy under the expected producer session. A live subagent registry
+ * cannot answer this once the child has ended (or the process restarted), so
+ * this durable binding is the acceptance evidence that keeps a re-drive from
+ * reporting a genuinely completed child as a spawn failure.
+ */
+export function hasTerminalDelegateArtifactPolicyForProducer(
+  params: { flowId: string; producerSessionKey: string },
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  ensureDelegateArtifactsSchema(options);
+  const { db } = openOpenClawStateDatabase(options);
+  const policy = executeSqliteQueryTakeFirstSync(
+    db,
+    artifactDb(db)
+      .selectFrom("delegate_artifact_policies")
+      .select(["status", "producer_session_key"])
+      .where("flow_id", "=", params.flowId),
+  );
+  return (
+    (policy?.status === "completed" || policy?.status === "failed") &&
+    policy.producer_session_key === params.producerSessionKey
+  );
+}
+
 export function removeUnacceptedDelegateArtifactPolicy(
   flowId: string,
   options: OpenClawStateDatabaseOptions = {},
