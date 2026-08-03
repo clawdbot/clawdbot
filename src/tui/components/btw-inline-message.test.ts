@@ -1,5 +1,6 @@
 // BTW inline message tests cover compact inline status message rendering.
 import { describe, expect, it } from "vitest";
+import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { BtwInlineMessage } from "./btw-inline-message.js";
 
 describe("btw inline message", () => {
@@ -16,5 +17,56 @@ describe("btw inline message", () => {
       "323                                                                             ",
       " Press Enter or Esc to dismiss                                                  ",
     ]);
+  });
+
+  it("sanitizes the question and successful Markdown result on every update", () => {
+    const firstQuestionAttack = "\x1b[3Jquestion";
+    const firstTextAttack = "\x1b]52;c;T08_BTW_CLIPBOARD\x07";
+    const nextQuestionAttack = "\u009b3Jquestion";
+    const nextTextAttack = "\u009d0;T08_BTW_TITLE\u009c";
+    const url = "https://example.test/tui/btw?copy=caf%C3%A9";
+    const message = new BtwInlineMessage({
+      question: `first ${firstQuestionAttack}`,
+      text: `${firstTextAttack}**first café** ${url}`,
+    });
+
+    let raw = message.render(140).join("\n");
+    let rendered = normalizeTestText(raw);
+    expect(rendered).toContain("BTW: first question");
+    expect(rendered).toContain("first café");
+    expect(raw).toContain(`\x1b]8;;${url}\x07`);
+    expect(raw).not.toContain(firstQuestionAttack);
+    expect(raw).not.toContain(firstTextAttack);
+
+    message.setResult({
+      question: `next ${nextQuestionAttack}`,
+      text: `${nextTextAttack}**next 東京** ${url}`,
+    });
+
+    raw = message.render(140).join("\n");
+    rendered = normalizeTestText(raw);
+    expect(rendered).toContain("BTW: next question");
+    expect(rendered).toContain("next 東京");
+    expect(rendered).not.toContain("first question");
+    expect(rendered).not.toContain("first café");
+    expect(raw).not.toContain(nextQuestionAttack);
+    expect(raw).not.toContain(nextTextAttack);
+  });
+
+  it("sanitizes BTW error questions and text before applying trusted themes", () => {
+    const questionAttack = "\x1b]0;T08_BTW_QUESTION_TITLE\x07";
+    const errorAttack = "\u009b3Jretry";
+    const message = new BtwInlineMessage({
+      question: `why ${questionAttack}failed?`,
+      text: `${errorAttack} safely café`,
+      isError: true,
+    });
+
+    const raw = message.render(100).join("\n");
+    const rendered = normalizeTestText(raw);
+    expect(rendered).toContain("BTW: why failed?");
+    expect(rendered).toContain("retry safely café");
+    expect(raw).not.toContain(questionAttack);
+    expect(raw).not.toContain(errorAttack);
   });
 });

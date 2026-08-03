@@ -1,0 +1,38 @@
+title: TUI terminal rendering and output safety PTY contracts
+scenario:
+  id: tui-terminal-safety-pty
+  surface: tui
+  category: tui.rendering-and-output-safety
+  coverage:
+    primary:
+      - tui.terminal-rendering-primitives
+      - tui.output-safety
+  risk: medium
+  objective: Prove narrow terminal rendering and hostile output sanitization through the real runTui PTY loop.
+  successCriteria:
+    - Long Unicode output renders through narrow real PTY frames without replacement characters.
+    - Wrapped URLs retain their complete copy-safe OSC 8 target.
+    - ANSI, OSC, clipboard, and C1 payloads cannot reach raw terminal frames.
+    - Printable text surrounding hostile terminal controls remains visible.
+  codeRefs:
+    - src/tui/tui-pty-harness.e2e.test.ts
+    - src/tui/tui-formatters.ts
+    - src/tui/osc8-hyperlinks.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
+    summary: Runs independently matched real-PTY rendering and output-safety assertions and authenticates their fresh Vitest results.
+    timeoutMs: 180000
+    args:
+      - --artifact-base
+      - ${outputDir}
+      - --scenario-id
+      - ${scenarioId}
+    config:
+      tuiPtyCases:
+        - coverageId: tui.terminal-rendering-primitives
+          testFile: src/tui/tui-pty-harness.e2e.test.ts
+          testNamePattern: ^TUI PTY harness renders long Unicode output and copy-safe URLs in narrow real PTY frames$
+        - coverageId: tui.output-safety
+          testFile: src/tui/tui-pty-harness.e2e.test.ts
+          testNamePattern: ^TUI PTY harness sanitizes ANSI OSC and C1 payloads in narrow real PTY frames$

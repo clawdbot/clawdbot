@@ -686,6 +686,110 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "renders long Unicode output and copy-safe URLs in narrow real PTY frames",
+    async () => {
+      const url =
+        "https://example.test/tui/copy-safe/very-long-path/with-query?mode=narrow&value=alpha%20beta#proof";
+      const message = [
+        "terminal rendering proof",
+        "Long output must wrap across several narrow terminal rows without losing text.",
+        "Unicode stays intact: café 東京 👩🏽‍💻.",
+        `Copy this URL exactly: ${url}`,
+      ].join(" ");
+      const renderingFixture = await startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_COLS: "28",
+          OPENCLAW_TUI_PTY_ROWS: "18",
+          OPENCLAW_TUI_PTY_INITIAL_MESSAGE: message,
+        },
+      });
+
+      try {
+        await renderingFixture.run.waitForOutput(
+          "PTY_RESPONSE: terminal rendering proof",
+          STARTUP_TIMEOUT_MS,
+        );
+        await renderingFixture.run.waitForOutput("café 東京 👩🏽‍💻", STARTUP_TIMEOUT_MS);
+        const sent = await renderingFixture.waitForLogEntry(
+          (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+          STARTUP_TIMEOUT_MS,
+        );
+        expect(sent.payload).toMatchObject({ message });
+
+        const raw = renderingFixture.run.output();
+        const linkOpen = `\x1b]8;;${url}\x07`;
+        expect(raw.split(linkOpen).length - 1).toBeGreaterThan(1);
+        expect(raw).not.toContain("\uFFFD");
+      } finally {
+        await renderingFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "sanitizes ANSI OSC and C1 payloads in narrow real PTY frames",
+    async () => {
+      const sgr = "\x1b[38;5;201mANSI_RED";
+      const erase = "\x1b[3JERASE_SCREEN";
+      const oscTitle = "\x1b]0;T08_OSC_TITLE\x07";
+      const oscClipboard = "\x1b]52;c;T08_CLIPBOARD_PAYLOAD\x07";
+      const c1Csi = "\u009b3JC1_ERASE";
+      const c1Osc = "\u009d0;T08_C1_TITLE\u009c";
+      const gatewayStatus = [
+        "terminal safety proof",
+        `${sgr}\x1b[0m`,
+        erase,
+        oscTitle,
+        oscClipboard,
+        c1Csi,
+        c1Osc,
+        "Unicode remains visible: café 東京 👩🏽‍💻.",
+      ].join(" ");
+      const safetyFixture = await startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_COLS: "30",
+          OPENCLAW_TUI_PTY_ROWS: "18",
+          OPENCLAW_TUI_PTY_GATEWAY_STATUS: gatewayStatus,
+        },
+      });
+
+      try {
+        await safetyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await safetyFixture.run.write("/gateway-status\r", { delay: false });
+        await safetyFixture.run.waitForOutput(
+          "terminal safety proof ANSI_RED ERASE_SCREEN C1_ERASE",
+          STARTUP_TIMEOUT_MS,
+        );
+        await safetyFixture.run.waitForOutput(
+          "Unicode remains visible: café 東京 👩🏽‍💻.",
+          STARTUP_TIMEOUT_MS,
+        );
+        await safetyFixture.waitForLogEntry(
+          (entry) => entry.method === "getGatewayStatus",
+          STARTUP_TIMEOUT_MS,
+        );
+
+        const raw = safetyFixture.run.output();
+        for (const attack of [sgr, erase, oscTitle, oscClipboard, c1Csi, c1Osc]) {
+          expect(raw).not.toContain(attack);
+        }
+        expect(raw).not.toContain("\uFFFD");
+
+        const helpOffset = safetyFixture.run.visibleOutput().length;
+        await safetyFixture.run.write("/help\r", { delay: false });
+        await safetyFixture.run.waitForOutput("Slash commands:", STARTUP_TIMEOUT_MS);
+        const helpOutput = safetyFixture.run.visibleOutput().slice(helpOffset);
+        expect(helpOutput).toContain("/help");
+        expect(helpOutput).toContain("/exit");
+      } finally {
+        await safetyFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "preserves xAI account limit errors in terminal output",
     async () => {
       await fixture.run.write("xai limit proof\r");
