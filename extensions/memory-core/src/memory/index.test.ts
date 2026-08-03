@@ -199,20 +199,20 @@ vi.mock("./embeddings.js", async (importOriginal) => {
               throw providerCloseFailure;
             }
           },
-          embedQuery: async (text: string, options?: { signal?: AbortSignal }) => {
+          embedQuery: async (text: string, requestOptions?: { signal?: AbortSignal }) => {
             providerQueryCalls += 1;
             await providerProbeGate;
-            if (options?.signal?.aborted) {
-              const reason = options.signal.reason;
+            if (requestOptions?.signal?.aborted) {
+              const reason = requestOptions.signal.reason;
               throw reason instanceof Error ? reason : new Error("embedding aborted");
             }
             return embedText(text);
           },
-          embedBatch: async (texts: string[], options?: { signal?: AbortSignal }) => {
+          embedBatch: async (texts: string[], requestOptions?: { signal?: AbortSignal }) => {
             embedBatchCalls += 1;
             await providerProbeGate;
-            if (options?.signal?.aborted) {
-              const reason = options.signal.reason;
+            if (requestOptions?.signal?.aborted) {
+              const reason = requestOptions.signal.reason;
               throw reason instanceof Error ? reason : new Error("embedding aborted");
             }
             embeddedBatchTexts.push(...texts);
@@ -4256,9 +4256,11 @@ describe("memory index", () => {
       },
     );
     try {
-      for (let attempt = 0; attempt < 20 && providerQueryCalls === queryCallsBeforeRecovery;) {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
         await Promise.resolve();
-        attempt += 1;
+        if (providerQueryCalls !== queryCallsBeforeRecovery) {
+          break;
+        }
       }
       expect(providerQueryCalls).toBe(queryCallsBeforeRecovery + 1);
 
