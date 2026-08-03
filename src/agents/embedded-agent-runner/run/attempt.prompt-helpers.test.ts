@@ -36,6 +36,8 @@ vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatus
 vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
+import { createHookRunner } from "../../../plugins/hooks.js";
+import { createMockPluginRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-skip.js";
 import {
   forgetPromptBuildDrainCacheForRun,
@@ -408,5 +410,108 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
 
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
+  });
+});
+
+// The embedded runner appends `appendContext` to the prompt verbatim
+// (attempt-prompt-assembly.ts), so these assertions are assertions about the
+// model-visible prompt for the embedded consumer.
+describe("resolvePromptBuildHookResult drop marker", () => {
+  const MARKER_OPEN = '<dropped_plugin_context hook="before_prompt_build">';
+  const secret = "AUTH_TOKEN=sk-live-9f3c https://internal.example/v1/queue";
+
+  function primeDrain() {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+      queuedInjections: [],
+    });
+  }
+
+  it("marks a failed handler with a reason code and no error text", async () => {
+    primeDrain();
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          pluginId: "leaky-plugin",
+          handler: () => {
+            throw new Error(`bd ready failed: ${secret}`);
+          },
+        },
+        {
+          hookName: "before_prompt_build",
+          pluginId: "healthy-plugin",
+          handler: () => ({ prependContext: "healthy" }),
+        },
+      ]),
+    );
+
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hi",
+      messages: [],
+      hookCtx: { runId: "drop-marker-handler", sessionKey: "agent:main:main" },
+      hookRunner: runner as never,
+    });
+
+    expect(result.prependContext).toBe("healthy");
+    expect(result.appendContext).toContain(MARKER_OPEN);
+    expect(result.appendContext).toContain("leaky-plugin (handler-failed)");
+    expect(result.appendContext).not.toContain("sk-live-9f3c");
+    expect(result.appendContext).not.toContain("internal.example");
+    expect(result.appendContext).not.toContain("bd ready failed");
+    forgetPromptBuildDrainCacheForRun("drop-marker-handler");
+  });
+
+  it("bounds the marker when many handlers fail", async () => {
+    primeDrain();
+    const runner = createHookRunner(
+      createMockPluginRegistry(
+        Array.from({ length: 30 }, (_unused, index) => ({
+          hookName: "before_prompt_build",
+          pluginId: `bulk-plugin-${index}`,
+          handler: () => {
+            throw new Error(`handler ${index} exploded`);
+          },
+        })),
+      ),
+    );
+
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hi",
+      messages: [],
+      hookCtx: { runId: "drop-marker-cap", sessionKey: "agent:main:main" },
+      hookRunner: runner as never,
+    });
+
+    const marker = result.appendContext ?? "";
+    expect(marker.match(/\(handler-failed\)/gu)).toHaveLength(5);
+    expect(marker).toContain("+25 more");
+    expect(new TextEncoder().encode(marker).length).toBeLessThanOrEqual(640);
+    expect(marker).not.toContain("exploded");
+    forgetPromptBuildDrainCacheForRun("drop-marker-cap");
+  });
+
+  it("marks a rejected dispatch without echoing the rejection", async () => {
+    primeDrain();
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hi",
+      messages: [],
+      hookCtx: { runId: "drop-marker-dispatch", sessionKey: "agent:main:main" },
+      hookRunner: {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => {
+          throw new Error(`registry exploded: ${secret}`);
+        }),
+      },
+    });
+
+    expect(result.appendContext).toContain(MARKER_OPEN);
+    expect(result.appendContext).toContain("unknown plugin (dispatch-failed)");
+    expect(result.appendContext).not.toContain("registry exploded");
+    expect(result.appendContext).not.toContain("sk-live-9f3c");
+    forgetPromptBuildDrainCacheForRun("drop-marker-dispatch");
   });
 });

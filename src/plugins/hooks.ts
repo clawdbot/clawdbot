@@ -987,12 +987,10 @@ export function createHookRunner(
           ctx,
           {
             mergeResults: mergeBeforePromptBuild,
-            onHandlerDropped: ({ pluginId, error }) => {
-              drops.push({
-                pluginId,
-                reason: "handler-failed",
-                detail: sanitizeHookError(error),
-              });
+            onHandlerDropped: ({ pluginId }) => {
+              // Reason code only: the error itself is model-visible nowhere.
+              // handleHookError already logged it for operators.
+              drops.push({ pluginId, reason: "handler-failed" });
             },
           },
         );

@@ -176,9 +176,9 @@ export async function resolvePromptBuildHookResult(params: {
           log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
           // The contribution is gone; say so in the prompt rather than handing
           // the agent a context that only looks complete (openclaw-beads-201).
-          return buildPromptBuildDropResult([
-            { reason: "dispatch-failed", detail: String(hookErr) },
-          ]);
+          // The error stays in the warn above: the marker carries a bounded
+          // reason code, never error-derived text.
+          return buildPromptBuildDropResult([{ reason: "dispatch-failed" }]);
         })
     : undefined;
   return {

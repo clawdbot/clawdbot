@@ -757,9 +757,10 @@ export async function prepareCliRunContext(
       cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
       // Preparation failed after the hooks may already have produced context.
       // Surface the loss instead of shipping a prompt that looks complete
-      // (openclaw-beads-201).
+      // (openclaw-beads-201). The error stays in the warn above; the marker is a
+      // bounded reason code so nothing error-derived reaches the model.
       return hookRunner?.hasHooks("before_prompt_build")
-        ? buildPromptBuildDropResult([{ reason: "dispatch-failed", detail: String(error) }])
+        ? buildPromptBuildDropResult([{ reason: "dispatch-failed" }])
         : undefined;
     }
   })();
