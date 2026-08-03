@@ -176,6 +176,44 @@ function assertPluginScopedSessionMutationOwner(params: {
   );
 }
 
+function assertPluginScopedSessionOwnerTransition(params: {
+  existingEntry?: InternalSessionEntry;
+  nextPatch: Partial<SessionEntry>;
+  replaceEntry?: boolean;
+  sessionKey: string;
+}): void {
+  const callerPluginId = normalizeOptionalString(getPluginRuntimeGatewayRequestScope()?.pluginId);
+  if (!callerPluginId || !params.existingEntry) {
+    return;
+  }
+  const existingPluginOwnerId = normalizeOptionalString(params.existingEntry.pluginOwnerId);
+  if (existingPluginOwnerId && existingPluginOwnerId !== callerPluginId) {
+    assertPluginScopedSessionMutationOwner({
+      entry: params.existingEntry,
+      sessionKey: params.sessionKey,
+    });
+    return;
+  }
+  const nextPatchOwnsPluginOwnerId = Object.hasOwn(params.nextPatch, "pluginOwnerId");
+  const ownerIsReplaced = nextPatchOwnsPluginOwnerId || params.replaceEntry === true;
+  if (!ownerIsReplaced) {
+    return;
+  }
+  const nextPluginOwnerId = nextPatchOwnsPluginOwnerId
+    ? normalizeOptionalString(params.nextPatch.pluginOwnerId)
+    : undefined;
+  if (!existingPluginOwnerId && nextPluginOwnerId) {
+    throw new Error(
+      `Plugin "${callerPluginId}" cannot assign plugin owner "${nextPluginOwnerId}" to existing unowned session "${params.sessionKey}".`,
+    );
+  }
+  if (existingPluginOwnerId === callerPluginId && nextPluginOwnerId !== existingPluginOwnerId) {
+    throw new Error(
+      `Plugin "${callerPluginId}" cannot change plugin owner for session "${params.sessionKey}".`,
+    );
+  }
+}
+
 function assertPluginScopedSessionStoreMutationOwners(params: {
   internalStore: Record<string, InternalSessionEntry>;
   publicStore: Record<string, SessionEntry>;
@@ -185,16 +223,21 @@ function assertPluginScopedSessionStoreMutationOwners(params: {
     return;
   }
   for (const [sessionKey, internalEntry] of Object.entries(params.internalStore)) {
-    const existingPluginOwnerId = normalizeOptionalString(internalEntry.pluginOwnerId);
-    if (!existingPluginOwnerId || existingPluginOwnerId === callerPluginId) {
-      continue;
-    }
     const publicEntry = params.publicStore[sessionKey];
     if (
-      publicEntry === undefined ||
-      !isDeepStrictEqual(publicEntry, projectPluginSessionEntry(internalEntry))
+      publicEntry !== undefined &&
+      isDeepStrictEqual(publicEntry, projectPluginSessionEntry(internalEntry))
     ) {
-      assertPluginScopedSessionMutationOwner({ entry: internalEntry, sessionKey });
+      continue;
+    }
+    assertPluginScopedSessionMutationOwner({ entry: internalEntry, sessionKey });
+    if (publicEntry !== undefined) {
+      assertPluginScopedSessionOwnerTransition({
+        existingEntry: internalEntry,
+        nextPatch: publicEntry,
+        replaceEntry: true,
+        sessionKey,
+      });
     }
   }
 }
@@ -488,7 +531,14 @@ export async function patchSessionEntry(
       if (!patch) {
         return null;
       }
-      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+      const publicPatch = projectPluginSessionEntryPatch(patch);
+      assertPluginScopedSessionOwnerTransition({
+        existingEntry: context.existingEntry as InternalSessionEntry | undefined,
+        nextPatch: publicPatch,
+        replaceEntry: params.replaceEntry,
+        sessionKey: params.sessionKey,
+      });
+      return preserveCoreRecoveryState(persistedEntry, publicPatch);
     },
     {
       fallbackEntry: params.fallbackEntry
@@ -537,7 +587,13 @@ export async function updateSessionStoreEntry(
         return null;
       }
       const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+      const publicPatch = projectPluginSessionEntryPatch(patch);
+      assertPluginScopedSessionOwnerTransition({
+        existingEntry: persistedEntry,
+        nextPatch: publicPatch,
+        sessionKey: params.sessionKey,
+      });
+      return preserveCoreRecoveryState(persistedEntry, publicPatch);
     },
     {
       skipMaintenance: params.skipMaintenance,
@@ -553,10 +609,16 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
   const publicEntry = projectPluginSessionEntry(params.entry);
   await patchAccessorSessionEntry(
     toSessionAccessScope(params),
-    (internalEntry) => {
+    (internalEntry, context) => {
       const persistedEntry = internalEntry as InternalSessionEntry;
       assertPluginScopedSessionMutationOwner({
         entry: persistedEntry,
+        sessionKey: params.sessionKey,
+      });
+      assertPluginScopedSessionOwnerTransition({
+        existingEntry: context.existingEntry as InternalSessionEntry | undefined,
+        nextPatch: publicEntry,
+        replaceEntry: true,
         sessionKey: params.sessionKey,
       });
       return preserveCoreRecoveryState(persistedEntry, publicEntry);

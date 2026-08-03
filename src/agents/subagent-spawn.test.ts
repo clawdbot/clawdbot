@@ -813,7 +813,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds retained failed-spawn deletion retries without releasing admission", async () => {
+  it("keeps retained failed-spawn cleanup scheduled after the initial retry window", async () => {
     hoisted.configOverride = createConfigOverride({
       agents: {
         defaults: {
@@ -838,16 +838,24 @@ describe("spawnSubagentDirect seam flow", () => {
     });
     hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
     let deleteCalls = 0;
+    let failAgentLaunch = true;
+    let deleteRecovered = false;
     hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
       if (method === "sessions.delete") {
         deleteCalls += 1;
+        if (deleteRecovered) {
+          return { ok: true };
+        }
         throw new Error("session deletion did not settle");
       }
       if (method.startsWith("sessions.")) {
         return { ok: true };
       }
       if (method === "agent") {
-        throw new Error("ambiguous dispatch failure");
+        if (failAgentLaunch) {
+          throw new Error("ambiguous dispatch failure");
+        }
+        return { runId: "after-retained-storage-recovery-run" };
       }
       return {};
     });
@@ -874,17 +882,26 @@ describe("spawnSubagentDirect seam flow", () => {
         childSessionKey: "agent:worker:subagent:quarantine-persist-delete-outage",
         attempts: 30,
         maxAttempts: 30,
-        status: "exhausted",
-        retryScheduled: false,
+        status: "retained",
+        retryScheduled: true,
       }),
     ]);
 
     await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
-    expect(deleteCalls - provisionalCleanupAttempts).toBe(30);
+    expect(deleteCalls - provisionalCleanupAttempts).toBe(31);
     const stillBlockedResult = await spawnOrdinaryWorker("after-retained-retries-exhaust");
     expect(stillBlockedResult.status).toBe("forbidden");
     expect(stillBlockedResult.error).toContain("max active children");
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+
+    failAgentLaunch = false;
+    deleteRecovered = true;
+    await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+    expect(spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions()).toEqual([]);
+
+    const admittedResult = await spawnOrdinaryWorker("after-retained-storage-recovery");
+    expect(admittedResult.status).toBe("accepted");
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps retained admission active when replacement inspection throws", async () => {

@@ -536,7 +536,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     expect(spawnSubagentDirect).toHaveBeenCalledTimes(2);
   });
 
-  it("bounds indeterminate cleanup retries while retaining process claims fail-closed", async () => {
+  it("keeps indeterminate cleanup scheduled after the initial retry window", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.useFakeTimers();
     const runtime = createGatewaySubagentRuntime();
@@ -557,15 +557,33 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       withReservedPluginScope(() => runtime.spawnReserved(boundedReservation), dedupe),
     ).rejects.toThrow("gateway request timeout for agent");
 
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(3);
 
     expect(cleanupProvisionalSession).toHaveBeenCalledTimes(3);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
     expect(dedupe.has(`agent:${boundedReservation.runId}`)).toBe(true);
     await expect(
       withReservedPluginScope(() => runtime.spawnReserved(boundedReservation), dedupe),
     ).rejects.toThrow("already claimed");
     expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+
+    cleanupProvisionalSession.mockResolvedValueOnce(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(cleanupProvisionalSession).toHaveBeenCalledTimes(4);
+    expect(dedupe.has(`agent:${boundedReservation.runId}`)).toBe(false);
+    spawnSubagentDirect.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: boundedReservation.childSessionKey,
+      runId: boundedReservation.runId,
+      mode: "run",
+    });
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(boundedReservation), dedupe),
+    ).resolves.toMatchObject({
+      childSessionKey: boundedReservation.childSessionKey,
+      runId: boundedReservation.runId,
+    });
+    expect(spawnSubagentDirect).toHaveBeenCalledTimes(2);
   });
 
   it("releases process claims after bounded cleanup retries when durable registry owns the failure", async () => {

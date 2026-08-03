@@ -6,6 +6,8 @@ import { withPluginRuntimePluginIdScope } from "../plugins/runtime/gateway-reque
 import {
   getSessionEntry,
   patchSessionEntry,
+  updateSessionStore,
+  updateSessionStoreEntry,
   upsertSessionEntry,
   type SessionEntry,
 } from "./session-store-runtime.js";
@@ -86,5 +88,130 @@ describe("session-store-runtime plugin owner scope", () => {
       pluginOwnerId: "memory-core",
       sessionId: "caller-session",
     });
+  });
+
+  it("allows plugin-scoped mutations of existing unowned entries when ownership is omitted", async () => {
+    const sessionKey = "agent:main:unowned-preserved";
+    await seedSessionEntry(sessionKey, {
+      label: "unowned original",
+      sessionId: "unowned-session",
+      updatedAt: 10,
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("memory-core", () =>
+        patchSessionEntry({
+          sessionKey,
+          storePath,
+          update: () => ({ label: "unowned mutation" }),
+        }),
+      ),
+    ).resolves.toMatchObject({
+      label: "unowned mutation",
+      sessionId: "unowned-session",
+    });
+    expect(getSessionEntry({ sessionKey, storePath })?.pluginOwnerId).toBeUndefined();
+  });
+
+  it("rejects plugin-scoped patch claims on existing unowned entries", async () => {
+    const sessionKey = "agent:main:unowned-patch-claim";
+    await seedSessionEntry(sessionKey, {
+      label: "unowned original",
+      sessionId: "unowned-session",
+      updatedAt: 10,
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("memory-core", () =>
+        patchSessionEntry({
+          sessionKey,
+          storePath,
+          update: () => ({ label: "claimed", pluginOwnerId: "memory-core" }),
+        }),
+      ),
+    ).rejects.toThrow(
+      `Plugin "memory-core" cannot assign plugin owner "memory-core" to existing unowned session "${sessionKey}".`,
+    );
+    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      label: "unowned original",
+      sessionId: "unowned-session",
+    });
+    expect(getSessionEntry({ sessionKey, storePath })?.pluginOwnerId).toBeUndefined();
+  });
+
+  it("rejects plugin-scoped update and upsert claims on existing unowned entries", async () => {
+    const updateSessionKey = "agent:main:main";
+    const upsertSessionKey = "agent:main:unowned-upsert-claim";
+    for (const sessionKey of [updateSessionKey, upsertSessionKey]) {
+      await seedSessionEntry(sessionKey, {
+        label: "unowned original",
+        sessionId: `${sessionKey}-session`,
+        updatedAt: 10,
+      });
+    }
+
+    await expect(
+      withPluginRuntimePluginIdScope("memory-core", () =>
+        updateSessionStoreEntry({
+          sessionKey: updateSessionKey,
+          storePath,
+          update: () => ({ label: "claimed", pluginOwnerId: "memory-core" }),
+        }),
+      ),
+    ).rejects.toThrow("cannot assign plugin owner");
+    await expect(
+      withPluginRuntimePluginIdScope("memory-core", () =>
+        upsertSessionEntry({
+          agentId: "main",
+          sessionKey: upsertSessionKey,
+          storePath,
+          entry: {
+            label: "claimed",
+            pluginOwnerId: "memory-core",
+            sessionId: "replacement-session",
+            updatedAt: 20,
+          },
+        }),
+      ),
+    ).rejects.toThrow("cannot assign plugin owner");
+
+    expect(getSessionEntry({ sessionKey: updateSessionKey, storePath })).toMatchObject({
+      label: "unowned original",
+      sessionId: `${updateSessionKey}-session`,
+    });
+    expect(getSessionEntry({ sessionKey: upsertSessionKey, storePath })).toMatchObject({
+      label: "unowned original",
+      sessionId: `${upsertSessionKey}-session`,
+    });
+  });
+
+  it("rejects deprecated whole-store owner claims on existing unowned entries", async () => {
+    const sessionKey = "agent:main:main";
+    await seedSessionEntry(sessionKey, {
+      label: "unowned original",
+      sessionId: "unowned-session",
+      updatedAt: 10,
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("memory-core", () =>
+        updateSessionStore(storePath, (store) => {
+          const projectedSessionKey = Object.keys(store)[0];
+          if (!projectedSessionKey) {
+            throw new Error("expected seeded session entry");
+          }
+          store[projectedSessionKey] = {
+            ...store[projectedSessionKey],
+            label: "claimed",
+            pluginOwnerId: "memory-core",
+          };
+        }),
+      ),
+    ).rejects.toThrow("cannot assign plugin owner");
+    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      label: "unowned original",
+      sessionId: "unowned-session",
+    });
+    expect(getSessionEntry({ sessionKey, storePath })?.pluginOwnerId).toBeUndefined();
   });
 });

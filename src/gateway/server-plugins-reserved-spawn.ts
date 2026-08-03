@@ -116,19 +116,19 @@ function retainReservedSubagentCleanupHolder(params: {
     } catch {
       // Fail closed: unresolved inspection cannot release reserved identities.
     }
-    if (holder.attempts >= maxAttempts) {
-      if (
-        hasDurableReservedCleanupOwner({
-          runId: params.runId,
-          childSessionKey: params.childSessionKey,
-        })
-      ) {
-        holder.release();
-        return;
-      }
-      holder.timer = undefined;
+    if (
+      holder.attempts >= maxAttempts &&
+      hasDurableReservedCleanupOwner({
+        runId: params.runId,
+        childSessionKey: params.childSessionKey,
+      })
+    ) {
+      holder.release();
       return;
     }
+    // The first window bounds the eager handoff to durable cleanup ownership.
+    // Without a durable owner or deletion proof, keep probing so recovered
+    // storage can release the reserved dedupe and identity claims.
     holder.timer = setTimeout(() => {
       void retryDeletion();
     }, retryDelayMs);

@@ -26,7 +26,7 @@ const RETAINED_FAILED_SPAWN_ADMISSION_KEY: unique symbol = Symbol.for(
 const RETAINED_FAILED_SPAWN_ADMISSION_RETRY_MS = 1_000;
 const RETAINED_FAILED_SPAWN_ADMISSION_MAX_ATTEMPTS = 30;
 
-type RetainedFailedSpawnAdmissionStatus = "retrying" | "exhausted";
+type RetainedFailedSpawnAdmissionStatus = "retrying" | "retained";
 type RetainableAdmissionSlot = Pick<SubagentSpawnAdmissionSlot, "id" | "release">;
 
 type RetainedFailedSpawnAdmission = {
@@ -70,7 +70,7 @@ function clearRetainedFailedSpawnAdmissionTimer(holder: RetainedFailedSpawnAdmis
 }
 
 function scheduleRetainedFailedSpawnAdmission(holder: RetainedFailedSpawnAdmission): void {
-  if (holder.retryTimer || holder.status === "exhausted") {
+  if (holder.retryTimer) {
     return;
   }
   holder.retryTimer = setTimeout(() => {
@@ -103,11 +103,7 @@ async function reconcileRetainedFailedSpawnAdmission(
   holder: RetainedFailedSpawnAdmission,
 ): Promise<void> {
   const state = getRetainedFailedSpawnAdmissionState();
-  if (
-    state.holders.get(holder.slot.id) !== holder ||
-    holder.inFlight ||
-    holder.status === "exhausted"
-  ) {
+  if (state.holders.get(holder.slot.id) !== holder || holder.inFlight) {
     return;
   }
   holder.inFlight = true;
@@ -135,9 +131,9 @@ async function reconcileRetainedFailedSpawnAdmission(
   }
   if (state.holders.get(holder.slot.id) === holder) {
     if (holder.attempts >= holder.maxAttempts) {
-      holder.status = "exhausted";
-      clearRetainedFailedSpawnAdmissionTimer(holder);
-      return;
+      // Persistence failed, so there is no durable cleanup owner to take over.
+      // Keep the slot retained and scheduled until storage proves release-safe.
+      holder.status = "retained";
     }
     scheduleRetainedFailedSpawnAdmission(holder);
   }
