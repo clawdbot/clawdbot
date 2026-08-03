@@ -5,6 +5,8 @@ import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
+type AuthorizeSearchHits = NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>;
+
 const mocks = vi.hoisted(() => ({
   getMemoryRuntime: vi.fn(),
   loadPluginRegistryHandle: vi.fn(),
@@ -38,7 +40,7 @@ import { hasMemoryRuntime } from "./memory-state.js";
 
 function createRuntime() {
   return {
-    authorizeSearchHits: vi.fn(async ({ hits }) => hits),
+    authorizeSearchHits: vi.fn<AuthorizeSearchHits>(async ({ hits }) => hits),
     getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
     resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
     closeMemorySearchManager: vi.fn(async () => {}),
@@ -46,7 +48,16 @@ function createRuntime() {
   } satisfies MemoryPluginRuntime;
 }
 
-function createRegistry<T extends MemoryPluginRuntime>(runtime: T = createRuntime() as T) {
+type TestRegistry<T extends MemoryPluginRuntime> = {
+  registry: ReturnType<typeof createEmptyPluginRegistry>;
+  runtime: T;
+};
+
+function createRegistry(): TestRegistry<ReturnType<typeof createRuntime>>;
+function createRegistry<T extends MemoryPluginRuntime>(runtime: T): TestRegistry<T>;
+function createRegistry(
+  runtime: MemoryPluginRuntime = createRuntime(),
+): TestRegistry<MemoryPluginRuntime> {
   const registry = createEmptyPluginRegistry();
   registry.memoryCapabilities.push({ pluginId: "memory-core", capability: { runtime } });
   return { registry, runtime };
