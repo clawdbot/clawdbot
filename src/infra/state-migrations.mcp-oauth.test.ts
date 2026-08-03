@@ -464,7 +464,7 @@ describe("legacy MCP OAuth Doctor migration", () => {
     // fs-safe owns backoff timing; this migration test still exercises every failed acquisition.
     const fastSetTimeout = (...params: Parameters<typeof setTimeout>) => {
       const [callback, delay, ...args] = params;
-      retryDelays.push(Number(delay ?? 0));
+      retryDelays.push(delay ?? 0);
       return setTimeoutActual(callback, 0, ...args);
     };
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(fastSetTimeout);
