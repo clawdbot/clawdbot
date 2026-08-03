@@ -9,6 +9,7 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { normalizeToolName } from "./tool-policy.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import {
@@ -23,7 +24,6 @@ import {
   type ToolSearchCatalogSession,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
-import { normalizeToolName } from "./tool-policy.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
@@ -416,6 +416,9 @@ export function applyToolCatalogCompaction(
 
   const toolSearchConfig = resolveToolSearchConfig(params.config);
   const alwaysVisibleSet = toolSearchConfig.alwaysVisibleTools;
+  // alwaysVisibleTools only applies to generic Tool Search ("tools" and "directory" modes),
+  // not Code Mode. Code Mode has its own trusted direct-tool gate via isVisibleCatalogTool.
+  const isCodeMode = toolSearchConfig.mode === "code";
 
   const visible: AnyAgentTool[] = [];
   const catalog: ToolSearchCatalogEntry[] = [];
@@ -430,7 +433,9 @@ export function applyToolCatalogCompaction(
       continue;
     }
     const normalizedName = normalizeToolName(tool.name);
-    if (alwaysVisibleSet.has(normalizedName)) {
+    // Only apply alwaysVisibleTools in non-Code Mode. Code Mode's isVisibleCatalogTool
+    // predicate owns which direct tools remain visible.
+    if (!isCodeMode && alwaysVisibleSet.has(normalizedName)) {
       visible.push(tool);
       continue;
     }

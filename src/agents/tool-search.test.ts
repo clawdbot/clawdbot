@@ -308,6 +308,83 @@ describe("Tool Search", () => {
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["message"]);
   });
 
+  it("does not let alwaysVisibleTools bypass Code Mode's trusted direct-tool gate", () => {
+    // Code Mode must keep its strict boundary: only explicitly required trusted
+    // direct tools may remain visible. A configured alwaysVisibleTools list must
+    // not promote normal tools onto Code Mode's direct model surface.
+    const catalogRef = createToolSearchCatalogRef();
+    const readTool = fakeTool("read_file", "Read files");
+    const writeTool = fakeTool("write_file", "Write files");
+    const execTool = fakeTool("exec", "Run shell commands");
+
+    // In Code Mode, alwaysVisibleTools is ignored; only control tools remain direct.
+    const compactedCodeMode = applyToolSearchCatalog({
+      tools: [
+        fakeTool("code_mode_exec", "Execute code"),
+        fakeTool("code_mode_wait", "Wait for code"),
+        readTool,
+        writeTool,
+        execTool,
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+      config: {
+        tools: {
+          toolSearch: {
+            enabled: true,
+            mode: "code",
+            alwaysVisibleTools: ["read_file", "write_file", "exec"],
+          },
+        },
+      } as never,
+      catalogRef,
+      shouldCatalogTool: (tool) => tool.name !== "code_mode_exec" && tool.name !== "code_mode_wait",
+    });
+
+    // Only Code Mode control tools stay direct; alwaysVisibleTools are cataloged.
+    expect(compactedCodeMode.tools.map((tool) => tool.name)).toEqual([
+      "code_mode_exec",
+      "code_mode_wait",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toContain("read_file");
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toContain("write_file");
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toContain("exec");
+
+    // In non-Code Mode ("tools"), alwaysVisibleTools works as expected.
+    catalogRef.current = { entries: [], searchCount: 0, describeCount: 0, callCount: 0 };
+    const compactedToolsMode = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        readTool,
+        writeTool,
+        execTool,
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+      config: {
+        tools: {
+          toolSearch: {
+            enabled: true,
+            mode: "tools",
+            alwaysVisibleTools: ["read_file", "write_file", "exec"],
+          },
+        },
+      } as never,
+      catalogRef,
+    });
+
+    // Control tools + alwaysVisibleTools stay direct; others are cataloged.
+    expect(compactedToolsMode.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+      "read_file",
+      "write_file",
+      "exec",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
+  });
+
   it("keeps core coding tools visible while still cataloging them", () => {
     const catalogRef = createToolSearchCatalogRef();
     const compacted = applyToolSearchCatalog({
