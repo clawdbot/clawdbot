@@ -29,7 +29,7 @@ import {
   updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
 import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
-import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryCreateCronTaskRun } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
