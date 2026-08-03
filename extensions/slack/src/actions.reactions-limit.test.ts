@@ -1,7 +1,7 @@
 import { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
+import { slackActionRuntime } from "./action-runtime.js";
 import {
   listSlackReactions,
   removeOwnSlackReactions,
@@ -119,25 +119,75 @@ describe("Slack reaction user limits", () => {
     expect(users).toHaveLength(101);
   });
 
-  it.each([
-    0,
-    -1,
-    1.5,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    Number.NEGATIVE_INFINITY,
-    Number.MAX_SAFE_INTEGER + 1,
-  ])("rejects invalid direct action limit %s before Slack API work", async (limit) => {
-    const reactionLookup = vi.spyOn(slackActionRuntime, "listSlackReactions");
+  it.each(["reactions", "read"] as const)(
+    "authorizes public %s targets before inspecting malformed limits",
+    async (action) => {
+      const restrictedConfig = {
+        channels: {
+          slack: {
+            botToken: "xoxb-local-proof",
+            groupPolicy: "allowlist",
+            channels: { C_ALLOWED: { enabled: true } },
+          },
+        },
+      } as OpenClawConfig;
+      const { client, calls } = createSlackReactionClient([]);
+      const reactionLookup = vi
+        .spyOn(slackActionRuntime, "listSlackReactions")
+        .mockImplementation((channelId, messageId, options) =>
+          listSlackReactions(channelId, messageId, { ...options, client }),
+        );
+      const messageLookup = vi.spyOn(slackActionRuntime, "readSlackMessages");
 
-    await expect(
-      handleSlackAction(
-        { action: "reactions", channelId: "C1", messageId: "123.456", limit },
-        slackConfig,
-      ),
-    ).rejects.toThrow("limit must be a positive integer.");
-    expect(reactionLookup).not.toHaveBeenCalled();
-  });
+      await expect(
+        createSlackActions("slack").handleAction?.({
+          action,
+          cfg: restrictedConfig,
+          params: { channelId: "C_FORBIDDEN", messageId: "123.456", limit: 0 },
+        } as never),
+      ).rejects.toThrow("Slack read target channel is not allowed.");
+      expect(reactionLookup).not.toHaveBeenCalled();
+      expect(messageLookup).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    },
+  );
+
+  it.each([
+    { action: "reactions", limit: 0 },
+    { action: "reactions", limit: -1 },
+    { action: "reactions", limit: 1.5 },
+    { action: "reactions", limit: Number.NaN },
+    { action: "reactions", limit: Number.POSITIVE_INFINITY },
+    { action: "reactions", limit: Number.NEGATIVE_INFINITY },
+    { action: "reactions", limit: Number.MAX_SAFE_INTEGER + 1 },
+    { action: "read", limit: 0 },
+  ])(
+    "rejects invalid public $action limit $limit before Slack API work",
+    async ({ action, limit }) => {
+      const { client, calls } = createSlackReactionClient([]);
+      const conversationLookup = vi
+        .spyOn(slackActionRuntime, "resolveSlackConversationInfo")
+        .mockResolvedValue({ type: "channel" });
+      const reactionLookup = vi
+        .spyOn(slackActionRuntime, "listSlackReactions")
+        .mockImplementation((channelId, messageId, options) =>
+          listSlackReactions(channelId, messageId, { ...options, client }),
+        );
+      const messageLookup = vi.spyOn(slackActionRuntime, "readSlackMessages");
+
+      await expect(
+        createSlackActions("slack").handleAction?.({
+          action,
+          cfg: slackConfig,
+          params: { channelId: "C1", messageId: "123.456", limit },
+        } as never),
+      ).rejects.toThrow("limit must be a positive integer.");
+      expect(conversationLookup).toHaveBeenCalledOnce();
+      expect(reactionLookup).not.toHaveBeenCalled();
+      expect(messageLookup).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    },
+  );
 
   it("preserves all reaction users for existing live approval helper callers", async () => {
     const users = [...Array.from({ length: 100 }, (_, index) => `U${index + 1}`), "U_APPROVER"];
