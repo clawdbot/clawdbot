@@ -155,6 +155,8 @@ describe("createWebChannelStatusController", () => {
     {
       healthState: "logged-out",
       statusCode: 401,
+      error: "WhatsApp session logged out",
+      reconnectAttempts: 0,
       lifecycle: "blocked",
       finalHealthState: "logged-out",
       finalLifecycle: "blocked",
@@ -163,14 +165,28 @@ describe("createWebChannelStatusController", () => {
     {
       healthState: "conflict",
       statusCode: 440,
+      error: "WhatsApp session conflict",
+      reconnectAttempts: 0,
       lifecycle: "blocked",
       finalHealthState: "conflict",
       finalLifecycle: "blocked",
       terminalDisconnect: true,
     },
     {
+      healthState: "stopped",
+      statusCode: 408,
+      error: "WhatsApp reconnect attempts exhausted after a timeout",
+      reconnectAttempts: 12,
+      lifecycle: "blocked",
+      finalHealthState: "stopped",
+      finalLifecycle: "blocked",
+      terminalDisconnect: true,
+    },
+    {
       healthState: "reconnecting",
       statusCode: 408,
+      error: "WhatsApp connection timed out",
+      reconnectAttempts: 1,
       lifecycle: "recovering",
       finalHealthState: "stopped",
       finalLifecycle: "stopped",
@@ -181,6 +197,8 @@ describe("createWebChannelStatusController", () => {
     ({
       healthState,
       statusCode,
+      error,
+      reconnectAttempts,
       lifecycle,
       finalHealthState,
       finalLifecycle,
@@ -193,41 +211,80 @@ describe("createWebChannelStatusController", () => {
       controller.noteClose({
         at: 2000,
         statusCode,
-        error: healthState,
-        reconnectAttempts: healthState === "reconnecting" ? 1 : 0,
+        error,
+        reconnectAttempts,
         healthState,
       });
       expect(patches.at(-1)!.healthState).toBe(healthState);
       expect(patches.at(-1)!.lifecycle).toBe(lifecycle);
 
-      controller.markStopped(2100);
+      const stoppedStatus = {
+        healthState: finalHealthState,
+        lifecycle: finalLifecycle,
+        terminalDisconnect,
+        lastError: error,
+        reconnectAttempts,
+        lastDisconnect: {
+          at: 2000,
+          status: statusCode,
+          error,
+        },
+      };
 
-      expect(patches.at(-1)!.healthState).toBe(finalHealthState);
-      expect(patches.at(-1)!.lifecycle).toBe(finalLifecycle);
-      expect(patches.at(-1)!.terminalDisconnect).toBe(terminalDisconnect);
+      controller.markStopped(2100);
+      expect(patches.at(-1)).toMatchObject(stoppedStatus);
+
+      controller.markStopped(2200);
+      expect(patches.at(-1)).toMatchObject(stoppedStatus);
     },
   );
 
-  it("clears terminalDisconnect on noteConnected after a terminal stop", () => {
-    const patches: Record<string, unknown>[] = [];
-    const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
+  it.each([
+    { healthState: "logged-out", statusCode: 401, reconnectAttempts: 0 },
+    { healthState: "conflict", statusCode: 440, reconnectAttempts: 0 },
+    { healthState: "stopped", statusCode: 408, reconnectAttempts: 12 },
+  ] as const)(
+    "clears terminalDisconnect on reconnect after a $healthState stop",
+    ({ healthState, statusCode, reconnectAttempts }) => {
+      const patches: Record<string, unknown>[] = [];
+      const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
 
-    controller.noteConnected(1000);
-    controller.noteClose({
-      at: 2000,
-      statusCode: 401,
-      error: "logged out",
-      reconnectAttempts: 0,
-      healthState: "logged-out",
-    });
-    controller.markStopped(2100);
-    expect(patches.at(-1)!.terminalDisconnect).toBe(true);
+      controller.noteConnected(1000);
+      controller.noteClose({
+        at: 2000,
+        statusCode,
+        error: healthState,
+        reconnectAttempts,
+        healthState,
+      });
+      controller.markStopped(2100);
+      expect(patches.at(-1)!.terminalDisconnect).toBe(true);
+      expect(patches.at(-1)!.lifecycle).toBe("blocked");
 
-    controller.noteConnected(3000);
-    expect(patches.at(-1)!.terminalDisconnect).toBeUndefined();
-    expect(patches.at(-1)!.healthState).toBe("healthy");
-    expect(patches.at(-1)!.lifecycle).toBe("ready");
-  });
+      controller.markStopped(2200);
+      expect(patches.at(-1)!.terminalDisconnect).toBe(true);
+      expect(patches.at(-1)!.lifecycle).toBe("blocked");
+
+      controller.noteConnected(3000);
+      expect(patches.at(-1)!.terminalDisconnect).toBeUndefined();
+      expect(patches.at(-1)!.healthState).toBe("healthy");
+      expect(patches.at(-1)!.lifecycle).toBe("ready");
+
+      controller.markStopped(3100);
+      expect(patches.at(-1)).toMatchObject({
+        healthState: "stopped",
+        lifecycle: "stopped",
+        terminalDisconnect: false,
+      });
+
+      controller.markStopped(3200);
+      expect(patches.at(-1)).toMatchObject({
+        healthState: "stopped",
+        lifecycle: "stopped",
+        terminalDisconnect: false,
+      });
+    },
+  );
 
   it("publishes stopped lifecycle without changing the shipped health label", () => {
     const patches: Record<string, unknown>[] = [];
@@ -241,6 +298,14 @@ describe("createWebChannelStatusController", () => {
       connected: false,
       healthState: "stopped",
       lifecycle: "stopped",
+      terminalDisconnect: false,
+    });
+
+    controller.markStopped(3000);
+    expect(patches.at(-1)).toMatchObject({
+      healthState: "stopped",
+      lifecycle: "stopped",
+      terminalDisconnect: false,
     });
   });
 });
