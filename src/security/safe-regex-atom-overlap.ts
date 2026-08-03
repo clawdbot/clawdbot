@@ -284,6 +284,7 @@ function finiteCharacterClassValues(source: string, flags: string): string[] | n
   if (!source.startsWith("[") || !source.endsWith("]") || source.startsWith("[^")) {
     return null;
   }
+  const unicodeAware = flags.includes("u") || flags.includes("v");
   const values = new Set<string>();
   const elements: Array<{ value: string; escaped: boolean }> = [];
   for (let index = 1; index < source.length - 1;) {
@@ -292,11 +293,21 @@ function finiteCharacterClassValues(source: string, flags: string): string[] | n
       if (!escaped) {
         return null;
       }
+      const escapedCodeUnit = escaped.value.charCodeAt(0);
+      // In Unicode mode, adjacent escaped surrogates inside a class can form one code point.
+      // Keep the overlap proof conservative instead of modeling either code unit independently.
+      if (
+        unicodeAware &&
+        escaped.value.length === 1 &&
+        escapedCodeUnit >= 0xd800 &&
+        escapedCodeUnit <= 0xdfff
+      ) {
+        return null;
+      }
       elements.push({ value: escaped.value, escaped: true });
       index = escaped.next;
       continue;
     }
-    const unicodeAware = flags.includes("u") || flags.includes("v");
     const value = unicodeAware
       ? String.fromCodePoint(expectDefined(source.codePointAt(index), "character class code point"))
       : source.charAt(index);

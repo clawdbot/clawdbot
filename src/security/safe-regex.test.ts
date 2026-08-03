@@ -61,6 +61,7 @@ const REGEX_CASES: Array<[pattern: string, expected: RegExpConstructor | null, f
   ["^(?:\\07|\\x07)+!$", null],
   ["^(?:\\cA|\\x01)+!$", null],
   ["^(?:\\uD83D\\uDE00|😀)+!$", null, "u"],
+  ["^(?:[\\uD83D\\uDE00]|..)+!$", null, "u"],
   ["^(?:[😀]|[😁][😀])+!$", null],
   ["(a|b)*$", RegExp],
   ["(ab|cd)*$", RegExp],
