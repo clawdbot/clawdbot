@@ -260,6 +260,13 @@ export function shouldCompact(
   if (!settings.enabled) {
     return false;
   }
+  // Guard against missing/stale model contextWindow metadata. When the resolved
+  // model lacks contextWindow (e.g. sessions_yield wake path rehydrating settings
+  // before model metadata is attached), the threshold collapses to a negative
+  // number and any non-zero contextTokens would falsely trigger compaction.
+  if (contextWindow <= 0) {
+    return false;
+  }
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 

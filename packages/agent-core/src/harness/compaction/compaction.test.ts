@@ -12,7 +12,9 @@ import {
   generateSummary,
   getLastAssistantUsage,
   prepareCompaction,
+  shouldCompact,
 } from "./compaction.js";
+import type { CompactionSettings } from "./compaction.js";
 import { createFileOps } from "./utils.js";
 
 function createUsage(totalTokens: number): Usage {
@@ -64,6 +66,34 @@ function createProjectedEntry(
     ? { ...common, type, customType: "test", content, display: true }
     : { ...common, type, fromId: common.parentId ?? common.id, summary: content };
 }
+
+describe("shouldCompact", () => {
+  const settings: CompactionSettings = {
+    enabled: true,
+    reserveTokens: 20_000,
+    keepRecentTokens: 0,
+  };
+
+  it("returns false when compaction is disabled", () => {
+    expect(shouldCompact(100_000, 200_000, { ...settings, enabled: false })).toBe(false);
+  });
+
+  it("returns false when contextWindow is zero (missing model metadata)", () => {
+    expect(shouldCompact(65_000, 0, settings)).toBe(false);
+  });
+
+  it("returns false when contextWindow is negative (stale metadata)", () => {
+    expect(shouldCompact(65_000, -1, settings)).toBe(false);
+  });
+
+  it("returns true when contextTokens exceed contextWindow minus reserveTokens", () => {
+    expect(shouldCompact(190_000, 200_000, settings)).toBe(true);
+  });
+
+  it("returns false when contextTokens are below the threshold", () => {
+    expect(shouldCompact(65_000, 1_050_000, settings)).toBe(false);
+  });
+});
 
 describe("calculateContextTokens", () => {
   it("prefers the final-iteration context snapshot over aggregate billing usage", () => {
