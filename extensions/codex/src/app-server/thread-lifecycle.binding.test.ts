@@ -1,6 +1,6 @@
+import fsSync from "node:fs";
 // Codex tests cover thread lifecycle.binding plugin behavior.
 import fs from "node:fs/promises";
-import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
