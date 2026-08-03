@@ -85,7 +85,7 @@ Reef lives under `channels.reef`:
 
 ## Adding a friend
 
-Friendship changes and review decisions from authenticated chat require the sender to match an explicit `commands.ownerAllowFrom` entry. Wildcards can admit commands, but do not grant owner authority. If chat reports that an owner is required, ask a configured owner or run the equivalent `openclaw reef` command on the Gateway host.
+Friendship changes and review decisions from authenticated chat require the sender to match an explicit `commands.ownerAllowFrom` entry. Wildcards can admit commands, but do not grant owner authority. A configured owner can make either change in chat; friendship changes can also use `openclaw reef friend` on the Gateway host.
 
 The receiving side mints a short-lived code in an authenticated chat:
 
