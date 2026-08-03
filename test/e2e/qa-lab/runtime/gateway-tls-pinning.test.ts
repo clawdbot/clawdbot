@@ -20,7 +20,7 @@ describe("Gateway TLS pinning evidence", () => {
       repoRoot: process.cwd(),
     });
 
-    expect(evidence.entries[0]?.result.status).toBe("pass");
+    expect(evidence.entries[0]?.result.status, evidence.entries[0]?.result.details).toBe("pass");
     const proof = JSON.parse(
       await fs.readFile(path.join(artifactBase, "gateway-tls-pinning-summary.json"), "utf8"),
     ) as {

@@ -6,6 +6,7 @@ import path from "node:path";
 import tls from "node:tls";
 import { pathToFileURL } from "node:url";
 import { GatewayClient } from "@openclaw/gateway-client";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
@@ -19,19 +20,25 @@ import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "gateway-tls-pinning";
 const SOURCE_PATH = "qa/scenarios/runtime/gateway-tls-pinning.yaml";
+const DISCOVERY_PLUGIN_ID = "tls-discovery-proof";
 const CONNECTION_TIMEOUT_MS = 15_000;
 const ENV_KEYS = [
   "HOME",
+  "NODE_ENV",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_DISABLE_BONJOUR",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
   "OPENCLAW_TEST_MINIMAL_GATEWAY",
+  "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
   "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
   "OPENCLAW_SKIP_CANVAS_HOST",
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_SKIP_CRON",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
   "OPENCLAW_SKIP_PROVIDERS",
+  "VITEST",
 ] as const;
 
 type ProducerOptions = {
@@ -76,6 +83,66 @@ function captureEnvironment() {
       }
     }
   };
+}
+
+async function writeDiscoveryProbePlugin(
+  bundledPluginsDir: string,
+  advertisementPath: string,
+): Promise<void> {
+  const pluginDir = path.join(bundledPluginsDir, DISCOVERY_PLUGIN_ID);
+  await fs.mkdir(pluginDir, { recursive: true });
+  await Promise.all([
+    fs.writeFile(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      `${JSON.stringify(
+        {
+          id: DISCOVERY_PLUGIN_ID,
+          activation: { onStartup: true },
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    ),
+    fs.writeFile(
+      path.join(pluginDir, "index.cjs"),
+      `const fs = require("node:fs");
+module.exports = {
+  id: ${JSON.stringify(DISCOVERY_PLUGIN_ID)},
+  register(api) {
+    api.registerGatewayDiscoveryService({
+      id: ${JSON.stringify(DISCOVERY_PLUGIN_ID)},
+      advertise(context) {
+        fs.writeFileSync(${JSON.stringify(advertisementPath)}, JSON.stringify(context), "utf8");
+      },
+    });
+  },
+};
+`,
+      "utf8",
+    ),
+  ]);
+}
+
+async function readAdvertisedFingerprint(advertisementPath: string): Promise<string> {
+  const advertisement: unknown = JSON.parse(await fs.readFile(advertisementPath, "utf8"));
+  if (!isRecord(advertisement) || advertisement.gatewayTlsEnabled !== true) {
+    throw new Error("Gateway discovery publisher did not advertise TLS");
+  }
+  const fingerprint = advertisement.gatewayTlsFingerprintSha256;
+  if (typeof fingerprint !== "string") {
+    throw new Error("Gateway discovery publisher did not advertise a TLS fingerprint");
+  }
+  const normalized = normalizeFingerprint(fingerprint);
+  if (!normalized) {
+    throw new Error("Gateway discovery publisher advertised an invalid TLS fingerprint");
+  }
+  return normalized;
 }
 
 async function getFreePort(): Promise<number> {
@@ -232,31 +299,37 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
   const configPath = path.join(stateDir, "openclaw.json");
   const certPath = path.join(runtimeRoot, "tls", "gateway-cert.pem");
   const keyPath = path.join(runtimeRoot, "tls", "gateway-key.pem");
-  const emptyPluginsDir = path.join(runtimeRoot, "empty-plugins");
+  const bundledPluginsDir = path.join(runtimeRoot, "bundled-plugins");
+  const advertisementPath = path.join(runtimeRoot, "gateway-discovery-advertisement.json");
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 
   try {
     process.env.HOME = runtimeRoot;
     process.env.OPENCLAW_CONFIG_PATH = configPath;
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = emptyPluginsDir;
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+    delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
     process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
     process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     process.env.OPENCLAW_SKIP_CRON = "1";
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
     process.env.OPENCLAW_SKIP_PROVIDERS = "1";
-    await fs.mkdir(emptyPluginsDir, { recursive: true });
+    delete process.env.NODE_ENV;
+    delete process.env.OPENCLAW_DISABLE_BONJOUR;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    delete process.env.VITEST;
+    await writeDiscoveryProbePlugin(bundledPluginsDir, advertisementPath);
 
-    const gatewayTls = await loadGatewayTlsRuntime({
+    const preparedTls = await loadGatewayTlsRuntime({
       enabled: true,
       autoGenerate: true,
       certPath,
       keyPath,
     });
-    if (!gatewayTls.enabled || !gatewayTls.fingerprintSha256) {
-      throw new Error(gatewayTls.error ?? "Gateway TLS runtime did not expose a fingerprint");
+    if (!preparedTls.enabled || !preparedTls.fingerprintSha256) {
+      throw new Error(preparedTls.error ?? "Gateway TLS runtime did not expose a fingerprint");
     }
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(
@@ -268,6 +341,13 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
             bind: "loopback",
             controlUi: { enabled: false },
             tls: { enabled: true, autoGenerate: false, certPath, keyPath },
+          },
+          plugins: {
+            enabled: true,
+            allow: [DISCOVERY_PLUGIN_ID],
+            entries: {
+              [DISCOVERY_PLUGIN_ID]: { enabled: true },
+            },
           },
         },
         null,
@@ -286,20 +366,21 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
       sidecarStartup: "defer",
     });
     const url = `wss://127.0.0.1:${port}`;
+    const advertisedFingerprint = await readAdvertisedFingerprint(advertisementPath);
     const peerFingerprint = await waitForPeerFingerprint(port);
-    if (peerFingerprint !== gatewayTls.fingerprintSha256) {
+    if (peerFingerprint !== advertisedFingerprint) {
       throw new Error("Gateway advertised TLS fingerprint did not match the live peer certificate");
     }
 
-    const healthResponded = await connectWithExactPin(url, gatewayTls.fingerprintSha256);
-    const wrongPin = `${gatewayTls.fingerprintSha256.slice(0, -1)}${
-      gatewayTls.fingerprintSha256.endsWith("0") ? "1" : "0"
+    const healthResponded = await connectWithExactPin(url, advertisedFingerprint);
+    const wrongPin = `${advertisedFingerprint.slice(0, -1)}${
+      advertisedFingerprint.endsWith("0") ? "1" : "0"
     }`;
     const wrongPinResult = await connectWithWrongPin(url, wrongPin);
-    const cleartextMismatch = await proveCleartextMismatch(port, gatewayTls.fingerprintSha256);
+    const cleartextMismatch = await proveCleartextMismatch(port, advertisedFingerprint);
 
     return {
-      advertisedFingerprint: gatewayTls.fingerprintSha256,
+      advertisedFingerprint,
       cleartextMismatch,
       healthResponded,
       peerFingerprint,
