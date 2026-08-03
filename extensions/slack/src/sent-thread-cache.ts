@@ -37,6 +37,8 @@ const threadParticipation = createPersistentDedupeCache<SlackThreadParticipation
       "thread-participation-state",
       "Slack persistent thread participation state failed",
     ),
+    // Restoring participation must not extend its original mention-bypass window.
+    readTimestamp: ({ repliedAt }) => repliedAt,
   },
 });
 
