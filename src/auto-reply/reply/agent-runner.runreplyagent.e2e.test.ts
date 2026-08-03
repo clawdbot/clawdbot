@@ -1129,37 +1129,53 @@ describe("runReplyAgent heartbeat followup guard", () => {
     }
   });
 
-  it("returns a terminal failure after a delivered partial with block streaming disabled", async () => {
-    const accounting = await import("./session-run-accounting.js");
-    const persistSpy = vi
-      .spyOn(accounting, "persistRunSessionUsage")
-      .mockRejectedValueOnce(new Error("persist exploded"));
-    const onPartialReply = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onPartialReply?.({ text: "partial answer" });
-      return {
-        payloads: [{ text: "final answer" }],
-        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-      };
-    });
-
-    try {
-      const { run } = createMinimalRun({
-        blockStreamingEnabled: false,
-        opts: { onPartialReply },
+  it.each([
+    { label: "direct chat", sessionCtx: {} },
+    {
+      label: "group chat",
+      sessionCtx: {
+        ChatType: "group" as const,
+        SessionKey: "agent:test:telegram:group:-100123",
+      },
+    },
+  ])(
+    "returns a terminal failure in a $label after a delivered partial with block streaming disabled",
+    async ({ sessionCtx }) => {
+      const accounting = await import("./session-run-accounting.js");
+      const persistSpy = vi
+        .spyOn(accounting, "persistRunSessionUsage")
+        .mockRejectedValueOnce(new Error("persist exploded"));
+      const onPartialReply = vi.fn();
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onPartialReply?.({ text: "partial answer" });
+        return {
+          payloads: [{ text: "final answer" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
       });
-      const result = await run();
-      const payload = Array.isArray(result) ? result[0] : result;
 
-      expect(onPartialReply).toHaveBeenCalledWith({ text: "partial answer", mediaUrls: undefined });
-      expect(payload).toMatchObject({
-        text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-        isError: true,
-      });
-    } finally {
-      persistSpy.mockRestore();
-    }
-  });
+      try {
+        const { run } = createMinimalRun({
+          blockStreamingEnabled: false,
+          opts: { onPartialReply },
+          sessionCtx,
+        });
+        const result = await run();
+        const payload = Array.isArray(result) ? result[0] : result;
+
+        expect(onPartialReply).toHaveBeenCalledWith({
+          text: "partial answer",
+          mediaUrls: undefined,
+        });
+        expect(payload).toMatchObject({
+          text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+          isError: true,
+        });
+      } finally {
+        persistSpy.mockRestore();
+      }
+    },
+  );
 
   it("rethrows after a delivered partial without visible content", async () => {
     const accounting = await import("./session-run-accounting.js");

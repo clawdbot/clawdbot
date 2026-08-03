@@ -507,7 +507,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     ) {
       throw error;
     }
-    return buildTerminalAgentRunFailureReplyPayload({ sessionCtx: ctx, cfg: replyConfig });
+    return buildTerminalAgentRunFailureReplyPayload({
+      visibleReplyDelivered: true,
+      sessionCtx: ctx,
+      cfg: replyConfig,
+    });
   });
   const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
   notifySessionMetadataChanges(sessionMetadataChanges);

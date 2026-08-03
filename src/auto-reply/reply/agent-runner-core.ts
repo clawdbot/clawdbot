@@ -450,7 +450,11 @@ export async function handleReplyAgentRunError(
   if (!isHeartbeat && didDeliverVisibleReply && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
-      buildTerminalAgentRunFailureReplyPayload({ sessionCtx, cfg }),
+      buildTerminalAgentRunFailureReplyPayload({
+        visibleReplyDelivered: true,
+        sessionCtx,
+        cfg,
+      }),
     );
   }
   replyOperation.fail("run_failed", error);
