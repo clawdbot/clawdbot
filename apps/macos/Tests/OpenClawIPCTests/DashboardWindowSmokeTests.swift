@@ -979,6 +979,7 @@ struct DashboardWindowSmokeTests {
 
         try controller._testOpenLinkBrowser(#require(URL(string: "https://docs.openclaw.ai/")))
         #expect(!controller._testLinkBrowserOwnsJavaScriptControlUIDialog)
+        #expect(controller._testLinkBrowserOwnsJavaScriptConfirmDialog)
     }
 
     @Test func `dashboard javascript dialogs accept only trusted main control frames`() throws {

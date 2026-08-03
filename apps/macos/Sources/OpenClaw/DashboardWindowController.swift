@@ -292,12 +292,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping @MainActor @Sendable (Bool) -> Void)
     {
-        guard Self.shouldAllowJavaScriptControlUIDialog(
-            isOwnedWebView: self.ownsJavaScriptControlUIDialog(webView),
-            from: frame.request.url,
-            isMainFrame: frame.isMainFrame,
-            dashboardURL: self.currentURL)
-        else {
+        guard self.ownsJavaScriptConfirmDialog(webView) else {
             completionHandler(false)
             return
         }
@@ -1123,6 +1118,10 @@ extension DashboardWindowController {
         webView === self.webView
     }
 
+    private func ownsJavaScriptConfirmDialog(_ webView: WKWebView) -> Bool {
+        webView === self.webView || self.linkBrowser.owns(webView)
+    }
+
     private static func makeJavaScriptAlert(message: String, host: String?) -> NSAlert {
         let alert = self.makeJavaScriptDialog(message: message, host: host)
         alert.addButton(withTitle: "OK")
@@ -1750,9 +1749,18 @@ extension DashboardWindowController {
         self.ownsJavaScriptControlUIDialog(webView)
     }
 
+    func _testOwnsJavaScriptConfirmDialog(_ webView: WKWebView) -> Bool {
+        self.ownsJavaScriptConfirmDialog(webView)
+    }
+
     var _testLinkBrowserOwnsJavaScriptControlUIDialog: Bool {
         guard let webView = self.linkBrowser.activeWebView else { return false }
         return self.ownsJavaScriptControlUIDialog(webView)
+    }
+
+    var _testLinkBrowserOwnsJavaScriptConfirmDialog: Bool {
+        guard let webView = self.linkBrowser.activeWebView else { return false }
+        return self.ownsJavaScriptConfirmDialog(webView)
     }
 }
 #endif
