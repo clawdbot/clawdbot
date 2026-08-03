@@ -91,8 +91,9 @@ function dashboardDataPrewarmItems(
     ...resolveConfiguredAgentWorkspaceDirs(cfg).map((workspaceDir, index) => ({
       name: `runtime-plugins.${index}`,
       load: async () => {
-        const { ensureRuntimePluginsLoaded } = await import("../agents/runtime-plugins.js");
-        ensureRuntimePluginsLoaded({ config: cfg, workspaceDir });
+        const { loadAgentRuntimePluginRegistryHandle } =
+          await import("../agents/runtime-plugins.js");
+        loadAgentRuntimePluginRegistryHandle({ config: cfg, workspaceDir });
       },
     })),
     // getReply resolves the published model-catalog owner per agent before its
