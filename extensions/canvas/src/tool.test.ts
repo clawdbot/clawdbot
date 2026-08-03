@@ -35,7 +35,9 @@ const canvasToolInvocationActions = [
 
 const mocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
-  imageResultFromFile: vi.fn(async (params) => ({ content: [], details: params })),
+  imageResultFromFile: vi.fn<
+    typeof import("openclaw/plugin-sdk/channel-actions").imageResultFromFile
+  >(async (params) => ({ content: [], details: params })),
   listNodes: vi.fn(async () => []),
   resolveNodeIdFromList: vi.fn(() => "node-1"),
 }));
