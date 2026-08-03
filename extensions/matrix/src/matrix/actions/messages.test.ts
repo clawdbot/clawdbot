@@ -228,6 +228,25 @@ describe("matrix message actions", () => {
     }
   });
 
+  it("preserves leading Markdown indentation while trimming trailing edit whitespace", async () => {
+    const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
+
+    try {
+      await editMatrixMessage("!room:example.org", "$original", "    @room  \t\n", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+      });
+
+      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "    @room", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+        accountId: undefined,
+        client: undefined,
+        timeoutMs: undefined,
+      });
+    } finally {
+      editSpy.mockRestore();
+    }
+  });
+
   it("rejects whitespace-only Matrix edits", async () => {
     await expect(
       editMatrixMessage("!room:example.org", "$original", "   \n  ", {

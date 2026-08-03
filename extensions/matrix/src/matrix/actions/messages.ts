@@ -111,7 +111,7 @@ export async function editMatrixMessage(
   if (!content.trim()) {
     throw new Error("Matrix edit requires content");
   }
-  const eventId = await editMessageMatrix(roomId, messageId, content, {
+  const eventId = await editMessageMatrix(roomId, messageId, content.trimEnd(), {
     cfg: opts.cfg,
     accountId: opts.accountId ?? undefined,
     client: opts.client,
