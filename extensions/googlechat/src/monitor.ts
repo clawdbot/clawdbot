@@ -545,14 +545,15 @@ export async function startGoogleChatMonitor(
   return await monitorGoogleChatProvider(params);
 }
 
+// Null keeps the same meaning it has in monitorGoogleChatProvider above: the
+// configured webhookUrl does not parse, so no route is ever bound. Falling back
+// to the default path here would report a route the monitor never registers.
 export function resolveGoogleChatWebhookPath(params: {
   account: ResolvedGoogleChatAccount;
-}): string {
-  return (
-    resolveWebhookPath({
-      webhookPath: params.account.config.webhookPath,
-      webhookUrl: params.account.config.webhookUrl,
-      defaultPath: "/googlechat",
-    }) ?? "/googlechat"
-  );
+}): string | null {
+  return resolveWebhookPath({
+    webhookPath: params.account.config.webhookPath,
+    webhookUrl: params.account.config.webhookUrl,
+    defaultPath: "/googlechat",
+  });
 }

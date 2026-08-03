@@ -13,7 +13,12 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
+import {
+  mergeSsrFPolicies,
+  SsrFBlockedError,
+  type LookupFn,
+  type SsrFPolicy,
+} from "../../infra/net/ssrf.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
@@ -525,10 +530,7 @@ type WebFetchRuntimeParams = {
   readabilityEnabled: boolean;
   config?: OpenClawConfig;
   useTrustedEnvProxy: boolean;
-  ssrfPolicy?: {
-    allowRfc2544BenchmarkRange?: boolean;
-    allowIpv6UniqueLocalRange?: boolean;
-  };
+  ssrfPolicy?: SsrFPolicy;
   providerCacheKey?: string;
   lookupFn?: LookupFn;
   signal?: AbortSignal;
@@ -686,16 +688,11 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
-  const allowIpv6UniqueLocalRange = params.ssrfPolicy?.allowIpv6UniqueLocalRange === true;
+  const ssrfPolicy = mergeSsrFPolicies(params.ssrfPolicy);
+  const dangerouslyAllowPrivateNetwork = ssrfPolicy?.dangerouslyAllowPrivateNetwork === true;
+  const allowRfc2544BenchmarkRange = ssrfPolicy?.allowRfc2544BenchmarkRange === true;
+  const allowIpv6UniqueLocalRange = ssrfPolicy?.allowIpv6UniqueLocalRange === true;
   const useTrustedEnvProxy = params.useTrustedEnvProxy;
-  const ssrfPolicy: SsrFPolicy | undefined =
-    allowRfc2544BenchmarkRange || allowIpv6UniqueLocalRange
-      ? {
-          ...(allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : {}),
-          ...(allowIpv6UniqueLocalRange ? { allowIpv6UniqueLocalRange } : {}),
-        }
-      : undefined;
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(params.url);
@@ -711,8 +708,12 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   const cacheDiscriminators = [
     `user-agent:${sha256Hex(params.userAgent)}`,
     params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
+    dangerouslyAllowPrivateNetwork ? "allow-private-network" : "",
     allowRfc2544BenchmarkRange ? "allow-rfc2544" : "",
     allowIpv6UniqueLocalRange ? "allow-ipv6-ula" : "",
+    ssrfPolicy?.allowedHostnames?.length
+      ? `allowed-hostnames:${sha256Hex(ssrfPolicy.allowedHostnames.join("\n"))}`
+      : "",
     useTrustedEnvProxy ? "trusted-env-proxy" : "",
     headersCacheKey ? `headers:${headersCacheKey}` : "",
   ].filter(Boolean);

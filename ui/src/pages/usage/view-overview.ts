@@ -12,11 +12,11 @@ import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   buildUsageCostWindows,
   buildUsageCostWindowSummary,
-  formatCost,
+  formatUsageCost,
   formatDayLabel,
   formatFullDate,
   formatIsoDate,
-  formatTokens,
+  formatUsageTokens,
 } from "./metrics.ts";
 import type { UsageInsightStats } from "./metrics.ts";
 import type {
@@ -55,7 +55,7 @@ function pct(part: number, total: number): number {
 function formatAnalysisCost(value: number): string {
   const magnitude = Math.abs(value);
   const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
-  return formatCost(value, decimals);
+  return formatUsageCost(value, decimals);
 }
 
 function handleDailyBarKeydown(
@@ -234,7 +234,7 @@ function renderCostWindowComparison(
                 ${formatAnalysisCost(summary.totals.totalCost)}
               </div>
               <div class="cost-window-card__meta">
-                ${formatTokens(summary.totals.totalTokens)} ${t("usage.metrics.tokens")} ·
+                ${formatUsageTokens(summary.totals.totalTokens)} ${t("usage.metrics.tokens")} ·
                 ${formatAnalysisCost(averageDailyCost)} ${t("usage.costWindows.perDay")}
               </div>
             </div>
@@ -323,9 +323,9 @@ function renderDailyChartCompact(
               (value) =>
                 html`<span
                   >${isTokenMode
-                    ? formatTokens(value)
+                    ? formatUsageTokens(value)
                     : value === 0
-                      ? formatCost(0)
+                      ? formatUsageCost(0)
                       : formatAnalysisCost(value)}</span
                 >`,
             )}
@@ -350,15 +350,16 @@ function renderDailyChartCompact(
                   : [];
               const breakdownLines = segments.map(
                 ({ value, labelKey }) =>
-                  `${t(labelKey)} ${isTokenMode ? formatTokens(value) : formatAnalysisCost(value)}`,
+                  `${t(labelKey)} ${isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value)}`,
               );
               const totalLabel = isTokenMode
-                ? formatTokens(d.totalTokens)
+                ? formatUsageTokens(d.totalTokens)
                 : formatAnalysisCost(d.totalCost);
               const dateLabel = formatFullDate(d.date);
-              const tokensLabel = `${formatTokens(d.totalTokens)} ${normalizeLowercaseStringOrEmpty(
-                t("usage.metrics.tokens"),
-              )}`.trim();
+              const tokensLabel =
+                `${formatUsageTokens(d.totalTokens)} ${normalizeLowercaseStringOrEmpty(
+                  t("usage.metrics.tokens"),
+                )}`.trim();
               const costLabel = formatAnalysisCost(d.totalCost);
               const segmentTotal = segments.reduce((sum, segment) => sum + segment.value, 0) || 1;
               return html`
@@ -420,7 +421,7 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
       className,
       labelKey,
       percentage: pct(value, total),
-      formatted: isTokenMode ? formatTokens(value) : formatAnalysisCost(value),
+      formatted: isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value),
     };
   });
 
@@ -451,7 +452,9 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
       </div>
       <div class="cost-breakdown-total">
         ${t("usage.breakdown.total")}:
-        ${isTokenMode ? formatTokens(totals.totalTokens) : formatAnalysisCost(totals.totalCost)}
+        ${isTokenMode
+          ? formatUsageTokens(totals.totalTokens)
+          : formatAnalysisCost(totals.totalCost)}
       </div>
     </div>
   `;
@@ -591,7 +594,7 @@ function renderUsageInsights(
   const errorRatePct = stats.errorRate * 100;
   const throughputLabel =
     stats.throughputTokensPerMin !== undefined
-      ? `${formatTokens(Math.round(stats.throughputTokensPerMin))} ${t("usage.overview.tokensPerMinute")}`
+      ? `${formatUsageTokens(Math.round(stats.throughputTokensPerMin))} ${t("usage.overview.tokensPerMinute")}`
       : t("usage.common.emptyValue");
   const throughputCostLabel =
     stats.throughputCostPerMin !== undefined
@@ -609,7 +612,7 @@ function renderUsageInsights(
       return {
         label: formatDayLabel(day.date),
         value: `${(rate * 100).toFixed(2)}%`,
-        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatTokens(day.tokens)}`,
+        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens)}`,
         rate,
       };
     })
@@ -624,7 +627,7 @@ function renderUsageInsights(
   const costAttributionSub = (cost: number, tokens: number, messageCount?: number) =>
     [
       costShare(cost),
-      formatTokens(tokens),
+      formatUsageTokens(tokens),
       messageCount === undefined ? null : `${messageCount} ${t("usage.overview.messagesAbbrev")}`,
     ]
       .filter((part): part is string => part !== null)
@@ -698,7 +701,7 @@ function renderUsageInsights(
               hintId: "average-tokens",
               title: t("usage.overview.avgTokens"),
               hint: t("usage.overview.avgTokensHint"),
-              value: formatTokens(avgTokens),
+              value: formatUsageTokens(avgTokens),
               sub: t("usage.overview.acrossMessages", {
                 count: String(aggregates.messages.total || 0),
               }),
@@ -709,7 +712,7 @@ function renderUsageInsights(
               title: t("usage.overview.cacheHitRate"),
               hint: t("usage.overview.cacheHint"),
               value: cacheHitLabel,
-              sub: `${formatTokens(totals.cacheRead)} ${t("usage.overview.cached")} · ${formatTokens(cacheBase)} ${t("usage.overview.prompt")}`,
+              sub: `${formatUsageTokens(totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(cacheBase)} ${t("usage.overview.prompt")}`,
               tone: cacheHitRate > 0.6 ? "good" : cacheHitRate > 0.3 ? "warn" : "bad",
               className: "usage-summary-card--medium",
             })}
@@ -926,7 +929,7 @@ function renderSessionsCard(
             ${t("usage.sessions.copy")}
           </button>
           <div class="session-bar-value">
-            ${isTokenMode ? formatTokens(value) : formatAnalysisCost(value)}
+            ${isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value)}
           </div>
         </div>
       </div>
@@ -956,7 +959,7 @@ function renderSessionsCard(
         <div class="sessions-card-meta">
           <div class="sessions-card-stats">
             <span>
-              ${isTokenMode ? formatTokens(avgValue) : formatAnalysisCost(avgValue)}
+              ${isTokenMode ? formatUsageTokens(avgValue) : formatAnalysisCost(avgValue)}
               ${t("usage.sessions.avg")}
             </span>
             <span

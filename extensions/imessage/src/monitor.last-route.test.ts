@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
@@ -23,6 +24,111 @@ import {
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
+
+const DEFAULT_SENDER = "+15550001111";
+const ANCHOR_REPAIR_GUID = "11111111-1111-4111-8111-111111111111";
+const WATCH_SUBSCRIBE_PARAMS = { attachments: false, include_reactions: true } as const;
+const WATCH_SUBSCRIBE_OPTIONS = { timeoutMs: 10_000 } as const;
+const EMPTY_DISPATCH_RESULT = {
+  queuedFinal: false,
+  counts: { tool: 0, block: 0, final: 0 },
+} as const;
+
+type IMessageTestRequest = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+type IMessageTestRequestResult =
+  | Record<string, unknown>
+  | ((params?: Record<string, unknown>) => unknown);
+type ChatDbMessage = Required<
+  Pick<IMessagePayload, "id" | "guid" | "sender" | "text" | "created_at">
+>;
+type MonitorRunParams = {
+  accountId?: string;
+  imessage?: Record<string, unknown>;
+  session?: Record<string, unknown>;
+  messages?: Record<string, unknown>;
+  agents?: Record<string, unknown>;
+  runtime?: MonitorIMessageOpts["runtime"];
+  allowlist?: boolean;
+};
+type ReplyDispatchParams = Parameters<typeof dispatchReplyWithBufferedBlockDispatcher>[0];
+type WatchClientParams = {
+  requests?: Record<string, IMessageTestRequestResult>;
+  auxiliaryRequests?: Record<string, IMessageTestRequestResult>;
+  message?: IMessagePayload;
+  messages?: IMessagePayload[];
+  onClose?: (notify: (message: IMessagePayload) => void) => Promise<void>;
+  afterNotify?: () => Promise<void>;
+};
+
+function createIMessageTestRequest(
+  results: Record<string, IMessageTestRequestResult>,
+): IMessageTestRequest {
+  return async (method, params) => {
+    if (!Object.hasOwn(results, method)) {
+      throw new Error(`unexpected imsg method ${method}`);
+    }
+    const result = results[method];
+    return typeof result === "function" ? await result(params) : result;
+  };
+}
+
+async function settleNotifications(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function withChatDb<T>(dbPath: string, run: (database: DatabaseSync) => T): T {
+  const database = new DatabaseSync(dbPath);
+  try {
+    return run(database);
+  } finally {
+    database.close();
+  }
+}
+
+function createChatDbMessage(
+  id: number,
+  guid: string,
+  text: string,
+  createdAt = new Date().toISOString(),
+): ChatDbMessage {
+  return { id, guid, sender: DEFAULT_SENDER, text, created_at: createdAt };
+}
+
+const CHAT_DB_SCHEMA = "CREATE TABLE message (guid TEXT, sender TEXT, text TEXT, created_at TEXT);";
+const CHAT_DB_INSERT =
+  "INSERT INTO message(rowid, guid, sender, text, created_at) VALUES (?, ?, ?, ?, ?)";
+
+function createChatDb(dbPath: string, messages: ChatDbMessage[] = []): void {
+  withChatDb(dbPath, (database) => {
+    database.exec(CHAT_DB_SCHEMA);
+    const insert = database.prepare(CHAT_DB_INSERT);
+    for (const message of messages) {
+      insert.run(message.id, message.guid, message.sender, message.text, message.created_at);
+    }
+  });
+}
+
+function insertChatDbMessage(dbPath: string, message: ChatDbMessage): void {
+  withChatDb(dbPath, (database) => {
+    database
+      .prepare(CHAT_DB_INSERT)
+      .run(message.id, message.guid, message.sender, message.text, message.created_at);
+  });
+}
+
+function readChatDbMessagesAfter(dbPath: string, rowid: number): IMessagePayload[] {
+  return withChatDb(dbPath, (database) => {
+    const messages = database
+      .prepare(
+        "SELECT rowid AS id, guid, sender, text, created_at FROM message WHERE rowid > ? ORDER BY rowid",
+      )
+      .all(rowid) as ChatDbMessage[];
+    return messages.map((message) =>
+      Object.assign(message, { chat_id: 123, is_from_me: false, is_group: false }),
+    );
+  });
+}
 
 function expireCachedPrivateApiStatus(): void {
   setCachedIMessagePrivateApiStatus(
@@ -197,7 +303,7 @@ describe("iMessage monitor last-route updates", () => {
       id: message.id,
       guid: message.guid,
       chat_id: message.chat_id ?? 123,
-      sender: message.sender ?? "+15550001111",
+      sender: message.sender ?? DEFAULT_SENDER,
       is_from_me: message.is_from_me ?? false,
       text: message.text,
       is_group: message.is_group ?? false,
@@ -205,55 +311,84 @@ describe("iMessage monitor last-route updates", () => {
     };
   }
 
-  function createIMessageWatchClient(
-    params: {
-      request?: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
-      message?: () => IMessagePayload;
-      onClose?: (notify: (message: IMessagePayload) => void) => Promise<void>;
-    } = {},
-  ) {
+  function createAnchorlessDirectPair(id: number, text: string, isFromMe: boolean) {
+    return {
+      notification: {
+        id,
+        guid: ANCHOR_REPAIR_GUID,
+        chat_id: 0,
+        chat_guid: "",
+        chat_identifier: "",
+        sender: "+15550000001",
+        destination_caller_id: "+15550000001",
+        is_from_me: false,
+        is_group: false,
+        service: "iMessage",
+        text,
+        created_at: new Date().toISOString(),
+      },
+      history: {
+        id,
+        guid: ANCHOR_REPAIR_GUID,
+        chat_id: 42,
+        chat_guid: "iMessage;-;+15550000002",
+        chat_identifier: "+15550000002",
+        sender: "+15550000002",
+        destination_caller_id: "+15550000001",
+        is_from_me: isFromMe,
+        is_group: false,
+        service: "iMessage",
+      },
+    };
+  }
+
+  function createIMessageWatchClient(params: WatchClientParams = {}) {
     let onNotification:
       | NonNullable<NonNullable<Parameters<typeof createIMessageRpcClient>[0]>["onNotification"]>
       | undefined;
     const notify = (message: IMessagePayload) => {
       onNotification?.({ method: "message", params: { message } });
     };
-    const message = params.message;
+    const messages = params.messages ?? (params.message ? [params.message] : undefined);
     const onClose =
       params.onClose ??
-      (message
+      (messages
         ? async (notifyMessage: (message: IMessagePayload) => void) => {
-            notifyMessage(message());
-            await Promise.resolve();
-            await Promise.resolve();
+            for (const message of messages) {
+              notifyMessage(message);
+            }
+            await settleNotifications();
+            await params.afterNotify?.();
           }
         : undefined);
+    const auxiliaryClient = params.auxiliaryRequests
+      ? {
+          request: vi.fn(createIMessageTestRequest(params.auxiliaryRequests)),
+          stop: vi.fn(async () => {}),
+        }
+      : undefined;
     const client = {
-      request: vi.fn(params.request ?? (async () => ({ subscription: 1 }))),
+      request: vi.fn(
+        createIMessageTestRequest(params.requests ?? { "watch.subscribe": { subscription: 1 } }),
+      ),
       waitForClose: vi.fn(() => onClose?.(notify) ?? Promise.resolve()),
       stop: vi.fn(async () => {}),
+      auxiliaryClient,
     };
     createIMessageRpcClientMock.mockImplementation(async (clientParams) => {
-      if (!clientParams?.onNotification) {
-        throw new Error("expected iMessage notification handler");
+      if (clientParams?.onNotification) {
+        onNotification = clientParams.onNotification;
+        return client as never;
       }
-      onNotification = clientParams.onNotification;
-      return client as never;
+      if (auxiliaryClient) {
+        return auxiliaryClient as never;
+      }
+      throw new Error("expected iMessage notification handler");
     });
     return client;
   }
 
-  async function runIMessageMonitor(
-    params: {
-      accountId?: string;
-      imessage?: Record<string, unknown>;
-      session?: Record<string, unknown>;
-      messages?: Record<string, unknown>;
-      agents?: Record<string, unknown>;
-      runtime?: MonitorIMessageOpts["runtime"];
-      allowlist?: boolean;
-    } = {},
-  ): Promise<void> {
+  async function runIMessageMonitor(params: MonitorRunParams = {}): Promise<void> {
     await monitorIMessageProvider({
       ...(params.accountId ? { accountId: params.accountId } : {}),
       config: {
@@ -261,7 +396,7 @@ describe("iMessage monitor last-route updates", () => {
           imessage: {
             ...(params.allowlist === false
               ? {}
-              : { dmPolicy: "allowlist", allowFrom: ["+15550001111"] }),
+              : { dmPolicy: "allowlist", allowFrom: [DEFAULT_SENDER] }),
             ...params.imessage,
           },
         },
@@ -279,15 +414,64 @@ describe("iMessage monitor last-route updates", () => {
     return stateDir;
   }
 
-  async function seedChatDb(dbPath: string, label = "boundary"): Promise<void> {
-    const { DatabaseSync } = await import("node:sqlite");
-    const database = new DatabaseSync(dbPath);
-    try {
+  function seedChatDb(dbPath: string, label = "boundary"): void {
+    withChatDb(dbPath, (database) => {
       database.exec("CREATE TABLE message (text TEXT);");
       database.prepare("INSERT INTO message(rowid, text) VALUES (?, ?)").run(5000, label);
-    } finally {
-      database.close();
+    });
+  }
+
+  function recoveryCursorIdentity(dbPath: string): string {
+    return resolveIMessageRecoveryCursorDbIdentity({ dbPath });
+  }
+
+  function createRecoveryChatDb(prefix: string, cursor?: number, label = "boundary"): string {
+    const dbPath = path.join(createTestStateDir(prefix), "chat.db");
+    if (cursor !== undefined) {
+      advanceIMessageRecoveryCursor("default", recoveryCursorIdentity(dbPath), cursor);
     }
+    seedChatDb(dbPath, label);
+    return dbPath;
+  }
+
+  function loadRecoveryCursor(dbPath: string): number | null {
+    return loadIMessageRecoveryCursor("default", recoveryCursorIdentity(dbPath));
+  }
+
+  async function runMessageCase(
+    params: WatchClientParams & { monitor?: MonitorRunParams },
+  ): Promise<ReturnType<typeof createIMessageWatchClient>> {
+    const { monitor, ...clientParams } = params;
+    const client = createIMessageWatchClient(clientParams);
+    await runIMessageMonitor(monitor);
+    return client;
+  }
+
+  function expectWatchSubscription(
+    client: ReturnType<typeof createIMessageWatchClient>,
+    sinceRowid?: number,
+  ): void {
+    const params =
+      sinceRowid === undefined
+        ? WATCH_SUBSCRIBE_PARAMS
+        : { ...WATCH_SUBSCRIBE_PARAMS, since_rowid: sinceRowid };
+    expect(client.request).toHaveBeenCalledWith("watch.subscribe", params, WATCH_SUBSCRIBE_OPTIONS);
+  }
+
+  async function runBlockStreamingCase(
+    message: Pick<IMessagePayload, "id" | "guid">,
+    monitorParams: MonitorRunParams,
+  ): Promise<ReplyDispatchParams> {
+    let dispatchParams: ReplyDispatchParams | undefined;
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
+      dispatchParams = params;
+      return EMPTY_DISPATCH_RESULT;
+    });
+    createIMessageWatchClient({
+      message: createInboundMessage({ ...message, text: "stream blocks before the final" }),
+    });
+    await runIMessageMonitor(monitorParams);
+    return dispatchParams as ReplyDispatchParams;
   }
 
   it("keeps native typing alive when tool activity arrives before reply text", async () => {
@@ -343,28 +527,21 @@ describe("iMessage monitor last-route updates", () => {
       });
       typingController.markRunComplete();
       typingController.markDispatchIdle();
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
+      return EMPTY_DISPATCH_RESULT;
     });
 
-    const client = createIMessageWatchClient({
-      request: async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        if (method === "typing") {
-          return { ok: true };
-        }
-        throw new Error(`unexpected imsg method ${method}`);
+    const client = await runMessageCase({
+      requests: {
+        "watch.subscribe": { subscription: 1 },
+        typing: { ok: true },
       },
-      message: () =>
-        createInboundMessage({
-          id: 7,
-          guid: "typing-keepalive-guid-7",
-          text: "run a long script",
-        }),
+      message: createInboundMessage({
+        id: 7,
+        guid: "typing-keepalive-guid-7",
+        text: "run a long script",
+      }),
+      monitor: { imessage: { sendReadReceipts: false } },
     });
-
-    await runIMessageMonitor({ imessage: { sendReadReceipts: false } });
 
     await vi.waitFor(() => {
       expect(client.request).toHaveBeenCalledWith(
@@ -394,28 +571,18 @@ describe("iMessage monitor last-route updates", () => {
         text: "💨Fast: auto-off(75s>=60s)",
         channelData: { openclawProgressKind: "fast-mode-auto" },
       });
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
+      return EMPTY_DISPATCH_RESULT;
     });
 
-    const client = createIMessageWatchClient({
-      request: async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        if (method === "typing") {
-          throw new Error("typing should not start without native typing support");
-        }
-        throw new Error(`unexpected imsg method ${method}`);
-      },
-      message: () =>
-        createInboundMessage({
-          id: 13,
-          guid: "typing-unsupported-guid-13",
-          text: "run a long script without native typing",
-        }),
+    const client = await runMessageCase({
+      requests: { "watch.subscribe": { subscription: 1 } },
+      message: createInboundMessage({
+        id: 13,
+        guid: "typing-unsupported-guid-13",
+        text: "run a long script without native typing",
+      }),
+      monitor: { imessage: { sendReadReceipts: false } },
     });
-
-    await runIMessageMonitor({ imessage: { sendReadReceipts: false } });
 
     await vi.waitFor(() => {
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
@@ -430,38 +597,18 @@ describe("iMessage monitor last-route updates", () => {
 
   it("starts direct typing before dispatching the inbound turn", async () => {
     setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing"]);
-
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    const earlyTypingClient = {
-      request: vi.fn(async (method: string) => {
-        if (method === "typing") {
-          return { ok: true };
-        }
-        throw new Error(`unexpected imsg typing-client method ${method}`);
+    const watchClient = createIMessageWatchClient({
+      requests: {
+        "watch.subscribe": { subscription: 1 },
+        typing: { ok: true },
+      },
+      auxiliaryRequests: { typing: { ok: true } },
+      message: createInboundMessage({
+        id: 12,
+        guid: "typing-early-guid-12",
+        text: "respond after a slow context build",
       }),
-      stop: vi.fn(async () => {}),
-    };
-    const watchClient = {
-      request: vi.fn(async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        if (method === "typing") {
-          return { ok: true };
-        }
-        throw new Error(`unexpected imsg watch-client method ${method}`);
-      }),
-      waitForClose: vi.fn(async () => {
-        onNotification?.({
-          method: "message",
-          params: {
-            message: createInboundMessage({
-              id: 12,
-              guid: "typing-early-guid-12",
-              text: "respond after a slow context build",
-            }),
-          },
-        });
+      afterNotify: async () => {
         await vi.waitFor(() => {
           expect(earlyTypingClient.request).toHaveBeenCalledWith(
             "typing",
@@ -470,23 +617,16 @@ describe("iMessage monitor last-route updates", () => {
           );
           expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
         });
-      }),
-      stop: vi.fn(async () => {}),
-    };
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      if (params?.onNotification) {
-        onNotification = params.onNotification;
-        return watchClient as never;
-      }
-      return earlyTypingClient as never;
+      },
     });
+    const earlyTypingClient = watchClient.auxiliaryClient!;
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async () => {
       expect(earlyTypingClient.request).toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ typing: true, to: "+15550001111" }),
         expect.any(Object),
       );
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
+      return EMPTY_DISPATCH_RESULT;
     });
 
     await runIMessageMonitor({ imessage: { sendReadReceipts: false } });
@@ -505,9 +645,27 @@ describe("iMessage monitor last-route updates", () => {
     });
   });
 
-  it.each(["never", "message", "thinking"] as const)(
-    "does not start direct tool typing when typingMode is %s",
-    async (typingMode) => {
+  for (const { name, id, guid, monitor } of [
+    ...(["never", "message", "thinking"] as const).map((typingMode) => ({
+      name: `does not start direct tool typing when typingMode is ${typingMode}`,
+      id: 8,
+      guid: `typing-mode-${typingMode}-guid-8`,
+      monitor: {
+        imessage: { sendReadReceipts: false },
+        agents: { defaults: { typingMode } },
+      },
+    })),
+    {
+      name: "does not start direct tool typing when sendPolicy denies source delivery",
+      id: 9,
+      guid: "send-policy-guid-9",
+      monitor: {
+        imessage: { sendReadReceipts: false },
+        session: { sendPolicy: { default: "deny" } },
+      },
+    },
+  ]) {
+    it(name, async () => {
       setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing"]);
       dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
         expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
@@ -515,30 +673,13 @@ describe("iMessage monitor last-route updates", () => {
           params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed,
         ).toBeUndefined();
         expect(params.replyOptions?.onToolStart).toBeUndefined();
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
+        return EMPTY_DISPATCH_RESULT;
       });
 
-      const client = createIMessageWatchClient({
-        request: async (method: string) => {
-          if (method === "watch.subscribe") {
-            return { subscription: 1 };
-          }
-          if (method === "typing") {
-            throw new Error("typing should not start from tool activity");
-          }
-          throw new Error(`unexpected imsg method ${method}`);
-        },
-        message: () =>
-          createInboundMessage({
-            id: 8,
-            guid: `typing-mode-${typingMode}-guid-8`,
-            text: "run a long script",
-          }),
-      });
-
-      await runIMessageMonitor({
-        imessage: { sendReadReceipts: false },
-        agents: { defaults: { typingMode } },
+      const client = await runMessageCase({
+        requests: { "watch.subscribe": { subscription: 1 } },
+        message: createInboundMessage({ id, guid, text: "run a long script" }),
+        monitor,
       });
 
       await vi.waitFor(() => {
@@ -549,99 +690,25 @@ describe("iMessage monitor last-route updates", () => {
         expect.objectContaining({ typing: true }),
         expect.anything(),
       );
-    },
-  );
-
-  it("does not start direct tool typing when sendPolicy denies source delivery", async () => {
-    setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing"]);
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
-      expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
-      expect(
-        params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed,
-      ).toBeUndefined();
-      expect(params.replyOptions?.onToolStart).toBeUndefined();
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
     });
-
-    const client = createIMessageWatchClient({
-      request: async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        if (method === "typing") {
-          throw new Error("typing should not start under sendPolicy deny");
-        }
-        throw new Error(`unexpected imsg method ${method}`);
-      },
-      message: () =>
-        createInboundMessage({
-          id: 9,
-          guid: "send-policy-guid-9",
-          text: "run a long script",
-        }),
-    });
-
-    await runIMessageMonitor({
-      imessage: { sendReadReceipts: false },
-      session: { sendPolicy: { default: "deny" } },
-    });
-
-    await vi.waitFor(() => {
-      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-    });
-    expect(client.request).not.toHaveBeenCalledWith(
-      "typing",
-      expect.objectContaining({ typing: true }),
-      expect.anything(),
-    );
-  });
+  }
 
   it("does not wait for read receipts before dispatching the inbound turn", async () => {
     setAvailablePrivateApiMethods(["watch.subscribe", "read"]);
-
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    const readClient = {
-      request: vi.fn((method: string) => {
-        if (method === "read") {
-          return new Promise(() => {});
-        }
-        return Promise.reject(new Error(`unexpected imsg read-client method ${method}`));
+    const watchClient = await runMessageCase({
+      auxiliaryRequests: { read: () => new Promise(() => {}) },
+      message: createInboundMessage({
+        id: 11,
+        guid: "read-receipt-guid-11",
+        text: "respond without waiting for read receipt",
       }),
-      stop: vi.fn(async () => {}),
-    };
-    const watchClient = {
-      request: vi.fn((method: string) => {
-        if (method === "watch.subscribe") {
-          return Promise.resolve({ subscription: 1 });
-        }
-        return Promise.reject(new Error(`unexpected imsg watch-client method ${method}`));
-      }),
-      waitForClose: vi.fn(async () => {
-        onNotification?.({
-          method: "message",
-          params: {
-            message: createInboundMessage({
-              id: 11,
-              guid: "read-receipt-guid-11",
-              text: "respond without waiting for read receipt",
-            }),
-          },
-        });
+      afterNotify: async () => {
         await vi.waitFor(() => {
           expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
         });
-      }),
-      stop: vi.fn(async () => {}),
-    };
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      if (params?.onNotification) {
-        onNotification = params.onNotification;
-        return watchClient as never;
-      }
-      return readClient as never;
+      },
     });
-
-    await runIMessageMonitor();
+    const readClient = watchClient.auxiliaryClient!;
 
     expect(readClient.request).toHaveBeenCalledWith(
       "read",
@@ -671,28 +738,11 @@ describe("iMessage monitor last-route updates", () => {
   ] as const)(
     "passes iMessage block streaming config ($label) through to reply dispatch",
     async ({ label, imessagePatch, expectedDisable }) => {
-      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
-        expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
-      });
-
-      createIMessageWatchClient({
-        request: async (method: string) => {
-          if (method === "watch.subscribe") {
-            return { subscription: 1 };
-          }
-          throw new Error(`unexpected imsg method ${method}`);
-        },
-        message: () =>
-          createInboundMessage({
-            id: 10,
-            guid: `block-streaming-${label}-guid-10`,
-            text: "stream blocks before the final",
-          }),
-      });
-
-      await runIMessageMonitor({ imessage: { sendReadReceipts: false, ...imessagePatch } });
-
+      const params = await runBlockStreamingCase(
+        { id: 10, guid: `block-streaming-${label}-guid-10` },
+        { imessage: { sendReadReceipts: false, ...imessagePatch } },
+      );
+      expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
       await vi.waitFor(() => {
         expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
       });
@@ -715,39 +765,20 @@ describe("iMessage monitor last-route updates", () => {
   ] as const)(
     "preserves account-level block streaming opt-outs when inheriting channel streaming ($label)",
     async ({ label, channelBlockEnabled, accountBlockEnabled, expectedDisable }) => {
-      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
-        expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
-      });
-
-      createIMessageWatchClient({
-        request: async (method: string) => {
-          if (method === "watch.subscribe") {
-            return { subscription: 1 };
-          }
-          throw new Error(`unexpected imsg method ${method}`);
-        },
-        message: () =>
-          createInboundMessage({
-            id: 11,
-            guid: `account-block-streaming-${label}-guid-11`,
-            text: "stream blocks before the final",
-          }),
-      });
-
-      await runIMessageMonitor({
-        accountId: "personal",
-        imessage: {
-          sendReadReceipts: false,
-          streaming: { block: { enabled: channelBlockEnabled } },
-          accounts: {
-            personal: {
-              streaming: { block: { enabled: accountBlockEnabled } },
+      const params = await runBlockStreamingCase(
+        { id: 11, guid: `account-block-streaming-${label}-guid-11` },
+        {
+          accountId: "personal",
+          imessage: {
+            sendReadReceipts: false,
+            streaming: { block: { enabled: channelBlockEnabled } },
+            accounts: {
+              personal: { streaming: { block: { enabled: accountBlockEnabled } } },
             },
           },
         },
-      });
-
+      );
+      expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
       await vi.waitFor(() => {
         expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
       });
@@ -766,39 +797,20 @@ describe("iMessage monitor last-route updates", () => {
   ] as const)(
     "preserves channel-level nested block streaming when an account overrides $label",
     async ({ label, accountStreaming }) => {
-      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
-        expect(params.replyOptions?.disableBlockStreaming).toBe(false);
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
-      });
-
-      createIMessageWatchClient({
-        request: async (method: string) => {
-          if (method === "watch.subscribe") {
-            return { subscription: 1 };
-          }
-          throw new Error(`unexpected imsg method ${method}`);
-        },
-        message: () =>
-          createInboundMessage({
-            id: 11,
-            guid: `account-streaming-${label}-guid-11`,
-            text: "stream blocks before the final",
-          }),
-      });
-
-      await runIMessageMonitor({
-        accountId: "personal",
-        imessage: {
-          sendReadReceipts: false,
-          streaming: { block: { enabled: true } },
-          accounts: {
-            personal: {
-              streaming: accountStreaming,
+      const params = await runBlockStreamingCase(
+        { id: 11, guid: `account-streaming-${label}-guid-11` },
+        {
+          accountId: "personal",
+          imessage: {
+            sendReadReceipts: false,
+            streaming: { block: { enabled: true } },
+            accounts: {
+              personal: { streaming: accountStreaming },
             },
           },
         },
-      });
-
+      );
+      expect(params.replyOptions?.disableBlockStreaming).toBe(false);
       await vi.waitFor(() => {
         expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
       });
@@ -811,18 +823,16 @@ describe("iMessage monitor last-route updates", () => {
     const storePath = resolveStorePath(configuredStore, { agentId: "main" });
     const sessionKey = "agent:main:imessage:direct:+15550001111";
     const runtimeErrorMock = vi.fn();
-    createIMessageWatchClient({
-      message: () =>
-        createInboundMessage({
-          id: 1,
-          guid: "last-route-guid-1",
-          text: "hello from imessage",
-        }),
-    });
-
-    await runIMessageMonitor({
-      session: { dmScope: "per-channel-peer", store: configuredStore },
-      runtime: { error: runtimeErrorMock, exit: vi.fn(), log: vi.fn() },
+    await runMessageCase({
+      message: createInboundMessage({
+        id: 1,
+        guid: "last-route-guid-1",
+        text: "hello from imessage",
+      }),
+      monitor: {
+        session: { dmScope: "per-channel-peer", store: configuredStore },
+        runtime: { error: runtimeErrorMock, exit: vi.fn(), log: vi.fn() },
+      },
     });
 
     await vi.waitFor(() => {
@@ -850,74 +860,42 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("suppresses stale backlog rows but dispatches fresh live rows", async () => {
-    // Dates are relative to real now so the age fence sees the intended ages
-    // (the live debouncer also flushes on a real 0ms timer here).
     const staleCreatedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const freshCreatedAt = new Date().toISOString();
 
-    const client = createIMessageWatchClient({
-      onClose: async (notify) => {
-        // Stale backlog row (old send date) Apple delivered after a recovery —
-        // must be suppressed by the age fence.
-        notify(
-          createInboundMessage({
-            id: 2023,
-            guid: "OLD-GUID-2023",
-            text: "old backlog row",
-            created_at: staleCreatedAt,
-          }),
-        );
-        // Fresh live row — must dispatch.
-        notify(
-          createInboundMessage({
-            id: 3001,
-            guid: "LIVE-GUID-2026",
-            text: "current row",
-            created_at: freshCreatedAt,
-          }),
-        );
-        await Promise.resolve();
-        await Promise.resolve();
+    const client = await runMessageCase({
+      messages: [
+        createInboundMessage({
+          id: 2023,
+          guid: "OLD-GUID-2023",
+          text: "old backlog row",
+          created_at: staleCreatedAt,
+        }),
+        createInboundMessage({
+          id: 3001,
+          guid: "LIVE-GUID-2026",
+          text: "current row",
+          created_at: freshCreatedAt,
+        }),
+      ],
+      monitor: {
+        imessage: {
+          dbPath: path.join(os.tmpdir(), `openclaw-missing-chat-${Date.now()}.db`),
+        },
       },
     });
 
-    await runIMessageMonitor({
-      imessage: {
-        // Unreadable dbPath => no startup rowid watermark, so this test
-        // isolates the age-fence behavior on the live path.
-        dbPath: path.join(os.tmpdir(), `openclaw-missing-chat-${Date.now()}.db`),
-      },
-    });
-
-    // No readable db => watch.subscribe carries no since_rowid; the age fence
-    // suppresses stale backlog on the live path instead.
-    expect(client.request).toHaveBeenCalledWith(
-      "watch.subscribe",
-      { attachments: false, include_reactions: true },
-      { timeoutMs: 10_000 },
-    );
-    // Only the fresh row dispatches; the stale backlog row is suppressed.
+    expectWatchSubscription(client);
     await vi.waitFor(() => {
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
     });
   });
 
   it("passes the startup rowid watermark as since_rowid when chat.db is readable", async () => {
-    // Regression guard: the watermark is captured before the transport-ready
-    // probe so messages that land during the startup window are not skipped by
-    // imsg's self-fence at subscribe time.
-    const stateDir = createTestStateDir("openclaw-imsg-startup-rowid-");
-    const dbPath = path.join(stateDir, "chat.db");
-    await seedChatDb(dbPath, "watermark");
-    const client = createIMessageWatchClient();
+    const dbPath = createRecoveryChatDb("openclaw-imsg-startup-rowid-", undefined, "watermark");
+    const client = await runMessageCase({ monitor: { imessage: { dbPath } } });
 
-    await runIMessageMonitor({ imessage: { dbPath } });
-
-    expect(client.request).toHaveBeenCalledWith(
-      "watch.subscribe",
-      { attachments: false, include_reactions: true, since_rowid: 5000 },
-      { timeoutMs: 10_000 },
-    );
+    expectWatchSubscription(client, 5000);
   });
 
   it("recovers over a remote cliPath: replays from the cursor even without a local chat.db boundary", async () => {
@@ -926,27 +904,19 @@ describe("iMessage monitor last-route updates", () => {
       resolveIMessageRecoveryCursorDbIdentity({ remoteHost: "user@gateway-host" }),
       4990,
     );
-    const client = createIMessageWatchClient();
-
-    await runIMessageMonitor({
-      imessage: {
-        // remoteHost set => no local chat.db boundary; recovery must still
-        // drive since_rowid from the persisted cursor over the RPC client.
-        remoteHost: "user@gateway-host",
+    const client = await runMessageCase({
+      monitor: {
+        imessage: {
+          remoteHost: "user@gateway-host",
+        },
       },
     });
 
-    expect(client.request).toHaveBeenCalledWith(
-      "watch.subscribe",
-      { attachments: false, include_reactions: true, since_rowid: 4990 },
-      { timeoutMs: 10_000 },
-    );
+    expectWatchSubscription(client, 4990);
   });
 
   it("routes legacy catchup through durable ingress and rejects a live GUID overlap", async () => {
-    const stateDir = createTestStateDir("openclaw-imsg-catchup-window-");
-    const dbPath = path.join(stateDir, "chat.db");
-    await seedChatDb(dbPath);
+    const dbPath = createRecoveryChatDb("openclaw-imsg-catchup-window-");
     const createdAt = new Date().toISOString();
     const historyMessage = createInboundMessage({
       id: 4995,
@@ -954,33 +924,19 @@ describe("iMessage monitor last-route updates", () => {
       text: "caught up exactly once",
       created_at: createdAt,
     });
-    const client = createIMessageWatchClient({
-      request: async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        if (method === "chats.list") {
-          return { chats: [{ id: 123, last_message_at: createdAt }] };
-        }
-        if (method === "messages.history") {
-          return { messages: [historyMessage] };
-        }
-        throw new Error(`unexpected request ${method}`);
+    const client = await runMessageCase({
+      requests: {
+        "watch.subscribe": { subscription: 1 },
+        "chats.list": { chats: [{ id: 123, last_message_at: createdAt }] },
+        "messages.history": { messages: [historyMessage] },
       },
-      onClose: async (notify) => {
-        notify({ ...historyMessage, id: 5001 });
+      message: { ...historyMessage, id: 5001 },
+      monitor: {
+        imessage: { dbPath, catchup: { enabled: true, perRunLimit: 25, maxAgeMinutes: 60 } },
       },
     });
 
-    await runIMessageMonitor({
-      imessage: { dbPath, catchup: { enabled: true, perRunLimit: 25, maxAgeMinutes: 60 } },
-    });
-
-    expect(client.request).toHaveBeenCalledWith(
-      "watch.subscribe",
-      { attachments: false, include_reactions: true },
-      { timeoutMs: 10_000 },
-    );
+    expectWatchSubscription(client);
     expect(client.request).toHaveBeenCalledWith(
       "chats.list",
       { limit: 200 },
@@ -992,206 +948,122 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("recovers downtime messages: replays from the cursor and delivers replay rows older than the live fence", async () => {
-    const stateDir = createTestStateDir("openclaw-imsg-recovery-");
-    const dbPath = path.join(stateDir, "chat.db");
-    advanceIMessageRecoveryCursor(
-      "default",
-      resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
-      4990,
-    );
-    await seedChatDb(dbPath);
-    // 30 min old: inside the 2h recovery window, outside the 15min live fence.
+    const dbPath = createRecoveryChatDb("openclaw-imsg-recovery-", 4990);
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
-    const client = createIMessageWatchClient({
-      onClose: async (notify) => {
-        // Recovery replay row (rowid <= boundary 5000): missed during downtime,
-        // delivered despite being 30min old.
-        notify(
-          createInboundMessage({
-            id: 4995,
-            guid: "RECOVERY-GUID-4995",
-            text: "missed during downtime",
-            created_at: thirtyMinAgo,
-          }),
-        );
-        // Live row (rowid > boundary) with the same old date: this is the
-        // #89237 Push-flush backlog shape, suppressed at the live fence.
-        notify(
-          createInboundMessage({
-            id: 5001,
-            guid: "LIVE-OLD-GUID-5001",
-            text: "live backlog bomb",
-            created_at: thirtyMinAgo,
-          }),
-        );
-        await Promise.resolve();
-        await Promise.resolve();
-      },
+    const client = await runMessageCase({
+      messages: [
+        createInboundMessage({
+          id: 4995,
+          guid: "RECOVERY-GUID-4995",
+          text: "missed during downtime",
+          created_at: thirtyMinAgo,
+        }),
+        createInboundMessage({
+          id: 5001,
+          guid: "LIVE-OLD-GUID-5001",
+          text: "live backlog bomb",
+          created_at: thirtyMinAgo,
+        }),
+      ],
+      monitor: { imessage: { dbPath } },
     });
 
-    await runIMessageMonitor({ imessage: { dbPath } });
-
-    // since_rowid replays from the persisted cursor, not the boundary.
-    expect(client.request).toHaveBeenCalledWith(
-      "watch.subscribe",
-      { attachments: false, include_reactions: true, since_rowid: 4990 },
-      { timeoutMs: 10_000 },
-    );
-    // The recovery replay row dispatches; the live old row is suppressed.
+    expectWatchSubscription(client, 4990);
     await vi.waitFor(() => {
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
     });
   });
 
   it("does not treat startup-boundary rows as recovery replay without a prior cursor", async () => {
-    const stateDir = createTestStateDir("openclaw-imsg-first-run-boundary-");
-    const dbPath = path.join(stateDir, "chat.db");
-    await seedChatDb(dbPath);
+    const dbPath = createRecoveryChatDb("openclaw-imsg-first-run-boundary-");
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
-    const client = createIMessageWatchClient({
-      message: () =>
-        createInboundMessage({
-          id: 4995,
-          guid: "FIRST-RUN-HISTORY-GUID-4995",
-          text: "already existed before first monitor start",
-          created_at: thirtyMinAgo,
-        }),
+    const client = await runMessageCase({
+      message: createInboundMessage({
+        id: 4995,
+        guid: "FIRST-RUN-HISTORY-GUID-4995",
+        text: "already existed before first monitor start",
+        created_at: thirtyMinAgo,
+      }),
+      monitor: { imessage: { dbPath } },
     });
 
-    await runIMessageMonitor({ imessage: { dbPath } });
-
-    expect(client.request).toHaveBeenCalledWith(
-      "watch.subscribe",
-      { attachments: false, include_reactions: true, since_rowid: 5000 },
-      { timeoutMs: 10_000 },
-    );
-    await Promise.resolve();
-    await Promise.resolve();
+    expectWatchSubscription(client, 5000);
+    await settleNotifications();
     expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
   });
 
   it("records a suppressed live row so a later replay of the same row is deduped, not delivered", async () => {
-    const stateDir = createTestStateDir("openclaw-imsg-suppress-record-");
-    const dbPath = path.join(stateDir, "chat.db");
-    await seedChatDb(dbPath);
+    const dbPath = createRecoveryChatDb("openclaw-imsg-suppress-record-");
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
-    createIMessageWatchClient({
-      onClose: async (notify) => {
-        // Live row (rowid > boundary), 30min old -> suppressed by the live fence
-        // AND recorded in the dedupe.
-        notify(
-          createInboundMessage({
-            id: 5001,
-            guid: "SUPPRESSED-GUID",
-            text: "stale live backlog",
-            created_at: thirtyMinAgo,
-          }),
-        );
-        // Same GUID re-emitted fresh (as a restart replay would): must be
-        // dropped as a duplicate, not delivered under the recovery window.
-        notify(
-          createInboundMessage({
-            id: 5001,
-            guid: "SUPPRESSED-GUID",
-            text: "stale live backlog",
-          }),
-        );
-        await Promise.resolve();
-        await Promise.resolve();
-      },
+    await runMessageCase({
+      messages: [
+        createInboundMessage({
+          id: 5001,
+          guid: "SUPPRESSED-GUID",
+          text: "stale live backlog",
+          created_at: thirtyMinAgo,
+        }),
+        createInboundMessage({
+          id: 5001,
+          guid: "SUPPRESSED-GUID",
+          text: "stale live backlog",
+        }),
+      ],
+      monitor: { imessage: { dbPath } },
     });
 
-    await runIMessageMonitor({ imessage: { dbPath } });
-
-    await Promise.resolve();
-    await Promise.resolve();
+    await settleNotifications();
     expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
   });
 
   it("advances the recovery cursor after durable enqueue before dispatch", async () => {
     debouncerControl.holdEntries = true;
-    const stateDir = createTestStateDir("openclaw-imsg-recovery-failed-");
-    const dbPath = path.join(stateDir, "chat.db");
-    advanceIMessageRecoveryCursor(
-      "default",
-      resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
-      4990,
-    );
-    await seedChatDb(dbPath);
+    const dbPath = createRecoveryChatDb("openclaw-imsg-recovery-failed-", 4990);
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
-    const client = createIMessageWatchClient({
-      onClose: async (notify) => {
-        for (const id of [4995, 4996]) {
-          notify({
-            id,
-            guid: `FAILED-REPLAY-GUID-${id}`,
-            chat_id: 123,
-            sender: "+15550001111",
-            is_from_me: false,
-            text: `missed during downtime ${id}`,
-            is_group: false,
-            created_at: thirtyMinAgo,
-          });
-        }
-      },
+    const client = await runMessageCase({
+      messages: [4995, 4996].map((id) =>
+        createInboundMessage({
+          id,
+          guid: `FAILED-REPLAY-GUID-${id}`,
+          text: `missed during downtime ${id}`,
+          created_at: thirtyMinAgo,
+        }),
+      ),
+      monitor: { imessage: { dbPath } },
     });
 
-    await runIMessageMonitor({ imessage: { dbPath } });
-
-    expect(client.request).toHaveBeenCalledWith(
-      "watch.subscribe",
-      { attachments: false, include_reactions: true, since_rowid: 4990 },
-      { timeoutMs: 10_000 },
-    );
+    expectWatchSubscription(client, 4990);
     await vi.waitFor(() => {
       expect(debouncerControl.entries).toHaveLength(2);
     });
-    expect(
-      loadIMessageRecoveryCursor("default", resolveIMessageRecoveryCursorDbIdentity({ dbPath })),
-    ).toBe(4996);
+    expect(loadRecoveryCursor(dbPath)).toBe(4996);
   });
 
   it("keeps the durable recovery cursor independent of later dispatch order", async () => {
     debouncerControl.holdEntries = true;
-    const stateDir = createTestStateDir("openclaw-imsg-recovery-ordered-");
-    const dbPath = path.join(stateDir, "chat.db");
-    advanceIMessageRecoveryCursor(
-      "default",
-      resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
-      4990,
-    );
-    await seedChatDb(dbPath);
+    const dbPath = createRecoveryChatDb("openclaw-imsg-recovery-ordered-", 4990);
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
-    createIMessageWatchClient({
-      onClose: async (notify) => {
-        for (const id of [4995, 4996]) {
-          notify({
-            id,
-            guid: `OUT-OF-ORDER-REPLAY-GUID-${id}`,
-            chat_id: 123,
-            sender: "+15550001111",
-            is_from_me: false,
-            text: `missed during downtime ${id}`,
-            is_group: false,
-            created_at: thirtyMinAgo,
-          });
-        }
-      },
+    await runMessageCase({
+      messages: [4995, 4996].map((id) =>
+        createInboundMessage({
+          id,
+          guid: `OUT-OF-ORDER-REPLAY-GUID-${id}`,
+          text: `missed during downtime ${id}`,
+          created_at: thirtyMinAgo,
+        }),
+      ),
+      monitor: { imessage: { dbPath } },
     });
-
-    await runIMessageMonitor({ imessage: { dbPath } });
 
     await vi.waitFor(() => {
       expect(debouncerControl.entries).toHaveLength(2);
     });
-    expect(
-      loadIMessageRecoveryCursor("default", resolveIMessageRecoveryCursorDbIdentity({ dbPath })),
-    ).toBe(4996);
+    expect(loadRecoveryCursor(dbPath)).toBe(4996);
   });
 
   const replacedDatabaseCases = [
@@ -1220,93 +1092,50 @@ describe("iMessage monitor last-route updates", () => {
         resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
         9000,
       );
-      const { DatabaseSync } = await import("node:sqlite");
-      const replacement = new DatabaseSync(dbPath);
-      try {
-        replacement.exec(
-          "CREATE TABLE message (guid TEXT, sender TEXT, text TEXT, created_at TEXT);",
-        );
-        if (replacedDatabase.seededRowid !== null) {
-          replacement
-            .prepare(
-              "INSERT INTO message(rowid, guid, sender, text, created_at) VALUES (?, ?, ?, ?, ?)",
-            )
-            .run(
-              replacedDatabase.seededRowid,
-              `RESTORED-GUID-${replacedDatabase.seededRowid}`,
-              "+15550001111",
-              "restored history",
-              new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-            );
-        }
-      } finally {
-        replacement.close();
-      }
+      createChatDb(
+        dbPath,
+        replacedDatabase.seededRowid === null
+          ? []
+          : [
+              createChatDbMessage(
+                replacedDatabase.seededRowid,
+                `RESTORED-GUID-${replacedDatabase.seededRowid}`,
+                "restored history",
+                new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+              ),
+            ],
+      );
 
       let sinceRowid: unknown;
       const client = createIMessageWatchClient({
-        request: async (method: string, params?: Record<string, unknown>) => {
-          if (method === "watch.subscribe") {
+        requests: {
+          "watch.subscribe": (params) => {
             sinceRowid = params?.since_rowid;
-          }
-          return { subscription: 1 };
+            return { subscription: 1 };
+          },
         },
         onClose: async (notify) => {
-          const live = new DatabaseSync(dbPath);
-          try {
-            live
-              .prepare(
-                "INSERT INTO message(rowid, guid, sender, text, created_at) VALUES (?, ?, ?, ?, ?)",
-              )
-              .run(
-                replacedDatabase.liveRowid,
-                `REPLACEMENT-GUID-${replacedDatabase.liveRowid}`,
-                "+15550001111",
-                "sent after the restore",
-                new Date().toISOString(),
-              );
-            const rows = live
-              .prepare(
-                "SELECT rowid AS id, guid, sender, text, created_at FROM message WHERE rowid > ? ORDER BY rowid",
-              )
-              .all(typeof sinceRowid === "number" ? sinceRowid : 0) as Array<{
-              id: number;
-              guid: string;
-              sender: string;
-              text: string;
-              created_at: string;
-            }>;
-            for (const row of rows) {
-              notify({
-                id: row.id,
-                guid: row.guid,
-                chat_id: 123,
-                sender: row.sender,
-                is_from_me: false,
-                text: row.text,
-                is_group: false,
-                created_at: row.created_at,
-              });
-            }
-          } finally {
-            live.close();
+          insertChatDbMessage(
+            dbPath,
+            createChatDbMessage(
+              replacedDatabase.liveRowid,
+              `REPLACEMENT-GUID-${replacedDatabase.liveRowid}`,
+              "sent after the restore",
+            ),
+          );
+          for (const message of readChatDbMessagesAfter(
+            dbPath,
+            typeof sinceRowid === "number" ? sinceRowid : 0,
+          )) {
+            notify(message);
           }
-          await Promise.resolve();
-          await Promise.resolve();
+          await settleNotifications();
         },
       });
 
       await runIMessageMonitor({ imessage: { dbPath } });
 
-      expect(client.request).toHaveBeenCalledWith(
-        "watch.subscribe",
-        {
-          attachments: false,
-          include_reactions: true,
-          since_rowid: replacedDatabase.expectedSinceRowid,
-        },
-        { timeoutMs: 10_000 },
-      );
+      expectWatchSubscription(client, replacedDatabase.expectedSinceRowid);
       await vi.waitFor(() => {
         expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
       });
@@ -1324,41 +1153,26 @@ describe("iMessage monitor last-route updates", () => {
       resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
       9000,
     );
-    const { DatabaseSync } = await import("node:sqlite");
-    const replacement = new DatabaseSync(dbPath);
-    try {
-      replacement.exec(
-        "CREATE TABLE message (guid TEXT, sender TEXT, text TEXT, created_at TEXT);",
-      );
-    } finally {
-      replacement.close();
-    }
+    createChatDb(dbPath);
 
     let effectiveWatcherCursor: number | undefined;
     const client = createIMessageWatchClient({
-      request: async (method: string, params?: Record<string, unknown>) => {
-        if (method !== "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        const live = new DatabaseSync(dbPath);
-        try {
-          live
-            .prepare(
-              "INSERT INTO message(rowid, guid, sender, text, created_at) VALUES (?, ?, ?, ?, ?)",
-            )
-            .run(
-              1,
-              "REBUILT-STARTUP-GUID-1",
-              "+15550001111",
-              "sent while the watcher starts",
-              new Date().toISOString(),
-            );
+      requests: {
+        "watch.subscribe": async (params) => {
+          insertChatDbMessage(
+            dbPath,
+            createChatDbMessage(1, "REBUILT-STARTUP-GUID-1", "sent while the watcher starts"),
+          );
           const requestedCursor = params?.since_rowid;
-          const maxRowid = (
-            live.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as {
-              maxRowid: number;
-            }
-          ).maxRowid;
+          const maxRowid = withChatDb(
+            dbPath,
+            (database) =>
+              (
+                database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as {
+                  maxRowid: number;
+                }
+              ).maxRowid,
+          );
           // Match imsg's MessageWatcher.start contract: cursor 0 self-fences to
           // the subscribe-time maximum, while any other explicit cursor is kept.
           effectiveWatcherCursor =
@@ -1367,56 +1181,20 @@ describe("iMessage monitor last-route updates", () => {
               : typeof requestedCursor === "number"
                 ? requestedCursor
                 : maxRowid;
-        } finally {
-          live.close();
-        }
-        return { subscription: 1 };
+          return { subscription: 1 };
+        },
       },
       onClose: async (notify) => {
-        const live = new DatabaseSync(dbPath);
-        try {
-          const rows = live
-            .prepare(
-              "SELECT rowid AS id, guid, sender, text, created_at FROM message WHERE rowid > ? ORDER BY rowid",
-            )
-            .all(effectiveWatcherCursor ?? 0) as Array<{
-            id: number;
-            guid: string;
-            sender: string;
-            text: string;
-            created_at: string;
-          }>;
-          for (const row of rows) {
-            notify({
-              id: row.id,
-              guid: row.guid,
-              chat_id: 123,
-              sender: row.sender,
-              is_from_me: false,
-              text: row.text,
-              is_group: false,
-              created_at: row.created_at,
-            });
-          }
-        } finally {
-          live.close();
+        for (const message of readChatDbMessagesAfter(dbPath, effectiveWatcherCursor ?? 0)) {
+          notify(message);
         }
-        await Promise.resolve();
-        await Promise.resolve();
+        await settleNotifications();
       },
     });
 
     await runIMessageMonitor({ imessage: { dbPath } });
 
-    expect(client.request).toHaveBeenCalledWith(
-      "watch.subscribe",
-      {
-        attachments: false,
-        include_reactions: true,
-        since_rowid: -1,
-      },
-      { timeoutMs: 10_000 },
-    );
+    expectWatchSubscription(client, -1);
     await vi.waitFor(() => {
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
     });
@@ -1434,14 +1212,10 @@ describe("iMessage monitor last-route updates", () => {
     );
 
     createIMessageWatchClient({
-      request: async (method: string, params?: Record<string, unknown>) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        if (method === "chats.list") {
-          return { chats: [{ id: 349 }] };
-        }
-        if (method === "messages.history") {
+      requests: {
+        "watch.subscribe": { subscription: 1 },
+        "chats.list": { chats: [{ id: 349 }] },
+        "messages.history": (params) => {
           expect(params?.chat_id).toBe(349);
           return {
             messages: [
@@ -1460,10 +1234,9 @@ describe("iMessage monitor last-route updates", () => {
               },
             ],
           };
-        }
-        throw new Error(`unexpected imsg method ${method}`);
+        },
       },
-      message: () => ({
+      message: {
         id: 9500,
         guid: "ANCHORLESS-GROUP-GUID",
         chat_id: 0,
@@ -1476,7 +1249,7 @@ describe("iMessage monitor last-route updates", () => {
         chat_name: "",
         participants: null,
         created_at: new Date().toISOString(),
-      }),
+      },
     });
 
     await runIMessageMonitor({
@@ -1496,137 +1269,57 @@ describe("iMessage monitor last-route updates", () => {
     expect(dispatchParams?.ctx.To).not.toBe("imessage:+15550001111");
   });
 
-  it("repairs anchorless direct watch payloads so reply routing targets the authoritative remote peer (#104136)", async () => {
-    const issueGuid = "11111111-1111-4111-8111-111111111111";
-    const anchorlessNotification = {
+  for (const { name, id, text, isFromMe } of [
+    {
+      name: "repairs anchorless direct watch payloads so reply routing targets the authoritative remote peer (#104136)",
       id: 9500,
-      guid: issueGuid,
-      chat_id: 0,
-      chat_guid: "",
-      chat_identifier: "",
-      sender: "+15550000001",
-      destination_caller_id: "+15550000001",
-      is_from_me: false,
-      is_group: false,
-      service: "iMessage",
       text: "hello from broken anchor",
-      created_at: new Date().toISOString(),
-    };
-    const authoritativeHistory = {
-      id: 9500,
-      guid: issueGuid,
-      chat_id: 42,
-      chat_guid: "iMessage;-;+15550000002",
-      chat_identifier: "+15550000002",
-      sender: "+15550000002",
-      destination_caller_id: "+15550000001",
-      is_from_me: false,
-      is_group: false,
-      service: "iMessage",
-    };
-
-    createIMessageWatchClient({
-      request: async (method: string, params?: Record<string, unknown>) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        if (method === "chats.list") {
-          return { chats: [{ id: 42 }] };
-        }
-        if (method === "messages.history") {
-          expect(params?.chat_id).toBe(42);
-          return { messages: [authoritativeHistory] };
-        }
-        throw new Error(`unexpected imsg method ${method}`);
-      },
-      message: () => anchorlessNotification,
-    });
-
-    await runIMessageMonitor({ imessage: { allowFrom: ["+15550000002"] } });
-
-    await vi.waitFor(() => {
-      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-    });
-    const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
-    expect(dispatchParams?.ctx.To).toBe("imessage:+15550000002");
-    expect(dispatchParams?.ctx.To).not.toBe("imessage:+15550000001");
-
-    console.log(
-      [
-        "[L3 proof #104136] scenario: stale local sender repaired to remote peer",
-        `[L3 proof #104136] anchorless notification sender: ${anchorlessNotification.sender}`,
-        `[L3 proof #104136] authoritative history sender: ${authoritativeHistory.sender}`,
-        `[L3 proof #104136] monitor dispatch ctx.To: ${dispatchParams?.ctx.To}`,
-      ].join("\n"),
-    );
-  });
-
-  it("suppresses anchorless watch payloads when authoritative history is from-me (#104136)", async () => {
-    const issueGuid = "11111111-1111-4111-8111-111111111111";
-    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
-    const anchorlessNotification = {
+      isFromMe: false,
+    },
+    {
+      name: "suppresses anchorless watch payloads when authoritative history is from-me (#104136)",
       id: 9501,
-      guid: issueGuid,
-      chat_id: 0,
-      chat_guid: "",
-      chat_identifier: "",
-      sender: "+15550000001",
-      destination_caller_id: "+15550000001",
-      is_from_me: false,
-      is_group: false,
-      service: "iMessage",
       text: "outgoing row with broken direction",
-      created_at: new Date().toISOString(),
-    };
-    const authoritativeHistory = {
-      id: 9501,
-      guid: issueGuid,
-      chat_id: 42,
-      chat_guid: "iMessage;-;+15550000002",
-      chat_identifier: "+15550000002",
-      sender: "+15550000002",
-      destination_caller_id: "+15550000001",
-      is_from_me: true,
-      is_group: false,
-      service: "iMessage",
-    };
+      isFromMe: true,
+    },
+  ]) {
+    it(name, async () => {
+      const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
+      const { notification, history } = createAnchorlessDirectPair(id, text, isFromMe);
 
-    createIMessageWatchClient({
-      request: async (method: string, params?: Record<string, unknown>) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        if (method === "chats.list") {
-          return { chats: [{ id: 42 }] };
-        }
-        if (method === "messages.history") {
-          expect(params?.chat_id).toBe(42);
-          return { messages: [authoritativeHistory] };
-        }
-        throw new Error(`unexpected imsg method ${method}`);
-      },
-      message: () => anchorlessNotification,
+      await runMessageCase({
+        requests: {
+          "watch.subscribe": { subscription: 1 },
+          "chats.list": { chats: [{ id: 42 }] },
+          "messages.history": (params) => {
+            expect(params?.chat_id).toBe(42);
+            return { messages: [history] };
+          },
+        },
+        message: notification,
+        monitor: {
+          imessage: { allowFrom: ["+15550000002"] },
+          ...(isFromMe ? { runtime } : {}),
+        },
+      });
+
+      if (isFromMe) {
+        await vi.waitFor(() => {
+          expect(runtime.error).toHaveBeenCalled();
+        });
+        expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
+        expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(
+          "recovered authoritative row is from-me",
+        );
+      } else {
+        await vi.waitFor(() => {
+          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+        });
+        const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
+        expect(dispatchParams?.ctx.To).toBe("imessage:+15550000002");
+        expect(dispatchParams?.ctx.To).not.toBe("imessage:+15550000001");
+      }
     });
-
-    await runIMessageMonitor({ imessage: { allowFrom: ["+15550000002"] }, runtime });
-
-    await vi.waitFor(() => {
-      expect(runtime.error).toHaveBeenCalled();
-    });
-    expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
-    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(
-      "recovered authoritative row is from-me",
-    );
-
-    console.log(
-      [
-        "[L3 proof #104136] scenario: authoritative from-me row suppressed before dispatch",
-        `[L3 proof #104136] notification is_from_me: ${anchorlessNotification.is_from_me}`,
-        `[L3 proof #104136] history is_from_me: ${authoritativeHistory.is_from_me}`,
-        `[L3 proof #104136] monitor dispatch count: ${dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.length}`,
-        `[L3 proof #104136] runtime error: ${runtime.error.mock.calls.at(-1)?.[0]}`,
-      ].join("\n"),
-    );
-  });
+  }
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

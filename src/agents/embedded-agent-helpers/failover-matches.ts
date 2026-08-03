@@ -147,6 +147,10 @@ const ERROR_PATTERNS = {
     "network request failed",
     "fetch failed",
     "socket hang up",
+    // Codex and node-fetch expose these exact terminal transport messages.
+    // Keep them anchored so unrelated local stream failures do not trigger model failover.
+    /^stream disconnected before completion(?::[\s\S]*)?$/i,
+    /^premature close of server response while trying to fetch\b/i,
     // Chinese provider error messages (ZhipuAI/GLM, Bailian, Kimi/Moonshot, DeepSeek, etc.)
     "网络错误",
     "网络异常",

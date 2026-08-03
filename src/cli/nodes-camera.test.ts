@@ -8,7 +8,8 @@ import {
 } from "../test-utils/camera-url-test-helpers.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
-type PublishOutputFileAtomically = typeof import("./media-output.js").publishOutputFileAtomically;
+type PublishOutputFileAtomically =
+  typeof import("./output-file.runtime.js").publishOutputFileAtomically;
 
 const fetchGuardMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(
@@ -22,7 +23,7 @@ const fetchGuardMocks = vi.hoisted(() => ({
   ),
 }));
 
-const mediaOutputMocks = vi.hoisted(() => ({
+const outputFileMocks = vi.hoisted(() => ({
   publishOutputFileAtomically: vi.fn<PublishOutputFileAtomically>(),
 }));
 
@@ -30,14 +31,16 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
 }));
 
-vi.mock("./media-output.js", async () => {
-  const actual = await vi.importActual<typeof import("./media-output.js")>("./media-output.js");
-  mediaOutputMocks.publishOutputFileAtomically.mockImplementation(
+vi.mock("./output-file.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
+    "./output-file.runtime.js",
+  );
+  outputFileMocks.publishOutputFileAtomically.mockImplementation(
     actual.publishOutputFileAtomically,
   );
   return {
     ...actual,
-    publishOutputFileAtomically: mediaOutputMocks.publishOutputFileAtomically,
+    publishOutputFileAtomically: outputFileMocks.publishOutputFileAtomically,
   };
 });
 
@@ -112,7 +115,7 @@ describe("nodes camera helpers", () => {
       writeScreenRecordToFile,
       writeScreenSnapshotToFile,
     } = await import("./nodes-screen.js"));
-    ({ publishOutputFileAtomically } = await vi.importActual("./media-output.js"));
+    ({ publishOutputFileAtomically } = await vi.importActual("./output-file.runtime.js"));
   });
 
   beforeEach(() => {
@@ -298,7 +301,7 @@ describe("nodes camera helpers", () => {
       const out = path.join(dir, "x.bin");
       await fs.writeFile(out, "existing-screen");
       await fs.chmod(out, 0o640);
-      mediaOutputMocks.publishOutputFileAtomically.mockImplementationOnce(async (params) => {
+      outputFileMocks.publishOutputFileAtomically.mockImplementationOnce(async (params) => {
         return await publishOutputFileAtomically({
           ...params,
           writeTemp: async (tempPath) => {

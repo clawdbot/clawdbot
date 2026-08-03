@@ -183,6 +183,32 @@ it("does not admit an unrelated continuation through restart drain", async () =>
   expect(ran).not.toHaveBeenCalled();
 });
 
+it("real restart drain blocks a reserved continuation before provider execution and releases it", async () => {
+  let releaseContinuation = () => {};
+  const continuationGate = new Promise<void>((resolve) => {
+    releaseContinuation = resolve;
+  });
+  const providerStarted = vi.fn();
+  let continuation: Promise<void> | undefined;
+
+  await runWithGatewayRootWorkAdmissionForTest(async () => {
+    continuation = runWithGatewayIndependentRootWorkContinuation(async () => {
+      await continuationGate;
+      if (isGatewaySubordinateWorkAdmissionClosed()) {
+        throw new GatewayDrainingError();
+      }
+      providerStarted();
+    });
+  });
+
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+  markGatewayRestartDraining();
+  releaseContinuation();
+  await expect(continuation).rejects.toThrow(GatewayDrainingError);
+  expect(providerStarted).not.toHaveBeenCalled();
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
 it("does not let a stale suspension release clear restart drain", () => {
   const invalidated = vi.fn();
   const suspension = tryBeginGatewaySuspendAdmission(invalidated);

@@ -69,10 +69,12 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
 
 vi.mock("../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => "test-generation",
-  getAgentRunContext: vi.fn(() => undefined),
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: vi.fn((_handler: unknown) => noop),
   registerAgentEventLifecycleRotationHandler: vi.fn(),
+}));
+vi.mock("../infra/agent-run-registry.js", () => ({
+  getAgentRunContext: vi.fn(() => undefined),
 }));
 
 vi.mock("../config/config.js", async () => {

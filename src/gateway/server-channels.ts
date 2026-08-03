@@ -387,13 +387,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   ): ChannelAccountSnapshot => {
     const store = getStore(channelId);
     const current = getRuntime(channelId, accountId);
+    // Terminal channel diagnosis survives task cleanup and late status patches.
+    // Only the gateway-owned start transition proves a new lifecycle began.
     const lifecycle =
-      patch.lifecycle ??
-      (patch.restartPending === true
-        ? "recovering"
-        : patch.connected === true
-          ? "ready"
-          : undefined);
+      current.lifecycle === "blocked" &&
+      current.terminalDisconnect === true &&
+      patch.lifecycle !== "starting"
+        ? "blocked"
+        : (patch.lifecycle ??
+          (patch.restartPending === true
+            ? "recovering"
+            : patch.connected === true
+              ? "ready"
+              : undefined));
     const next = { ...current, ...patch, ...(lifecycle ? { lifecycle } : {}), accountId };
     store.runtimes.set(accountId, next);
     return next;

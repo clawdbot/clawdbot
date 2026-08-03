@@ -1,17 +1,13 @@
 // Coverage for incomplete-turn safety, retry instructions, and liveness states.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { registerAgentHarness } from "../harness/registry.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasOutboundDeliveryEvidence,
 } from "./delivery-evidence.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
-  loadRunOverflowCompactionHarness,
   mockedBuildEmbeddedRunPayloads,
   mockedClassifyFailoverReason,
-  mockedGlobalHookRunner,
   mockedIsFailoverAssistantError,
   mockedIsRateLimitAssistantError,
   mockedLog,
@@ -19,10 +15,11 @@ import {
   mockedResolveModelAsync,
   mockedSleepWithAbort,
   overflowBaseRunParams,
-  resetRunOverflowCompactionHarnessMocks,
-  useOpenAIPlatformAuthFixture,
-  warmRunOverflowCompactionHarness,
-} from "./run.overflow-compaction.harness.js";
+  registerAgentHarness,
+  resetRunIncompleteTurnOwnerMocks,
+  runIncompleteTurnOwnerHarness,
+} from "./run.incomplete-turn.test-support.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
@@ -49,11 +46,7 @@ const EMPTY_RESPONSE_RETRY_INSTRUCTION =
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
 
-let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
-
-// Cold GitHub-hosted fork runners can spend more than five minutes loading and
-// warming this broad harness before the first test reports progress.
-const COLD_FORK_RUNNER_HOOK_TIMEOUT_MS = 420_000;
+const runEmbeddedAgent = runIncompleteTurnOwnerHarness;
 
 function resolveIncompleteTurnPayloadText(
   params: Omit<Parameters<typeof resolveIncompleteTurnPayloadTextCore>[0], "externalAbort"> & {
@@ -66,15 +59,8 @@ function resolveIncompleteTurnPayloadText(
 }
 
 describe("runEmbeddedAgent incomplete-turn safety", () => {
-  beforeAll(async () => {
-    ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
-    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
-  }, COLD_FORK_RUNNER_HOOK_TIMEOUT_MS);
-
   beforeEach(() => {
-    resetRunOverflowCompactionHarnessMocks();
-    useOpenAIPlatformAuthFixture();
-    mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
+    resetRunIncompleteTurnOwnerMocks();
   });
 
   function warnMessages(): string[] {
@@ -1210,7 +1196,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       );
       expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
     } finally {
-      resetRunOverflowCompactionHarnessMocks();
+      resetRunIncompleteTurnOwnerMocks();
     }
   });
 

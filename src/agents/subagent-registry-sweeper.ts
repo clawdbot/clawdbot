@@ -1,6 +1,6 @@
 import type { callGateway } from "../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
-import { getAgentRunContext } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";

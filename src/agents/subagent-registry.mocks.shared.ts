@@ -22,8 +22,10 @@ vi.mock("../gateway/call.js", () => ({
 
 vi.mock("../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => "test-generation",
-  getAgentRunContext: () => undefined,
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: sharedMocks.onAgentEvent,
   registerAgentEventLifecycleRotationHandler: vi.fn(),
+}));
+vi.mock("../infra/agent-run-registry.js", () => ({
+  getAgentRunContext: () => undefined,
 }));

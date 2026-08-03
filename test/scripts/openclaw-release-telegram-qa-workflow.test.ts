@@ -433,7 +433,7 @@ describe("release Telegram QA workflow", () => {
       },
     );
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.toString().split("\0").filter(Boolean)).toEqual(paths.slice(4).reverse());
+    expect(result.stdout.split("\0").filter(Boolean)).toEqual(paths.slice(4).toReversed());
   });
 
   it("keeps generated SUT programs syntactically valid", () => {

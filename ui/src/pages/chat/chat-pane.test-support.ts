@@ -36,6 +36,7 @@ export type TestChatPane = HTMLElement & {
   connectedCallback: () => void;
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
+  restoreArchivedSession: (sessionKey: string) => Promise<void>;
   disconnectedCallback: () => void;
   acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
@@ -108,7 +109,7 @@ export type TestChatPane = HTMLElement & {
   renderPaneHeader: (
     workspace: ReturnType<typeof createSessionWorkspaceProps>,
     tasks: ReturnType<typeof createBackgroundTasksProps>,
-    row: undefined,
+    row: GatewaySessionRow | undefined,
     catalog: boolean,
     agentWorkspace: undefined,
     workspaceGit: boolean,
@@ -130,7 +131,7 @@ export function createSessionContext(
         phase: "connected" as const,
         hello: {
           features: {
-            methods: ["taskSuggestions.list", "session.suggestions.list"],
+            methods: ["taskSuggestions.list", "session.suggestions.list", "sessions.patch"],
           },
         },
       },

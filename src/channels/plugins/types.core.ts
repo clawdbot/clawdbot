@@ -167,6 +167,11 @@ export type ChannelAccountSnapshot = {
   lastTransportActivityAt?: number | null;
   stateReason?: string;
   lastError?: string | null;
+  /**
+   * Legacy channel-authored health label; channel plugins should publish `lifecycle` instead.
+   * Core-derived policy writes remain supported. There is no removal date; removal awaits
+   * external plugin adoption.
+   */
   healthState?: string;
   /**
    * Recorded account lifecycle, independent of inferred transport health.

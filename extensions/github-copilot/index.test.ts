@@ -190,6 +190,80 @@ describe("github-copilot plugin", () => {
     ).toBe("durable-github-token");
   });
 
+  it("normalizes legacy OAuth profiles without losing tenant metadata", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const credential = {
+      type: "oauth" as const,
+      provider: "github-copilot",
+      access: "short-lived-copilot-token",
+      refresh: "durable-github-token",
+      expires: 1,
+      enterpriseUrl: "acme.ghe.com",
+    };
+
+    await expect(provider.refreshOAuth?.(credential)).resolves.toEqual({
+      ...credential,
+      access: "durable-github-token",
+      expires: MAX_DATE_TIMESTAMP_MS,
+    });
+    expect(credential).toEqual({
+      type: "oauth",
+      provider: "github-copilot",
+      access: "short-lived-copilot-token",
+      refresh: "durable-github-token",
+      expires: 1,
+      enterpriseUrl: "acme.ghe.com",
+    });
+  });
+
+  it("rejects unsafe legacy OAuth tenants before formatting or refresh", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const credential = {
+      type: "oauth" as const,
+      provider: "github-copilot",
+      access: "short-lived-copilot-token",
+      refresh: "durable-github-token",
+      expires: 1,
+      enterpriseUrl: "attacker.example",
+    };
+
+    expect(() => provider.formatApiKey?.(credential)).toThrow(/attacker\.example/);
+    await expect(provider.refreshOAuth?.(credential)).rejects.toThrow(/attacker\.example/);
+  });
+
+  it("moves unsupported legacy OAuth doctor guidance into the provider", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const store = {
+      version: 1,
+      profiles: {
+        "github-copilot:default": {
+          type: "oauth" as const,
+          provider: "github-copilot",
+          access: "fake",
+          refresh: "fake",
+          expires: 0,
+          enterpriseUrl: "attacker.example",
+        },
+      },
+    };
+
+    expect(
+      await provider.buildAuthDoctorHint?.({
+        store,
+        provider: "github-copilot",
+        profileId: "github-copilot:default",
+      }),
+    ).toContain("unsupported enterprise domain");
+    store.profiles["github-copilot:default"].enterpriseUrl = "acme.ghe.com";
+    expect(
+      await provider.buildAuthDoctorHint?.({
+        store,
+        provider: "github-copilot",
+        profileId: "github-copilot:default",
+      }),
+    ).toBeUndefined();
+  });
+
   it("preserves the source token supplied by the auth layer for runtime auth", async () => {
     mocks.resolveCopilotRuntimeAuth.mockResolvedValueOnce({
       apiKey: "github-source-token",
@@ -225,6 +299,38 @@ describe("github-copilot plugin", () => {
           "User-Agent": "GitHubCopilotChat/0.35.0",
         },
       },
+    });
+  });
+
+  it("carries a legacy OAuth tenant into request-time routing", async () => {
+    mocks.resolveCopilotRuntimeAuth.mockResolvedValueOnce({
+      apiKey: "durable-github-token",
+      baseUrl: "https://copilot-api.acme.ghe.com",
+    });
+    const provider = registerProviderWithPluginConfig({});
+    const apiKey = provider.formatApiKey?.({
+      type: "oauth",
+      provider: "github-copilot",
+      access: "short-lived-copilot-token",
+      refresh: "durable-github-token",
+      expires: MAX_DATE_TIMESTAMP_MS,
+      enterpriseUrl: "acme.ghe.com",
+    });
+
+    await provider.prepareRuntimeAuth({
+      config: {},
+      env: {},
+      provider: "github-copilot",
+      modelId: "gpt-5-mini",
+      model: { id: "gpt-5-mini", provider: "github-copilot" },
+      apiKey,
+      authMode: "oauth",
+    } as never);
+
+    expect(mocks.resolveCopilotRuntimeAuth).toHaveBeenCalledWith({
+      githubToken: "durable-github-token",
+      env: {},
+      githubDomain: "acme.ghe.com",
     });
   });
 

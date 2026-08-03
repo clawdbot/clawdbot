@@ -253,7 +253,13 @@ export class CodexAssistantProjection {
       this.assistantTextByItem.set(typedItemId, text);
       return;
     }
-    if (!text) {
+    if (
+      text === undefined ||
+      (!text &&
+        (phase === "commentary" ||
+          activeItemIds.size > 0 ||
+          readString(item, "type") !== "message"))
+    ) {
       return;
     }
     const itemId = rawItemId ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
@@ -263,6 +269,7 @@ export class CodexAssistantProjection {
       pendingTerminalAssistantEchoItemId === undefined &&
       activeItemIds.size === 0;
     if (
+      text &&
       phase !== "commentary" &&
       candidateWasSupersededBeforeRaw &&
       itemId !== this.streamedPartialAssistantItemId &&
@@ -275,6 +282,10 @@ export class CodexAssistantProjection {
     }
     this.rememberAssistantItem(itemId);
     this.assistantTextByItem.set(itemId, text);
+    // Empty raw finals prove an actual stop; retain that fact without publishing fake output.
+    if (!text) {
+      return;
+    }
     this.rawPromotedAssistantItemIds.add(itemId);
     if (phase === "commentary") {
       this.emitCommentaryProgress({ itemId, text });

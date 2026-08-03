@@ -53,6 +53,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
+import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
@@ -279,6 +281,9 @@ export function buildGatewayCronService(params: {
   const env = params.env ?? process.env;
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  // Resolve once per cron service snapshot so every webhook route shares the
+  // same explicit opt-in while omitted config keeps the guard strict.
+  const webhookSsrfPolicy = mergeSsrFPolicies(params.cfg.cron?.webhookSsrfPolicy);
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
     listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
@@ -608,6 +613,7 @@ export function buildGatewayCronService(params: {
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
+    listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
     ...(scriptRuntime
       ? {
           evaluateCronTrigger: ({ job, script, state, streamBatch, abortSignal }) =>
@@ -855,6 +861,7 @@ export function buildGatewayCronService(params: {
         onDeliveryAccepted,
         ...(deadlineAtMs !== undefined ? { deadlineAtMs } : {}),
         webhookToken: params.cfg.cron?.webhookToken,
+        ssrfPolicy: webhookSsrfPolicy,
       });
     },
     runScriptJob: async ({ job, streamBatch, abortSignal }) => {
@@ -1004,6 +1011,7 @@ export function buildGatewayCronService(params: {
         logger: cronLogger,
         resolveCronAgent,
         webhookToken: params.cfg.cron?.webhookToken,
+        ssrfPolicy: webhookSsrfPolicy,
         job,
         text,
         runAtMs,
@@ -1105,6 +1113,7 @@ export function buildGatewayCronService(params: {
           logger: cronLogger,
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
+          ssrfPolicy: webhookSsrfPolicy,
           globalFailureDestination: params.cfg.cron?.failureAlert,
         });
       }

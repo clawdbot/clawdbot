@@ -57,6 +57,7 @@ export async function runDoctorRepairSequence(params: {
   changeNotes: string[];
   warningNotes: string[];
   authProfilesRepaired: boolean;
+  openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
 }> {
   let state = params.state;
   const changeNotes: string[] = [];
@@ -141,12 +142,15 @@ export async function runDoctorRepairSequence(params: {
     changes: codexRouteRepair.changes,
     warnings: codexRouteRepair.warnings,
   });
+  // Auth JSON is archived below; retain its exact collision-aware profile map
+  // so durable session selections can follow the same account after import.
+  const openAICodexAuthProfileIdMap = collectOpenAICodexAuthProfileStoreIdMap({
+    cfg: state.candidate,
+    env,
+  });
   applyMutation(
     maybeRepairOpenAICodexAuthConfig(state.candidate, {
-      profileIdMap: collectOpenAICodexAuthProfileStoreIdMap({
-        cfg: state.candidate,
-        env,
-      }),
+      profileIdMap: openAICodexAuthProfileIdMap,
     }),
   );
   applyMutation(
@@ -252,6 +256,7 @@ export async function runDoctorRepairSequence(params: {
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },
     env,
+    openAICodexAuthProfileIdMap,
   });
   if (authProfileSqliteMigration.configChanged) {
     state = applyDoctorConfigMutation({
@@ -274,5 +279,11 @@ export async function runDoctorRepairSequence(params: {
     staleOAuthShadowRepair.changes.length > 0 ||
     authProfileSqliteMigration.changes.length > 0;
 
-  return { state, changeNotes, warningNotes, authProfilesRepaired };
+  return {
+    state,
+    changeNotes,
+    warningNotes,
+    authProfilesRepaired,
+    ...(openAICodexAuthProfileIdMap.size > 0 ? { openAICodexAuthProfileIdMap } : {}),
+  };
 }

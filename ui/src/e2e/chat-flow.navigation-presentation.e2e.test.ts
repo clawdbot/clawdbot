@@ -560,6 +560,7 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.list"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
       historyMessages: [
         {
           content: [{ text: "History renders before sessions finish.", type: "text" }],
@@ -829,6 +830,7 @@ suite.define(() => {
       },
     ]);
     const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
       methodResponses: {
         "sessions.list": {
           cases: [

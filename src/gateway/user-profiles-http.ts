@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
   formatUserProfileAvatarEtag,
   getProfileAvatar,
@@ -244,22 +245,18 @@ async function resolveGravatar(
   if (cached) {
     return cached;
   }
-  const inFlight = gravatarRequests.get(hash);
-  if (inFlight) {
-    return await inFlight;
-  }
-  const request = fetchGravatar(hash, options.fetchImpl, options.deadline).then((result) => {
-    if (result.kind !== "error") {
-      cacheGravatar(hash, result, options.nowMs());
-    }
-    return result;
-  });
-  gravatarRequests.set(hash, request);
-  try {
-    return await request;
-  } finally {
-    gravatarRequests.delete(hash);
-  }
+  return await getOrCreatePromise(
+    gravatarRequests,
+    hash,
+    async () => {
+      const result = await fetchGravatar(hash, options.fetchImpl, options.deadline);
+      if (result.kind !== "error") {
+        cacheGravatar(hash, result, options.nowMs());
+      }
+      return result;
+    },
+    { evictOnSettled: true },
+  );
 }
 
 function sendAvatar(

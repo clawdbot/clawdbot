@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { shouldHandleNavigationClick } from "../../components/app-sidebar-nav-menus.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
   renderDocsLink,
@@ -212,10 +213,17 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private async removeWorktree(record: WorktreeRecord) {
     const scope = this.captureOperationScope();
+    if (!scope || this.operationPending) {
+      return;
+    }
     if (
-      !scope ||
-      this.operationPending ||
-      !window.confirm(t("worktrees.confirmDelete", { name: record.name }))
+      !(await showConfirmDialog({
+        message: t("worktrees.confirmDelete", { name: record.name }),
+        confirmLabel: t("common.delete"),
+        danger: true,
+      })) ||
+      !this.isOperationScopeCurrent(scope) ||
+      this.operationPending
     ) {
       return;
     }
@@ -231,12 +239,16 @@ class WorktreesPage extends OpenClawLightDomElement {
         return;
       }
       const reason = result.snapshotError ?? "";
-      const force = window.confirm(t("worktrees.confirmForceDelete", { error: reason }));
-      if (!force) {
-        this.error = reason || null;
+      const force = await showConfirmDialog({
+        message: t("worktrees.confirmForceDelete", { error: reason }),
+        confirmLabel: t("common.delete"),
+        danger: true,
+      });
+      if (!this.isOperationScopeCurrent(scope)) {
         return;
       }
-      if (!this.isOperationScopeCurrent(scope)) {
+      if (!force) {
+        this.error = reason || null;
         return;
       }
       try {

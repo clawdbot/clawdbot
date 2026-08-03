@@ -230,7 +230,7 @@ async function startMockModelServer(): Promise<MockModelServer> {
       await drainRequest(request);
       responseCount += 1;
       writeModelResponse(response, responseCount);
-    })().catch((error) => {
+    })().catch((error: unknown) => {
       response.writeHead(500, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { message: String(error) } }));
     });

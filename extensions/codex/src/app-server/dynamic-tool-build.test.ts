@@ -17,6 +17,7 @@ import {
   resolveCodexAppServerExecutionCwd,
   resolveCodexExternalSandboxPolicyForOpenClawSandbox,
   resolveCodexMessageToolProvider,
+  resolveCodexSandboxEnvironmentSelection,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import {
@@ -186,6 +187,42 @@ describe("Codex app-server dynamic tool build", () => {
         messageProvider: "discord-voice",
       }),
     ).toBe("discord");
+  });
+
+  const sandboxEnvironment = { environmentId: "sandbox-1", cwd: "/workspace" };
+
+  it.each([
+    {
+      name: "restricted without a sandbox",
+      environment: undefined,
+      nativeToolSurfaceEnabled: false,
+      expected: [],
+    },
+    {
+      name: "restricted with a sandbox",
+      environment: sandboxEnvironment,
+      nativeToolSurfaceEnabled: false,
+      expected: [],
+    },
+    {
+      name: "native without a sandbox",
+      environment: undefined,
+      nativeToolSurfaceEnabled: true,
+      expected: undefined,
+    },
+    {
+      name: "native with a sandbox",
+      environment: sandboxEnvironment,
+      nativeToolSurfaceEnabled: true,
+      expected: [sandboxEnvironment],
+    },
+  ])("preserves the explicit Codex environment selection when $name", (testCase) => {
+    expect(
+      resolveCodexSandboxEnvironmentSelection(
+        testCase.environment,
+        testCase.nativeToolSurfaceEnabled,
+      ),
+    ).toEqual(testCase.expected);
   });
 
   it("maps sandbox exec-server cwd through the remote workspace mapping", () => {

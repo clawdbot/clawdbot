@@ -33,6 +33,17 @@ export class SessionWriteLockStaleError extends Error {
   }
 }
 
+/** Returns whether another owner replaced the active SQLite session lease. */
+export function isSessionWriteLockLeaseLostError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  const staleReasons = (error as { staleReasons?: unknown } | null)?.staleReasons;
+  return (
+    (error instanceof SessionWriteLockStaleError || code === STALE_CODE) &&
+    Array.isArray(staleReasons) &&
+    staleReasons.includes("lease-lost")
+  );
+}
+
 export function isSessionWriteLockAcquireError(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   return (

@@ -79,10 +79,10 @@ export function isSqliteCorruptionError(error: unknown): boolean {
 }
 
 function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined): number {
-  if (options?.busyTimeoutMs === undefined) {
+  if (options?.busyTimeoutMs === undefined || options.busyTimeoutMs <= 0) {
     return DEFAULT_SLOW_BUSY_WAIT_MS;
   }
-  return Math.min(DEFAULT_SLOW_BUSY_WAIT_MS, Math.max(1, options.busyTimeoutMs));
+  return Math.min(DEFAULT_SLOW_BUSY_WAIT_MS, options.busyTimeoutMs);
 }
 
 function slowTransactionHoldThresholdMs(options: SqliteTransactionOptions | undefined): number {

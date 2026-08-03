@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { useMockHttp } from "../test-utils/mock-http.js";
 import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
 import {
@@ -816,33 +817,45 @@ describe("checkUpdateStatus", () => {
     });
   });
 
-  it("detects lockless OpenClaw npm installs despite packed pnpm metadata", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-lockless-npm-" }, async (base) => {
-      const root = path.join(base, "prefix", "node_modules", "openclaw");
-      await fs.mkdir(root, { recursive: true });
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
-        "utf8",
-      );
+  it.each([
+    { manager: "npm", expectedLockfile: "package-lock.json" },
+    { manager: "bun", expectedLockfile: "bun.lockb" },
+  ])(
+    "detects lockless OpenClaw $manager installs despite packed pnpm metadata",
+    async ({ manager, expectedLockfile }) => {
+      await withTempDir({ prefix: `openclaw-update-check-lockless-${manager}-` }, async (base) => {
+        const bunInstall = path.join(base, "custom-bun-home");
+        const root =
+          manager === "bun"
+            ? path.join(bunInstall, "install", "global", "node_modules", "openclaw")
+            : path.join(base, "prefix", "node_modules", "openclaw");
+        await fs.mkdir(root, { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
+          "utf8",
+        );
 
-      const status = await checkUpdateStatus({
-        root,
-        includeRegistry: false,
-        fetchGit: false,
-        timeoutMs: 1000,
-      });
+        await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
+          const status = await checkUpdateStatus({
+            root,
+            includeRegistry: false,
+            fetchGit: false,
+            timeoutMs: 1000,
+          });
 
-      expect(status.installKind).toBe("package");
-      expect(status.packageManager).toBe("npm");
-      expect(status.deps).toMatchObject({
-        manager: "npm",
-        lockfilePath: path.join(root, "package-lock.json"),
-        status: "unknown",
-        reason: "lockfile missing",
+          expect(status.installKind).toBe("package");
+          expect(status.packageManager).toBe(manager);
+          expect(status.deps).toMatchObject({
+            manager,
+            lockfilePath: path.join(root, expectedLockfile),
+            status: "unknown",
+            reason: "lockfile missing",
+          });
+        });
       });
-    });
-  });
+    },
+  );
 
   it("reports missing and stale dependency markers for package installs", async () => {
     await withTempDir({ prefix: "openclaw-update-check-deps-" }, async (root) => {

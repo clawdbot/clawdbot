@@ -55,11 +55,11 @@ describe("Android app i18n resources", () => {
     );
     const base = await readFile("apps/android/wear/src/main/res/values/strings.xml", "utf8");
     const baseKeys = [...base.matchAll(/<string name="([^"]+)"/gu)]
-      .map((match) => match[1])
-      .toSorted();
+      .map((match) => match[1] as string)
+      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
     const basePlaceholders = [...base.matchAll(/%\d+\$[a-z]/giu)]
       .map((match) => match[0])
-      .toSorted();
+      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 
     expect(wearResources).toHaveLength(NATIVE_I18N_LOCALES.length);
     for (const [, content] of wearResources) {

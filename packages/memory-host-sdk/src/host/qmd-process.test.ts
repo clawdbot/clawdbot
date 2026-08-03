@@ -84,6 +84,17 @@ function restoreEnvValue(key: string, value: string | undefined): void {
   process.env[key] = value;
 }
 
+function runQmdCommand(overrides: Partial<Parameters<typeof runCliCommand>[0]> = {}) {
+  return runCliCommand({
+    commandSummary: "qmd query test",
+    spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+    env: process.env,
+    cwd: tempDir,
+    maxOutputChars: 10_000,
+    ...overrides,
+  });
+}
+
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-win-spawn-"));
   platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -410,13 +421,7 @@ describe("runCliCommand", () => {
     });
 
     try {
-      await runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 10_000,
-      });
+      await runQmdCommand();
       throw new Error("expected runCliCommand to reject");
     } catch (err) {
       expect(err).toBeInstanceOf(Error);
@@ -446,15 +451,7 @@ describe("runCliCommand", () => {
       return child;
     });
 
-    await expect(
-      runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 10_000,
-      }),
-    ).rejects.toMatchObject({
+    await expect(runQmdCommand()).rejects.toMatchObject({
       code: null,
       signal: "SIGABRT",
       stdout: "[]",
@@ -471,15 +468,7 @@ describe("runCliCommand", () => {
       return child;
     });
 
-    await expect(
-      runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 4,
-      }),
-    ).rejects.toThrow(/produced too much output/);
+    await expect(runQmdCommand({ maxOutputChars: 4 })).rejects.toThrow(/produced too much output/);
   });
 
   it("counts surrogate pairs as one character when capping failed command output", async () => {
@@ -492,15 +481,7 @@ describe("runCliCommand", () => {
       return child;
     });
 
-    await expect(
-      runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 2,
-      }),
-    ).rejects.toThrow(/🙂/);
+    await expect(runQmdCommand({ maxOutputChars: 2 })).rejects.toThrow(/🙂/);
   });
 
   it("caps oversized command timeouts before scheduling", async () => {
@@ -509,12 +490,7 @@ describe("runCliCommand", () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     spawnMock.mockReturnValueOnce(child);
 
-    void runCliCommand({
-      commandSummary: "qmd query test",
-      spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-      env: process.env,
-      cwd: tempDir,
-      maxOutputChars: 10_000,
+    void runQmdCommand({
       timeoutMs: Number.MAX_SAFE_INTEGER,
     }).catch(() => undefined);
 
@@ -529,12 +505,9 @@ describe("runCliCommand", () => {
     const controller = new AbortController();
 
     try {
-      const pending = runCliCommand({
+      const pending = runQmdCommand({
         commandSummary: "qmd query slow",
         spawnInvocation: { command: "qmd", argv: ["query", "slow", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 10_000,
         timeoutMs: 60_000,
         signal: controller.signal,
       });
@@ -555,12 +528,7 @@ describe("runCliCommand", () => {
     controller.abort(new Error("memory_search timed out after 15s"));
 
     await expect(
-      runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 10_000,
+      runQmdCommand({
         signal: controller.signal,
       }),
     ).rejects.toThrow("memory_search timed out after 15s");
@@ -574,12 +542,7 @@ describe("runCliCommand", () => {
     spawnMock.mockReturnValueOnce(child);
 
     try {
-      const pending = runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 10_000,
+      const pending = runQmdCommand({
         timeoutMs: 1,
       });
       const timeoutAssertion = expect(pending).rejects.toThrow(
@@ -600,12 +563,7 @@ describe("runCliCommand", () => {
     const child = createMockChild({ pid: 12346 });
     spawnMock.mockReturnValueOnce(child);
 
-    const pending = runCliCommand({
-      commandSummary: "qmd query test",
-      spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-      env: process.env,
-      cwd: tempDir,
-      maxOutputChars: 10_000,
+    const pending = runQmdCommand({
       timeoutMs: 1,
     });
 
@@ -625,12 +583,7 @@ describe("runCliCommand", () => {
     spawnMock.mockReturnValueOnce(child);
     spawnMock.mockReturnValueOnce(taskkill);
 
-    const pending = runCliCommand({
-      commandSummary: "qmd query test",
-      spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-      env: process.env,
-      cwd: tempDir,
-      maxOutputChars: 10_000,
+    const pending = runQmdCommand({
       timeoutMs: 1,
     });
 
@@ -656,13 +609,7 @@ describe("runCliCommand", () => {
       spawnMock.mockReturnValueOnce(child);
       const streamError = new Error(`${streamName} EPIPE`);
 
-      const pending = runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 10_000,
-      });
+      const pending = runQmdCommand();
 
       child[streamName].emit("error", streamError);
 
@@ -679,13 +626,7 @@ describe("runCliCommand", () => {
     const child = createMockChild();
     spawnMock.mockReturnValueOnce(child);
 
-    const pending = runCliCommand({
-      commandSummary: "qmd query test",
-      spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-      env: process.env,
-      cwd: tempDir,
-      maxOutputChars: 10_000,
-    });
+    const pending = runQmdCommand();
 
     child.stdout.emit("error", new Error("stdout EPIPE"));
 

@@ -8,6 +8,7 @@ import net from "node:net";
 import os from "node:os";
 import type { GatewayNodePairingConfig } from "../config/types.gateway.js";
 import { normalizeDevicePublicKeyBase64Url } from "../infra/device-identity.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { isLoopbackAddress, isPrivateOrLoopbackAddress, isTrustedProxyAddress } from "./net.js";
 import {
   isEligibleFreshNodePairingRequest,
@@ -238,9 +239,6 @@ export function startNodePairingSshVerify(params: {
     return { ok: true, user: params.plan.policy.user, host: params.plan.host };
   })();
 
-  const tracked = done.finally(() => {
-    inFlightByKey.delete(key);
-  });
-  inFlightByKey.set(key, tracked);
+  const tracked = getOrCreatePromise(inFlightByKey, key, () => done, { evictOnSettled: true });
   return { done: tracked, alreadyInFlight: false };
 }

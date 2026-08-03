@@ -408,6 +408,23 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let runMeta: Record<string, unknown> | undefined;
     let messageSeq: number | undefined;
     const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const sessionCreation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
+    const spawnActorSessionKey =
+      sessionCreation.via === "spawn" && sessionCreation.actor?.type === "agent"
+        ? normalizeOptionalString(sessionCreation.actor.id)
+        : undefined;
+    if (
+      sessionCreation.inheritedToolPolicy &&
+      spawnActorSessionKey &&
+      normalizeOptionalString(p.parentSessionKey) !== spawnActorSessionKey
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "spawn parent must match the trusted agent caller"),
+      );
+      return;
+    }
     const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
       ADMIN_SCOPE,
       clientScopes,
@@ -454,6 +471,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       allowExistingModelSelection,
       parentSessionKey: p.parentSessionKey,
       spawnDepth: p.spawnDepth,
+      spawnToolPolicy:
+        sessionCreation.via === "spawn" && sessionCreation.inheritedToolPolicy
+          ? {
+              ...sessionCreation.inheritedToolPolicy,
+              ...(sessionCreation.completionOwnerSessionKey
+                ? { completionOwnerSessionKey: sessionCreation.completionOwnerSessionKey }
+                : {}),
+            }
+          : undefined,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree
         ? {
@@ -472,7 +498,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       emitCommandHooks: p.emitCommandHooks,
       resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",
-      creation: resolveOperatorSessionCreation(client, { allowTrustedHint: true }),
+      creation: sessionCreation,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),

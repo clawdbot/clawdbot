@@ -32,8 +32,10 @@ vi.mock("./subagent-registry-restart-recovery.js", async (importOriginal) => {
   };
 });
 vi.mock("../infra/agent-events.js", () => ({
-  getAgentRunContext,
   isAgentEventLifecycleGenerationCurrent: () => true,
+}));
+vi.mock("../infra/agent-run-registry.js", () => ({
+  getAgentRunContext,
 }));
 vi.mock("./internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession,

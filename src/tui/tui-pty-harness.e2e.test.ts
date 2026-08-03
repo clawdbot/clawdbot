@@ -346,6 +346,22 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "preserves consecutive backspaces received in the same terminal input chunk",
+    async () => {
+      await fixture.run.write("abc\x7f\x7f\r", { delay: false });
+
+      const sent = await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" &&
+          (objectFieldEquals(entry, "message", "a") || objectFieldEquals(entry, "message", "ab")),
+      );
+      expect(sent.payload).toMatchObject({ message: "a" });
+      await fixture.run.waitForOutput("PTY_RESPONSE: a");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "deletes forward with Ctrl+D without exiting a nonempty terminal editor",
     async () => {
       await fixture.run.write("keepXword", { delay: false });

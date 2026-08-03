@@ -5023,6 +5023,38 @@ describe("chat model controls", () => {
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
   });
 
+  it("disables runtime overrides with the exact mutation reason", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    const onFastModeSelect = vi.fn(async () => true);
+    const onModelSelect = vi.fn(async () => true);
+    const onThinkingSelect = vi.fn(async () => true);
+    const reason = "Operator admin access is required.";
+    const container = renderModelControls(state, {
+      mutationDisabledReason: reason,
+      onFastModeSelect,
+      onModelSelect,
+      onThinkingSelect,
+    });
+
+    const modelSelect = getChatModelSelect(container);
+    expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
+    expect(modelSelect.getAttribute("title")).toBe(reason);
+    modelSelect.click();
+    container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")?.click();
+    getThinkingSlider(container)?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onFastModeSelect).not.toHaveBeenCalled();
+    expect(onModelSelect).not.toHaveBeenCalled();
+    expect(onThinkingSelect).not.toHaveBeenCalled();
+  });
+
   it("marks the inherited default muted and resets an override from the provenance row", () => {
     const { state } = createChatHeaderState({
       model: null,

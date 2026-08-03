@@ -9,6 +9,8 @@ import { embeddedAgentVitestProjectOwners } from "../test/vitest/vitest.agents-p
 import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
+import { runWithFailedTrailer, writeFailedTrailer } from "./lib/failed-trailer.mjs";
+import { signalExitCode } from "./lib/managed-child-process.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
@@ -1107,10 +1109,22 @@ export function runTestProjectsDelegation(argv, env, options = {}) {
   return child;
 }
 
-function main(argv = process.argv.slice(2), env = process.env) {
+async function finishVitestProcess({ completion, getForwardedSignal }) {
+  const { code, signal } = await completion;
+  const exitSignal = getForwardedSignal() ?? signal;
+  if (exitSignal) {
+    writeFailedTrailer("vitest", signalExitCode(exitSignal));
+    process.kill(process.pid, exitSignal);
+    return;
+  }
+  process.exitCode = code ?? 1;
+}
+
+async function main(argv = process.argv.slice(2), env = process.env) {
   if (argv.length === 0) {
     console.error("usage: node scripts/run-vitest.mjs <vitest args...>");
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const missingTestFiles = resolveMissingExplicitTestFiles(argv);
@@ -1121,12 +1135,13 @@ function main(argv = process.argv.slice(2), env = process.env) {
         ...missingTestFiles.map((file) => `  - ${file}`),
       ].join("\n"),
     );
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    runTestProjectsDelegation(delegatedArgs, env);
+    await finishVitestProcess(spawnTestProjectsRunner(delegatedArgs, env));
     return;
   }
 
@@ -1139,38 +1154,28 @@ function main(argv = process.argv.slice(2), env = process.env) {
   } catch (error) {
     if (error instanceof Error && error.code === "OPENCLAW_MISSING_VITEST") {
       console.error(error.message);
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     throw error;
   }
 
-  const { completion, getForwardedSignal } = spawnWatchedVitestProcess({
-    pnpmArgs: ["exec", "node", ...resolveVitestNodeArgs(env), vitestCliEntry, ...guardedVitestArgs],
-    spawnParams: resolveVitestSpawnParams(spawnEnv),
-    env: spawnEnv,
-    label: guardedVitestArgs.join(" "),
-  });
-
-  completion.then(
-    ({ code, signal }) => {
-      const forwardedSignal = getForwardedSignal();
-      if (forwardedSignal) {
-        process.kill(process.pid, forwardedSignal);
-        return;
-      }
-      if (signal) {
-        process.kill(process.pid, signal);
-        return;
-      }
-      process.exit(code ?? 1);
-    },
-    /** @param {unknown} error */ (error) => {
-      console.error(error);
-      process.exit(1);
-    },
+  await finishVitestProcess(
+    spawnWatchedVitestProcess({
+      pnpmArgs: [
+        "exec",
+        "node",
+        ...resolveVitestNodeArgs(env),
+        vitestCliEntry,
+        ...guardedVitestArgs,
+      ],
+      spawnParams: resolveVitestSpawnParams(spawnEnv),
+      env: spawnEnv,
+      label: guardedVitestArgs.join(" "),
+    }),
   );
 }
 
 if (import.meta.main) {
-  main();
+  await runWithFailedTrailer("vitest", main);
 }

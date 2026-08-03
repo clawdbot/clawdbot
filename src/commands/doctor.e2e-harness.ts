@@ -61,13 +61,13 @@ function createLegacyConfigSnapshot() {
   } as const;
 }
 
-const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
+export const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
 export const confirm = vi.fn().mockResolvedValue(true) as unknown as MockFn;
 const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
 const note = vi.fn() as unknown as MockFn;
 export const writeConfigFile = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
-const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
-const runGatewayUpdate = vi
+export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
+export const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
 const collectRelevantDoctorPluginIds = vi.fn(() => []) as unknown as MockFn;
@@ -87,7 +87,7 @@ const runExec = vi.fn().mockResolvedValue({
   stdout: "",
   stderr: "",
 }) as unknown as MockFn;
-const runCommandWithTimeout = vi
+export const runCommandWithTimeout = vi
   .fn()
   .mockResolvedValue(createCommandWithTimeoutResult()) as unknown as MockFn;
 
@@ -133,7 +133,7 @@ export const callGateway = vi
   .fn()
   .mockRejectedValue(new Error("gateway closed")) as unknown as MockFn;
 
-const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
+export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   migrated: false,
   skipped: false,
   changes: [],

@@ -82,6 +82,7 @@ import {
   handleSessionStateSessionReset,
   recordSessionCreated,
 } from "../sessions/session-state-events.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -447,35 +448,31 @@ async function ensureSessionRuntimeCleanup(params: {
     });
   };
   const ensureMcpRetirementWatcher = () => {
-    if (mcpRunEndWatchers.has(sessionId)) {
-      return;
-    }
-    const watcherRef: { current?: Promise<void> } = {};
-    const watcher = (async () => {
-      while (await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, null)) {
-        // A replacement can register after the wait promise settles but before
-        // this continuation runs. Keep the required retirement armed for it.
-        if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
-          continue;
+    const watcher = getOrCreatePromise(
+      mcpRunEndWatchers,
+      sessionId,
+      async () => {
+        try {
+          while (await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, null)) {
+            // A replacement can register after the wait promise settles but before
+            // this continuation runs. Keep the required retirement armed for it.
+            if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
+              continue;
+            }
+            if (mcpRunEndWatchers.get(sessionId) === watcher) {
+              mcpRunEndWatchers.delete(sessionId);
+            }
+            await retireMcpRuntime(false);
+            return;
+          }
+        } catch (error) {
+          logVerbose(
+            `sessions cleanup: failed to disarm deferred MCP retirement: ${String(error)}`,
+          );
         }
-        if (mcpRunEndWatchers.get(sessionId) === watcherRef.current) {
-          mcpRunEndWatchers.delete(sessionId);
-        }
-        await retireMcpRuntime(false);
-        return;
-      }
-    })();
-    watcherRef.current = watcher;
-    mcpRunEndWatchers.set(sessionId, watcher);
-    void watcher
-      .catch((error: unknown) => {
-        logVerbose(`sessions cleanup: failed to disarm deferred MCP retirement: ${String(error)}`);
-      })
-      .finally(() => {
-        if (mcpRunEndWatchers.get(sessionId) === watcher) {
-          mcpRunEndWatchers.delete(sessionId);
-        }
-      });
+      },
+      { evictOnSettled: true },
+    );
   };
   // Register against the run being stopped before abort or any await allows a
   // later embedded or reply-backed run to replace it in the active registry.
@@ -1448,6 +1445,10 @@ export async function performGatewaySessionReset(params: {
             queueCap: currentEntry?.queueCap,
             queueDrop: currentEntry?.queueDrop,
             spawnedBy: currentEntry?.spawnedBy,
+            completionOwnerSessionKey: currentEntry?.completionOwnerSessionKey,
+            inheritedToolPolicyVersion: currentEntry?.inheritedToolPolicyVersion,
+            inheritedToolAllow: currentEntry?.inheritedToolAllow,
+            inheritedToolDeny: currentEntry?.inheritedToolDeny,
             spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
             spawnedCwd: params.clearSpawnedCwd
               ? undefined

@@ -757,6 +757,39 @@ describe("deliverSlackSlashReplies chunking", () => {
     );
   });
 
+  it("keeps 4k native fallback chunks for uncapped Web API delivery", async () => {
+    const respond = vi
+      .fn(async () => undefined)
+      .mockRejectedValueOnce({ response: { data: { error: "invalid_blocks" } } });
+    const caption = "c".repeat(9_000);
+    const blocks = [
+      {
+        type: "data_table",
+        caption,
+        rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
+      },
+    ] as never;
+
+    await deliverSlackSlashReplies({
+      replies: [{ channelData: { slack: { blocks } } }],
+      respond,
+      responseBudget: {
+        respond,
+        remaining: () => undefined,
+      },
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(4);
+    const fallback = [1, 2, 3].map((index) => requireSlashMessage(respond, index));
+    expect(fallback.every((message) => message.blocks === undefined)).toBe(true);
+    expect(fallback.every((message) => message.text.length <= 4_000)).toBe(true);
+    expect(fallback.map((message) => message.text).join("")).toBe(
+      `${caption} (table)\nAccount\nAcme`,
+    );
+  });
+
   it("batches in-place native fallback at 50 blocks without losing content", async () => {
     const respond = vi
       .fn(async () => undefined)

@@ -14,6 +14,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-registry-runtime.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { agentIdentityHandlers } from "./agent-identity.js";
 import { agentHandlers } from "./agent.js";
@@ -214,6 +215,13 @@ vi.mock("../../infra/agent-events.js", () => ({
   registerAgentEventLifecycleRotationHandler: vi.fn(),
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
+}));
+vi.mock("../../infra/agent-run-registry.js", () => ({
+  claimAgentRunContext: mocks.registerAgentRunContext,
+  clearAgentRunContext: mocks.clearAgentRunContext,
+  getAgentRunContext: vi.fn(() => undefined),
+  hasProjectedAgentRunForSession: vi.fn(() => false),
+  registerAgentRunContext: mocks.registerAgentRunContext,
 }));
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
@@ -936,11 +944,21 @@ export function applyGatewaySubagentRegistryTestDeps(
 
 applyGatewaySubagentRegistryTestDeps();
 
+/** Keep handler tests on the real task lifecycle without paying for SQLite durability. */
+export function resetAgentTaskRegistryForTests(): void {
+  resetTaskRegistryForTests({ persist: false });
+  installInMemoryTaskRegistryRuntime();
+}
+
+export function restoreAgentTaskRegistryRuntimeAfterTests(): void {
+  resetTaskRegistryForTests({ persist: false });
+}
+
 export const describe0AfterEach0 = () => {
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetDiagnosticEventsForTest();
-  resetTaskRegistryForTests();
+  resetAgentTaskRegistryForTests();
   resetSubagentRegistryForTests({ persist: false });
   applyGatewaySubagentRegistryTestDeps();
   mocks.loadConfigReturn = {};
@@ -970,7 +988,7 @@ export const describe0AfterEach0 = () => {
 function resetIntegrationState() {
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryForTests();
+  resetAgentTaskRegistryForTests();
   mocks.agentCommand.mockReset();
   mocks.loadConfigReturn = {};
   mocks.loadGatewaySessionRow.mockReset();

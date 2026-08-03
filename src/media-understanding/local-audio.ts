@@ -159,35 +159,40 @@ async function findBinary(
   checkExecutable: (filePath: string, platform: NodeJS.Platform) => Promise<boolean> = isExecutable,
 ): Promise<string | null> {
   const key = `${platform}\0${env.PATH ?? ""}\0${env.PATHEXT ?? ""}\0${name}`;
-  return await getOrCreatePromise(binaryCache, key, async () => {
-    const direct = name.trim();
-    const candidates = binaryNames(direct, platform, env);
-    if (direct.includes("/") || direct.includes("\\")) {
-      for (const candidate of candidates) {
-        const expanded =
-          candidate === "~" || candidate.startsWith("~/") || candidate.startsWith("~\\")
-            ? path.join(env.HOME ?? "~", candidate.slice(candidate === "~" ? 1 : 2))
-            : candidate;
-        if (await checkExecutable(expanded, platform)) {
-          return expanded;
+  return await getOrCreatePromise(
+    binaryCache,
+    key,
+    async () => {
+      const direct = name.trim();
+      const candidates = binaryNames(direct, platform, env);
+      if (direct.includes("/") || direct.includes("\\")) {
+        for (const candidate of candidates) {
+          const expanded =
+            candidate === "~" || candidate.startsWith("~/") || candidate.startsWith("~\\")
+              ? path.join(env.HOME ?? "~", candidate.slice(candidate === "~" ? 1 : 2))
+              : candidate;
+          if (await checkExecutable(expanded, platform)) {
+            return expanded;
+          }
+        }
+        return null;
+      }
+      for (const directory of (env.PATH ?? "").split(path.delimiter)) {
+        const expandedDirectory = expandHomeDir(directory, env);
+        if (!expandedDirectory) {
+          continue;
+        }
+        for (const candidate of candidates) {
+          const fullPath = path.join(expandedDirectory, candidate);
+          if (await checkExecutable(fullPath, platform)) {
+            return fullPath;
+          }
         }
       }
       return null;
-    }
-    for (const directory of (env.PATH ?? "").split(path.delimiter)) {
-      const expandedDirectory = expandHomeDir(directory, env);
-      if (!expandedDirectory) {
-        continue;
-      }
-      for (const candidate of candidates) {
-        const fullPath = path.join(expandedDirectory, candidate);
-        if (await checkExecutable(fullPath, platform)) {
-          return fullPath;
-        }
-      }
-    }
-    return null;
-  });
+    },
+    { cacheRejections: false },
+  );
 }
 
 async function inspectLinkedLibraries(
@@ -195,19 +200,24 @@ async function inspectLinkedLibraries(
   platform: NodeJS.Platform,
 ): Promise<string | null> {
   const key = `${platform}\0${filePath}`;
-  return await getOrCreatePromise(libraryCache, key, async () => {
-    const command = platform === "darwin" ? "otool" : platform === "linux" ? "readelf" : null;
-    if (!command) {
-      return null;
-    }
-    try {
-      const args = platform === "darwin" ? ["-L", filePath] : ["-d", filePath];
-      const result = await runExec(command, args, { timeoutMs: 1500 });
-      return `${result.stdout}\n${result.stderr ?? ""}`;
-    } catch {
-      return null;
-    }
-  });
+  return await getOrCreatePromise(
+    libraryCache,
+    key,
+    async () => {
+      const command = platform === "darwin" ? "otool" : platform === "linux" ? "readelf" : null;
+      if (!command) {
+        return null;
+      }
+      try {
+        const args = platform === "darwin" ? ["-L", filePath] : ["-d", filePath];
+        const result = await runExec(command, args, { timeoutMs: 1500 });
+        return `${result.stdout}\n${result.stderr ?? ""}`;
+      } catch {
+        return null;
+      }
+    },
+    { cacheRejections: false },
+  );
 }
 
 async function inspectWhisperBackend(params: {

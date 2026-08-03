@@ -57,7 +57,7 @@ openclaw config set 'agents.entries.work.tools.exec.node' "node-id-or-name"
 
 ### `config get`
 
-Reads a value from the redacted config snapshot (secrets never print). `--json` prints the raw value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
+Reads a value from the redacted config snapshot (secrets never print). `--json` prints the same redacted value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
 
 When the path is missing, `--json` writes `{ "error": "Config path not found: <path>" }` to stdout and exits with status 1. Without `--json`, the diagnostic remains on stderr.
 
@@ -123,7 +123,7 @@ openclaw config set gateway.port 19001 --strict-json
 openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 ```
 
-`config get <path> --json` prints the raw value as JSON instead of terminal-formatted text.
+`config get <path> --json` prints the redacted value as JSON instead of terminal-formatted text.
 
 When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured provider catalogs before writing. Unknown model references are rejected without changing the active config; run `openclaw models list` to see available models.
 

@@ -2,7 +2,7 @@
 import { EventEmitter } from "node:events";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { GatewayPlugin } from "../internal/gateway.js";
+import { GatewayCloseCodes, type GatewayPlugin } from "../internal/gateway.js";
 import type { waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import {
   DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
@@ -194,6 +194,8 @@ describe("runDiscordGatewayLifecycle", () => {
 
   type StatusPatch = {
     connected?: boolean;
+    lifecycle?: "ready" | "recovering" | "blocked";
+    terminalDisconnect?: boolean;
     lastDisconnect?: null | Record<string, unknown>;
     lastError?: string | null;
   };
@@ -268,7 +270,8 @@ describe("runDiscordGatewayLifecycle", () => {
 
     expectStatusPatch(
       statusSink,
-      (patch) => patch.connected === true && patch.lastDisconnect === null,
+      (patch) =>
+        patch.connected === true && patch.lifecycle === "ready" && patch.lastDisconnect === null,
     );
   });
 
@@ -363,7 +366,14 @@ describe("runDiscordGatewayLifecycle", () => {
       expectStatusPatch(
         statusSink,
         (patch) =>
-          patch.connected === true && patch.lastDisconnect === null && patch.lastError === null,
+          patch.connected === true &&
+          patch.lifecycle === "ready" &&
+          patch.lastDisconnect === null &&
+          patch.lastError === null,
+      );
+      expectStatusPatch(
+        statusSink,
+        (patch) => patch.connected === false && patch.lifecycle === "recovering",
       );
     } finally {
       vi.useRealTimers();
@@ -618,10 +628,37 @@ describe("runDiscordGatewayLifecycle", () => {
       statusSink,
       (patch) =>
         patch.connected === false &&
+        patch.lifecycle === "recovering" &&
         patch.lastDisconnect !== null &&
         patch.lastDisconnect?.status === 1006,
     );
   });
+
+  it.each([GatewayCloseCodes.AuthenticationFailed, GatewayCloseCodes.InvalidIntents])(
+    "publishes blocked lifecycle for fatal gateway close code %s",
+    async (closeCode) => {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+        emitter.emit("debug", `Gateway websocket closed: ${closeCode}`);
+      });
+
+      const { lifecycleParams, statusSink } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+      expectStatusPatch(
+        statusSink,
+        (patch) =>
+          patch.connected === false &&
+          patch.lifecycle === "blocked" &&
+          patch.terminalDisconnect === true &&
+          patch.lastError === `Gateway websocket closed: ${closeCode}` &&
+          patch.lastDisconnect?.status === closeCode,
+      );
+    },
+  );
 
   it("pushes disconnected status when the gateway schedules a reconnect", async () => {
     const { emitter, gateway } = createGatewayHarness();
@@ -639,6 +676,7 @@ describe("runDiscordGatewayLifecycle", () => {
       statusSink,
       (patch) =>
         patch.connected === false &&
+        patch.lifecycle === "recovering" &&
         patch.lastError === "Gateway reconnect scheduled in 1000ms (zombie, resume=true)",
     );
   });
@@ -665,7 +703,8 @@ describe("runDiscordGatewayLifecycle", () => {
       expectStatusPatch(statusSink, (patch) => patch.connected === false);
       expectStatusPatch(
         statusSink,
-        (patch) => patch.connected === true && patch.lastDisconnect === null,
+        (patch) =>
+          patch.connected === true && patch.lifecycle === "ready" && patch.lastDisconnect === null,
       );
     } finally {
       vi.useRealTimers();

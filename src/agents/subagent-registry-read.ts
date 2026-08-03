@@ -3,7 +3,7 @@
  *
  * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
  */
-import { getAgentRunContext } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,

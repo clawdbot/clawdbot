@@ -1,9 +1,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
-import {
-  getAgentRunContext,
-  isAgentEventLifecycleGenerationCurrent,
-} from "../infra/agent-events.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
 import { finalizeTaskRunByRunId, findDetachedTaskRun } from "../tasks/detached-task-runtime.js";

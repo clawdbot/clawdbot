@@ -9,6 +9,10 @@ import { resolveAgentConfig } from "./agent-scope-config.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
+  buildCodeModeScriptParseSource,
+  parseCodeModeScriptSyntax,
+} from "./code-mode-script-syntax.js";
+import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
@@ -381,10 +385,10 @@ function maskCodeLiteralsAndComments(
   };
 
   try {
-    const prefix = "(async () => {\n";
-    parse(`${prefix}${code}\n})`, {
+    const wrapped = buildCodeModeScriptParseSource(code);
+    parse(wrapped.source, {
       ecmaVersion: "latest",
-      onComment: (_isBlock, _text, start, end) => maskRange(start, end, prefix.length),
+      onComment: (_isBlock, _text, start, end) => maskRange(start, end, wrapped.codeOffset),
       onToken: (token) => {
         // Parse in the real async guest context: standalone tokenization can
         // mistake executable division for a regex after contextual keywords.
@@ -393,7 +397,7 @@ function maskCodeLiteralsAndComments(
           token.type.label === "regexp" ||
           token.type.label === "template"
         ) {
-          maskRange(token.start, token.end, prefix.length);
+          maskRange(token.start, token.end, wrapped.codeOffset);
         }
       },
     });
@@ -549,20 +553,17 @@ function rejectsModuleAccess(
   code: string,
   typescriptRuntime?: typeof import("typescript"),
 ): boolean {
-  try {
-    const source = parse(`(async () => {\n${code}\n})`, {
-      ecmaVersion: "latest",
-    });
+  const parsed = parseCodeModeScriptSyntax(code);
+  if (parsed.ok) {
     // The WASI guest has no host module loader. Only executable module syntax
     // belongs in this early check; ordinary guest methods are not capabilities.
-    return containsModuleAccess(source);
-  } catch {
-    if (typescriptRuntime) {
-      try {
-        return typeScriptContainsModuleAccess(code, typescriptRuntime);
-      } catch {
-        // Keep malformed input on the conservative lexical fallback.
-      }
+    return containsModuleAccess(parsed.program);
+  }
+  if (typescriptRuntime) {
+    try {
+      return typeScriptContainsModuleAccess(code, typescriptRuntime);
+    } catch {
+      // Keep malformed input on the conservative lexical fallback.
     }
   }
   const source = maskCodeLiteralsAndComments(code, typescriptRuntime);

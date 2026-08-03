@@ -165,9 +165,10 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     const joined = runtimeLogs.join("\n");
     expect(joined).toContain("Dashboard URL: http://127.0.0.1:18789/");
     expect(joined).not.toContain("#token=");
-    expect(joined).toContain(
-      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token",
-    );
+    expect(joined).toContain("One-time pairing URL not delivered");
+    expect(joined).toContain("openclaw dashboard --json");
+    expect(joined).toContain("browserUrl");
+    expect(joined).not.toContain("Token auto-auth is disabled");
     expect(joined).not.toContain("Token auto-auth unavailable");
     expect(runtimeErrors).toStrictEqual([]);
   });
@@ -193,8 +194,12 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     const joined = runtimeLogs.join("\n");
     expect(joined).toContain("Dashboard URL: http://127.0.0.1:18789/");
     expect(joined).not.toContain("#token=");
-    expect(joined).toContain("Token auto-auth unavailable");
-    expect(joined).toContain("Set OPENCLAW_GATEWAY_TOKEN");
+    expect(joined).toContain("One-time pairing URL not delivered");
+    expect(joined).toContain("openclaw dashboard --json");
+    expect(joined).toContain("browserUrl");
+    expect(joined).not.toContain("Token auto-auth unavailable");
+    expect(joined).not.toContain("Set OPENCLAW_GATEWAY_TOKEN");
+    expect(runtimeErrors).toStrictEqual([]);
   });
 
   afterAll(() => {
