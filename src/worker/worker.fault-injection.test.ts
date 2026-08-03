@@ -355,7 +355,7 @@ class ComposedGatewayHarness {
         },
         toolAuthority: {
           allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
-          execPolicy: { security: "full", ask: "off" },
+          execPolicy: { mode: "full", security: "full", ask: "off" },
         },
       },
     };

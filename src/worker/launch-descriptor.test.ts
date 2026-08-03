@@ -43,7 +43,7 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       liveEvents: { ackedSeq: 12, nextSeq: 13 },
       toolAuthority: {
         allowedToolNames: ["read", "exec"],
-        execPolicy: { security: "full", ask: "off" },
+        execPolicy: { mode: "full", security: "full", ask: "off" },
       },
     },
   };
@@ -129,7 +129,7 @@ describe("worker launch descriptor", () => {
           ...descriptor.assignment,
           toolAuthority: {
             allowedToolNames: ["read", "read"],
-            execPolicy: { security: "full", ask: "off" },
+            execPolicy: { mode: "full", security: "full", ask: "off" },
           },
         },
       },
@@ -139,7 +139,7 @@ describe("worker launch descriptor", () => {
           ...descriptor.assignment,
           toolAuthority: {
             allowedToolNames: ["read", "gateway"],
-            execPolicy: { security: "full", ask: "off" },
+            execPolicy: { mode: "full", security: "full", ask: "off" },
           },
         },
       },
@@ -156,7 +156,7 @@ describe("worker launch descriptor", () => {
           ...descriptor.assignment,
           toolAuthority: {
             allowedToolNames: ["read", "exec"],
-            execPolicy: { security: "FULL", ask: "off" },
+            execPolicy: { mode: "full", security: "FULL", ask: "off" },
           },
         },
       },
@@ -166,7 +166,27 @@ describe("worker launch descriptor", () => {
           ...descriptor.assignment,
           toolAuthority: {
             allowedToolNames: ["read", "exec"],
-            execPolicy: { security: "full", ask: "ALWAYS" },
+            execPolicy: { mode: "ask", security: "full", ask: "ALWAYS" },
+          },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: {
+            allowedToolNames: ["exec"],
+            execPolicy: { mode: "auto", security: "full", ask: "off" },
+          },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: {
+            allowedToolNames: ["exec"],
+            execPolicy: { mode: "auto", security: "allowlist", ask: "off" },
           },
         },
       },
@@ -179,6 +199,27 @@ describe("worker launch descriptor", () => {
     }
 
     descriptor.assignment.toolAuthority.allowedToolNames = [];
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    descriptor.assignment.toolAuthority.execPolicy = {
+      mode: "auto",
+      security: "allowlist",
+      ask: "on-miss",
+    };
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    descriptor.assignment.toolAuthority.execPolicy = {
+      mode: "ask",
+      security: "full",
+      ask: "always",
+    };
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    descriptor.assignment.toolAuthority.execPolicy = {
+      mode: "full",
+      security: "full",
+      ask: "on-miss",
+    };
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
   });
 

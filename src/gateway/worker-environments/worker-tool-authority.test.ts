@@ -35,7 +35,7 @@ function execPolicy(overrides: Partial<SessionPlacementTurnParams> = {}) {
 describe("resolveWorkerToolAuthority", () => {
   it("keeps the deterministic complete worker surface when no policy narrows it", () => {
     expect(authority()).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
-    expect(execPolicy()).toEqual({ security: "full", ask: "off" });
+    expect(execPolicy()).toEqual({ mode: "full", security: "full", ask: "off" });
   });
 
   it("carries the effective exec mode independently of tool visibility", () => {
@@ -43,17 +43,30 @@ describe("resolveWorkerToolAuthority", () => {
       execPolicy({
         config: { tools: { exec: { security: "deny" } } },
       }),
-    ).toEqual({ security: "deny", ask: "off" });
+    ).toEqual({ mode: "deny", security: "deny", ask: "off" });
     expect(
       execPolicy({
         config: { tools: { exec: { security: "full", ask: "always" } } },
       }),
-    ).toEqual({ security: "full", ask: "always" });
+    ).toEqual({ mode: "ask", security: "full", ask: "always" });
     expect(
       authority({
         config: { tools: { exec: { security: "deny" } } },
       }),
     ).toContain("exec");
+  });
+
+  it("keeps auto review distinct from ordinary ask with the same policy pair", () => {
+    expect(execPolicy({ config: { tools: { exec: { mode: "auto" } } } })).toEqual({
+      mode: "auto",
+      security: "allowlist",
+      ask: "on-miss",
+    });
+    expect(execPolicy({ config: { tools: { exec: { mode: "ask" } } } })).toEqual({
+      mode: "ask",
+      security: "allowlist",
+      ask: "on-miss",
+    });
   });
 
   it("projects runtime caps with canonical write-to-apply_patch semantics", () => {
@@ -142,7 +155,11 @@ describe("resolveWorkerToolAuthority", () => {
     "exposes no tools for non-tool run mode %#",
     (overrides) => {
       expect(authority(overrides)).toEqual([]);
-      expect(execPolicy(overrides)).toEqual({ security: "deny", ask: "off" });
+      expect(execPolicy(overrides)).toEqual({
+        mode: "deny",
+        security: "deny",
+        ask: "off",
+      });
     },
   );
 });

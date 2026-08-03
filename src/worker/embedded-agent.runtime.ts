@@ -28,6 +28,7 @@ import {
   toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
 import {
+  toWorkerExecConfig,
   WORKER_LOCAL_TOOL_NAMES,
   type WorkerLocalToolName,
   type WorkerToolAuthority,
@@ -144,7 +145,7 @@ export async function runWorkerEmbeddedTurn(
     modelApi: model.api,
     modelContextWindowTokens: model.contextWindow,
     config: { plugins: { enabled: false } },
-    exec: { host: "gateway", ...params.execPolicy },
+    exec: toWorkerExecConfig(params.execPolicy),
     toolConstructionPlan: {
       includeBaseCodingTools: true,
       includeShellTools: true,

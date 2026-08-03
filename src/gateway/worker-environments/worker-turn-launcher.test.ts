@@ -764,6 +764,7 @@ describe("worker turn launcher", () => {
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
     expect(descriptor?.version).toBe(3);
     expect(descriptor?.assignment.toolAuthority.execPolicy).toEqual({
+      mode: "full",
       security: "full",
       ask: "off",
     });

@@ -24,7 +24,12 @@ import {
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
-import { normalizeExecAsk, normalizeExecSecurity } from "../infra/exec-approvals.js";
+import {
+  normalizeExecAsk,
+  normalizeExecMode,
+  normalizeExecSecurity,
+  resolveExecModeFromPolicy,
+} from "../infra/exec-approvals.js";
 import { isWorkerLocalToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 
@@ -87,16 +92,27 @@ function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
 }
 
 function parseExecPolicy(value: unknown): WorkerToolAuthority["execPolicy"] | undefined {
-  if (!isRecord(value) || !hasExactKeys(value, ["security", "ask"])) {
+  if (!isRecord(value) || !hasExactKeys(value, ["mode", "security", "ask"])) {
     return undefined;
   }
+  const mode = typeof value.mode === "string" ? normalizeExecMode(value.mode) : null;
   const security =
     typeof value.security === "string" ? normalizeExecSecurity(value.security) : null;
   const ask = typeof value.ask === "string" ? normalizeExecAsk(value.ask) : null;
-  if (security === null || security !== value.security || ask === null || ask !== value.ask) {
+  if (
+    mode === null ||
+    mode !== value.mode ||
+    security === null ||
+    security !== value.security ||
+    ask === null ||
+    ask !== value.ask ||
+    (mode === "auto"
+      ? security !== "allowlist" || ask !== "on-miss"
+      : resolveExecModeFromPolicy({ security, ask }) !== mode)
+  ) {
     return undefined;
   }
-  return { security, ask };
+  return { mode, security, ask };
 }
 
 function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {

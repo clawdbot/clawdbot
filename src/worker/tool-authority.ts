@@ -1,4 +1,4 @@
-import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
+import type { ExecAsk, ExecMode, ExecSecurity } from "../infra/exec-approvals.js";
 
 export const WORKER_LOCAL_TOOL_NAMES = [
   "read",
@@ -20,7 +20,23 @@ export function isWorkerLocalToolName(value: unknown): value is WorkerLocalToolN
 export type WorkerToolAuthority = {
   allowedToolNames: WorkerLocalToolName[];
   execPolicy: {
+    mode: ExecMode;
     security: ExecSecurity;
     ask: ExecAsk;
   };
 };
+
+export function toWorkerExecConfig(policy: WorkerToolAuthority["execPolicy"]): {
+  host: "gateway";
+  mode?: "auto";
+  security: ExecSecurity;
+  ask: ExecAsk;
+} {
+  return {
+    host: "gateway",
+    security: policy.security,
+    ask: policy.ask,
+    // Auto needs its mode identity; replaying other modes would overwrite stricter resolved pairs.
+    ...(policy.mode === "auto" ? { mode: "auto" as const } : {}),
+  };
+}
