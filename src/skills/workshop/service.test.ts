@@ -460,6 +460,58 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow("Skill already exists");
   });
 
+  it("reconciles pending create proposals when their target skills are created manually", async () => {
+    const workspaceDir = await makeWorkspace();
+    const listed = await proposeCreateSkill({
+      workspaceDir,
+      name: "Listed Manual Skill",
+      description: "Becomes stale before proposal listing.",
+      content: "# Listed Manual Skill\n",
+    });
+    const inspected = await proposeCreateSkill({
+      workspaceDir,
+      name: "Inspected Manual Skill",
+      description: "Becomes stale before proposal inspection.",
+      content: "# Inspected Manual Skill\n",
+    });
+    await writeSkill({
+      dir: listed.record.target.skillDir,
+      name: "listed-manual-skill",
+      description: "Installed without the proposal.",
+      body: "# Listed Manual Skill\n\nAlready active.\n",
+    });
+    await writeSkill({
+      dir: inspected.record.target.skillDir,
+      name: "inspected-manual-skill",
+      description: "Installed without the proposal.",
+      body: "# Inspected Manual Skill\n\nAlready active.\n",
+    });
+
+    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+      proposals: expect.arrayContaining([
+        expect.objectContaining({
+          id: listed.record.id,
+          status: "stale",
+        }),
+      ]),
+    });
+    await expect(
+      inspectSkillProposal(inspected.record.id, { workspaceDir }),
+    ).resolves.toMatchObject({
+      record: {
+        id: inspected.record.id,
+        status: "stale",
+        statusReason: "Target skill was created after proposal creation.",
+      },
+    });
+    await expect(
+      resolvePendingSkillProposal({
+        name: listed.record.target.skillKey,
+        workspaceDir,
+      }),
+    ).rejects.toThrow("No pending skill proposal matched");
+  });
+
   it("revises pending proposals in place before approval", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({
