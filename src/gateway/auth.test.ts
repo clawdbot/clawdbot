@@ -537,6 +537,24 @@ describe("gateway auth", () => {
     expect(tailscaleWhois).not.toHaveBeenCalled();
   });
 
+  it("rejects wildcard origin grants for ambient Tailscale avatar identity", async () => {
+    const req = createTailscaleForwardedReq();
+    req.headers.origin = "https://evil.example";
+    req.headers["sec-fetch-site"] = "cross-site";
+    const tailscaleWhois = vi.fn(createTailscaleWhois());
+
+    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois,
+      req,
+      browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["*"]),
+    });
+
+    expect(res).toMatchObject({ ok: false, reason: "origin_not_allowed" });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+  });
+
   it("allows an approved Control UI origin before verifying Tailscale avatar identity", async () => {
     const req = createTailscaleForwardedReq();
     req.headers.origin = "https://control.example.com";
@@ -639,7 +657,7 @@ describe("gateway auth", () => {
     const res = await authorizeUserProfileAvatarHttpGatewayConnect({
       ...testCase,
       req,
-      browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
+      browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["*"]),
     });
 
     expect(res).toMatchObject({ ok: true, method: testCase.method });
