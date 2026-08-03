@@ -79,7 +79,7 @@ export function collectSmsStartupWarnings(account: ResolvedSmsAccount): string[]
     !resolveTwilioStatusCallbackUrl(account.publicWebhookUrl)
   ) {
     warnings.push(
-      "- SMS: publicWebhookUrl must be a properly encoded absolute HTTP(S) URL with a valid hostname, no embedded credentials, and a final callback length of at most 4,000 characters; OpenClaw will omit the per-message delivery callback until fixed.",
+      "- SMS: publicWebhookUrl must be a properly encoded absolute HTTP(S) URL with a valid hostname, no embedded credentials, and remain within OpenClaw's 4,000-character callback safety limit; OpenClaw will omit the per-message delivery callback until fixed.",
     );
   }
   if (account.dmPolicy === "allowlist" && account.allowFrom.length === 0) {

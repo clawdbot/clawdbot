@@ -385,7 +385,9 @@ The webhook route also enforces, independent of signature validation:
 - Delivery observations use a semantic, non-PII fingerprint of source, message SID, normalized status, error code, and carrier completion date. Multiple states for one outbound message remain distinct. Records expire 30 days after their latest observation, while the 5,000-message cap can evict older records sooner.
 - Request bodies over 32 KB are rejected.
 
-OpenClaw adds the `5xx` retry policy and a retry count to generated delivery `StatusCallback` URLs so Twilio can retry a failed SQLite commit. Twilio does not retry HTTP 429 by default. The `#rp=4xx` and `#rp=all` connection overrides opt into 4xx retries, but Twilio caps the complete retry transaction at 15 seconds. Configure a fallback URL when another handler must receive failed deliveries; treat a 429 as a fail-closed rejection, not reliable backpressure.
+OpenClaw adds the `5xx` retry policy and a retry count to generated delivery `StatusCallback` URLs so Twilio can retry a failed SQLite commit. Twilio does not retry HTTP 429 by default. The `#rp=4xx` and `#rp=all` connection overrides opt into 4xx retries, but Twilio caps the complete retry transaction at 15 seconds. Treat a 429 as a fail-closed rejection, not reliable backpressure.
+
+For completeness-sensitive workflows, persist Message SIDs and reconcile stale nonterminal records by polling Twilio's Message resource. Twilio's [delivery logging guidance](https://www.twilio.com/docs/messaging/guides/outbound-message-logging) recommends polling when a message has not reached `delivered` or `undelivered` within 12 hours because a status callback may not have arrived. The SMS fallback URL is not a substitute: it only handles failures retrieving or executing the [inbound SMS TwiML webhook](https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource).
 
 For local tunnel testing only, you can set:
 

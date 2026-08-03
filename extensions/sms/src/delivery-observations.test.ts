@@ -203,21 +203,26 @@ describe("SMS delivery observations", () => {
     },
   );
 
-  it("advances accepted through sent in Twilio lifecycle order", async () => {
-    const store = createStore();
-    for (const [index, status] of [
-      "accepted",
-      "scheduled",
-      "queued",
-      "sending",
-      "sent",
-    ].entries()) {
-      const current = await recordApiStatus(store, status, index + 1);
-      expect(current.status).toBe(status);
-    }
+  it.each(["accepted", "scheduled"])(
+    "advances a message from its %s initial state through sent",
+    async (initialStatus) => {
+      const store = createStore();
+      for (const [index, status] of [initialStatus, "queued", "sending", "sent"].entries()) {
+        const current = await recordApiStatus(store, status, index + 1);
+        expect(current.status).toBe(status);
+      }
 
-    await recordCallback(store, { MessageSid: "SM123", MessageStatus: "queued" }, 10);
-    expect((await latestRecord(store)).status).toBe("sent");
+      await recordCallback(store, { MessageSid: "SM123", MessageStatus: "queued" }, 10);
+      expect((await latestRecord(store)).status).toBe("sent");
+    },
+  );
+
+  it("allows a scheduled message to be canceled before queueing", async () => {
+    const store = createStore();
+    await recordApiStatus(store, "scheduled", 1);
+    const canceled = await recordApiStatus(store, "canceled", 2);
+
+    expect(canceled.status).toBe("canceled");
   });
 
   it("does not regress a terminal state when an older transition arrives late", async () => {

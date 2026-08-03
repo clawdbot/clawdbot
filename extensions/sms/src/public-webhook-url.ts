@@ -2,7 +2,9 @@
 import { isIP } from "node:net";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 
-const TWILIO_STATUS_CALLBACK_MAX_LENGTH = 4_000;
+// Bound generated callback metadata defensively; Twilio does not publish a
+// 4,000-character StatusCallback contract.
+const SMS_STATUS_CALLBACK_MAX_LENGTH = 4_000;
 const ABSOLUTE_HTTP_URL_PATTERN = /^https?:\/\//iu;
 const RAW_AUTHORITY_PATTERN = /^[a-z0-9.:[\]-]+$/iu;
 const RAW_PATH_QUERY_FRAGMENT_PATTERN = /^[a-z0-9\-._~%!$&'()*+,;=:@/?]*$/iu;
@@ -116,7 +118,7 @@ export function resolveTwilioStatusCallbackUrl(publicWebhookUrl: string): string
   // resulting 5xx when that commit fails or the observation can disappear silently.
   const callbackUrl = `${baseUrl}#${overrides.toString().replaceAll("%2C", ",")}`;
   if (
-    callbackUrl.length > TWILIO_STATUS_CALLBACK_MAX_LENGTH ||
+    callbackUrl.length > SMS_STATUS_CALLBACK_MAX_LENGTH ||
     !parseSmsPublicWebhookUrl(callbackUrl)
   ) {
     return "";
