@@ -411,6 +411,20 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
   const frames: ParseFrame[] = [createParseFrame()];
   const capturedPaths = new Map<string, string[][] | null>();
 
+  const recordCapturedPaths = (captureKey: string, paths: string[][] | null): void => {
+    if (!capturedPaths.has(captureKey)) {
+      capturedPaths.set(captureKey, paths);
+      return;
+    }
+    const existing = capturedPaths.get(captureKey);
+    if (!existing || !paths) {
+      capturedPaths.set(captureKey, null);
+      return;
+    }
+    const merged = [...existing, ...paths];
+    capturedPaths.set(captureKey, merged.length <= MAX_ALTERNATIVE_PATHS ? merged : null);
+  };
+
   const emitToken = (token: TokenState) => {
     const frame = expectDefined(frames[frames.length - 1], "frames entry at frames.length 1");
     frame.lastToken = token;
@@ -506,7 +520,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[], flags: string)
             : null
           : frame.branchPaths;
         for (const captureKey of frame.captureKeys) {
-          capturedPaths.set(
+          recordCapturedPaths(
             captureKey,
             frame.zeroWidth || frame.opaque ? null : consumingGroupPaths,
           );
