@@ -269,6 +269,134 @@ describe("createHostedOutboundMediaStore", () => {
     expect(await store.read("abc123abc123abc123abc123")).toBeNull();
   });
 
+  it("retains metadata until a failed chunk cleanup can be retried", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("image-bytes"),
+      kind: "image",
+      contentType: "image/png",
+    });
+    const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
+      "fixture-plugin",
+      {
+        namespace: "retry-delete-media",
+        maxEntries: 10,
+      },
+    );
+    const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
+      "fixture-plugin",
+      {
+        namespace: "retry-delete-media-chunks",
+        maxEntries: 100,
+      },
+    );
+    const store = createHostedOutboundMediaStore({
+      metadataStore,
+      chunkStore,
+      ttlMs: 120_000,
+      resolveExpiresAtMs: () => Date.now() + 120_000,
+      createId: () => "abc123abc123abc123abc123",
+      createToken: () => "token123",
+      rawChunkBytes: 4,
+      maxEntries: 10,
+      maxChunkRows: 100,
+    });
+    await store.prepareUrl({
+      mediaUrl: "https://example.com/photo.png",
+      routePath: "/hook/media/",
+      publicBaseUrl: "https://gateway.example.com",
+      maxBytes: 1024,
+    });
+    const originalDelete = chunkStore.delete.bind(chunkStore);
+    let deleteCalls = 0;
+    vi.spyOn(chunkStore, "delete").mockImplementation(async (key) => {
+      deleteCalls += 1;
+      if (deleteCalls === 2) {
+        throw new Error("chunk delete failed");
+      }
+      return await originalDelete(key);
+    });
+
+    await expect(store.delete("abc123abc123abc123abc123")).rejects.toThrow("chunk delete failed");
+    expect(await metadataStore.entries()).toHaveLength(1);
+
+    await expect(store.delete("abc123abc123abc123abc123")).resolves.toBeUndefined();
+    expect(await metadataStore.entries()).toEqual([]);
+    expect(await chunkStore.entries()).toEqual([]);
+  });
+
+  it("serializes explicit deletion with reject-new capacity checks", async () => {
+    let idCounter = 0;
+    const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
+      "fixture-plugin",
+      {
+        namespace: "serialized-delete-media",
+        maxEntries: 1,
+        overflowPolicy: "reject-new",
+      },
+    );
+    const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
+      "fixture-plugin",
+      {
+        namespace: "serialized-delete-media-chunks",
+        maxEntries: 2,
+        overflowPolicy: "reject-new",
+      },
+    );
+    const store = createHostedOutboundMediaStore({
+      metadataStore,
+      chunkStore,
+      ttlMs: 120_000,
+      resolveExpiresAtMs: () => Date.now() + 120_000,
+      createId: () => {
+        idCounter += 1;
+        return idCounter === 1 ? "111111111111111111111111" : "222222222222222222222222";
+      },
+      createToken: () => "token123",
+      rawChunkBytes: 64,
+      maxEntries: 1,
+      maxChunkRows: 2,
+      overflowPolicy: "reject-new",
+    });
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("image-bytes"),
+      kind: "image",
+      contentType: "image/png",
+    });
+    await store.prepareUrl({
+      mediaUrl: "https://example.com/first.png",
+      routePath: "/hook/media/",
+      publicBaseUrl: "https://gateway.example.com",
+      maxBytes: 1024,
+    });
+    let releaseDelete: (() => void) | undefined;
+    let markDeleteStarted: (() => void) | undefined;
+    const deleteStarted = new Promise<void>((resolve) => {
+      markDeleteStarted = resolve;
+    });
+    const deleteReleased = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    const originalDelete = chunkStore.delete.bind(chunkStore);
+    vi.spyOn(chunkStore, "delete").mockImplementationOnce(async (key) => {
+      markDeleteStarted?.();
+      await deleteReleased;
+      return await originalDelete(key);
+    });
+
+    const deletion = store.delete("111111111111111111111111");
+    await deleteStarted;
+    const replacement = store.prepareUrl({
+      mediaUrl: "https://example.com/second.png",
+      routePath: "/hook/media/",
+      publicBaseUrl: "https://gateway.example.com",
+      maxBytes: 1024,
+    });
+    releaseDelete?.();
+
+    await expect(deletion).resolves.toBeUndefined();
+    await expect(replacement).resolves.toContain("222222222222222222222222");
+  });
+
   it("prunes oldest complete entries before chunk rows evict independently", async () => {
     let idCounter = 0;
     const store = createHostedOutboundMediaStore({

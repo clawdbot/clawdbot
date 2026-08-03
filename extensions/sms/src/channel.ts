@@ -21,12 +21,11 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import {
   inspectSmsAccount,
@@ -266,22 +265,25 @@ type PreparedSmsAttachmentAttempt = {
   account: ResolvedSmsAccount;
   to: string;
   attempt: PreparedSmsMediaAttempt;
+  platformDispatchStarted: boolean;
 };
 
 // Core passes the same context object through lifecycle preparation and send.
 // Object identity keeps hosted bearer URLs scoped to exactly one MMS attempt.
 const preparedSmsAttachmentAttempts = new WeakMap<object, Promise<PreparedSmsAttachmentAttempt>>();
 
-function resolveSmsHostedMediaCleanup(attemptToken: unknown): (() => Promise<void>) | undefined {
-  if (typeof attemptToken !== "object" || attemptToken === null || !("attempt" in attemptToken)) {
+function resolveSmsAttachmentAttemptToken(
+  attemptToken: unknown,
+): Pick<PreparedSmsAttachmentAttempt, "attempt" | "platformDispatchStarted"> | undefined {
+  if (
+    !isRecord(attemptToken) ||
+    typeof attemptToken.platformDispatchStarted !== "boolean" ||
+    !isRecord(attemptToken.attempt) ||
+    typeof attemptToken.attempt.cleanupHostedMedia !== "function"
+  ) {
     return undefined;
   }
-  const attempt = attemptToken.attempt;
-  if (typeof attempt !== "object" || attempt === null || !("cleanupHostedMedia" in attempt)) {
-    return undefined;
-  }
-  const cleanup = attempt.cleanupHostedMedia;
-  return typeof cleanup === "function" ? async () => await cleanup() : undefined;
+  return attemptToken as Pick<PreparedSmsAttachmentAttempt, "attempt" | "platformDispatchStarted">;
 }
 
 async function prepareSmsAttachmentAttempt(
@@ -300,7 +302,7 @@ async function prepareSmsAttachmentAttempt(
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
   });
-  return { account, to, attempt };
+  return { account, to, attempt, platformDispatchStarted: false };
 }
 
 function getOrPrepareSmsAttachmentAttempt(
@@ -324,7 +326,10 @@ async function sendPreparedSmsAttachment(ctx: SmsAttachmentContext) {
   const prepared = await preparation;
   const results = await sendPreparedSmsMediaAttempt({
     ...prepared,
-    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    onPlatformSendDispatch: async () => {
+      await ctx.onPlatformSendDispatch?.();
+      prepared.platformDispatchStarted = true;
+    },
     onDeliveryResult: ctx.onDeliveryResult,
   });
   return createSmsReceipt({ results, kind: "media" });
@@ -348,13 +353,16 @@ const smsMessageAdapter = defineChannelMessageAdapter({
         return await getOrPrepareSmsAttachmentAttempt(ctx);
       },
       afterSendFailure: async (ctx) => {
-        // Only direct pre-dispatch proof is safe to discard. Ambiguous and
-        // partial outcomes keep the bearer URL available for Twilio retries.
-        if (ctx.kind !== "media" || !(ctx.error instanceof PlatformMessageNotDispatchedError)) {
+        if (ctx.kind !== "media") {
           return;
         }
-        const cleanup = resolveSmsHostedMediaCleanup(ctx.attemptToken);
-        await cleanup?.();
+        const attemptToken = resolveSmsAttachmentAttemptToken(ctx.attemptToken);
+        // Core can fail after staging but before the adapter starts. Discard only
+        // while the attempt still proves Twilio's HTTP boundary was never crossed.
+        if (!attemptToken || attemptToken.platformDispatchStarted) {
+          return;
+        }
+        await attemptToken.attempt.cleanupHostedMedia();
       },
     },
     text: async (ctx) => await sendSmsText(ctx),

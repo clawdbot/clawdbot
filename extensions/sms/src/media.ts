@@ -200,8 +200,16 @@ function createHostedSmsMediaCleanup(
 ): () => Promise<void> {
   let cleanup: Promise<void> | undefined;
   return async () => {
-    cleanup ??= store.delete(id);
-    await cleanup;
+    const activeCleanup = cleanup ?? store.delete(id);
+    cleanup = activeCleanup;
+    try {
+      await activeCleanup;
+    } catch (error) {
+      if (cleanup === activeCleanup) {
+        cleanup = undefined;
+      }
+      throw error;
+    }
   };
 }
 

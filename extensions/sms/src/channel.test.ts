@@ -365,6 +365,36 @@ describe("smsPlugin outbound", () => {
     expect(hostedMediaMocks.cleanup).toHaveBeenCalledOnce();
   });
 
+  it("discards staged MMS media when core fails before entering the adapter", async () => {
+    const ctx = {
+      cfg: {
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+          },
+        },
+      },
+      to: "+15551234567",
+      text: "caption",
+      kind: "media" as const,
+      mediaUrl: "/tmp/photo.jpg",
+    };
+    const lifecycle = smsPlugin.message?.send?.lifecycle;
+    const attemptToken = await lifecycle?.beforeSendAttempt?.(ctx);
+
+    await lifecycle?.afterSendFailure?.({
+      ...ctx,
+      error: new Error("queue state rejected before adapter dispatch"),
+      attemptToken,
+    });
+
+    expect(hostedMediaMocks.cleanup).toHaveBeenCalledOnce();
+    expect(sendSmsViaTwilio).not.toHaveBeenCalled();
+  });
+
   it("retains staged MMS media after an ambiguous Twilio failure", async () => {
     const failure = new Error("Twilio response was lost");
     sendSmsViaTwilio.mockImplementationOnce(async ({ onPlatformSendDispatch }) => {
@@ -398,6 +428,54 @@ describe("smsPlugin outbound", () => {
     }
 
     expect(observed).toBe(failure);
+    await lifecycle?.afterSendFailure?.({
+      ...ctx,
+      error: observed,
+      attemptToken,
+    });
+
+    expect(hostedMediaMocks.cleanup).not.toHaveBeenCalled();
+  });
+
+  it("retains staged MMS media after a partial delivery", async () => {
+    sendSmsViaTwilio
+      .mockImplementationOnce(async ({ to, onPlatformSendDispatch }) => {
+        await onPlatformSendDispatch?.();
+        return { sid: "MM-first", to };
+      })
+      .mockRejectedValueOnce(
+        new PlatformMessageNotDispatchedError("second chunk rejected before dispatch", {
+          cause: new Error("provider rejected chunk"),
+        }),
+      );
+    const ctx = {
+      cfg: {
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+            textChunkLimit: 5,
+          },
+        },
+      },
+      to: "+15551234567",
+      text: "alpha beta",
+      kind: "media" as const,
+      mediaUrl: "/tmp/photo.jpg",
+      onPlatformSendDispatch: async () => undefined,
+    };
+    const lifecycle = smsPlugin.message?.send?.lifecycle;
+    const attemptToken = await lifecycle?.beforeSendAttempt?.(ctx);
+    let observed: unknown;
+    try {
+      await smsPlugin.message?.send?.media?.(ctx);
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
     await lifecycle?.afterSendFailure?.({
       ...ctx,
       error: observed,

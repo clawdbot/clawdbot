@@ -191,15 +191,17 @@ async function deleteHostedOutboundMediaRows(
   chunkStore: PluginStateKeyedStore<HostedOutboundMediaChunkRecord>,
   knownChunkCount?: number,
 ): Promise<void> {
-  const meta = await metadataStore.lookup(buildHostedOutboundMediaMetaKey(id));
-  await metadataStore.delete(buildHostedOutboundMediaMetaKey(id));
+  const metaKey = buildHostedOutboundMediaMetaKey(id);
+  const meta = await metadataStore.lookup(metaKey);
   const chunkCount = meta?.chunkCount ?? knownChunkCount;
-  if (chunkCount == null) {
-    return;
+  if (chunkCount != null) {
+    for (let index = 0; index < chunkCount; index += 1) {
+      await chunkStore.delete(buildHostedOutboundMediaChunkKey(id, index));
+    }
   }
-  for (let index = 0; index < chunkCount; index += 1) {
-    await chunkStore.delete(buildHostedOutboundMediaChunkKey(id, index));
-  }
+  // Metadata owns chunk cardinality. Delete it last so a failed cleanup can
+  // retry remaining rows instead of orphaning capacity with no recovery fact.
+  await metadataStore.delete(metaKey);
 }
 
 export function createHostedOutboundMediaStore(
@@ -245,26 +247,29 @@ export function createHostedOutboundMediaStore(
     row: Awaited<ReturnType<typeof options.metadataStore.entries>>[number],
   ): Promise<void> {
     const id = parseHostedOutboundMediaMetaKey(row.key);
-    await options.metadataStore.delete(row.key);
     if (
       !id ||
       !Number.isSafeInteger(row.value.chunkCount) ||
       row.value.chunkCount < 1 ||
       row.value.chunkCount > maxChunkRows
     ) {
+      await options.metadataStore.delete(row.key);
       return;
     }
     for (let index = 0; index < row.value.chunkCount; index += 1) {
       await options.chunkStore.delete(buildHostedOutboundMediaChunkKey(id, index));
     }
+    await options.metadataStore.delete(row.key);
   }
 
   async function cleanupExpired(nowMs = Date.now()): Promise<void> {
-    for (const row of await options.metadataStore.entries()) {
-      if (!isFutureHostedOutboundMediaExpiry(row.value.expiresAt, nowMs)) {
-        await deleteStoredRow(row);
+    await withCapacityMutation(async () => {
+      for (const row of await options.metadataStore.entries()) {
+        if (!isFutureHostedOutboundMediaExpiry(row.value.expiresAt, nowMs)) {
+          await deleteStoredRow(row);
+        }
       }
-    }
+    });
   }
 
   async function pruneForCapacity(incomingChunkCount: number, nowMs = Date.now()): Promise<void> {
@@ -378,14 +383,14 @@ export function createHostedOutboundMediaStore(
         return null;
       }
       if (!isFutureHostedOutboundMediaExpiry(meta.expiresAt, nowMs)) {
-        await deleteEntry(id);
+        await withCapacityMutation(async () => await deleteEntry(id));
         return null;
       }
       const chunks: Buffer[] = [];
       for (let index = 0; index < meta.chunkCount; index += 1) {
         const chunk = await options.chunkStore.lookup(buildHostedOutboundMediaChunkKey(id, index));
         if (!chunk || chunk.id !== id || chunk.index !== index) {
-          await deleteEntry(id);
+          await withCapacityMutation(async () => await deleteEntry(id));
           return null;
         }
         chunks.push(Buffer.from(chunk.dataBase64, "base64"));
@@ -395,10 +400,14 @@ export function createHostedOutboundMediaStore(
         buffer: Buffer.concat(chunks, meta.byteLength),
       };
     },
-    delete: deleteEntry,
+    async delete(id) {
+      await withCapacityMutation(async () => await deleteEntry(id));
+    },
     cleanupExpired,
     async clear() {
-      await Promise.all([options.metadataStore.clear(), options.chunkStore.clear()]);
+      await withCapacityMutation(
+        async () => await Promise.all([options.metadataStore.clear(), options.chunkStore.clear()]),
+      );
     },
   };
 }

@@ -221,6 +221,29 @@ describe("SMS outbound hosted media", () => {
     });
   });
 
+  it("retries a hosted MMS cleanup after a transient store failure", async () => {
+    const prepared = await prepareHostedSmsMedia({
+      account: { ...createAccount(), accountId: "cleanup-retry" },
+      mediaUrl: "https://example.com/photo.png",
+    });
+    const chunkStore = openKeyedStore.mock.results[1]?.value;
+    if (!chunkStore) {
+      throw new Error("expected hosted media chunk store");
+    }
+    const originalDelete = chunkStore.delete.bind(chunkStore);
+    let failed = false;
+    vi.spyOn(chunkStore, "delete").mockImplementation(async (key) => {
+      if (!failed) {
+        failed = true;
+        throw new Error("transient chunk delete failure");
+      }
+      return await originalDelete(key);
+    });
+
+    await expect(prepared.cleanup()).rejects.toThrow("transient chunk delete failure");
+    await expect(prepared.cleanup()).resolves.toBeUndefined();
+  });
+
   it("hosts media on the exact webhook path and supports repeat GET/HEAD fetches", async () => {
     const hostedUrl = await prepareHostedSmsMediaUrl({
       account: createAccount(),
