@@ -374,7 +374,7 @@ export class AcpSessionManager {
     });
   }
 
-  /** Evicts and closes runtime ownership without waiting for the current actor lane. */
+  /** Evicts runtime ownership immediately; old handles close best-effort in the background. */
   async forceDiscardSessionRuntime(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -402,7 +402,7 @@ export class AcpSessionManager {
         ? [{ runtime: cached.runtime, handle: cached.handle }]
         : []),
     ];
-    const outcomes = await Promise.allSettled(
+    void Promise.allSettled(
       closeTargets.map(async ({ runtime, handle }) => {
         await runtime.close({
           handle,
@@ -410,13 +410,16 @@ export class AcpSessionManager {
           discardPersistentState: true,
         });
       }),
-    );
-    const failed = outcomes.find(
-      (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
-    );
-    if (failed) {
-      throw toErrorObject(failed.reason, "ACP runtime force discard failed.");
-    }
+    ).then((outcomes) => {
+      const failed = outcomes.find(
+        (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
+      );
+      if (failed) {
+        logVerbose(
+          `acp-manager: force-discard runtime close failed for ${sessionKey}: ${String(failed.reason)}`,
+        );
+      }
+    });
   }
 
   async closeSession(input: AcpCloseSessionInput): Promise<AcpCloseSessionResult> {

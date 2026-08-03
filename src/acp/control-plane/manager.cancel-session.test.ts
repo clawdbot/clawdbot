@@ -169,11 +169,20 @@ describe("AcpSessionManager cancelSession", () => {
       expect(runtimeState.cancel).toHaveBeenCalledTimes(1);
     });
 
-    await manager.forceDiscardSessionRuntime({
-      cfg: baseCfg,
-      sessionKey,
-      reason: "session-reset",
-    });
+    const stuckDiscardClose = createDeferred();
+    runtimeState.close.mockImplementationOnce(async () => await stuckDiscardClose.promise);
+    const forceDiscardResult = vi.fn();
+    void manager
+      .forceDiscardSessionRuntime({
+        cfg: baseCfg,
+        sessionKey,
+        reason: "session-reset",
+      })
+      .then(
+        () => forceDiscardResult("resolved"),
+        () => forceDiscardResult("rejected"),
+      );
+    await vi.waitFor(() => expect(forceDiscardResult).toHaveBeenCalledWith("resolved"));
     expect(runtimeState.close).toHaveBeenCalledWith({
       handle: first.handle,
       reason: "session-reset",
@@ -183,6 +192,9 @@ describe("AcpSessionManager cancelSession", () => {
     const second = await initialize();
     expect(second.handle.runtimeSessionName).toBe("runtime-2");
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    stuckDiscardClose.resolve();
+    await Promise.resolve();
+
     const upsertsBeforeStaleCancelSettles = hoisted.upsertAcpSessionMetaMock.mock.calls.length;
 
     stuckCancel.resolve();
