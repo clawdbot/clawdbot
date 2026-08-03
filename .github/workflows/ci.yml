@@ -1758,10 +1758,14 @@ jobs:
 
       - name: Build QA smoke runtime
         env:
-          OPENCLAW_BUILD_PRIVATE_QA: "1"
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
+          # Pack the public runtime before overlaying private QA artifacts so they cannot leak.
+          unset OPENCLAW_BUILD_PRIVATE_QA
+          node scripts/build-all.mjs qaRuntime
+          pnpm ui:build
           package_args=(
+            --skip-build
             --output-dir .artifacts/qa-e2e/smoke-ci-package
             --output-name openclaw-current.tgz
           )
@@ -1769,8 +1773,7 @@ jobs:
             package_args=(--allow-unreleased-changelog "${package_args[@]}")
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
-          node scripts/build-all.mjs qaRuntime
-          pnpm ui:build
+          OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs qaRuntime
 
       - name: Run smoke profile part
         env:

@@ -1642,7 +1642,10 @@ test("sessions.compact preserves accepted queued follow-up work", async () => {
   }
 });
 
-test("sessions.compact preserves an in-flight collected follow-up waiting in the command lane", async () => {
+test.each([
+  { name: "follow-up-backed", withFollowup: true },
+  { name: "lane-only", withFollowup: false },
+])("sessions.compact preserves accepted $name command-lane work", async ({ withFollowup }) => {
   const { storePath } = await createSessionStoreDir();
   const sessionId = "sess-compact-command-queue";
   const sessionKey = "agent:main:main";
@@ -1663,8 +1666,9 @@ test("sessions.compact preserves an in-flight collected follow-up waiting in the
     enqueuedAt: Date.now(),
     run: {},
   } as unknown as FollowupRun;
-  const queue = getFollowupQueue(sessionKey, { mode: "collect" });
-  queue.inFlight.add(queuedRun);
+  if (withFollowup) {
+    getFollowupQueue(sessionKey, { mode: "collect" }).inFlight.add(queuedRun);
+  }
   setCommandLaneConcurrency(lane, 0);
   let commandRan = false;
   const queuedCommand = enqueueCommandInLane(lane, async () => {
@@ -1685,7 +1689,9 @@ test("sessions.compact preserves an in-flight collected follow-up waiting in the
       code: "INVALID_REQUEST",
       message: "Session main has queued work; retry after it finishes.",
     });
-    expect(getExistingFollowupQueue(sessionKey)?.inFlight).toContain(queuedRun);
+    expect(Boolean(getExistingFollowupQueue(sessionKey)?.inFlight.has(queuedRun))).toBe(
+      withFollowup,
+    );
     expect(getCommandLaneSnapshot(lane).queuedCount).toBe(1);
     expect(commandRan).toBe(false);
     expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();

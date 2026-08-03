@@ -439,7 +439,6 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       tempRoots.add(rootDir);
       const descendantPidPath = path.join(rootDir, "descendant.pid");
       let descendantPid = 0;
-      let runnerPid = 0;
       const moduleHref = pathToFileURL(
         path.resolve("scripts/prepare-extension-package-boundary-artifacts.mjs"),
       ).href;
@@ -462,7 +461,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
         stdio: "ignore",
       });
-      runnerPid = runner.pid ?? 0;
+      const runnerPid = runner.pid ?? 0;
 
       try {
         descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 10_000), 10);

@@ -27,6 +27,7 @@ import {
   summarizeMcpServers,
 } from "../../lib/config/mcp-servers.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
@@ -300,8 +301,12 @@ export class ChatComposerCapabilityHost {
     if (!state.connected || !state.client) {
       return { ok: false, error: t("chat.composer.menu.offlineBlocked") };
     }
-    if (!readGatewayOperatorAccess(context.gateway.snapshot).canWrite) {
-      return { ok: false, error: t("chat.composer.menu.readOnlyBlocked") };
+    const access = readSessionMethodAccess(context.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: state.sessionKey, toolOverrides: next },
+    });
+    if (!access.allowed) {
+      return { ok: false, error: access.reason };
     }
     const sessionKey = state.sessionKey;
     if (this.patchTokens.has(sessionKey)) {
@@ -595,12 +600,16 @@ export class ChatComposerCapabilityHost {
     const toolsEffectiveError =
       effectiveToolsKey !== null && this.effectiveToolsErrorKey === effectiveToolsKey;
     const capabilitiesReady = gatewayAvailable && session !== undefined && runtimeConfig !== null;
+    const toolPatchAccess = readSessionMethodAccess(context.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: state.sessionKey, toolOverrides: null },
+    });
     const mutationBlockedReason = !gatewayAvailable
       ? t("chat.composer.menu.offlineBlocked")
       : !capabilitiesReady
         ? t("common.loading")
-        : !access.canWrite
-          ? t("chat.composer.menu.readOnlyBlocked")
+        : !toolPatchAccess.allowed
+          ? toolPatchAccess.reason
           : this.patchTokens.has(state.sessionKey)
             ? t("chat.composer.menu.savingBlocked")
             : null;

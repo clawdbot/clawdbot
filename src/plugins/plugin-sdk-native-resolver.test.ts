@@ -112,7 +112,7 @@ function createInternalCoreAliasFixture(prefix: string): {
   root: string;
   sourcePath: string;
 } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   const { loaderModulePath } = writeFakeOpenClawPackage(root);
   const sourcePath = writeInternalCorePackageSource(root, "markdown-core", "code-spans.ts");
   const coreSourceParent = path.join(root, "src", "host-probe.js");

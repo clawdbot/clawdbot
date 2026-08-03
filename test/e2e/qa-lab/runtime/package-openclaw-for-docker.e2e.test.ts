@@ -241,6 +241,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/bundled-plugin-build-entries.mjs",
       "scripts/lib/bundled-plugin-paths.mjs",
       "scripts/lib/managed-child-process.mjs",
+      "scripts/lib/npm-json-output.mjs",
       "scripts/lib/optional-bundled-clusters.mjs",
       "scripts/lib/windows-taskkill.mjs",
     ];
@@ -794,7 +795,7 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
-  it("writes npm pack metadata for renamed package artifacts", async () => {
+  it("normalizes npm 12 pack metadata for renamed package artifacts", async () => {
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-pack-json-"));
     const packJsonPath = path.join(outputDir, "pack.json");
 
@@ -823,15 +824,15 @@ describe("package-openclaw-for-docker", () => {
           ]);
           expect(options.deferForwardedSignalExit).toBe(true);
           fs.writeFileSync(path.join(outputDir, "openclaw-2026.5.28.tgz"), "package");
-          return JSON.stringify([
-            {
+          return JSON.stringify({
+            openclaw: {
               entryCount: 1,
               filename: "openclaw-2026.5.28.tgz",
               size: 7,
               unpackedSize: 7,
               version: "2026.5.28",
             },
-          ]);
+          });
         },
       });
 

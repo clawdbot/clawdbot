@@ -7,6 +7,7 @@ import {
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { callGatewayTool, resolveMessageActionAgentRuntimeIdentityToken } from "./gateway.js";
 
 const mocks = vi.hoisted(() => ({
@@ -64,6 +65,37 @@ describe("gateway tool runtime identity", () => {
       expect(capturedGatewayCall().agentRuntimeIdentityToken).toEqual(expect.any(String));
     },
   );
+
+  it("scopes signed session-spawn authority to its Gateway call", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ key: "agent:ops:dashboard:child" });
+
+    await withGatewayToolCallerIdentity(
+      { agentId: "ops", sessionKey: "agent:ops:main" },
+      async () =>
+        await runWithGatewaySessionSpawnContext(
+          {
+            completionOwnerSessionKey: "agent:ops:discord:direct:alice",
+            inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] },
+          },
+          () =>
+            callGatewayTool(
+              "sessions.create",
+              {},
+              { parentSessionKey: "agent:ops:main", spawnDepth: 1 },
+              { requireAgentRuntimeIdentity: true },
+            ),
+        ),
+    );
+
+    await expect(
+      verifyAgentRuntimeIdentityToken(capturedGatewayCall().agentRuntimeIdentityToken),
+    ).resolves.toMatchObject({
+      sessionSpawnContext: {
+        completionOwnerSessionKey: "agent:ops:discord:direct:alice",
+        inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] },
+      },
+    });
+  });
 
   it("mints message action identity only for an exact admitted source turn", async () => {
     const capabilityInput = {

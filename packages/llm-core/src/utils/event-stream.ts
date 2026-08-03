@@ -8,6 +8,7 @@ import type {
 /** Generic async-iterable event stream with a separately awaited final result. */
 export class EventStream<T, R = T> implements AsyncIterable<T> {
   private queue: T[] = [];
+  private queueHead = 0;
   private waiting: ((value: IteratorResult<T>) => void)[] = [];
   private done = false;
   private finalResultPromise: Promise<R>;
@@ -63,10 +64,16 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 
   async *[Symbol.asyncIterator](): AsyncIterator<T> {
     while (true) {
-      if (this.queue.length > 0) {
-        for (const event of this.queue.splice(0, 1)) {
-          yield event;
+      if (this.queueHead < this.queue.length) {
+        const event = this.queue[this.queueHead] as T;
+        this.queueHead += 1;
+        // Compact only after a substantial consumed prefix reaches half the
+        // backing array, keeping dequeue amortized O(1) when consumers lag.
+        if (this.queueHead >= 1024 && this.queueHead * 2 >= this.queue.length) {
+          this.queue = this.queue.slice(this.queueHead);
+          this.queueHead = 0;
         }
+        yield event;
       } else if (this.done) {
         return;
       } else {

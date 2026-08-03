@@ -51,7 +51,7 @@ export async function startGoogleChatGatewayAccount(ctx: {
     running: true,
     lastStartAt: Date.now(),
     ...(webhookPath
-      ? { webhookPath }
+      ? { webhookPath, lifecycle: "starting" as const }
       : {
           webhookPath: undefined,
           lifecycle: "blocked" as const,

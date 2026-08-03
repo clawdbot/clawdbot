@@ -2326,6 +2326,7 @@ describe("doctor health contributions", () => {
     const status = {
       eventLoop: {
         degraded: true,
+        degradedSinceMs: 61_000,
         reasons: ["event_loop_delay"],
         intervalMs: 30_000,
         delayP99Ms: 42,

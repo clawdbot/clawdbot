@@ -132,7 +132,7 @@ function resolveRawAssistantAnswerParts(lastAssistant: AssistantMessage | undefi
       const record = block as { type?: unknown; textSignature?: unknown };
       return (
         isAssistantTextContentBlockType(record.type) &&
-        Boolean(parseAssistantTextSignature(record.textSignature)?.phase)
+        Boolean(parseAssistantTextSignature(record)?.phase)
       );
     });
     if (!hasExplicitPhasedTextBlock) {
@@ -142,7 +142,7 @@ function resolveRawAssistantAnswerParts(lastAssistant: AssistantMessage | undefi
             return null;
           }
           const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
-          const signature = parseAssistantTextSignature(record.textSignature);
+          const signature = parseAssistantTextSignature(record);
           if (
             !isAssistantTextContentBlockType(record.type) ||
             typeof record.text !== "string" ||

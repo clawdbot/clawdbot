@@ -12,7 +12,7 @@ import {
 } from "../store.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
-import { emit, type CronServiceState } from "./state.js";
+import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 
 const loadedCronStoreRevisions = new WeakMap<CronServiceState, number>();
 
@@ -310,7 +310,7 @@ export async function persistOrRestore(
   state: CronServiceState,
   snapshot: CronRollbackSnapshot,
   opts: {
-    postPersistAutoDisableNotifications?: Array<() => void>;
+    postPersistNotifications?: DeferredCronNotifications;
     suppressScheduledJobId?: string;
   } = {},
 ) {
@@ -329,7 +329,9 @@ export async function persistOrRestore(
     state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
     throw err;
   }
-  for (const notify of opts.postPersistAutoDisableNotifications ?? []) {
+  // Queued notifications must not describe speculative cron state that a
+  // failed write rolls back before the service lock is released.
+  for (const notify of opts.postPersistNotifications ?? []) {
     notify();
   }
 }

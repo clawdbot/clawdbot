@@ -693,6 +693,11 @@ type CronJobState = {
   lastErrorReason?: string;
   lastDurationMs?: number;
   consecutiveErrors?: number;
+  autoDisabled?: {
+    reason: "consecutive-failures" | "schedule-errors";
+    atMs: number;
+    consecutiveErrors: number;
+  };
   lastDelivered?: boolean;
   lastDeliveryStatus?: CronDeliveryStatus;
   lastDeliveryError?: string;

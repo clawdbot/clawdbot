@@ -14,6 +14,7 @@ export {
   GatewaySuspendStatusResultSchema,
   GatewaySuspendResumeParamsSchema,
   GatewaySuspendResumeResultSchema,
+  HooksStatusParamsSchema,
   GATEWAY_SERVER_CAPS,
   HelloOkSchema,
   RequestFrameSchema,

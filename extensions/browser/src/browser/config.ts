@@ -6,6 +6,7 @@
  */
 import os from "node:os";
 import path from "node:path";
+import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
@@ -236,26 +237,20 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
-  const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
-  const resolvedAllowPrivateNetwork =
-    dangerouslyAllowPrivateNetwork === true || allowPrivateNetwork === true;
-
-  if (!resolvedAllowPrivateNetwork && !hasExplicitPrivateSetting && !allowedHostnames) {
-    // Keep the default policy object present so CDP guards still enforce
-    // fail-closed private-network checks on unconfigured installs.
-    return {};
+  const resolved = mergeSsrFPolicies({
+    ...rawPolicy,
+    allowedHostnames: normalizeStringList(rawPolicy?.allowedHostnames),
+  });
+  if (resolved && hasExplicitPrivateSetting) {
+    delete resolved.allowPrivateNetwork;
+    resolved.dangerouslyAllowPrivateNetwork =
+      allowPrivateNetwork === true || dangerouslyAllowPrivateNetwork === true;
   }
-
-  return {
-    ...(resolvedAllowPrivateNetwork ||
-    dangerouslyAllowPrivateNetwork === false ||
-    allowPrivateNetwork === false
-      ? { dangerouslyAllowPrivateNetwork: resolvedAllowPrivateNetwork }
-      : {}),
-    ...(allowedHostnames ? { allowedHostnames } : {}),
-  };
+  // Keep an explicit strict object so every browser guard stays fail-closed
+  // even when the operator leaves the shared policy unconfigured.
+  return resolved ?? (hasExplicitPrivateSetting ? { dangerouslyAllowPrivateNetwork: false } : {});
 }
 
 function ensureDefaultProfile(

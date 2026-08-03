@@ -167,7 +167,8 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
           });
         };
   const taskKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
-  const { agentSessionKey: requesterSessionKey, runId: requesterTurnRunId } = options ?? {};
+  const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
+  const requesterTurnRunId = options?.runId;
   const imageTool =
     options?.agentDir &&
     resolveImageToolFactoryAvailable({

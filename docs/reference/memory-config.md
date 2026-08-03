@@ -465,6 +465,18 @@ Index session transcripts and surface them via `memory_search`:
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Session logs live on disk, so treat filesystem access as the trust boundary.
 </Warning>
 
+<Note>
+The [session-memory hook](/automation/hooks#session-memory) saves conversation
+excerpts to `<workspace>/memory/`, which the `memory` source already indexes.
+If transcript indexing is also enabled, the same conversation can appear from
+both `memory` and `sessions`, resulting in overlapping search results and
+additional embedding work. For hook-only recall, set `sources: ["memory"]` and
+`rememberAcrossConversations: false`; `sources` alone is insufficient because
+cross-conversation recall automatically adds `sessions`. For full-transcript
+recall instead, run `openclaw hooks disable session-memory`. Enable both only
+when you intentionally want both representations.
+</Note>
+
 Ordinary model-invoked session transcript search obeys
 [`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
 `tree` visibility exposes the current session, sessions it spawned, and

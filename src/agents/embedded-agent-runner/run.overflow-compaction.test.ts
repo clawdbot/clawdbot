@@ -11,13 +11,12 @@ import {
   rollbackAgentHarnessSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
 import {
-  claimAgentRunContext,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { claimAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { AgentHarness } from "../harness/types.js";
@@ -50,6 +49,7 @@ import {
   mockedGetApiKeyForModel,
   mockedIsProfileInCooldown,
   mockedIsLikelyContextOverflowError,
+  mockedLog,
   mockedMarkAuthProfileSuccess,
   mockedPickFallbackThinkingLevel,
   mockedPrepareProviderRuntimeAuth,
@@ -258,6 +258,14 @@ function expectMockCallFields(
   callIndex = 0,
 ): Record<string, unknown> {
   return expectRecordFields(mockCallArg(mock, callIndex), expected);
+}
+
+function expectLogIncludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
+  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).toContain(fragment);
+}
+
+function expectLogExcludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
+  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(fragment);
 }
 
 function queueOpenAIResolvedModel(params: {
@@ -3303,6 +3311,26 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       trigger: "overflow",
       authProfileId: "test-profile",
     });
+    // Regression guard: overflow compaction must also emit a
+    // [context-pressure:fire] anchor so operators grepping for mid-turn
+    // pressure triggers (docs/design/continue-work-signal-v2.md §4.1) find the
+    // in-turn event that bypasses the pre-run checkContextPressure() path.
+    expectLogIncludes(mockedLog.warn, "[context-pressure:fire] mid-turn trigger=overflow");
+  });
+
+  it("uses the canonical session identity when sessionKey is empty on overflow path", async () => {
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
+    });
+
+    await runEmbeddedAgent({ ...overflowBaseRunParams, sessionKey: "" });
+
+    expectLogIncludes(
+      mockedLog.warn,
+      "[context-pressure:fire] mid-turn trigger=overflow attempt=1/3 tokens=?k/200k sessionKey=agent:main:test-session",
+    );
+    expectLogExcludes(mockedLog.warn, "[session-key:missing] site=pi-runner.overflow-compaction");
   });
 
   it("keeps implicit Codex overflow recovery out of generic compaction without a native compactor", async () => {

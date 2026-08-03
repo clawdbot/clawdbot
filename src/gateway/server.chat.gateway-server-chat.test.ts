@@ -7,7 +7,8 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
-import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,

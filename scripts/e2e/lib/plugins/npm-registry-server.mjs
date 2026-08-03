@@ -5,7 +5,10 @@ import { once } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { readBoundedResponseBytes } from "../bounded-response-text.mjs";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseBytes,
+} from "../../../lib/bounded-response.mjs";
 
 const [portFile, ...packageArgs] = process.argv.slice(2);
 function normalizeUpstreamRegistry(raw) {
@@ -159,6 +162,7 @@ async function proxyUpstream(rawRequestUrl, response) {
       upstreamResponse,
       "npm registry upstream",
       UPSTREAM_RESPONSE_MAX_BYTES,
+      { createTooLargeError: createBoundedResponseTooLargeError },
     );
     // Fetch decodes compressed bodies but preserves upstream length metadata.
     // Emit the decoded size so npm clients do not truncate proxied responses.

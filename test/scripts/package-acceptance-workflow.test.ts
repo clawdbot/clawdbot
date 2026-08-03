@@ -3173,6 +3173,14 @@ describe("package artifact reuse", () => {
     expect(workflowStep(buzzJob, "Upload Buzz QA artifacts").with?.path).toBe(
       "${{ steps.resolve_buzz.outputs.output_dir }}",
     );
+    const requireBuzz = workflowStep(buzzJob, "Require requested Buzz QA runner");
+    expect(requireBuzz.if).toBe(
+      "always() && steps.resolve_buzz.outcome == 'success' && steps.resolve_buzz.outputs.available != 'true'",
+    );
+    expect(requireBuzz.run).toContain(
+      "The selected ref does not declare the requested Buzz QA runner.",
+    );
+    expect(requireBuzz.run).toContain("exit 1");
   });
 
   it("runs live transport lanes nightly while release checks stay gated", () => {
@@ -3576,22 +3584,41 @@ describe("package artifact reuse", () => {
 
   it("runs full release children from the trusted workflow ref", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const evidenceReuseJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "evidence_reuse");
     const npmTelegramJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "npm_telegram");
     const performanceJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance");
+    const summaryJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
+    const evidenceReuseStep = workflowStep(evidenceReuseJob, "Find reusable validation evidence");
     const dispatchStep = workflowStep(npmTelegramJob, "Dispatch and monitor npm Telegram E2E");
+    const manifestStep = workflowStep(summaryJob, "Write release validation manifest");
 
     expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
     expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1');
     expect(npmTelegramJob.name).toBe("Run package Telegram E2E");
-    expect(npmTelegramJob.needs).toEqual(["resolve_target"]);
+    expect(npmTelegramJob.needs).toEqual(["resolve_target", "evidence_reuse"]);
     expect(npmTelegramJob["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 360 || 60 }}",
     );
     expect(performanceJob["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 360 || 120 }}",
     );
-    expect(npmTelegramJob.if).toContain("inputs.rerun_group == 'npm-telegram'");
-    expect(npmTelegramJob.if).not.toContain("inputs.rerun_group == 'all'");
+    expect(npmTelegramJob.if).toContain(
+      'contains(fromJSON(\'["all","npm-telegram"]\'), inputs.rerun_group)',
+    );
+    expect(npmTelegramJob.if).toContain("needs.evidence_reuse.outputs.reuse != 'true'");
+    expect(evidenceReuseStep.env).toMatchObject({
+      ALLOW_UNRELEASED_CHANGELOG:
+        "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}",
+      NPM_TELEGRAM_PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
+      NPM_TELEGRAM_PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
+      NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
+    });
+    expectTextToIncludeAll(evidenceReuseStep.run, [
+      "npmTelegramPackageSpec: $npmTelegramPackageSpec",
+      "npmTelegramProviderMode: $npmTelegramProviderMode",
+      "npmTelegramScenario: $npmTelegramScenario",
+      "allowUnreleasedChangelog: $allowUnreleasedChangelog",
+    ]);
     expect(dispatchStep.env).toEqual({
       CHILD_WORKFLOW_KIND: "npm-telegram",
       CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
@@ -3603,6 +3630,19 @@ describe("package artifact reuse", () => {
       SCENARIO: "${{ inputs.npm_telegram_scenario }}",
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
     });
+    expect(manifestStep.env).toMatchObject({
+      ALLOW_UNRELEASED_CHANGELOG:
+        "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}",
+      NPM_TELEGRAM_PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
+      NPM_TELEGRAM_PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
+      NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
+    });
+    expectTextToIncludeAll(manifestStep.run, [
+      "npmTelegramPackageSpec: $npmTelegramPackageSpec",
+      "npmTelegramProviderMode: $npmTelegramProviderMode",
+      "npmTelegramScenario: $npmTelegramScenario",
+      "allowUnreleasedChangelog: $allowUnreleasedChangelog",
+    ]);
     expectTextToIncludeAll(dispatchStep.run, [
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"',
       'dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"',
@@ -3626,6 +3666,10 @@ describe("package artifact reuse", () => {
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
       "release_check_blocking_job",
+      'if [[ "$RERUN_GROUP" == "npm-telegram" || ( "$RERUN_GROUP" == "all"',
+      "npm_telegram_required=1",
+      "Reused evidence did not record the required npm Telegram child run.",
+      'check_child "npm_telegram" "" "$npm_telegram_required"',
       'if [[ "$RELEASE_PROFILE" == "beta" && "$1" == "Run package acceptance / Telegram package acceptance / "* ]]; then',
       'or (.name | startswith("Run QA Lab runtime-pair lane ("))',
       'or .name == "Run QA Lab live Discord lane"',

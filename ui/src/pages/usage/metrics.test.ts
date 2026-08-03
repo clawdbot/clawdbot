@@ -3,7 +3,8 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildPeakErrorHours,
-  formatTokens,
+  formatUsageCost,
+  formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
@@ -520,27 +521,35 @@ describe("usage mosaic token buckets", () => {
   });
 });
 
-describe("formatTokens", () => {
+describe("formatUsageTokens", () => {
   it("formats values below 1,000 verbatim", () => {
-    expect(formatTokens(0)).toBe("0");
-    expect(formatTokens(999)).toBe("999");
+    expect(formatUsageTokens(0)).toBe("0");
+    expect(formatUsageTokens(999)).toBe("999");
   });
 
   it("formats thousands with one decimal and a K suffix", () => {
-    expect(formatTokens(1_000)).toBe("1.0K");
-    expect(formatTokens(12_500)).toBe("12.5K");
-    expect(formatTokens(999_949)).toBe("999.9K");
+    expect(formatUsageTokens(1_000)).toBe("1.0K");
+    expect(formatUsageTokens(12_500)).toBe("12.5K");
+    expect(formatUsageTokens(999_949)).toBe("999.9K");
   });
 
   it("rolls 999,950-999,999 over to the M branch instead of '1000.0K'", () => {
     // These values round up to "1000.0" at one-decimal thousands precision.
     // Without the rollover guard they render the nonsensical "1000.0K".
-    expect(formatTokens(999_950)).toBe("1.0M");
-    expect(formatTokens(999_999)).toBe("1.0M");
+    expect(formatUsageTokens(999_950)).toBe("1.0M");
+    expect(formatUsageTokens(999_999)).toBe("1.0M");
   });
 
   it("formats millions with one decimal and an M suffix", () => {
-    expect(formatTokens(1_000_000)).toBe("1.0M");
-    expect(formatTokens(2_500_000)).toBe("2.5M");
+    expect(formatUsageTokens(1_000_000)).toBe("1.0M");
+    expect(formatUsageTokens(2_500_000)).toBe("2.5M");
+  });
+});
+
+describe("formatUsageCost", () => {
+  it("preserves the caller-selected fixed precision used by chart scales", () => {
+    expect(formatUsageCost(0.5)).toBe("$0.50");
+    expect(formatUsageCost(0.005, 4)).toBe("$0.0050");
+    expect(formatUsageCost(0.000_05, 6)).toBe("$0.000050");
   });
 });

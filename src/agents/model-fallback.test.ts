@@ -16,6 +16,7 @@ import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.j
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-outcome.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -2078,6 +2079,60 @@ describe("runWithModelFallback", () => {
     expect(onFallbackStep).not.toHaveBeenCalledWith(
       expect.objectContaining({ decision: "candidate_failed" }),
     );
+  });
+
+  it.each([
+    ["direct", () => new GatewayDrainingError()],
+    ["cause", () => new Error("session send failed", { cause: new GatewayDrainingError() })],
+    [
+      "aggregate",
+      () =>
+        new AggregateError(
+          [new Error("cleanup failed"), new GatewayDrainingError()],
+          "agent run failed",
+        ),
+    ],
+  ])("aborts fallback on %s gateway drain failures", async (_label, makeError) => {
+    const error = makeError();
+    const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
+    const onError = vi.fn();
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg: undefined,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        fallbacksOverride: ["openai/gpt-5.4-mini"],
+        skipAuthProfileRuntime: true,
+        run,
+        onError,
+        onFallbackStep,
+      }),
+    ).rejects.toBe(error);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onFallbackStep).not.toHaveBeenCalled();
+  });
+
+  it("still advances after a genuine provider rate limit", async () => {
+    const rateLimit = Object.assign(new Error("rate limit exceeded"), { status: 429 });
+    const run = vi.fn().mockRejectedValueOnce(rateLimit).mockResolvedValueOnce("fallback ok");
+
+    const result = await runWithModelFallback({
+      cfg: undefined,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      fallbacksOverride: ["openai/gpt-5.4-mini"],
+      skipAuthProfileRuntime: true,
+      run,
+    });
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.result).toBe("fallback ok");
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4-mini");
+    expect(result.attempts[0]).toMatchObject({ reason: "rate_limit", status: 429 });
   });
 
   it("aborts the fallback chain on transcript continuation failures without candidate_failed attribution", async () => {

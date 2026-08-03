@@ -1001,6 +1001,7 @@ export async function handleControlUiHttpRequest(
     pathname,
     search: url.search,
     method: req.method,
+    accept: req.headers?.accept,
   });
   if (route.kind === "not-control-ui") {
     return false;
@@ -1237,6 +1238,10 @@ export async function handleControlUiHttpRequest(
   if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
     respondControlUiNotFound(res);
     return true;
+  }
+
+  if (!route.spaFallback) {
+    return false;
   }
 
   // SPA fallback (client-side router): serve index.html for unknown paths.

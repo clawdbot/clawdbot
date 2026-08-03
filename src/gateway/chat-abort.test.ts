@@ -2,11 +2,8 @@
 // abort fanout, history snapshots, and cleanup of buffered streaming state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import {
-  clearAgentRunContext,
-  onAgentEvent,
-  registerAgentRunContext,
-} from "../infra/agent-events.js";
+import { onAgentEvent } from "../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,

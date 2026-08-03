@@ -1,4 +1,5 @@
 // Slack plugin module implements interactions.modal behavior.
+import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
@@ -50,7 +51,7 @@ type SlackModalEventBase = {
 
 type SlackModalInteractionKind = "view_submission" | "view_closed";
 type SlackModalEventHandlerArgs = { ack: () => Promise<void>; body: unknown };
-export type RegisterSlackModalHandler = (
+type RegisterSlackModalHandler = (
   matcher: RegExp,
   handler: (args: SlackModalEventHandlerArgs) => Promise<void>,
 ) => void;
@@ -396,10 +397,31 @@ async function emitSlackModalLifecycleEvent(params: {
         }
       : {};
 
-  enqueueSystemEvent(params.formatSystemEvent({ ...eventPayload, ...pluginEventFields }), {
-    sessionKey: sessionRouting.sessionKey,
-    contextKey: [params.contextPrefix, callbackId, viewId, userId].filter(Boolean).join(":"),
-  });
+  const queued = enqueueSystemEvent(
+    params.formatSystemEvent({ ...eventPayload, ...pluginEventFields }),
+    {
+      sessionKey: sessionRouting.sessionKey,
+      contextKey: [params.contextPrefix, callbackId, viewId, userId].filter(Boolean).join(":"),
+      deliveryContext: {
+        channel: "slack",
+        ...(auth.channelType === "im"
+          ? { to: `user:${userId}` }
+          : sessionRouting.channelId
+            ? { to: `channel:${sessionRouting.channelId}` }
+            : {}),
+        accountId: params.ctx.accountId,
+      },
+    },
+  );
+  if (queued) {
+    requestHeartbeat({
+      source: "hook",
+      intent: "immediate",
+      reason: "hook:slack-interaction",
+      sessionKey: sessionRouting.sessionKey,
+      heartbeat: { target: "last" },
+    });
+  }
 }
 
 export function registerModalLifecycleHandler(params: {

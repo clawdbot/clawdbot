@@ -2080,18 +2080,21 @@ describe("cron method validation", () => {
     expectResponseError(systemEvent.respond, { code: "INVALID_REQUEST", messageIncludes: "text" });
   });
 
-  it("rejects ambiguous announce delivery on add when multiple channels are configured", async () => {
+  it("forwards implicit announce delivery to the service-owned ambiguity validation", async () => {
     setRuntimeConfig(telegramSlackConfig({ includeMainSession: true }));
 
+    // Implicit routing (no channel given) is validated by the cron service on the
+    // merged job, where session-backed and best-effort shapes are visible; the
+    // method layer must not pre-reject it (see assertAnnounceDeliveryChannelSupport).
     const { context, respond } = await invokeCronAdd(
       agentTurnCronParams({
-        name: "ambiguous announce add",
+        name: "implicit announce add",
         delivery: { mode: "announce" },
       }),
     );
 
-    expect(context.cron.add).not.toHaveBeenCalled();
-    expectResponseError(respond, { messageIncludes: "delivery.channel is required" });
+    expect(context.cron.add).toHaveBeenCalled();
+    expectCronSuccess(respond);
   });
 
   it("ignores stale ownerless channel config when validating default announce delivery", async () => {
@@ -3273,13 +3276,14 @@ describe("cron method validation", () => {
     expectResponseError(respond, { messageIncludes: "belongs to synology-chat, not slack" });
   });
 
-  it("rejects ambiguous announce delivery on update when multiple channels are configured", async () => {
+  it("forwards implicit announce delivery updates to the service-owned ambiguity validation", async () => {
     setRuntimeConfig(telegramSlackConfig({ includeMainSession: true }));
 
-    const { context, respond } = await invokeCronUpdateDelivery({ mode: "announce" });
+    // Same ownership as the add path: the service validates the merged job, so an
+    // implicit announce patch must reach it instead of dying at the method layer.
+    const { context } = await invokeCronUpdateDelivery({ mode: "announce" });
 
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, { messageIncludes: "delivery.channel is required" });
+    expect(context.cron.update).toHaveBeenCalled();
   });
 
   it("loads the cron job before validating update delivery patches", async () => {
@@ -3315,7 +3319,7 @@ describe("cron method validation", () => {
       params: {
         id: "cron-1",
         patch: {
-          delivery: { mode: "announce" },
+          delivery: { mode: "announce", channel: "whatsapp" },
         },
       } as never,
       respond: respond as never,
@@ -3327,7 +3331,7 @@ describe("cron method validation", () => {
     expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
     expect(context.cron.getJob).not.toHaveBeenCalled();
     expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, { messageIncludes: "delivery.channel is required" });
+    expectResponseError(respond, { messageIncludes: "must be one of" });
   });
 
   it("does not revalidate stale delivery config for unrelated updates", async () => {

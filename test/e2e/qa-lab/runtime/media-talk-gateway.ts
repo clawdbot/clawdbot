@@ -280,7 +280,9 @@ async function waitForChatFinal(
     if (finalEvent) {
       return finalEvent.payload;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   throw new Error(`timed out waiting for WebChat final event for run ${runId}`);
 }
@@ -301,7 +303,9 @@ async function waitForWebchatAudio(params: {
     if (attachment) {
       return { attachment, history };
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   return { attachment: undefined, history };
 }
@@ -434,7 +438,9 @@ async function waitForActiveTalkStatus(client: GatewayClient, sessionKey: string
       return status;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
     }
   }
   throw lastError instanceof Error ? lastError : new Error("timed out waiting for active Talk run");
@@ -462,7 +468,9 @@ async function waitForQueuedTalkSteer(client: GatewayClient, sessionKey: string)
     } catch (error) {
       lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   if (lastError instanceof Error) {
     throw lastError;
@@ -513,7 +521,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
       url: gateway.wsUrl,
     });
     const sessionKey = "agent:qa:main";
-    const created = await client.request<Record<string, unknown>>("talk.client.create", {
+    const created = await client.request("talk.client.create", {
       sessionKey,
       provider: FIXTURE_REALTIME_PROVIDER_ID,
     });
@@ -643,7 +651,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     .then((exitCode) => {
       process.exitCode = exitCode;
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exitCode = 1;
     });

@@ -41,6 +41,7 @@ import {
   extractAssistantThinking,
   extractAssistantCommentaryText,
   extractAssistantVisibleText,
+  createThinkingTagStreamState,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
   promoteThinkingTagsToBlocks,
@@ -190,6 +191,7 @@ function shouldSuppressValidationLoopAssistantOutput(params: {
 
 function resetMessageEndStreamingState(ctx: EmbeddedAgentSubscribeContext): void {
   ctx.state.deltaBuffer = "";
+  ctx.state.thinkingTagStream = createThinkingTagStreamState();
   ctx.state.blockBuffer = "";
   ctx.blockChunker?.reset();
   ctx.state.blockState.thinking = false;
@@ -263,8 +265,11 @@ function resolveAssistantStreamItemId(params: {
       ? (indexedBlock as { type?: unknown })
       : undefined;
   const hasIndexedTextBlock = indexedRecord?.type === "text";
-  const candidateBlocks = hasIndexedTextBlock ? [indexedBlock] : content.toReversed();
-  for (const block of candidateBlocks) {
+  const candidateStart =
+    hasIndexedTextBlock && contentIndex !== undefined ? contentIndex : content.length - 1;
+  const candidateEnd = hasIndexedTextBlock ? candidateStart : 0;
+  for (let index = candidateStart; index >= candidateEnd; index -= 1) {
+    const block = content[index];
     if (!block || typeof block !== "object") {
       continue;
     }
@@ -272,7 +277,7 @@ function resolveAssistantStreamItemId(params: {
     if (record.type !== "text") {
       continue;
     }
-    const signature = parseAssistantTextSignature(record.textSignature);
+    const signature = parseAssistantTextSignature(record);
     if (signature?.id) {
       return signature.id;
     }
@@ -293,17 +298,24 @@ function scopeAssistantMessageToStreamBlock(
     return message;
   }
   const indexedBlock = contentIndex === undefined ? undefined : message.content[contentIndex];
-  const block =
+  let block =
     indexedBlock && typeof indexedBlock === "object" && indexedBlock.type === "text"
       ? indexedBlock
-      : itemId
-        ? message.content.toReversed().find((candidate) => {
-            if (!candidate || typeof candidate !== "object" || candidate.type !== "text") {
-              return false;
-            }
-            return parseAssistantTextSignature(candidate.textSignature)?.id === itemId;
-          })
-        : undefined;
+      : undefined;
+  if (!block && itemId) {
+    for (let index = message.content.length - 1; index >= 0; index -= 1) {
+      const candidate = message.content[index];
+      if (
+        candidate &&
+        typeof candidate === "object" &&
+        candidate.type === "text" &&
+        parseAssistantTextSignature(candidate)?.id === itemId
+      ) {
+        block = candidate;
+        break;
+      }
+    }
+  }
   if (!block) {
     return message;
   }
@@ -1324,7 +1336,9 @@ export function handleMessageUpdate(
   // Handle partial <think> tags: stream whatever reasoning is visible so far.
   // Emit-always: emitReasoningStream reaches the bus/archive; rendering +
   // message_tool_only suppression are gated downstream (#92738).
-  ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
+  ctx.emitReasoningStream(
+    extractThinkingFromTaggedStream(ctx.state.deltaBuffer, ctx.state.thinkingTagStream),
+  );
   const wasThinking = ctx.state.partialBlockState.thinking;
   let visibleDelta = "";
   // A text_start partial may already contain text that the following text_delta replays.

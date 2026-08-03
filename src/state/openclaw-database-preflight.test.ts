@@ -31,6 +31,23 @@ describe("OpenClaw database schema preflight", () => {
     });
   });
 
+  it("accepts a supported state schema", () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-database-preflight-supported-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    openOpenClawStateDatabase({ env });
+    closeOpenClawStateDatabaseForTest();
+
+    expect(
+      preflightOpenClawDatabaseSchemas({
+        env,
+        supportedVersions: {
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        },
+      }),
+    ).toEqual({ incompatible: [], indeterminate: [] });
+  });
+
   it("collects newer state and registered agent schemas with writer builds", () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-database-preflight-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

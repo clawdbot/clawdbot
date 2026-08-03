@@ -70,10 +70,11 @@ enum RemoteGatewayAuthIssue: Equatable {
         switch self {
         case .tokenRequired:
             "Paste the token configured on the gateway host. "
-                + "On the gateway host, run `openclaw config get gateway.auth.token`. "
-                + "If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+                + "On the gateway host, run `openclaw gateway auth-token --show` "
+                + "in an interactive terminal, then paste its output."
         case .tokenMismatch:
-            "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again."
+            "On the gateway host, run `openclaw gateway auth-token --show` "
+                + "in an interactive terminal, then replace the token and try again."
         case .gatewayTokenNotConfigured:
             "This gateway is set to token auth, but no `gateway.auth.token` is configured on the gateway host. "
                 + "If the gateway uses an environment variable instead, "
@@ -107,9 +108,9 @@ enum RemoteGatewayAuthIssue: Equatable {
     var statusMessage: String {
         switch self {
         case .tokenRequired:
-            "This gateway requires an auth token from the gateway host."
+            "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host."
         case .tokenMismatch:
-            "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host."
+            "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host."
         case .gatewayTokenNotConfigured:
             "This gateway has token auth enabled, but no gateway.auth.token is configured on the host."
         case .setupCodeExpired:

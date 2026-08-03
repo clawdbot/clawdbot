@@ -12,7 +12,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -71,11 +71,16 @@ type PendingPluginBindingRequest = {
   pluginName?: string;
   pluginRoot: string;
   conversation: PluginBindingConversation;
-  requestedAt: number;
   requestedBySenderId?: string;
   summary?: string;
   detachHint?: string;
   data?: Record<string, unknown>;
+};
+
+type PendingPluginBindingRequestEntry = {
+  request: PendingPluginBindingRequest;
+  expiresAtMs: number;
+  timeoutId: ReturnType<typeof setTimeout>;
 };
 
 type PluginBindingApprovalAction = {
@@ -115,11 +120,52 @@ type PluginBindingResolveResult =
       status: "expired";
     };
 
-const PLUGIN_BINDING_PENDING_REQUESTS_KEY = Symbol.for("openclaw.pluginBindingPendingRequests");
+// Chat approvals get the exec-style 30-minute decision window, with abandoned payloads capped.
+const PENDING_PLUGIN_BINDING_REQUEST_TTL_MS = 30 * 60_000;
+const MAX_PENDING_PLUGIN_BINDING_REQUESTS = 512;
+const pendingRequests = new Map<string, PendingPluginBindingRequestEntry>();
 
-const pendingRequests = resolveGlobalMap<string, PendingPluginBindingRequest>(
-  PLUGIN_BINDING_PENDING_REQUESTS_KEY,
-);
+function takePendingPluginBindingRequest(
+  approvalId: string,
+  expected?: PendingPluginBindingRequestEntry,
+): PendingPluginBindingRequest | undefined {
+  const entry = pendingRequests.get(approvalId);
+  if (!entry || (expected && entry !== expected)) {
+    return undefined;
+  }
+  pendingRequests.delete(approvalId);
+  clearTimeout(entry.timeoutId);
+  return entry.request;
+}
+
+function addPendingPluginBindingRequest(request: PendingPluginBindingRequest): void {
+  const expiresAtMs = Date.now() + PENDING_PLUGIN_BINDING_REQUEST_TTL_MS;
+  const entry: PendingPluginBindingRequestEntry = {
+    request,
+    expiresAtMs,
+    timeoutId: setTimeout(() => {
+      takePendingPluginBindingRequest(request.id, entry);
+    }, PENDING_PLUGIN_BINDING_REQUEST_TTL_MS),
+  };
+  entry.timeoutId.unref?.();
+  pendingRequests.set(request.id, entry);
+
+  // Oldest-first eviction keeps abandoned approval payloads bounded and fail-closed.
+  while (pendingRequests.size > MAX_PENDING_PLUGIN_BINDING_REQUESTS) {
+    const oldestId = pendingRequests.keys().next().value;
+    if (oldestId === undefined) {
+      break;
+    }
+    takePendingPluginBindingRequest(oldestId);
+  }
+}
+
+export function clearPluginBindingPendingRequests(): void {
+  for (const entry of pendingRequests.values()) {
+    clearTimeout(entry.timeoutId);
+  }
+  pendingRequests.clear();
+}
 
 type PluginBindingGlobalState = {
   fallbackNoticeBindingIds: Set<string>;
@@ -831,13 +877,12 @@ export async function requestPluginConversationBinding(params: {
     pluginName: params.pluginName,
     pluginRoot: params.pluginRoot,
     conversation,
-    requestedAt: Date.now(),
     requestedBySenderId: normalizeOptionalString(params.requestedBySenderId),
     summary: normalizeOptionalString(params.binding?.summary),
     detachHint: normalizeOptionalString(params.binding?.detachHint),
     data: normalizeBindingData(params.binding?.data),
   };
-  pendingRequests.set(request.id, request);
+  addPendingPluginBindingRequest(request);
   logPluginBindingLifecycleEvent({
     event: "requested",
     pluginId: params.pluginId,
@@ -888,10 +933,14 @@ export async function resolvePluginConversationBindingApproval(params: {
   decision: PluginBindingApprovalDecision;
   senderId?: string;
 }): Promise<PluginBindingResolveResult> {
-  const request = pendingRequests.get(params.approvalId);
-  if (!request) {
+  const entry = pendingRequests.get(params.approvalId);
+  if (!entry || Date.now() >= entry.expiresAtMs) {
+    if (entry) {
+      takePendingPluginBindingRequest(params.approvalId, entry);
+    }
     return { status: "expired" };
   }
+  const request = entry.request;
   if (
     request.requestedBySenderId &&
     params.senderId?.trim() &&
@@ -899,7 +948,7 @@ export async function resolvePluginConversationBindingApproval(params: {
   ) {
     return { status: "expired" };
   }
-  pendingRequests.delete(params.approvalId);
+  takePendingPluginBindingRequest(params.approvalId, entry);
   if (params.decision === "deny") {
     dispatchPluginConversationBindingResolved({
       status: "denied",

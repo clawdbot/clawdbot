@@ -231,8 +231,8 @@ extension CronSettings {
                         if let thinking, !thinking.isEmpty { StatusPill(text: "think \(thinking)", tint: .secondary) }
                         if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
                         if job.supportsAnnounceDelivery {
-                            let delivery = job.delivery
-                            if let delivery {
+                            if let delivery = job.delivery {
+                                self.advancedDeliveryPills(delivery)
                                 if delivery.mode == .announce {
                                     StatusPill(text: "announce", tint: .secondary)
                                     if let channel = delivery.channel, !channel.isEmpty {
@@ -269,6 +269,25 @@ extension CronSettings {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func advancedDeliveryPills(_ delivery: CronDelivery) -> some View {
+        if let threadId = delivery.threadId?.value {
+            StatusPill.verbatim(
+                "threadId \(String(describing: threadId))",
+                tint: .secondary)
+        }
+        if let to = delivery.completionDestination?["to"]?.value as? String {
+            StatusPill.verbatim("completionDestination \(to)", tint: .secondary)
+        }
+        if let failure = delivery.failureDestination {
+            let target = failure["to"]?.value as? String
+                ?? failure["channel"]?.value as? String
+                ?? failure["accountId"]?.value as? String
+            let suffix = target.map { " \($0)" } ?? ""
+            StatusPill.verbatim("failureDestination" + suffix, tint: .secondary)
         }
     }
 }
