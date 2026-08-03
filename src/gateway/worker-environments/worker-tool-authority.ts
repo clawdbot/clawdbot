@@ -93,7 +93,7 @@ export function resolveWorkerToolAuthority(params: {
   if (!projected.includes("exec") && !projected.includes("process")) {
     return { allowedToolNames: projected };
   }
-  const { executionDisposition, security, ask } = resolveExecDefaults({
+  const { effectiveHost, security, ask } = resolveExecDefaults({
     cfg: turn.config,
     agentId: turn.agentId,
     sessionKey: sandboxSessionKey,
@@ -102,11 +102,12 @@ export function resolveWorkerToolAuthority(params: {
     elevatedRequested: resolveExecElevatedMode({ defaults: turn.bashElevated }) !== "off",
   });
   // A cloud worker reconstructs shell tools as full/off and cannot carry source
-  // policy or node authority. Transfer only equally unconditional authority;
-  // implicit sandbox defaults remain local to their source runtime.
+  // policy or node authority. Transfer only equally unconditional authority.
   if (
-    (executionDisposition.kind === "sandbox-local" && security === "full" && ask === "off") ||
-    (executionDisposition.kind === "host-unconditional" && executionDisposition.host !== "node")
+    security === "full" &&
+    ask === "off" &&
+    effectiveHost !== "node" &&
+    (effectiveHost !== "sandbox" || sandbox.sandboxed)
   ) {
     return { allowedToolNames: projected };
   }
