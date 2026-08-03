@@ -813,6 +813,11 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     prepareProviderExtraParams: vi.fn(async () => ({})),
     wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
   }));
+  // Runtime preparation already carries the fixture's provider facts. Keep the
+  // real handle shape without rediscovering every bundled provider plugin.
+  vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
+    resolveProviderRuntimePluginHandle: vi.fn((params: Record<string, unknown>) => params),
+  }));
   vi.doMock("../auth-profiles.js", () => ({
     isProfileInCooldown: mockedIsProfileInCooldown,
     markAuthProfileFailure: mockedMarkAuthProfileFailure,
@@ -1006,6 +1011,21 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveAuthProfileOrderWithMetadata: mockedResolveAuthProfileOrderWithMetadata,
     resolveProviderEntryApiKeyProfileReference: mockedResolveProviderEntryApiKeyProfileReference,
     shouldPreferExplicitConfigApiKeyAuth: mockedShouldPreferExplicitConfigApiKeyAuth,
+  }));
+
+  // Auth policy remains real; only manifest-derived discovery facts are
+  // prepared here so the shared runner does not rescan all bundled plugins.
+  vi.doMock("../model-auth-env-vars.js", () => ({
+    listKnownProviderEnvApiKeyNames: vi.fn(() => ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]),
+    listProviderEnvAuthLookupKeys: vi.fn(() => ["anthropic"]),
+    resolveProviderEnvAuthLookupMaps: vi.fn(() => ({
+      aliasMap: {},
+      envCandidateMap: {
+        anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+      },
+      authEvidenceMap: {},
+      setupProviderFallbackRefs: ["anthropic"],
+    })),
   }));
 
   vi.doMock("../models-config.js", () => ({

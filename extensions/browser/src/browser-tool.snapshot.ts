@@ -40,7 +40,7 @@ export type BrowserProxyRequest = ((opts: {
 
 /** Wrap page-controlled JSON payloads as untrusted browser content. */
 export function wrapBrowserExternalJson(params: {
-  kind: "snapshot" | "console" | "tabs";
+  kind: "snapshot" | "console" | "tabs" | "act" | "download";
   payload: unknown;
   includeWarning?: boolean;
 }): { wrappedText: string; safeDetails: Record<string, unknown> } {

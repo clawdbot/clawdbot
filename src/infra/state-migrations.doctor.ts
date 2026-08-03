@@ -900,6 +900,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   log?: MigrationLogger;
+  doctorOnlyStateMigrations?: boolean;
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -935,6 +936,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
     env,
     stateDir,
     oauthDir,
+    includeDoctorOnly: params.doctorOnlyStateMigrations === true,
     warnings,
   });
   const migrated = await migratePluginDoctorStatePlans({
