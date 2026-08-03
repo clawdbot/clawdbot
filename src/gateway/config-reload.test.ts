@@ -399,19 +399,18 @@ describe("buildGatewayReloadPlan", () => {
     expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
   });
 
-  it.each([
-    "gateway.remote.url",
-    "secrets.providers.default.path",
-    "tui.footer.showRemoteHost",
-  ])("keeps runtime-irrelevant path as a no-op: %s", (path) => {
-    const plan = buildGatewayReloadPlan([path]);
+  it.each(["gateway.remote.url", "secrets.providers.default.path", "tui.footer.showRemoteHost"])(
+    "keeps runtime-irrelevant path as a no-op: %s",
+    (path) => {
+      const plan = buildGatewayReloadPlan([path]);
 
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.restartReasons).toStrictEqual([]);
-    expect(plan.hotReasons).toStrictEqual([]);
-    expect(plan.noopPaths).toEqual([path]);
-    expect(isNoopGatewayReloadPlan(plan)).toBe(true);
-  });
+      expect(plan.restartGateway).toBe(false);
+      expect(plan.restartReasons).toStrictEqual([]);
+      expect(plan.hotReasons).toStrictEqual([]);
+      expect(plan.noopPaths).toEqual([path]);
+      expect(isNoopGatewayReloadPlan(plan)).toBe(true);
+    },
+  );
 
   it("treats plugin install timestamp-only changes as no-ops", () => {
     const paths = [
