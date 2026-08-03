@@ -198,6 +198,28 @@ describe("chat pane header state", () => {
     expect(copy).toHaveBeenNthCalledWith(2, "feature/header");
   });
 
+  it.each(["copy-path", "copy-branch"] as const)(
+    "surfaces a rejected workspace %s clipboard action",
+    async (action) => {
+      const { pane, requestUpdate, state } = createTestChatPane({
+        client: {} as GatewayBrowserClient,
+        sessions: {} as SessionCapability,
+      });
+      const session = {
+        key: "agent:main:current",
+        kind: "direct",
+        updatedAt: 0,
+      } satisfies GatewaySessionRow;
+      const copy = vi.fn(async () => false);
+
+      pane.handleHeaderMenuAction(action, session, "/src/openclaw", "feature/header", copy);
+
+      await vi.waitFor(() => expect(state.chatError).toBe("Copy failed"));
+      expect(state.lastError).toBe(state.chatError);
+      expect(requestUpdate).toHaveBeenCalledOnce();
+    },
+  );
+
   it("does not query gateway-local branches for exec-node sessions", async () => {
     const request = vi.fn();
     const { pane } = createTestChatPane({
