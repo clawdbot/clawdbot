@@ -1307,6 +1307,24 @@ VERBOSE="${OPENCLAW_VERBOSE:-0}"
 VERIFY_INSTALL="${OPENCLAW_VERIFY_INSTALL:-0}"
 OPENCLAW_BIN=""
 PNPM_CMD=()
+
+# SECURITY: refuse any path-like value that starts with `-`. Several git
+# subcommands (`clone`, `-C`, `--git-dir`) treat a leading-dash second
+# positional argument as a flag (`--upload-pack`, `--exec`, etc.). A user
+# passing `--git-dir "--upload-pack=touch /tmp/pwned"` to `install.sh`
+# otherwise lets the installer run arbitrary commands during `git clone`.
+assert_safe_path_value() {
+  local label="$1"
+  local value="$2"
+  if [[ -z "$value" ]]; then
+    return 0
+  fi
+  if [[ "$value" == -* ]]; then
+    ui_error "Invalid value for ${label}: must not start with '-'"
+    return 2
+  fi
+  return 0
+}
 HELP=0
 
 print_usage() {
@@ -1414,6 +1432,12 @@ parse_args() {
             --git-dir|--dir)
                 if [[ $# -lt 2 || "${2:-}" == --* ]]; then
                     ui_error "Missing value for $1"
+                    return 2
+                fi
+                # SECURITY: reject leading-dash values to prevent git option
+                # injection (`git clone <url> --upload-pack=...` etc.).
+                if [[ "${2:-}" == -* ]]; then
+                    ui_error "Invalid value for $1: must not start with '-'"
                     return 2
                 fi
                 GIT_DIR="$2"
@@ -2875,6 +2899,14 @@ install_openclaw_from_git() {
     local repo_dir="$1"
     local repo_url="https://github.com/openclaw/openclaw.git"
 
+    # SECURITY: reject leading-dash repo_dir so it can't be parsed by git
+    # as a flag (`git clone <url> --upload-pack=...` etc.). parse_args
+    # already blocks this for `--git-dir`, but OPENCLAW_GIT_DIR / function
+    # callers bypass that, so we re-check here at the actual sink.
+    if ! assert_safe_path_value "git install dir" "$repo_dir"; then
+        return 2
+    fi
+
     if [[ -d "$repo_dir/.git" ]]; then
         ui_info "Installing OpenClaw from git checkout: ${repo_dir}"
     else
@@ -2891,12 +2923,16 @@ install_openclaw_from_git() {
     validate_git_checkout_head "$repo_dir" || return 1
     if [[ ! -d "$repo_dir" ]]; then
         mkdir -p "$(dirname "$repo_dir")"
-        run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"
+        # `--` tells git everything after the url is positional (the
+        # destination directory), so even if a future regression lets a
+        # leading-dash value reach this point it would still be treated
+        # as a path, not a flag.
+        run_quiet_step "Cloning OpenClaw" git clone -- "$repo_url" "$repo_dir"
     fi
 
     local git_ref
     git_ref="$(resolve_git_openclaw_ref)"
-    if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+    if [[ -z "$(git -C -- "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
         ui_info "Using git ref: ${git_ref}"
         checkout_git_openclaw_ref "$repo_dir" "$git_ref"
     else
