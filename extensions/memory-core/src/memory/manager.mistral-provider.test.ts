@@ -14,7 +14,8 @@ import {
 const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
 const DEFAULT_LMSTUDIO_EMBEDDING_MODEL = "text-embedding-nomic-embed-text-v1.5";
 
-vi.mock("./embeddings.js", () => ({
+vi.mock("./embeddings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./embeddings.js")>()),
   resolveEmbeddingProviderIndexIdentity: () => undefined,
   resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
     providerId === "ollama"
@@ -152,18 +153,67 @@ describe("memory manager mistral provider wiring", () => {
     expect(fallbackState.providerUnavailableReason).toBeUndefined();
   });
 
-  it("uses default ollama model when activating ollama fallback", () => {
-    const request = resolveMemoryFallbackProviderRequest({
-      cfg: {} as OpenClawConfig,
-      settings: createSettings({ provider: "openai", fallback: "ollama" }),
-      currentProviderId: "openai",
-    });
+  it.each([
+    { provider: "ollama" as const, model: DEFAULT_OLLAMA_EMBEDDING_MODEL },
+    { provider: "lmstudio" as const, model: DEFAULT_LMSTUDIO_EMBEDDING_MODEL },
+    { provider: "mistral" as const, model: "text-embedding-3-small" },
+  ])(
+    "keeps the primary endpoint and credentials out of the $provider runtime fallback",
+    ({ provider, model }) => {
+      const sharedRemote = {
+        nonBatchConcurrency: 3,
+        batch: {
+          enabled: true,
+          wait: false,
+          concurrency: 2,
+          pollIntervalMs: 250,
+          timeoutMinutes: 5,
+        },
+      };
+      const remote = {
+        baseUrl: "https://primary-openai.invalid/v1",
+        apiKey: "synthetic-primary-openai-api-key",
+        headers: {
+          Authorization: "Bearer synthetic-primary-openai-auth",
+          "X-OpenAI-Secret": "synthetic-primary-openai-header",
+        },
+        ...sharedRemote,
+      };
+      const local = { modelPath: "/tmp/synthetic-memory-model.gguf", contextSize: 2048 };
+      const settings = {
+        ...createSettings({ provider: "openai", fallback: provider }),
+        remote,
+        inputType: "passage",
+        queryInputType: "query",
+        documentInputType: "document",
+        outputDimensionality: 768,
+        local,
+      } satisfies ResolvedMemorySearchConfig;
 
-    const fallbackRequest = expectMemoryFallbackRequest(request);
-    expect(fallbackRequest.provider).toBe("ollama");
-    expect(fallbackRequest.model).toBe(DEFAULT_OLLAMA_EMBEDDING_MODEL);
-    expect(fallbackRequest.fallback).toBe("none");
-  });
+      expect(resolveMemoryPrimaryProviderRequest({ settings }).remote).toBe(remote);
+
+      const fallbackRequest = expectMemoryFallbackRequest(
+        resolveMemoryFallbackProviderRequest({
+          cfg: {} as OpenClawConfig,
+          settings,
+          currentProviderId: "openai",
+        }),
+      );
+
+      expect(fallbackRequest).toMatchObject({
+        provider,
+        model,
+        fallback: "none",
+        remote: sharedRemote,
+        inputType: "passage",
+        queryInputType: "query",
+        documentInputType: "document",
+        outputDimensionality: 768,
+        local,
+      });
+      expect(fallbackRequest.remote).toEqual(sharedRemote);
+    },
+  );
 
   it("includes outputDimensionality in the primary provider request", () => {
     const request = resolveMemoryPrimaryProviderRequest({
@@ -195,16 +245,13 @@ describe("memory manager mistral provider wiring", () => {
     expect(request.documentInputType).toBe("document");
   });
 
-  it("uses default lmstudio model when activating lmstudio fallback", () => {
-    const request = resolveMemoryFallbackProviderRequest({
-      cfg: {} as OpenClawConfig,
-      settings: createSettings({ provider: "openai", fallback: "lmstudio" }),
-      currentProviderId: "openai",
-    });
-
-    const fallbackRequest = expectMemoryFallbackRequest(request);
-    expect(fallbackRequest.provider).toBe("lmstudio");
-    expect(fallbackRequest.model).toBe(DEFAULT_LMSTUDIO_EMBEDDING_MODEL);
-    expect(fallbackRequest.fallback).toBe("none");
+  it("does not activate a fallback that is already the current provider", () => {
+    expect(
+      resolveMemoryFallbackProviderRequest({
+        cfg: {} as OpenClawConfig,
+        settings: createSettings({ provider: "openai", fallback: "lmstudio" }),
+        currentProviderId: "lmstudio",
+      }),
+    ).toBeNull();
   });
 });
