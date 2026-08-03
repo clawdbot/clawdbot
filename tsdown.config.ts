@@ -410,14 +410,6 @@ function buildPackageDistEntriesFromExports(packageDir: string): Record<string, 
   return Object.fromEntries(Object.entries(entries).toSorted(([a], [b]) => a.localeCompare(b)));
 }
 
-function buildSpeechCoreDistEntries(): Record<string, string> {
-  return {
-    "runtime-api": "packages/speech-core/runtime-api.ts",
-    speaker: "packages/speech-core/speaker.ts",
-    "voice-models": "packages/speech-core/voice-models.ts",
-  };
-}
-
 function buildLlmCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/llm-core/src/index.ts",
@@ -456,10 +448,6 @@ function shouldExternalizeGatewayClientDependency(id: string): boolean {
 
 function shouldExternalizeNetPolicyDependency(id: string): boolean {
   return id === "ipaddr.js" || id.startsWith("ipaddr.js/");
-}
-
-function shouldExternalizeSpeechCoreDependency(id: string): boolean {
-  return id === "openclaw" || id.startsWith("openclaw/");
 }
 
 function shouldExternalizeLlmCoreDependency(id: string): boolean {
@@ -663,12 +651,6 @@ const configs = [
   nodeWorkspacePackageBuildConfig("terminal-core", {
     deps: {
       neverBundle: shouldExternalizeTerminalCoreDependency,
-    },
-  }),
-  nodeWorkspacePackageBuildConfig("speech-core", {
-    entry: buildSpeechCoreDistEntries(),
-    deps: {
-      neverBundle: shouldExternalizeSpeechCoreDependency,
     },
   }),
   nodeWorkspacePackageBuildConfig("llm-core", {

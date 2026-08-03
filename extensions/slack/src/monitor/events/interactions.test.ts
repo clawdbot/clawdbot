@@ -17,6 +17,35 @@ const dispatchPluginInteractiveHandlerMock = vi.hoisted(() =>
     duplicate: false,
   })),
 );
+const privilegedInteractiveBindingOperationMock = vi.hoisted(() =>
+  vi.fn((operation: "request" | "detach" | "get", conversation: Record<string, unknown>) => {
+    if (operation === "request") {
+      return { status: "bound" as const, binding: conversation };
+    }
+    return operation === "detach" ? { removed: true } : conversation;
+  }),
+);
+const createInteractiveConversationBindingHelpersMock = vi.hoisted(() =>
+  vi.fn(
+    (params: { registration: { pluginRoot?: string }; conversation: Record<string, unknown> }) => ({
+      requestConversationBinding: async () =>
+        params.registration.pluginRoot
+          ? privilegedInteractiveBindingOperationMock("request", params.conversation)
+          : {
+              status: "error" as const,
+              message: "This interaction cannot bind the current conversation.",
+            },
+      detachConversationBinding: async () =>
+        params.registration.pluginRoot
+          ? privilegedInteractiveBindingOperationMock("detach", params.conversation)
+          : { removed: false },
+      getCurrentConversationBinding: async () =>
+        params.registration.pluginRoot
+          ? privilegedInteractiveBindingOperationMock("get", params.conversation)
+          : null,
+    }),
+  ),
+);
 const resolvePluginConversationBindingApprovalMock = vi.hoisted(() => vi.fn());
 const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn(() => "Binding updated."));
 type ApprovalResolveMockResult = {
@@ -68,43 +97,12 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
   },
 }));
 
-vi.mock("../../interactive-dispatch.js", () => ({
-  dispatchSlackPluginInteractiveHandler: (params: {
-    data: string;
-    interactionId: string;
-    ctx: {
-      interaction?: Record<string, unknown>;
-    } & Record<string, unknown>;
-    respond: unknown;
-  }) =>
-    (dispatchPluginInteractiveHandlerMock as (arg: unknown) => Promise<unknown>)({
-      channel: "slack",
-      data: params.data,
-      dedupeId: params.interactionId,
-      invoke: async ({
-        registration,
-        namespace,
-        payload,
-      }: {
-        registration: { handler: (ctx: unknown) => unknown };
-        namespace: string;
-        payload: string;
-      }) =>
-        registration.handler({
-          ...params.ctx,
-          channel: "slack",
-          interaction: {
-            ...params.ctx.interaction,
-            data: params.data,
-            namespace,
-            payload,
-          },
-          respond: params.respond,
-          requestConversationBinding: vi.fn(),
-          detachConversationBinding: vi.fn(),
-          getCurrentConversationBinding: vi.fn(),
-        }),
-    }),
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  dispatchPluginInteractiveHandler: (arg: unknown) => dispatchPluginInteractiveHandlerMock(arg),
+  createInteractiveConversationBindingHelpers: (params: {
+    registration: { pluginRoot?: string };
+    conversation: Record<string, unknown>;
+  }) => createInteractiveConversationBindingHelpersMock(params),
 }));
 
 vi.mock("../conversation.runtime.js", () => {
@@ -372,6 +370,50 @@ function expectRecordFields(
   }
 }
 
+async function invokeSlackPluginBindingHandler(
+  dispatchCall: unknown,
+  params: { namespace?: string; payload?: string } = {},
+) {
+  const invoke = requireRecord(dispatchCall, "plugin interactive dispatch").invoke;
+  if (typeof invoke !== "function") {
+    throw new Error("Expected plugin interactive handler invocation");
+  }
+
+  let context: Record<string, unknown> | undefined;
+  let operations: { request: unknown; current: unknown; detach: unknown } | undefined;
+  await invoke({
+    registration: {
+      pluginId: "qa-interactive-plugin",
+      pluginRoot: "/plugins/qa-interactive-plugin",
+      handler: async (value: unknown) => {
+        context = requireRecord(value, "plugin interactive handler context");
+        const request = context.requestConversationBinding;
+        const current = context.getCurrentConversationBinding;
+        const detach = context.detachConversationBinding;
+        if (
+          typeof request !== "function" ||
+          typeof current !== "function" ||
+          typeof detach !== "function"
+        ) {
+          throw new Error("Expected plugin conversation binding helpers");
+        }
+        operations = {
+          request: await request({ summary: "Bind this conversation" }),
+          current: await current(),
+          detach: await detach(),
+        };
+      },
+    },
+    namespace: params.namespace ?? "qa",
+    payload: params.payload ?? "bind",
+  });
+
+  if (!context || !operations) {
+    throw new Error("Expected plugin interactive handler to complete");
+  }
+  return { context, ...operations };
+}
+
 function slackInteractionPayload(callIndex = 0): Record<string, unknown> {
   const eventText = mockCallArg(enqueueSystemEventMock, callIndex, "enqueueSystemEvent");
   if (typeof eventText !== "string") {
@@ -416,6 +458,8 @@ describe("registerSlackInteractionEvents", () => {
     enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatMock.mockClear();
     dispatchPluginInteractiveHandlerMock.mockClear();
+    createInteractiveConversationBindingHelpersMock.mockClear();
+    privilegedInteractiveBindingOperationMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockResolvedValue({ status: "expired" });
     buildPluginBindingResolvedTextMock.mockClear();
@@ -825,6 +869,98 @@ describe("registerSlackInteractionEvents", () => {
     expect(app.client.chat.update).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "channel root",
+      channelId: "C123",
+      channelType: "channel" as const,
+      conversationId: "C123",
+    },
+    {
+      name: "channel thread",
+      channelId: "C123",
+      channelType: "channel" as const,
+      threadId: "100.100",
+      conversationId: "100.100",
+      parentConversationId: "C123",
+    },
+    {
+      name: "private channel root",
+      channelId: "G123",
+      channelType: "group" as const,
+      conversationId: "G123",
+    },
+    {
+      name: "group direct-message root",
+      channelId: "G456",
+      channelType: "mpim" as const,
+      conversationId: "G456",
+    },
+    {
+      name: "direct-message root",
+      channelId: "D123",
+      channelType: "im" as const,
+      conversationId: "user:U_BINDER",
+    },
+    {
+      name: "direct-message thread",
+      channelId: "D123",
+      channelType: "im" as const,
+      threadId: "200.200",
+      conversationId: "200.200",
+      parentConversationId: "user:U_BINDER",
+    },
+  ])(
+    "binds the canonical $name conversation without changing public action context",
+    async (testCase) => {
+      dispatchPluginInteractiveHandlerMock.mockResolvedValueOnce({
+        matched: true,
+        handled: true,
+        duplicate: false,
+      });
+      const { ctx, getHandler } = createContext({
+        allowFrom: ["U_BINDER"],
+        resolveChannelName: async () => ({ type: testCase.channelType }),
+      });
+      registerSlackInteractionEvents({ ctx: ctx as never });
+
+      await getHandler()({
+        ack: vi.fn().mockResolvedValue(undefined),
+        body: {
+          user: { id: "U_BINDER" },
+          channel: { id: testCase.channelId },
+          container: {
+            channel_id: testCase.channelId,
+            message_ts: "300.300",
+            thread_ts: testCase.threadId,
+          },
+          message: { ts: "300.300" },
+        },
+        action: { type: "button", action_id: "qa", value: "bind" },
+      });
+
+      const { context, request, current, detach } = await invokeSlackPluginBindingHandler(
+        mockCallArg(dispatchPluginInteractiveHandlerMock, 0, "plugin interactive dispatcher"),
+      );
+      const expectedConversation = {
+        channel: "slack",
+        accountId: "default",
+        conversationId: testCase.conversationId,
+        parentConversationId: testCase.parentConversationId,
+        threadId: testCase.threadId,
+      };
+
+      expect(context.conversationId).toBe(testCase.channelId);
+      expect(context.parentConversationId).toBeUndefined();
+      expect(context.threadId).toBe(testCase.threadId);
+      expect(requireRecord(context.auth, "registration auth").isAuthorizedSender).toBe(true);
+      expect(request).toEqual({ status: "bound", binding: expectedConversation });
+      expect(current).toEqual(expectedConversation);
+      expect(detach).toEqual({ removed: true });
+      expect(privilegedInteractiveBindingOperationMock).toHaveBeenCalledTimes(3);
+    },
+  );
+
   it("passes false command auth to Slack plugin interactions for non-allowlisted senders", async () => {
     dispatchPluginInteractiveHandlerMock.mockResolvedValueOnce({
       matched: true,
@@ -896,6 +1032,16 @@ describe("registerSlackInteractionEvents", () => {
       "registration handler ctx",
     );
     expect(requireRecord(registrationCtx.auth, "registration auth").isAuthorizedSender).toBe(false);
+
+    const denied = await invokeSlackPluginBindingHandler(dispatchCall, {
+      namespace: "codex",
+      payload: "approve:thread-1",
+    });
+    expect(denied.context.conversationId).toBe("C1");
+    expect(denied.request).toMatchObject({ status: "error" });
+    expect(denied.current).toBeNull();
+    expect(denied.detach).toEqual({ removed: false });
+    expect(privilegedInteractiveBindingOperationMock).not.toHaveBeenCalled();
   });
 
   it("passes true command auth to Slack plugin interactions for allowlisted senders", async () => {
@@ -3263,6 +3409,22 @@ describe("registerSlackInteractionEvents", () => {
       senderId: "U777",
     });
     expect(requireRecord(registrationCtx.auth, "registration auth").isAuthorizedSender).toBe(true);
+
+    const binding = await invokeSlackPluginBindingHandler(dispatchCall, {
+      namespace: "dean.contract",
+      payload: "confirm_hearing",
+    });
+    expect(binding.context.conversationId).toBe("D777");
+    expect(binding.request).toEqual({
+      status: "bound",
+      binding: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U777",
+        parentConversationId: undefined,
+        threadId: undefined,
+      },
+    });
     const interaction = requireRecord(registrationCtx.interaction, "registration interaction") as {
       inputs?: unknown[];
       stateValues?: unknown;
@@ -3367,6 +3529,16 @@ describe("registerSlackInteractionEvents", () => {
       "registration handler ctx",
     );
     expect(requireRecord(registrationCtx.auth, "registration auth").isAuthorizedSender).toBe(false);
+
+    const denied = await invokeSlackPluginBindingHandler(dispatchCall, {
+      namespace: "dean.contract",
+      payload: "confirm_hearing",
+    });
+    expect(denied.context.conversationId).toBe("");
+    expect(denied.request).toMatchObject({ status: "error" });
+    expect(denied.current).toBeNull();
+    expect(denied.detach).toEqual({ removed: false });
+    expect(privilegedInteractiveBindingOperationMock).not.toHaveBeenCalled();
     expectRecordFields(requireRecord(registrationCtx.interaction, "registration interaction"), {
       kind: "view_submission",
       data: "dean.contract:confirm_hearing",
@@ -3476,6 +3648,11 @@ describe("registerSlackInteractionEvents", () => {
 
   it("keeps no-channel modal events open when allowFrom is unset", async () => {
     enqueueSystemEventMock.mockClear();
+    dispatchPluginInteractiveHandlerMock.mockResolvedValueOnce({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
     const { ctx, getViewHandler } = createContext({ allowFrom: [] });
     registerSlackInteractionEvents({ ctx: ctx as never });
     const viewHandler = getViewHandler();
@@ -3510,6 +3687,16 @@ describe("registerSlackInteractionEvents", () => {
     );
     expect(deliveryContext).not.toHaveProperty("to");
     expect(requestHeartbeatMock).toHaveBeenCalledOnce();
+
+    const denied = await invokeSlackPluginBindingHandler(
+      mockCallArg(dispatchPluginInteractiveHandlerMock, 0, "plugin interactive dispatcher"),
+    );
+    expect(requireRecord(denied.context.auth, "registration auth").isAuthorizedSender).toBe(true);
+    expect(denied.context.conversationId).toBe("");
+    expect(denied.request).toMatchObject({ status: "error" });
+    expect(denied.current).toBeNull();
+    expect(denied.detach).toEqual({ removed: false });
+    expect(privilegedInteractiveBindingOperationMock).not.toHaveBeenCalled();
   });
 
   it("captures modal input labels and picker values across block types", async () => {

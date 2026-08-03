@@ -3,10 +3,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
   getPropertyNameText,
-  resolveRepoRoot,
   resolveSourceRoots,
   runAsScript,
   toLine,

@@ -284,7 +284,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
-            webSearchEnabled: params.toolOverrides?.webSearch !== false,
           });
           session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
             session.agent.streamFn,

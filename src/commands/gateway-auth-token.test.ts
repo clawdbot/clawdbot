@@ -94,7 +94,7 @@ describe("gatewayAuthTokenCommand", () => {
       hadUnresolvedTargets: false,
     });
 
-    await expect(gatewayAuthTokenCommand(runtime, { interactive: true })).rejects.toThrow(
+    await expect(gatewayAuthTokenCommand(runtime, { env: {}, interactive: true })).rejects.toThrow(
       "openclaw doctor --generate-gateway-token",
     );
 

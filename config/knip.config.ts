@@ -620,11 +620,6 @@ const config = {
       entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
       project: ["src/**/*.ts!"],
     },
-    "packages/speech-core": {
-      entry: ["runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
-      project: ["**/*.ts!"],
-      ignoreDependencies: ["openclaw"],
-    },
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],

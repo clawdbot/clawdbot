@@ -700,7 +700,7 @@ describe("plugin-sdk facade runtime", () => {
     }
   });
 
-  it("does not treat package-backed speech-core as a bundled extension facade", () => {
+  it("does not treat the core-owned speech runtime as a bundled extension facade", () => {
     setRuntimeConfigSnapshot({});
 
     expect(

@@ -3131,8 +3131,240 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
-  it("directly delivers settle synthesis even when a direct-message requester turn is active", async () => {
-    const callGateway = createGatewayMock();
+  const requesterSettleSourceTarget = {
+    tool: "message",
+    provider: "discord",
+    accountId: "acct-1",
+    to: "dm:U123",
+    text: "the consolidated answer",
+  } as const;
+  const deliveredRequesterFinal = { delivered: true, path: "direct" } as const;
+  const missingRequesterFinal = {
+    delivered: false,
+    path: "direct",
+    reason: "visible_reply_missing",
+  } as const;
+
+  it.each([
+    {
+      name: "preserves an ordinary non-yielded direct settle turn",
+      response: {},
+      requireVisibleReply: false,
+      expected: deliveredRequesterFinal,
+    },
+    {
+      name: "preserves an intentional silent non-yielded settle turn",
+      response: { result: { payloads: [{ text: "NO_REPLY" }] } },
+      requireVisibleReply: false,
+      expected: deliveredRequesterFinal,
+    },
+    {
+      name: "accepts a yielded requester's visible final answer",
+      response: { result: { payloads: [{ text: "The consolidated answer." }] } },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
+      name: "rejects a yielded turn without a result",
+      response: {},
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a yielded turn with no response payloads",
+      response: { result: { payloads: [] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a yielded turn that emits only an error",
+      response: { result: { payloads: [{ text: "tool failed", isError: true }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a yielded turn that emits only private reasoning",
+      response: { result: { payloads: [{ text: "thinking", isReasoning: true }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects pre-tool commentary instead of a final answer",
+      response: { result: { payloads: [{ text: "working on it", isCommentary: true }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a compaction notice instead of a final answer",
+      response: { result: { payloads: [{ text: "compacting", isCompactionNotice: true }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a provider-fallback notice instead of a final answer",
+      response: { result: { payloads: [{ text: "switching providers", isFallbackNotice: true }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a transient status notice instead of a final answer",
+      response: { result: { payloads: [{ text: "still working", isStatusNotice: true }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects an explicitly hidden assistant payload",
+      response: { result: { payloads: [{ text: "not user visible", visible: false }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a yielded turn that emits only the silent reply token",
+      response: { result: { payloads: [{ text: "NO_REPLY" }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a visible final whose external delivery was suppressed",
+      response: {
+        result: {
+          payloads: [{ text: "never delivered" }],
+          deliveryStatus: { status: "suppressed", succeeded: true, resultCount: 0 },
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a messaging-tool flag without a committed source receipt",
+      response: { result: { payloads: [], didSendViaMessagingTool: true } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects messaging aggregates without a source-matched receipt",
+      response: {
+        result: {
+          payloads: [],
+          didSendViaMessagingTool: true,
+          messagingToolSentTexts: ["sent somewhere else"],
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects an accepted subagent spawn without a final reply",
+      response: {
+        result: {
+          payloads: [],
+          acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a cron side effect without a final reply",
+      response: { result: { payloads: [], successfulCronAdds: 1 } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a source-matched messaging progress update",
+      response: {
+        result: {
+          payloads: [],
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: [{ ...requesterSettleSourceTarget, sourceReplyFinal: false }],
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a final message sent to another recipient",
+      response: {
+        result: {
+          payloads: [],
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: [
+            { ...requesterSettleSourceTarget, to: "dm:OTHER", sourceReplyFinal: true },
+          ],
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "does not let an off-target final upgrade source progress",
+      response: {
+        result: {
+          payloads: [],
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: [
+            { ...requesterSettleSourceTarget, sourceReplyFinal: false },
+            { ...requesterSettleSourceTarget, to: "dm:OTHER", sourceReplyFinal: true },
+          ],
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "accepts an explicit source-matched final messaging delivery",
+      response: {
+        result: {
+          payloads: [{ text: "NO_REPLY" }],
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: [{ ...requesterSettleSourceTarget, sourceReplyFinal: true }],
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
+      name: "accepts an automatic source-matched final without legacy intent markers",
+      response: {
+        result: {
+          payloads: [{ text: "NO_REPLY" }],
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: [requesterSettleSourceTarget],
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
+      name: "accepts a source final after source progress in the same turn",
+      response: {
+        result: {
+          payloads: [],
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: [
+            { ...requesterSettleSourceTarget, sourceReplyFinal: false },
+            { ...requesterSettleSourceTarget, sourceReplyFinal: true },
+          ],
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
+      name: "accepts a committed source final when automatic delivery was suppressed",
+      response: {
+        result: {
+          payloads: [{ text: "NO_REPLY" }],
+          deliveryStatus: { status: "suppressed", succeeded: true, resultCount: 0 },
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: [{ ...requesterSettleSourceTarget, sourceReplyFinal: true }],
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+  ])("$name", async ({ response, requireVisibleReply, expected }) => {
+    const callGateway = createGatewayMock(response);
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     const origin = {
       channel: "discord",
@@ -3160,11 +3392,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requesterIsSubagent: false,
       expectsCompletionMessage: false,
       requireDirectDelivery: true,
+      ...(requireVisibleReply ? { requireVisibleReply: true } : {}),
       directIdempotencyKey: "announce-requester-settle-direct",
       sourceTool: "subagent_announce",
     });
 
-    expectDeliveryPath(result, "direct");
+    expect(result).toMatchObject(expected);
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
     const agentParams = expectGatewayAgentParams(callGateway, {
       deliver: true,

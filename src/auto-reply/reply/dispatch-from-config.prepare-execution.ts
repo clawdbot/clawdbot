@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   isFastModeAutoProgressPayload,
   resolveSendableOutboundReplyParts,
@@ -55,16 +54,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     );
   }
 
-  const toolStartStatusesSent = new Set<string>();
-  let toolStartStatusCount = 0;
   let didSendPlanStatusNotice = false;
-  const normalizeWorkingLabel = (label: string) => {
-    const collapsed = label.replace(/\s+/g, " ").trim();
-    if (collapsed.length <= 80) {
-      return collapsed;
-    }
-    return `${truncateUtf16Safe(collapsed, 77).trimEnd()}...`;
-  };
   const formatPlanUpdateText = (payload: { explanation?: string; steps?: AgentPlanStep[] }) => {
     const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
     const steps = (payload.steps ?? [])
@@ -77,32 +67,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       }).join("\n");
     }
     return explanation || "Planning next steps.";
-  };
-  const maybeSendWorkingStatus = async (label: string): Promise<void> => {
-    if (shouldSuppressProgressDelivery()) {
-      return;
-    }
-    const normalizedLabel = normalizeWorkingLabel(label);
-    if (
-      !shouldEmitVerboseProgress() ||
-      !state.shouldSendToolStartStatuses ||
-      !normalizedLabel ||
-      toolStartStatusCount >= 2 ||
-      toolStartStatusesSent.has(normalizedLabel)
-    ) {
-      return;
-    }
-    toolStartStatusesSent.add(normalizedLabel);
-    toolStartStatusCount += 1;
-    const payload: ReplyPayload = {
-      text: `Working: ${normalizedLabel}`,
-    };
-    if (shouldRouteToOriginating) {
-      await sendPayloadAsync(payload, undefined, false);
-      return;
-    }
-    markInboundDedupeReplayUnsafe();
-    turnLedger.sendQueued("tool", payload);
   };
   const sendPlanUpdate = async (payload: {
     explanation?: string;
@@ -126,38 +90,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     }
     markInboundDedupeReplayUnsafe();
     turnLedger.sendQueued("tool", replyPayload);
-  };
-  const summarizeApprovalLabel = (payload: {
-    status?: string;
-    command?: string;
-    message?: string;
-  }) => {
-    if (payload.status === "pending") {
-      const command = normalizeOptionalString(payload.command);
-      if (command) {
-        return normalizeWorkingLabel(`awaiting approval: ${command}`);
-      }
-      return "awaiting approval";
-    }
-    if (payload.status === "unavailable") {
-      const message = normalizeOptionalString(payload.message);
-      if (message) {
-        return normalizeWorkingLabel(message);
-      }
-      return "approval unavailable";
-    }
-    return "";
-  };
-  const summarizePatchLabel = (payload: { summary?: string; title?: string }) => {
-    const summary = normalizeOptionalString(payload.summary);
-    if (summary) {
-      return normalizeWorkingLabel(summary);
-    }
-    const title = normalizeOptionalString(payload.title);
-    if (title) {
-      return normalizeWorkingLabel(title);
-    }
-    return "";
   };
   // Track accumulated block text for TTS generation after streaming completes.
   // When block streaming succeeds, there's no final reply, so we need to generate
@@ -484,10 +416,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       : withFullRuntimeReplyConfig(cfg);
   state.recordAgentDispatchStarted();
   const nextState = extendPreparedDispatchState(state, {
-    maybeSendWorkingStatus,
     sendPlanUpdate,
-    summarizeApprovalLabel,
-    summarizePatchLabel,
     cleanBlockTtsDirectiveText,
     resolveToolDeliveryPayload,
     typing,

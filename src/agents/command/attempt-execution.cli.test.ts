@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   formatSqliteSessionFileMarker,
@@ -19,11 +19,19 @@ import { clearSessionStoreCacheForTest } from "../../config/sessions/store-write
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  disposeOpenClawAgentDatabaseByPath,
+  listOpenClawAgentDatabasesForTest,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
-import { saveAuthProfileStore } from "../auth-profiles/store.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
+} from "../auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
@@ -501,9 +509,19 @@ function firstEmbeddedAgentArg(callIndex = 0) {
 }
 
 describe("CLI attempt execution", () => {
+  const fixtureRoot = createSuiteTempRootTracker({ prefix: "openclaw-cli-attempt-suite-" });
+  let suiteRoot: string;
+  let agentDir: string;
   let tmpDir: string;
   let storePath: string;
   let homeEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
+
+  beforeAll(async () => {
+    suiteRoot = await fixtureRoot.setup();
+    agentDir = path.join(suiteRoot, "agents", "main", "agent");
+    storePath = path.join(suiteRoot, "sessions.json");
+    await fs.mkdir(agentDir, { recursive: true });
+  });
 
   async function runOpenClawEmbeddedAttemptForTest(overrides?: {
     opts?: Partial<RunAgentAttemptParams["opts"]>;
@@ -585,7 +603,7 @@ describe("CLI attempt execution", () => {
       messageChannel: "telegram",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: providerOverride,
       sessionStore,
@@ -599,8 +617,8 @@ describe("CLI attempt execution", () => {
 
   beforeEach(async () => {
     homeEnvSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-attempt-"));
-    storePath = path.join(tmpDir, "sessions.json");
+    setTestEnvValue("OPENCLAW_STATE_DIR", suiteRoot);
+    tmpDir = await fixtureRoot.make();
     runCliAgentMock.mockReset();
     runEmbeddedAgentMock.mockReset();
     resetGeneratedMediaTaskActivityForTests();
@@ -633,7 +651,6 @@ describe("CLI attempt execution", () => {
     for (const [sessionKey, entry] of Object.entries(sessionStore)) {
       await replaceSessionEntry({ sessionKey, storePath }, entry);
     }
-    closeOpenClawAgentDatabasesForTest();
   }
 
   function createSubagentAnnounceSessionStore(
@@ -668,10 +685,43 @@ describe("CLI attempt execution", () => {
   afterEach(async () => {
     vi.useRealTimers();
     cliBackendsTesting.resetDepsForTest();
-    closeOpenClawAgentDatabasesForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    clearSessionStoreCacheForTest();
+    for (const database of listOpenClawAgentDatabasesForTest()) {
+      if (!database.path.startsWith(`${suiteRoot}${path.sep}`)) {
+        continue;
+      }
+      runOpenClawAgentWriteTransaction(
+        (fixture) => {
+          fixture.db.exec(`
+            DELETE FROM session_transcript_fts;
+            DELETE FROM session_nodes;
+            DELETE FROM conversations;
+            DELETE FROM auth_profile_store;
+            DELETE FROM auth_profile_state;
+            DELETE FROM cache_entries;
+            DELETE FROM state_leases;
+          `);
+        },
+        database,
+        { operationLabel: "test.attempt-execution.reset" },
+      );
+    }
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    await fs.rm(storePath, { force: true });
     homeEnvSnapshot?.restore();
     homeEnvSnapshot = undefined;
-    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  afterAll(async () => {
+    for (const database of listOpenClawAgentDatabasesForTest()) {
+      if (database.path.startsWith(`${suiteRoot}${path.sep}`)) {
+        disposeOpenClawAgentDatabaseByPath(database.path, {
+          env: { OPENCLAW_STATE_DIR: suiteRoot },
+        });
+      }
+    }
+    await fixtureRoot.cleanup();
   });
 
   it("forwards explicit local-agent timeouts while preserving the default when omitted", async () => {
@@ -742,7 +792,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore: params.sessionStore,
@@ -881,7 +931,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
@@ -1278,7 +1328,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionHasHistory: false,
@@ -1556,7 +1606,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "openai",
       sessionStore,
@@ -1608,7 +1658,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "openai-codex",
       sessionStore,
@@ -1641,7 +1691,7 @@ describe("CLI attempt execution", () => {
           },
         },
       },
-      tmpDir,
+      agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("gemini cli response"));
@@ -1683,7 +1733,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "google",
       sessionStore,
@@ -1716,7 +1766,7 @@ describe("CLI attempt execution", () => {
           },
         },
       },
-      tmpDir,
+      agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("gemini cli api-key response"));
@@ -1753,7 +1803,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "google",
       sessionStore,
@@ -1786,7 +1836,7 @@ describe("CLI attempt execution", () => {
           },
         },
       },
-      tmpDir,
+      agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     expect(() =>
@@ -1822,7 +1872,7 @@ describe("CLI attempt execution", () => {
         messageChannel: undefined,
         skillsSnapshot: undefined,
         resolvedVerboseLevel: undefined,
-        agentDir: tmpDir,
+        agentDir,
         onAgentEvent: vi.fn(),
         authProfileProvider: "google",
         sessionStore,
@@ -1861,7 +1911,7 @@ describe("CLI attempt execution", () => {
           },
         },
       },
-      tmpDir,
+      agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("gemini cli api-key response"));
@@ -1903,7 +1953,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "google",
       sessionStore,
@@ -1934,7 +1984,7 @@ describe("CLI attempt execution", () => {
           },
         },
       },
-      tmpDir,
+      agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("gemini cli api-key response"));
@@ -1976,7 +2026,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "google",
       sessionStore,
@@ -1997,7 +2047,7 @@ describe("CLI attempt execution", () => {
       const sessionKey = `agent:main:internal-session-effects:${visibleSessionId}`;
       setTestEnvValue("HOME", tmpDir);
       setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tmpDir, "state"));
-      const internalStorePath = path.join(tmpDir, "sessions.json");
+      const internalStorePath = storePath;
       const internalSessionFile = formatSqliteSessionFileMarker({
         agentId: "main",
         sessionId,
@@ -2643,7 +2693,7 @@ describe("CLI attempt execution", () => {
       messageChannel: "discord",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
@@ -2700,7 +2750,7 @@ describe("CLI attempt execution", () => {
       messageChannel: "discord",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
@@ -2752,7 +2802,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
@@ -2782,7 +2832,7 @@ describe("CLI attempt execution", () => {
           },
         },
       },
-      tmpDir,
+      agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("configured claude cli"));
@@ -2835,7 +2885,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "anthropic",
       sessionStore,
@@ -2898,7 +2948,7 @@ describe("CLI attempt execution", () => {
       messageChannel: "discord",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
@@ -2975,7 +3025,7 @@ describe("CLI attempt execution", () => {
         messageChannel: "telegram",
         skillsSnapshot: undefined,
         resolvedVerboseLevel: undefined,
-        agentDir: tmpDir,
+        agentDir,
         onAgentEvent: vi.fn(),
         authProfileProvider: "claude-cli",
         sessionStore,
@@ -3129,7 +3179,7 @@ describe("CLI attempt execution", () => {
       messageChannel: "telegram",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
@@ -3190,7 +3240,7 @@ describe("CLI attempt execution", () => {
       messageChannel: "discord",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
@@ -3251,7 +3301,7 @@ describe("CLI attempt execution", () => {
       messageChannel: "telegram",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "anthropic",
       sessionStore,
@@ -3319,7 +3369,7 @@ describe("CLI attempt execution", () => {
       messageChannel: "telegram",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "anthropic",
       sessionStore,
@@ -3388,7 +3438,7 @@ describe("CLI attempt execution", () => {
       messageChannel: "telegram",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "openai",
       sessionStore,
@@ -3751,7 +3801,7 @@ describe("CLI attempt execution", () => {
           },
         },
       },
-      tmpDir,
+      agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -3780,7 +3830,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "fixture",
       sessionStore,
@@ -3827,7 +3877,7 @@ describe("CLI attempt execution", () => {
           },
         },
       },
-      tmpDir,
+      agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     clearAgentHarnesses();
@@ -3864,7 +3914,7 @@ describe("CLI attempt execution", () => {
         messageChannel: undefined,
         skillsSnapshot: undefined,
         resolvedVerboseLevel: undefined,
-        agentDir: tmpDir,
+        agentDir,
         onAgentEvent: vi.fn(),
         authProfileProvider: "openai",
         sessionStore,
@@ -3932,7 +3982,7 @@ describe("CLI attempt execution", () => {
       messageChannel: "discord",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "anthropic",
       sessionStore,
@@ -3996,7 +4046,7 @@ describe("CLI attempt execution", () => {
       messageChannel: "telegram",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "openai",
       sessionStore,
@@ -4046,7 +4096,7 @@ describe("CLI attempt execution", () => {
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
+      agentDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,

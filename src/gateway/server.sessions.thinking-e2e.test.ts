@@ -12,13 +12,13 @@ import { expect, test, vi } from "vitest";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   getGatewayConfigModule,
   getSessionsHandlers,
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 /**
  * Simulates the consumer-side resolution from session-controls.ts and

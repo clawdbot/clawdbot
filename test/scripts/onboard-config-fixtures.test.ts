@@ -87,6 +87,41 @@ describe("onboard config fixture helpers", () => {
     expect(assertResult.stderr).toBe("");
   });
 
+  it("writes configured guided skip-UI fixtures with a local mock model", () => {
+    const root = makeTempDir(tempDirs, "openclaw-onboard-config-guided-");
+    const configPath = path.join(root, "openclaw.json");
+    const workspace = path.join(root, "workspace");
+
+    const writeResult = runScript(WRITE_CONFIG_SCRIPT, [
+      "guided-skip-ui",
+      configPath,
+      workspace,
+      "19091",
+    ]);
+    const config = readJson(configPath);
+
+    expect(writeResult.status).toBe(0);
+    expect(config.gateway).toEqual({
+      mode: "local",
+      bind: "loopback",
+      controlUi: { enabled: false },
+    });
+    expect(config.agents.defaults.workspace).toBe(workspace);
+    expect(config.agents.defaults.model.primary).toBe("openai/gpt-5.6-luna");
+    expect(config.models.providers.openai.baseUrl).toBe("http://127.0.0.1:19091/v1");
+    expect(config.models.providers.openai.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+    expect(config.wizard).toMatchObject({
+      securityAcknowledgedAt: "2026-01-01T00:00:00.000Z",
+      accessMode: "full",
+      appRecommendations: false,
+    });
+    expect(readFileSync(configPath, "utf8")).toMatch(/\n$/u);
+  });
+
   it("accepts local and remote onboard assertion fixtures", () => {
     const root = makeTempDir(tempDirs, "openclaw-onboard-config-success-");
     const workspace = path.join(root, "workspace");

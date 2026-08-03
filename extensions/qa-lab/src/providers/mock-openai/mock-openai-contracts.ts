@@ -270,7 +270,6 @@ export const QA_SUBAGENT_TERMINAL_MARKERS = {
   fallback: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
 } as const;
 export const QA_SUBAGENT_TERMINAL_METADATA_SENTINEL = "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK";
-export const QA_SUBAGENT_TERMINAL_WORKER_DELAY_MS = 5_000;
 export const QA_NATIVE_STOP_DELAY_PROMPT_RE =
   /subagent recovery worker native command target proof\.\s*wait until stopped\./i;
 export const QA_NATIVE_STOP_DELAY_MS = 180_000;
