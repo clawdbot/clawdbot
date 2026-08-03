@@ -862,6 +862,12 @@ describe("slackPlugin messaging targets", () => {
     expect(messaging?.resolveDeliveryTarget?.({ conversationId: "c08gqh53ejm" })).toEqual({
       to: "channel:c08gqh53ejm",
     });
+    expect(messaging?.resolveDeliveryTarget?.({ conversationId: "G08GQH53EJM" })).toEqual({
+      to: "channel:g08gqh53ejm",
+    });
+    expect(messaging?.resolveDeliveryTarget?.({ conversationId: "user:U08GQH53EJM" })).toEqual({
+      to: "user:u08gqh53ejm",
+    });
     expect(
       messaging?.resolveDeliveryTarget?.({
         conversationId: "1712345678.123456",
@@ -870,6 +876,24 @@ describe("slackPlugin messaging targets", () => {
     ).toEqual({
       to: "channel:c08gqh53ejm",
       threadId: "1712345678.123456",
+    });
+    expect(
+      messaging?.resolveDeliveryTarget?.({
+        conversationId: "1712345678.654321",
+        parentConversationId: "user:U08GQH53EJM",
+      }),
+    ).toEqual({
+      to: "user:u08gqh53ejm",
+      threadId: "1712345678.654321",
+    });
+    expect(
+      messaging?.resolveDeliveryTarget?.({
+        conversationId: "1712345678.777777",
+        parentConversationId: "G08GQH53EJM",
+      }),
+    ).toEqual({
+      to: "channel:g08gqh53ejm",
+      threadId: "1712345678.777777",
     });
     expect(messaging?.resolveSessionTarget?.({ kind: "channel", id: "C08GQH53EJM" })).toBe(
       "channel:c08gqh53ejm",

@@ -4,9 +4,9 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
-  resolveRepoRoot,
   runAsScript,
   toLine,
   unwrapExpression,

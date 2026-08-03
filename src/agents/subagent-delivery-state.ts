@@ -128,11 +128,6 @@ export function getDeliveryAttemptCount(entry: SubagentRunRecord): number {
   return entry.delivery?.attemptCount ?? 0;
 }
 
-/** Reads the timestamp of the last delivery attempt. */
-export function getDeliveryLastAttemptAt(entry: SubagentRunRecord): number | undefined {
-  return entry.delivery?.lastAttemptAt;
-}
-
 /** Reads the non-empty last delivery error. */
 export function getDeliveryLastError(entry: SubagentRunRecord): string | undefined {
   const error = entry.delivery?.lastError;

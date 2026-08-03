@@ -1670,6 +1670,11 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/release-check.test.ts",
         "test/official-channel-catalog.test.ts",
       ],
+      "scripts/lib/official-external-channel-seed.json": [
+        "src/plugins/official-external-plugin-catalog.test.ts",
+        "test/release-check.test.ts",
+        "test/official-channel-catalog.test.ts",
+      ],
       "scripts/lib/official-external-plugin-catalog.json": [
         "src/plugins/official-external-plugin-catalog.test.ts",
         "test/release-check.test.ts",
@@ -1931,6 +1936,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/lib/ts-topology/analyze.ts": ["test/scripts/ts-topology.test.ts"],
       "scripts/lib/ts-topology/reports.ts": ["test/scripts/ts-topology.test.ts"],
       "scripts/lib/ts-topology/scope.ts": ["test/scripts/ts-topology.test.ts"],
+      "scripts/lib/repo-root.mjs": ["test/scripts/ts-guard-utils.test.ts"],
       "scripts/lib/ts-guard-utils.mjs": ["test/scripts/ts-guard-utils.test.ts"],
       "scripts/lib/tsgo-sparse-guard.mjs": [
         "test/scripts/run-tsgo.test.ts",

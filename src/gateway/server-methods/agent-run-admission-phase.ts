@@ -138,7 +138,6 @@ export async function prepareAgentRunDispatch(params: {
     return undefined;
   }
 
-  const now = Date.now();
   const timeoutMs = resolveAgentTimeoutMs({
     cfg: params.cfgForAgent ?? params.cfg,
     overrideSeconds:
@@ -191,6 +190,7 @@ export async function prepareAgentRunDispatch(params: {
     await params.acquireGatewayWorkAdmission(lifecycleStorePath);
     params.assertGatewayWorkAdmissionAllowed();
     if (!params.hasGatewayAdmissionOutcome()) {
+      const now = Date.now();
       params.setAdmittedRunAbort(
         registerChatAbortController({
           chatAbortControllers: params.context.chatAbortControllers,

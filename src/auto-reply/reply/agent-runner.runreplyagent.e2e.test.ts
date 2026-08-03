@@ -1128,6 +1128,169 @@ describe("runReplyAgent heartbeat followup guard", () => {
       persistSpy.mockRestore();
     }
   });
+
+  it.each([
+    { label: "direct chat", sessionCtx: {} },
+    {
+      label: "group chat",
+      sessionCtx: {
+        ChatType: "group" as const,
+        SessionKey: "agent:test:telegram:group:-100123",
+      },
+    },
+  ])(
+    "returns a terminal failure in a $label after a delivered partial with block streaming disabled",
+    async ({ sessionCtx }) => {
+      const accounting = await import("./session-run-accounting.js");
+      const persistSpy = vi
+        .spyOn(accounting, "persistRunSessionUsage")
+        .mockRejectedValueOnce(new Error("persist exploded"));
+      const onPartialReply = vi.fn();
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onPartialReply?.({ text: "partial answer" });
+        return {
+          payloads: [{ text: "final answer" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      try {
+        const { run } = createMinimalRun({
+          blockStreamingEnabled: false,
+          opts: { onPartialReply },
+          sessionCtx,
+        });
+        const result = await run();
+        const payload = Array.isArray(result) ? result[0] : result;
+
+        expect(onPartialReply).toHaveBeenCalledWith({
+          text: "partial answer",
+          mediaUrls: undefined,
+        });
+        expect(payload).toMatchObject({
+          text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+          isError: true,
+        });
+      } finally {
+        persistSpy.mockRestore();
+      }
+    },
+  );
+
+  it("rethrows after a delivered partial without visible content", async () => {
+    const accounting = await import("./session-run-accounting.js");
+    const persistSpy = vi
+      .spyOn(accounting, "persistRunSessionUsage")
+      .mockRejectedValueOnce(new Error("persist exploded"));
+    const onPartialReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "   " });
+      return {
+        payloads: [{ text: "final answer" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
+
+    try {
+      const { run } = createMinimalRun({
+        blockStreamingEnabled: false,
+        opts: { onPartialReply },
+      });
+
+      await expect(run()).rejects.toThrow("persist exploded");
+    } finally {
+      persistSpy.mockRestore();
+    }
+  });
+
+  it("rethrows heartbeat failures after a delivered partial", async () => {
+    const accounting = await import("./session-run-accounting.js");
+    const persistSpy = vi
+      .spyOn(accounting, "persistRunSessionUsage")
+      .mockRejectedValueOnce(new Error("persist exploded"));
+    const onPartialReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "heartbeat detail" });
+      return {
+        payloads: [{ text: "HEARTBEAT_OK" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
+
+    try {
+      const { run } = createMinimalRun({
+        blockStreamingEnabled: false,
+        opts: { isHeartbeat: true, onPartialReply },
+      });
+
+      await expect(run()).rejects.toThrow("persist exploded");
+    } finally {
+      persistSpy.mockRestore();
+    }
+  });
+
+  it("keeps user aborts silent after a delivered partial", async () => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    const onPartialReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "partial answer" });
+      replyOperation.abortByUser();
+      throw new Error("run stopped");
+    });
+
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: false,
+      opts: { onPartialReply },
+      replyOperation,
+    });
+    const result = await run();
+
+    expect(result).toEqual({ text: "NO_REPLY" });
+  });
+
+  it.each(["reasoning", "commentary"] as const)(
+    "rethrows after %s-only block streaming",
+    async (lane) => {
+      const accounting = await import("./session-run-accounting.js");
+      const persistSpy = vi
+        .spyOn(accounting, "persistRunSessionUsage")
+        .mockRejectedValueOnce(new Error("persist exploded"));
+      const onBlockReply = vi.fn();
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onBlockReply?.({
+          text: `internal ${lane}`,
+          ...(lane === "reasoning" ? { isReasoning: true } : { isCommentary: true }),
+        });
+        return {
+          payloads: [{ text: "final answer" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      try {
+        const { run } = createMinimalRun({
+          blockStreamingEnabled: true,
+          opts: {
+            onBlockReply,
+            reasoningPayloadsEnabled: lane === "reasoning",
+            commentaryPayloadsEnabled: lane === "commentary",
+          },
+        });
+
+        await expect(run()).rejects.toThrow("persist exploded");
+        expect(onBlockReply).toHaveBeenCalledWith(
+          expect.objectContaining({ text: `internal ${lane}` }),
+          expect.any(Object),
+        );
+      } finally {
+        persistSpy.mockRestore();
+      }
+    },
+  );
 });
 
 describe("runReplyAgent pending final delivery capture", () => {

@@ -28,7 +28,7 @@
       "detailLabel": "Signal REST",
       "docsPath": "/channels/signal",
       "docsLabel": "signal",
-      "blurb": "signal-cli linked device; more setup (David Reagans: \"Hop on Discord.\").",
+      "blurb": "signal-cli linked device with additional setup for the local REST bridge.",
       "systemImage": "antenna.radiowaves.left.and.right",
       "markdownCapable": true,
       "setup": {

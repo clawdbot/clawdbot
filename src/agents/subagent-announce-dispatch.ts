@@ -5,6 +5,13 @@
  * steering a subagent and directly delivering a message, with phase evidence.
  */
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
+type SubagentAnnounceDeliveryDisposition =
+  | "delivered"
+  | "session_queued"
+  | "intentional_non_delivery"
+  | "retryable"
+  | "ambiguous"
+  | "permanent_failure";
 /** Stable reasons an announcement delivery can fail without throwing. */
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
@@ -27,7 +34,10 @@ export type SubagentAnnounceDeliveryResult = {
   enqueuedAt?: number;
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
+  // Stops fallback delivery when ownership changed or another terminal result
+  // makes trying a second path unsafe.
   terminal?: boolean;
+  disposition?: SubagentAnnounceDeliveryDisposition;
   missingMediaUrls?: string[];
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
@@ -63,6 +73,7 @@ function mapSteerOutcomeToDeliveryResult(
       reason: "source_owner_changed",
       error: "subagent source lifecycle changed before completion delivery",
       terminal: true,
+      disposition: "intentional_non_delivery",
     };
   }
   return {
@@ -137,7 +148,13 @@ export async function runSubagentAnnounceDispatch(params: {
   // final visible message wins before falling back to steering.
   const primaryDirect = await params.direct();
   appendPhase("direct-primary", primaryDirect);
-  if (primaryDirect.delivered || primaryDirect.terminal) {
+  if (
+    primaryDirect.delivered ||
+    primaryDirect.disposition === "session_queued" ||
+    primaryDirect.disposition === "intentional_non_delivery" ||
+    primaryDirect.disposition === "ambiguous" ||
+    primaryDirect.disposition === "permanent_failure"
+  ) {
     return withPhases(primaryDirect);
   }
 

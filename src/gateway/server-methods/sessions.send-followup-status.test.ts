@@ -11,8 +11,10 @@ import { expectSubagentFollowupReactivation } from "./subagent-followup.test-hel
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.fn();
+const loadSessionEntryReadOnlyMock = vi.fn();
 const readSessionMessageCountAsyncMock = vi.fn();
 const loadGatewaySessionRowMock = vi.fn();
+const resolveDeletedAgentIdFromSessionKeyMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 const chatSendMock = vi.fn();
@@ -45,14 +47,13 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
   };
 });
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
-    loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
-  };
-});
+vi.mock("../session-utils.js", () => ({
+  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
+  loadSessionEntryReadOnly: (...args: unknown[]) => loadSessionEntryReadOnlyMock(...args),
+  loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
+  resolveDeletedAgentIdFromSessionKey: (...args: unknown[]) =>
+    resolveDeletedAgentIdFromSessionKeyMock(...args),
+}));
 
 vi.mock("../session-transcript-readers.js", async () => {
   const actual = await vi.importActual<typeof import("../session-transcript-readers.js")>(
@@ -112,8 +113,10 @@ function createRequestContext(overrides: Record<string, unknown> = {}): GatewayR
 describe("sessions.send completed subagent follow-up status", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
+    loadSessionEntryReadOnlyMock.mockReset();
     readSessionMessageCountAsyncMock.mockReset().mockResolvedValue(0);
     loadGatewaySessionRowMock.mockReset();
+    resolveDeletedAgentIdFromSessionKeyMock.mockReset().mockReturnValue(null);
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
     chatSendMock.mockReset();
@@ -136,6 +139,37 @@ describe("sessions.send completed subagent follow-up status", () => {
         },
       );
   });
+
+  for (const method of ["sessions.send", "sessions.steer"] as const) {
+    it(`${method} rejects keys belonging to a deleted agent`, async () => {
+      const orphanKey = "agent:deleted-agent:main";
+      loadSessionEntryMock.mockReturnValue({
+        cfg: {},
+        canonicalKey: orphanKey,
+        storePath: "/tmp/sessions.json",
+        entry: { sessionId: "sess-orphan" },
+      });
+      resolveDeletedAgentIdFromSessionKeyMock.mockReturnValue("deleted-agent");
+
+      const respondMock = vi.fn();
+      await expectDefined(
+        sessionMessagingHandlers[method],
+        "sessionMessagingHandlers[method] test invariant",
+      )({
+        req: { id: "req-deleted-agent" } as never,
+        params: { key: orphanKey, message: "hi" },
+        respond: respondMock as unknown as RespondFn,
+        context: createRequestContext(),
+        client: null,
+        isWebchatConnect: () => false,
+      });
+
+      expect(respondMock).toHaveBeenCalledWith(false, undefined, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: 'Agent "deleted-agent" no longer exists in configuration',
+      });
+    });
+  }
 
   it("reactivates completed subagent sessions before broadcasting sessions.changed", async () => {
     const childSessionKey = "agent:main:subagent:followup";

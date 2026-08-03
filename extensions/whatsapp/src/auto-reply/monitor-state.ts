@@ -12,7 +12,7 @@ const LIFECYCLE_BY_HEALTH_STATE = {
   reconnecting: "recovering",
   conflict: "blocked",
   "logged-out": "blocked",
-  stopped: "stopped",
+  stopped: "blocked", // Retry exhaustion is terminal; manual stops bypass this mapping.
 } satisfies Record<WebChannelHealthState, NonNullable<WebChannelStatus["lifecycle"]>>;
 
 function cloneStatus(status: WebChannelStatus): WebChannelStatus {
@@ -136,8 +136,7 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       status.running = false;
       status.connected = false;
       status.lastEventAt = at;
-      status.terminalDisconnect =
-        status.healthState === "logged-out" || status.healthState === "conflict";
+      status.terminalDisconnect = status.lifecycle === "blocked";
       if (!isTerminalHealthState(status.healthState)) {
         status.healthState = "stopped";
         status.lifecycle = "stopped";

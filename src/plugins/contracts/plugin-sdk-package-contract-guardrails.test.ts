@@ -465,11 +465,13 @@ function collectNewDeprecatedMemoryEmbeddingProviderApiFiles(): string[] {
 
 function collectNewDeprecatedMemoryEmbeddingProviderManifestFiles(): string[] {
   const files: string[] = [];
-  const manifestFiles =
-    listGitTrackedFiles({
-      repoRoot: REPO_ROOT,
-      pathspecs: "extensions/**/openclaw.plugin.json",
-    }) ?? [];
+  const manifestFiles = listGitTrackedFiles({
+    repoRoot: REPO_ROOT,
+    pathspecs: "extensions/**/openclaw.plugin.json",
+  });
+  if (!manifestFiles) {
+    throw new Error("unable to list plugin manifests for the deprecated manifest guard");
+  }
   for (const repoRelativePath of manifestFiles) {
     const source = fs.readFileSync(resolve(REPO_ROOT, repoRelativePath), "utf8");
     if (
