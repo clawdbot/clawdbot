@@ -338,9 +338,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   ) {
                     await state.onApprovalEventFromReplyOptions?.(payload);
                   }
-                  if (isDispatchOperationAborted()) {
-                    return;
-                  }
                 },
                 onPatchSummary: async (payload) => {
                   if (isDispatchOperationAborted()) {
@@ -361,9 +358,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     })
                   ) {
                     await state.onPatchSummaryFromReplyOptions?.(payload);
-                  }
-                  if (isDispatchOperationAborted()) {
-                    return;
                   }
                 },
                 onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
