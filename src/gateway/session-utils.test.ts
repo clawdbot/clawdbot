@@ -1780,7 +1780,18 @@ describe("gateway session utils", () => {
       models: {
         providers: {
           reasoner: {
-            models: [{ id: "default-on", name: "Default on", reasoning: true }],
+            baseUrl: "https://reasoner.example.test/v1",
+            models: [
+              {
+                id: "default-on",
+                name: "Default on",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
           },
         },
       },
