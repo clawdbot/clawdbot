@@ -75,45 +75,27 @@ if [ ! -d "$APP_BUNDLE" ]; then
   exit 1
 fi
 
+# Auto-selection order is a documented contract (docs/platforms/mac/signing.md): Developer ID
+# Application, Apple Distribution, Apple Development, then any valid codesigning identity. The
+# best rank wins across the whole listing rather than the first line, so ranks are collected in
+# one pass and resolved at END. `security` status is ignored on purpose: selection is judged by
+# the emitted listing, and a non-zero exit alongside usable output must not strand the caller.
 select_identity() {
-  local preferred available first
-
-  # Prefer a Developer ID Application cert.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Developer ID Application/ { print $2; exit }')"
-
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Next, try Apple Distribution.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Distribution/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Then, try Apple Development.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Development/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Fallback to the first valid signing identity.
-  available="$(security find-identity -p codesigning -v 2>/dev/null \
-    | sed -n 's/.*\"\\(.*\\)\"/\\1/p')"
-
-  if [ -n "$available" ]; then
-    first="$(printf '%s\n' "$available" | head -n1)"
-    echo "$first"
-    return
-  fi
-
-  return 1
+  { security find-identity -p codesigning -v 2>/dev/null || true; } | awk -F'"' '
+    NF > 1 && $2 != "" {
+      rank = 4
+      if ($2 ~ /Developer ID Application/) rank = 1
+      else if ($2 ~ /Apple Distribution/) rank = 2
+      else if ($2 ~ /Apple Development/) rank = 3
+      if (!(rank in best)) best[rank] = $2
+    }
+    END {
+      for (rank = 1; rank <= 4; rank++) {
+        if (rank in best) { print best[rank]; exit 0 }
+      }
+      exit 1
+    }
+  '
 }
 
 if [ -z "$IDENTITY" ]; then
