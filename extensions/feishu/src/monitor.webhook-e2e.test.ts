@@ -5,6 +5,7 @@ import { createConnection } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
   buildWebhookConfig,
@@ -555,6 +556,153 @@ describe("Feishu webhook signed-request e2e", () => {
       await monitorPromise;
     }
   });
+
+  it.each([
+    {
+      label: "top-level relative route",
+      scope: "root",
+      configuredPath: "legacy-root-hook",
+      acceptedTarget: "/legacy-root-hook",
+      rejectedTarget: "/legacy-root-hook/",
+    },
+    {
+      label: "account relative route",
+      scope: "account",
+      configuredPath: "legacy-account-hook",
+      acceptedTarget: "/legacy-account-hook",
+      rejectedTarget: "/legacy-account-hook/",
+    },
+    {
+      label: "relative route with exact query",
+      scope: "root",
+      configuredPath: "legacy-query-hook?tenant=alpha&mode=exact",
+      acceptedTarget: "/legacy-query-hook?tenant=alpha&mode=exact",
+      rejectedTarget: "/legacy-query-hook?mode=exact&tenant=alpha",
+    },
+    {
+      label: "relative route with trailing slash",
+      scope: "account",
+      configuredPath: "legacy-trailing-hook/",
+      acceptedTarget: "/legacy-trailing-hook/",
+      rejectedTarget: "/legacy-trailing-hook",
+    },
+    {
+      label: "canonical route with trailing slash",
+      scope: "account",
+      configuredPath: "/legacy-canonical-hook/",
+      acceptedTarget: "/legacy-canonical-hook/",
+      rejectedTarget: "/legacy-canonical-hook",
+    },
+    {
+      label: "empty top-level route",
+      scope: "root",
+      configuredPath: "",
+      acceptedTarget: "/feishu/events",
+      rejectedTarget: "/",
+    },
+    {
+      label: "whitespace account route",
+      scope: "account",
+      configuredPath: "   ",
+      acceptedTarget: "/feishu/events",
+      rejectedTarget: "/",
+    },
+  ])(
+    "normalizes the configured $label before raw webhook admission",
+    async ({ scope, configuredPath, acceptedTarget, rejectedTarget }) => {
+      const accountId = `legacy-route-${scope}`;
+      const port = await getFreePort();
+      const encryptKey = "encrypt_key";
+      const config = {
+        channels: {
+          feishu: {
+            ...(scope === "root" ? { webhookPath: configuredPath } : {}),
+            accounts: {
+              [accountId]: {
+                appId: "cli_test",
+                appSecret: "secret_test", // pragma: allowlist secret
+                connectionMode: "webhook" as const,
+                webhookPort: port,
+                ...(scope === "account" ? { webhookPath: configuredPath } : {}),
+                encryptKey,
+                verificationToken: "verify_token",
+              },
+            },
+          },
+        },
+      };
+      const account = resolveFeishuRuntimeAccount(
+        { cfg: config, accountId },
+        { requireEventSecrets: true },
+      );
+      expect(account.config.webhookPath).toBe(configuredPath);
+
+      const handler = vi.fn(async () => ({ accepted: true }));
+      const eventDispatcher = new Lark.EventDispatcher({
+        encryptKey,
+        verificationToken: "verify_token",
+      });
+      eventDispatcher.register({ "test.legacy_route_boundary": handler });
+      const statusSink = vi.fn();
+      const abortController = new AbortController();
+      const monitorPromise = monitorWebhook({
+        account,
+        accountId,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        abortSignal: abortController.signal,
+        eventDispatcher,
+        statusSink,
+      });
+      const rawBody = JSON.stringify({
+        schema: "2.0",
+        header: { event_type: "test.legacy_route_boundary" },
+        event: { marker: configuredPath },
+      });
+      const headers = signFeishuPayload({ encryptKey, rawBody });
+      const acceptedPath = acceptedTarget.split("?", 1)[0];
+      const requests = [
+        { label: "different raw target", target: rejectedTarget, status: 404 },
+        { label: "foreign authority", target: `//attacker${acceptedPath}`, status: 404 },
+        { label: "raw fragment", target: `${acceptedTarget}#fragment`, status: 404 },
+        { label: "normalized configured target", target: acceptedTarget, status: 200 },
+      ];
+
+      try {
+        await waitUntilServerReady(`http://127.0.0.1:${port}${acceptedTarget}`);
+        statusSink.mockClear();
+        const observed = [];
+
+        for (const request of requests) {
+          const initialDispatches = handler.mock.calls.length;
+          const initialActivity = statusSink.mock.calls.length;
+          const rawResponse = await sendRawSignedFeishuRequest({
+            port,
+            target: request.target,
+            rawBody,
+            headers,
+          });
+          observed.push({
+            label: request.label,
+            statusLine: rawResponse.split("\r\n", 1)[0],
+            dispatched: handler.mock.calls.length > initialDispatches,
+            publishedActivity: statusSink.mock.calls.length > initialActivity,
+          });
+        }
+
+        expect(observed).toEqual(
+          requests.map((request) => ({
+            label: request.label,
+            statusLine: `HTTP/1.1 ${request.status} ${request.status === 200 ? "OK" : "Not Found"}`,
+            dispatched: request.status === 200,
+            publishedActivity: request.status === 200,
+          })),
+        );
+      } finally {
+        abortController.abort();
+        await monitorPromise;
+      }
+    },
+  );
 
   it("matches an explicitly configured webhook query exactly", async () => {
     const accountId = "signed-configured-query-boundary";

@@ -10,6 +10,7 @@ import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
 import {
   applyBasicWebhookRequestGuards,
   installRequestBodyLimitGuard,
+  normalizePluginHttpPath,
   readWebhookBodyOrReject,
   resolveRequestClientIp,
   safeEqualSecret,
@@ -372,7 +373,7 @@ export async function monitorWebhook({
   }
 
   const port = account.config.webhookPort ?? 3000;
-  const path = account.config.webhookPath ?? "/feishu/events";
+  const path = normalizePluginHttpPath(account.config.webhookPath) ?? "/feishu/events";
   const host = account.config.webhookHost ?? "127.0.0.1";
 
   log(`feishu[${accountId}]: starting Webhook server on ${host}:${port}, path ${path}...`);

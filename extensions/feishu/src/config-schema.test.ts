@@ -42,6 +42,19 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.requireMention).toBeUndefined();
   });
 
+  it.each(["legacy-hook", "legacy-hook/", "legacy-hook?tenant=alpha", ""])(
+    "preserves existing root and account webhook path values: %j",
+    (webhookPath) => {
+      const result = FeishuConfigSchema.parse({
+        webhookPath,
+        accounts: { main: { webhookPath } },
+      });
+
+      expect(result.webhookPath).toBe(webhookPath);
+      expect(result.accounts?.main?.webhookPath).toBe(webhookPath);
+    },
+  );
+
   it("does not force top-level policy defaults into account config", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {
