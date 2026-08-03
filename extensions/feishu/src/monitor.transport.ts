@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import * as http from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
@@ -253,14 +254,12 @@ export async function monitorWebSocket({
       };
       const publishWsConnected = () => {
         const connectedAt = Date.now();
-        statusSink?.({
-          connected: true,
-          lifecycle: "ready",
-          terminalDisconnect: undefined,
-          lastConnectedAt: connectedAt,
-          lastEventAt: connectedAt,
-          lastError: null,
-        });
+        statusSink?.(
+          channelReadyPatch({
+            lastConnectedAt: connectedAt,
+            lastEventAt: connectedAt,
+          }),
+        );
       };
       const publishWsReconnecting = () => {
         const reconnectingAt = Date.now();
@@ -303,13 +302,12 @@ export async function monitorWebSocket({
       // WS cycle ended via terminal error (not abort) — publish disconnected
       // so the health monitor can flag the channel before the next reconnect.
       const disconnectedAt = Date.now();
-      statusSink?.({
-        connected: false,
-        lifecycle: "blocked",
-        terminalDisconnect: true,
-        lastEventAt: disconnectedAt,
-        lastError: formatFeishuWsErrorForLog(cycleEnd),
-      });
+      statusSink?.(
+        channelBlockedPatch(formatFeishuWsErrorForLog(cycleEnd), {
+          connected: false,
+          lastEventAt: disconnectedAt,
+        }),
+      );
 
       attempt += 1;
       const delayMs = getFeishuWsReconnectDelayMs(attempt);
@@ -525,14 +523,12 @@ export async function monitorWebhook({
       // this, the gateway health monitor has no transport signal for webhook
       // mode and will not detect a server crash. See PROPOSAL.md.
       const webhookConnectedAt = Date.now();
-      statusSink?.({
-        connected: true,
-        lifecycle: "ready",
-        terminalDisconnect: undefined,
-        lastConnectedAt: webhookConnectedAt,
-        lastEventAt: webhookConnectedAt,
-        lastError: null,
-      });
+      statusSink?.(
+        channelReadyPatch({
+          lastConnectedAt: webhookConnectedAt,
+          lastEventAt: webhookConnectedAt,
+        }),
+      );
     });
 
     server.on("error", (err) => {
