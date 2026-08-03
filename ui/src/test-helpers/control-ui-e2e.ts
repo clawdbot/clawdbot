@@ -437,7 +437,7 @@ function controlUiE2ePreviewConfigPlugin(): Plugin {
   };
 }
 
-export async function startBundledControlUiE2eServer(): Promise<ControlUiE2eServer> {
+export async function startBundledControlUiE2eServer(outDir: string): Promise<ControlUiE2eServer> {
   const [{ build, preview }, { default: controlUiViteConfig }] = await Promise.all([
     import("vite"),
     import("../../vite.config.ts"),
@@ -448,6 +448,10 @@ export async function startBundledControlUiE2eServer(): Promise<ControlUiE2eServ
   const sharedConfig = {
     ...config,
     base: "/",
+    build: {
+      ...config.build,
+      outDir,
+    },
     configFile: false,
     define: {
       ...config.define,
