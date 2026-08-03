@@ -10,7 +10,7 @@ import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-
 
 function launchDescriptor(): WorkerLaunchDescriptor {
   return {
-    version: 3,
+    version: 2,
     socketPath: "/tmp/openclaw-worker/gateway.sock",
     admission: {
       environmentId: "environment-1",
@@ -41,10 +41,7 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       ],
       transcript: { baseLeafId: "leaf-7", nextSeq: 8 },
       liveEvents: { ackedSeq: 12, nextSeq: 13 },
-      toolAuthority: {
-        allowedToolNames: ["read", "exec"],
-        execPolicy: { mode: "full", security: "full", ask: "off" },
-      },
+      toolAuthority: { allowedToolNames: ["read", "exec"] },
     },
   };
 }
@@ -121,73 +118,20 @@ describe("worker launch descriptor", () => {
     const descriptor = launchDescriptor();
     const { toolAuthority: _missing, ...assignmentWithoutAuthority } = descriptor.assignment;
     const cases: unknown[] = [
-      { ...descriptor, version: 2 },
+      { ...descriptor, version: 1 },
       { ...descriptor, assignment: assignmentWithoutAuthority },
       {
         ...descriptor,
         assignment: {
           ...descriptor.assignment,
-          toolAuthority: {
-            allowedToolNames: ["read", "read"],
-            execPolicy: { mode: "full", security: "full", ask: "off" },
-          },
+          toolAuthority: { allowedToolNames: ["read", "read"] },
         },
       },
       {
         ...descriptor,
         assignment: {
           ...descriptor.assignment,
-          toolAuthority: {
-            allowedToolNames: ["read", "gateway"],
-            execPolicy: { mode: "full", security: "full", ask: "off" },
-          },
-        },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          toolAuthority: { allowedToolNames: ["read", "exec"] },
-        },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          toolAuthority: {
-            allowedToolNames: ["read", "exec"],
-            execPolicy: { mode: "full", security: "FULL", ask: "off" },
-          },
-        },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          toolAuthority: {
-            allowedToolNames: ["read", "exec"],
-            execPolicy: { mode: "ask", security: "full", ask: "ALWAYS" },
-          },
-        },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          toolAuthority: {
-            allowedToolNames: ["exec"],
-            execPolicy: { mode: "auto", security: "full", ask: "off" },
-          },
-        },
-      },
-      {
-        ...descriptor,
-        assignment: {
-          ...descriptor.assignment,
-          toolAuthority: {
-            allowedToolNames: ["exec"],
-            execPolicy: { mode: "auto", security: "allowlist", ask: "off" },
-          },
+          toolAuthority: { allowedToolNames: ["read", "gateway"] },
         },
       },
     ];
@@ -199,27 +143,6 @@ describe("worker launch descriptor", () => {
     }
 
     descriptor.assignment.toolAuthority.allowedToolNames = [];
-    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
-
-    descriptor.assignment.toolAuthority.execPolicy = {
-      mode: "auto",
-      security: "allowlist",
-      ask: "on-miss",
-    };
-    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
-
-    descriptor.assignment.toolAuthority.execPolicy = {
-      mode: "ask",
-      security: "full",
-      ask: "always",
-    };
-    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
-
-    descriptor.assignment.toolAuthority.execPolicy = {
-      mode: "full",
-      security: "full",
-      ask: "on-miss",
-    };
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
   });
 

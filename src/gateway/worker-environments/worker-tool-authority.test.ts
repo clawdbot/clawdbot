@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import * as execApprovals from "../../infra/exec-approvals.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 
 function turn(overrides: Partial<SessionPlacementTurnParams> = {}): SessionPlacementTurnParams {
@@ -25,54 +26,71 @@ function authority(overrides: Partial<SessionPlacementTurnParams> = {}) {
   }).allowedToolNames;
 }
 
-function execPolicy(overrides: Partial<SessionPlacementTurnParams> = {}) {
-  return resolveWorkerToolAuthority({
-    modelRef: { provider: "openai", model: "gpt-test" },
-    turn: turn(overrides),
-  }).execPolicy;
-}
-
 describe("resolveWorkerToolAuthority", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({
+      version: 1,
+      agents: {},
+    });
+  });
+
   it("keeps the deterministic complete worker surface when no policy narrows it", () => {
     expect(authority()).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
-    expect(execPolicy()).toEqual({ mode: "full", security: "full", ask: "off" });
-  });
-
-  it("carries the effective exec mode independently of tool visibility", () => {
-    expect(
-      execPolicy({
-        config: { tools: { exec: { security: "deny" } } },
-      }),
-    ).toEqual({ mode: "deny", security: "deny", ask: "off" });
-    expect(
-      execPolicy({
-        config: { tools: { exec: { security: "full", ask: "always" } } },
-      }),
-    ).toEqual({ mode: "ask", security: "full", ask: "always" });
-    expect(
-      authority({
-        config: { tools: { exec: { security: "deny" } } },
-      }),
-    ).toContain("exec");
-  });
-
-  it("keeps auto review distinct from ordinary ask with the same policy pair", () => {
-    expect(execPolicy({ config: { tools: { exec: { mode: "auto" } } } })).toEqual({
-      mode: "auto",
-      security: "allowlist",
-      ask: "on-miss",
-    });
-    expect(execPolicy({ config: { tools: { exec: { mode: "ask" } } } })).toEqual({
-      mode: "ask",
-      security: "allowlist",
-      ask: "on-miss",
-    });
   });
 
   it("projects runtime caps with canonical write-to-apply_patch semantics", () => {
     expect(authority({ toolsAllow: ["write"] })).toEqual(["write", "apply_patch"]);
     expect(authority({ toolsAllow: [] })).toEqual([]);
     expect(authority({ toolsAllow: ["web_search"] })).toEqual([]);
+  });
+
+  it.each([
+    ["deny", { mode: "deny" as const }],
+    ["allowlist", { mode: "allowlist" as const }],
+    ["ask", { mode: "ask" as const }],
+    ["auto", { mode: "auto" as const }],
+    ["full with approval", { security: "full" as const, ask: "always" as const }],
+  ])("gates worker shell tools for restrictive exec policy: %s", (_label, exec) => {
+    expect(authority({ config: { tools: { exec } } })).toEqual([
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+    ]);
+  });
+
+  it("gates worker shell tools when host approval state restricts full config", () => {
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss" },
+      agents: {},
+    });
+
+    expect(authority({ config: { tools: { exec: { host: "gateway", mode: "full" } } } })).toEqual([
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+    ]);
+  });
+
+  it("uses the source sandbox state when resolving worker exec authority", () => {
+    expect(
+      authority({
+        sessionKey: "agent:main:worker-sandboxed",
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      }),
+    ).toEqual(["read", "write", "edit", "apply_patch"]);
+    expect(
+      authority({
+        sessionKey: "agent:main:worker-sandboxed",
+        config: {
+          agents: { defaults: { sandbox: { mode: "all" } } },
+          tools: { exec: { host: "gateway", mode: "full" } },
+        },
+      }),
+    ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
   });
 
   it("uses scheduled owner group policy without reapplying fresh sender overlays", () => {
@@ -155,11 +173,6 @@ describe("resolveWorkerToolAuthority", () => {
     "exposes no tools for non-tool run mode %#",
     (overrides) => {
       expect(authority(overrides)).toEqual([]);
-      expect(execPolicy(overrides)).toEqual({
-        mode: "deny",
-        security: "deny",
-        ask: "off",
-      });
     },
   );
 });

@@ -706,7 +706,7 @@ class FakeWorkerGateway {
 
 function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescriptor {
   return {
-    version: 3,
+    version: 2,
     socketPath,
     admission: {
       environmentId: "worker-environment",
@@ -733,7 +733,6 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       liveEvents: { ackedSeq: 0, nextSeq: 1 },
       toolAuthority: {
         allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
-        execPolicy: { mode: "full", security: "full", ask: "off" },
       },
     },
   };
@@ -1140,24 +1139,20 @@ describe("worker runtime", () => {
     ).toBe(true);
   });
 
-  it("keeps Gateway-denied exec from reaching the worker host", async () => {
+  it("does not reach the worker command sink when shell tools are absent", async () => {
     const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
-    launch.assignment.toolAuthority.execPolicy = {
-      mode: "deny",
-      security: "deny",
-      ask: "off",
-    };
+    launch.assignment.toolAuthority.allowedToolNames = ["read", "write", "edit", "apply_patch"];
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
     await expect(
       readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
     ).rejects.toMatchObject({ code: "ENOENT" });
-    const toolResult = gateway.inferenceRequests[1]?.context.messages.find(
-      (message) => message.role === "toolResult",
-    );
-    expect(toolResult).toMatchObject({ role: "toolResult", toolName: "exec" });
-    expect(JSON.stringify(toolResult?.content)).toContain("security=deny");
+    expect(
+      gateway.inferenceRequests[1]?.context.messages.some(
+        (message) => message.role === "toolResult" && message.toolName === "exec",
+      ),
+    ).toBe(true);
   });
 
   it("windows near-limit history for every local tool-loop inference", async () => {

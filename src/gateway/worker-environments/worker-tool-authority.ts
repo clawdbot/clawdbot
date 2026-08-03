@@ -11,26 +11,18 @@ import {
   type WorkerToolAuthority,
 } from "../../worker/tool-authority.js";
 
-function resolveWorkerSandboxSessionKey(turn: SessionPlacementTurnParams): string {
-  return turn.sandboxSessionKey?.trim() || turn.sessionKey?.trim() || turn.sessionId;
-}
-
 function resolveWorkerCapabilityProfile(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
+  sandbox: ReturnType<typeof resolveSandboxRuntimeStatus>;
+  sandboxSessionKey: string;
 }) {
   const turn = params.turn;
-  const sandboxSessionKey = resolveWorkerSandboxSessionKey(turn);
-  const sandbox = resolveSandboxRuntimeStatus({
-    cfg: turn.config,
-    sessionKey: sandboxSessionKey,
-    agentId: turn.agentId,
-  });
   return resolveConversationCapabilityProfile({
     config: turn.config,
-    sessionKey: sandboxSessionKey,
+    sessionKey: params.sandboxSessionKey,
     runSessionKey:
-      turn.sessionKey && turn.sessionKey !== sandboxSessionKey ? turn.sessionKey : undefined,
+      turn.sessionKey && turn.sessionKey !== params.sandboxSessionKey ? turn.sessionKey : undefined,
     sessionId: turn.sessionId,
     runId: turn.runId,
     agentId: turn.agentId,
@@ -62,7 +54,7 @@ function resolveWorkerCapabilityProfile(params: {
     isCanonicalWorkspace: turn.isCanonicalWorkspace,
     promptMode: turn.promptMode,
     skillsSnapshot: turn.skillsSnapshot,
-    sandboxToolPolicy: sandbox.sandboxed ? sandbox.toolPolicy : undefined,
+    sandboxToolPolicy: params.sandbox.sandboxed ? params.sandbox.toolPolicy : undefined,
     runtimeToolAllowlist: turn.toolsAllow,
     inheritRuntimeToolAllowlist: true,
     runtimePluginToolGrant: turn.runtimePluginToolGrant,
@@ -78,30 +70,38 @@ export function resolveWorkerToolAuthority(params: {
   turn: SessionPlacementTurnParams;
 }): WorkerToolAuthority {
   const turn = params.turn;
-  const sandboxSessionKey = resolveWorkerSandboxSessionKey(turn);
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
-    return {
-      allowedToolNames: [],
-      execPolicy: { mode: "deny", security: "deny", ask: "off" },
-    };
+    return { allowedToolNames: [] };
   }
+  const sandboxSessionKey =
+    turn.sandboxSessionKey?.trim() || turn.sessionKey?.trim() || turn.sessionId;
+  const sandbox = resolveSandboxRuntimeStatus({
+    cfg: turn.config,
+    sessionKey: sandboxSessionKey,
+    agentId: turn.agentId,
+  });
   const runtimeCappedTools = applyEmbeddedAttemptToolsAllow(
     WORKER_LOCAL_TOOL_NAMES.map((name) => ({ name })),
     turn.toolsAllow,
   );
   const projected: WorkerLocalToolName[] = projectConversationToolNames({
-    capabilityProfile: resolveWorkerCapabilityProfile(params),
+    capabilityProfile: resolveWorkerCapabilityProfile({ ...params, sandbox, sandboxSessionKey }),
     toolNames: runtimeCappedTools.map((tool) => tool.name),
     warn: logWarn,
   });
-  // The worker is the execution host, but the Gateway remains the authority owner.
-  // Carry the exact resolved pair so reconstruction cannot broaden deny/approval policy.
-  const { mode, security, ask } = resolveExecDefaults({
+  const { security, ask } = resolveExecDefaults({
     cfg: turn.config,
     agentId: turn.agentId,
     sessionKey: sandboxSessionKey,
-    execOverrides: { ...turn.execOverrides, host: "gateway" },
-    sandboxAvailable: false,
+    execOverrides: turn.execOverrides,
+    sandboxAvailable: sandbox.sandboxed,
   });
-  return { allowedToolNames: projected, execPolicy: { mode, security, ask } };
+  if (security === "full" && ask === "off") {
+    return { allowedToolNames: projected };
+  }
+  // Worker-local exec has no Gateway approval or allowlist authority.
+  // Gate the exec/process pair unless the Gateway resolved unconditional access.
+  return {
+    allowedToolNames: projected.filter((name) => name !== "exec" && name !== "process"),
+  };
 }

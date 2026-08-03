@@ -24,16 +24,10 @@ import {
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
-import {
-  normalizeExecAsk,
-  normalizeExecMode,
-  normalizeExecSecurity,
-  resolveExecModeFromPolicy,
-} from "../infra/exec-approvals.js";
 import { isWorkerLocalToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 
-const LAUNCH_VERSION = 3;
+const LAUNCH_VERSION = 2;
 
 type WorkerLaunchAssignment = {
   runId: string;
@@ -61,7 +55,7 @@ type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
 };
 
 export type WorkerLaunchDescriptor = {
-  version: 3;
+  version: 2;
   socketPath: string;
   admission: WorkerLaunchAdmission;
   assignment: WorkerLaunchAssignment;
@@ -91,45 +85,17 @@ function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
   return Value.Check(WorkerInferenceOptionsSchema, value);
 }
 
-function parseExecPolicy(value: unknown): WorkerToolAuthority["execPolicy"] | undefined {
-  if (!isRecord(value) || !hasExactKeys(value, ["mode", "security", "ask"])) {
-    return undefined;
-  }
-  const mode = typeof value.mode === "string" ? normalizeExecMode(value.mode) : null;
-  const security =
-    typeof value.security === "string" ? normalizeExecSecurity(value.security) : null;
-  const ask = typeof value.ask === "string" ? normalizeExecAsk(value.ask) : null;
-  if (
-    mode === null ||
-    mode !== value.mode ||
-    security === null ||
-    security !== value.security ||
-    ask === null ||
-    ask !== value.ask ||
-    (mode === "auto"
-      ? security !== "allowlist" || ask !== "on-miss"
-      : resolveExecModeFromPolicy({ security, ask }) !== mode)
-  ) {
-    return undefined;
-  }
-  return { mode, security, ask };
-}
-
 function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["allowedToolNames", "execPolicy"]) ||
+    !hasExactKeys(value, ["allowedToolNames"]) ||
     !Array.isArray(value.allowedToolNames) ||
     !value.allowedToolNames.every(isWorkerLocalToolName) ||
     new Set(value.allowedToolNames).size !== value.allowedToolNames.length
   ) {
     return undefined;
   }
-  const execPolicy = parseExecPolicy(value.execPolicy);
-  if (!execPolicy) {
-    return undefined;
-  }
-  return { allowedToolNames: [...value.allowedToolNames], execPolicy };
+  return { allowedToolNames: [...value.allowedToolNames] };
 }
 
 function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
