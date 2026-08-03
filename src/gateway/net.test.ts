@@ -637,15 +637,43 @@ describe("isContainerEnvironment", () => {
     expect(isContainerEnvironment()).toBe(true);
   });
 
-  it("returns true when /proc/1/cgroup contains Cloudflare Cloudchamber container marker", () => {
+  it.each([
+    {
+      name: "at EOF",
+      cgroup: "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci",
+    },
+    {
+      name: "before LF",
+      cgroup: "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci\n1:name=/",
+    },
+    {
+      name: "before CRLF",
+      cgroup: "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci\r\n1:name=/",
+    },
+    {
+      name: "before a descendant path",
+      cgroup: "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci/openclaw\n",
+    },
+  ])("returns true for a Cloudflare Cloudchamber marker $name", ({ cgroup }) => {
     const fs = require("node:fs");
     vi.spyOn(fs, "accessSync").mockImplementation(() => {
       throw new Error("ENOENT");
     });
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci\n",
-    );
+    vi.spyOn(fs, "readFileSync").mockReturnValue(cgroup);
     expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it.each([
+    "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci.service\n",
+    "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci-extra\n",
+    "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci\tjunk\n",
+  ])("returns false for a non-terminal Cloudchamber _oci marker: %s", (cgroup) => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue(cgroup);
+    expect(isContainerEnvironment()).toBe(false);
   });
 
   it("returns false when /proc/1/cgroup contains cloudchamber.service (host machine)", () => {
