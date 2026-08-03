@@ -24,6 +24,7 @@ export GATEWAY_LOG_PATH
 mkdir -p "$OPENCLAW_E2E_LOG_DIR"
 cleanup_onboard_artifacts() {
   openclaw_e2e_stop_process "${GATEWAY_PID:-}"
+  openclaw_e2e_stop_process "${mock_openai_pid:-}"
   rm -rf "$ONBOARD_TMP_DIR"
 }
 if [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
@@ -241,6 +242,72 @@ send_skills_flow() {
   send "" 2.0
 }
 
+send_guided_skip_ui_flow() {
+  wait_for_log "How should I set things up?" 120 || return $?
+  send $'\r' 0.8
+  wait_for_log "Use Current model?" 120 || return $?
+  send $'\r' 0.8
+}
+
+validate_guided_skip_ui_log() {
+  local log_path="$1"
+  local mock_request_log="$2"
+  log_contains "Hi — I'm OpenClaw. I keep this system running. Let's get you set up." || {
+    echo "Guided onboarding introduction was not rendered"
+    return 1
+  }
+  log_contains "OpenClaw is ready." || {
+    echo "Guided onboarding did not reach its skip-UI completion"
+    return 1
+  }
+  if log_contains "Opening the Control UI dashboard"; then
+    echo "Guided skip-UI onboarding attempted a browser handoff"
+    return 1
+  fi
+  if log_contains "Your browser is ready"; then
+    echo "Guided skip-UI onboarding completed a browser handoff"
+    return 1
+  fi
+  if log_contains "Hatching your agent now"; then
+    echo "Guided skip-UI onboarding attempted a terminal handoff"
+    return 1
+  fi
+  grep -q '"/v1/responses"' "$mock_request_log" || {
+    echo "Guided onboarding did not verify the configured model through /v1/responses"
+    return 1
+  }
+}
+
+run_case_guided_skip_ui() {
+  local mock_port="19091"
+  local mock_log="$ONBOARD_TMP_DIR/guided-skip-ui-mock-openai.log"
+  local mock_request_log="$ONBOARD_TMP_DIR/guided-skip-ui-mock-requests.jsonl"
+  set_isolated_openclaw_env guided-skip-ui
+  export OPENAI_API_KEY="sk-openclaw-guided-skip-ui-e2e"
+  node scripts/e2e/lib/onboard/write-config.mjs \
+    guided-skip-ui \
+    "$OPENCLAW_CONFIG_PATH" \
+    "$OPENCLAW_TEST_WORKSPACE_DIR" \
+    "$mock_port"
+  mock_openai_pid="$(
+    openclaw_e2e_start_tracked_process \
+      "$mock_log" \
+      env MOCK_PORT="$mock_port" MOCK_REQUEST_LOG="$mock_request_log" \
+      node scripts/e2e/mock-openai-server.mjs
+  )"
+  openclaw_e2e_wait_mock_openai "$mock_port"
+
+  run_wizard_cmd \
+    guided-skip-ui \
+    "$HOME" \
+    "node \"$OPENCLAW_ENTRY\" onboard --skip-ui" \
+    send_guided_skip_ui_flow
+
+  validate_guided_skip_ui_log "$WIZARD_LOG_PATH" "$mock_request_log"
+  openclaw_e2e_stop_process "$mock_openai_pid"
+  mock_openai_pid=""
+}
+
 run_case_local_basic() {
   set_isolated_openclaw_env local-basic
   openclaw_e2e_run_logged local-basic node "$OPENCLAW_ENTRY" onboard \
@@ -325,6 +392,7 @@ validate_local_basic_log() {
 }
 
 if [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
+  run_case_guided_skip_ui
   run_case_local_basic
   run_case_remote_non_interactive
   run_case_reset
