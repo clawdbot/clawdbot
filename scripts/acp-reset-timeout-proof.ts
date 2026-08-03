@@ -1070,7 +1070,7 @@ function resolveScenarios(): ScenarioName[] {
   const scenarioIndex = process.argv.indexOf("--scenario");
   const configured = scenarioIndex >= 0 ? process.argv[scenarioIndex + 1]?.trim() : "";
   if (!configured) {
-    return ["close-timeout", "cancel-timeout", "late-turn"];
+    return ["close-timeout", "cancel-timeout", "late-turn", "runtime-option-timeout"];
   }
   if (
     configured === "close-timeout" ||
