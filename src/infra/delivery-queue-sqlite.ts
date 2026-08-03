@@ -13,6 +13,10 @@ import {
   type UpsertDeliveryQueueEntryParams,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite-bound.js";
+import type {
+  DeliveryQueueCompletionRetention,
+  DeliveryQueueEntryState,
+} from "./delivery-queue-sqlite.types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -20,41 +24,17 @@ import {
 } from "./kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
+export type {
+  DeliveryQueueCompletionRetention,
+  DeliveryQueueEntryState,
+} from "./delivery-queue-sqlite.types.js";
+
 // Generic durable delivery queue storage shared by session and outbound queues.
 // Queue-specific wrappers own payload shape; this layer owns SQLite state.
 type QueueStatus = "pending" | "failed" | "completed";
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const PERMANENT_COMPLETION_RECOVERY_STATE = "completed_permanent";
 const BOUNDED_COMPLETION_RECOVERY_STATE = "completed_bounded";
-
-export type DeliveryQueueCompletionRetention =
-  | "permanent"
-  | Readonly<{
-      idPrefix: string;
-      maxAgeMs: number;
-      maxEntries: number;
-    }>;
-
-/** Persisted queue entry fields common to all delivery queue payloads. */
-export type DeliveryQueueEntryState = {
-  id: string;
-  enqueuedAt: number;
-  retryCount: number;
-  availableAt?: number;
-  /** Only explicit reusable producers retain a platform-send ownership lease. */
-  requiresProducerClaim?: boolean;
-  producerClaimId?: string;
-  /** Durable delivery-call count reserved before invoking the provider path. */
-  attemptCount?: number;
-  completionRetention?: DeliveryQueueCompletionRetention;
-  acknowledgedAt?: number;
-  lastAttemptAt?: number;
-  lastError?: string;
-  /** UUID fencing one platform attempt even when clock timestamps collide. */
-  platformSendAttemptId?: string;
-  platformSendStartedAt?: number;
-  recoveryState?: string;
-};
 
 type FailPendingDeliveryQueueEntryResult = { status: "failed" } | { status: "not_pending" };
 
