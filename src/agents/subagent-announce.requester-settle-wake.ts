@@ -27,7 +27,7 @@ import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-reg
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 const subagentRegistryRuntimeLoader = createLazyImportLoader(
-  () => import("./subagent-announce.registry.runtime.js"),
+  () => import("./subagent-registry-runtime.js"),
 );
 
 function loadSubagentRegistryRuntime() {
@@ -85,7 +85,10 @@ function buildConnectedSettledWave(
     .map((entry, originalIndex) => ({
       entry,
       originalIndex,
-      endedAt: typeof entry.endedAt === "number" ? entry.endedAt : Number.MAX_SAFE_INTEGER,
+      endedAt:
+        typeof entry.execution.endedAt === "number"
+          ? entry.execution.endedAt
+          : Number.MAX_SAFE_INTEGER,
     }))
     .toSorted(
       (a, b) =>
@@ -396,6 +399,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         targetRequesterSessionKey: requesterSessionKey,
         requesterIsSubagent: false,
         expectsCompletionMessage: false,
+        requireDirectDelivery: true,
         directIdempotencyKey: buildAnnounceIdempotencyKey(
           attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
         ),

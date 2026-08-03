@@ -122,7 +122,6 @@ export async function finalizeCodexAttempt(
   const recoveredTurnWatchTimeout =
     state.turnCompletionIdleTimedOut &&
     !terminalState.explicitCancellationObserved &&
-    !state.terminalTurnNotificationQueued &&
     hasRecoverableCompletedAssistant &&
     activeProjector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout();
   if (recoveredTurnWatchTimeout) {
@@ -245,15 +244,18 @@ export async function finalizeCodexAttempt(
     turnWatchTimeoutKind: state.turnWatchTimeoutKind,
   });
   const failureDiagnostics =
-    codexAppServerFailureKind === "turn_completion_idle_timeout" &&
-    state.turnWatchTimeoutKind === "completion"
-      ? buildCodexAppServerTimeoutDiagnostics({
-          idleMs: state.turnWatchTimeoutIdleMs,
-          timeoutMs: state.turnWatchTimeoutMs,
-          lastActivityReason: state.turnWatchTimeoutLastActivityReason,
-          details: state.turnWatchTimeoutDetails,
-        })
-      : undefined;
+    codexAppServerFailureKind === "client_closed_before_turn_completed" &&
+    state.clientClosedDiagnostic
+      ? { transportError: state.clientClosedDiagnostic }
+      : codexAppServerFailureKind === "turn_completion_idle_timeout" &&
+          state.turnWatchTimeoutKind === "completion"
+        ? buildCodexAppServerTimeoutDiagnostics({
+            idleMs: state.turnWatchTimeoutIdleMs,
+            timeoutMs: state.turnWatchTimeoutMs,
+            lastActivityReason: state.turnWatchTimeoutLastActivityReason,
+            details: state.turnWatchTimeoutDetails,
+          })
+        : undefined;
   const codexAppServerFailure = codexAppServerFailureKind
     ? ({
         kind: codexAppServerFailureKind,
@@ -271,18 +273,16 @@ export async function finalizeCodexAttempt(
     : undefined;
   const finalAborted = isFinalAborted();
   const completedTurnStatus = activeProjector.getCompletedTurnStatus();
-  const completedWithoutTerminalNotification =
+  const locallyCompletedTurn =
     state.completed &&
-    !state.terminalTurnNotificationQueued &&
+    (state.localCompletionRequested || !state.terminalTurnNotificationQueued) &&
     !state.timedOut &&
     clientClosedPromptErrorForFinal === undefined;
   const turnSucceeded =
     !finalAborted &&
     !effectiveTimedOut &&
     (finalPromptError === null || finalPromptError === undefined) &&
-    (completedTurnStatus === "completed" ||
-      recoveredTurnWatchTimeout ||
-      completedWithoutTerminalNotification);
+    (completedTurnStatus === "completed" || recoveredTurnWatchTimeout || locallyCompletedTurn);
   // buildResult retains the bridge's delivery records. Resolve omitted final
   // intent only after the authoritative turn outcome is known, before any
   // terminal observer consumes the result.

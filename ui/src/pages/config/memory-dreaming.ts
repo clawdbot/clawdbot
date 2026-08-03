@@ -4,6 +4,7 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import {
+  renderSettingsDefaultState,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -25,6 +26,8 @@ type DreamingFieldSpec =
       labelKey: string;
       helpKey: string;
       placeholderKey?: string;
+      defaultValue?: string;
+      defaultLabelKey?: string;
     }
   | {
       kind: "number";
@@ -32,6 +35,7 @@ type DreamingFieldSpec =
       labelKey: string;
       helpKey: string;
       bounds: DreamingNumberBounds;
+      defaultValue: number;
     }
   | {
       kind: "toggle";
@@ -65,6 +69,7 @@ const DREAMING_SCHEDULE_FIELDS: readonly DreamingFieldSpec[] = [
     labelKey: "memoryPage.dreaming.frequency.label",
     helpKey: "memoryPage.dreaming.frequency.help",
     placeholderKey: "memoryPage.dreaming.frequency.placeholder",
+    defaultValue: "0 3 * * *",
   },
   {
     kind: "text",
@@ -79,6 +84,7 @@ const DREAMING_SCHEDULE_FIELDS: readonly DreamingFieldSpec[] = [
     labelKey: "memoryPage.dreaming.model.label",
     helpKey: "memoryPage.dreaming.model.help",
     placeholderKey: "memoryPage.dreaming.model.placeholder",
+    defaultLabelKey: "memoryPage.dreaming.model.default",
   },
   {
     kind: "toggle",
@@ -108,6 +114,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.lookbackDays",
         helpKey: "memoryPage.dreaming.phaseFields.lookbackDaysHelp",
         bounds: COUNT_FROM_ZERO,
+        defaultValue: 2,
       },
       {
         kind: "number",
@@ -115,6 +122,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.limit",
         helpKey: "memoryPage.dreaming.phaseFields.limitHelp",
         bounds: COUNT_FROM_ZERO,
+        defaultValue: 100,
       },
       {
         kind: "number",
@@ -122,6 +130,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.dedupeSimilarity",
         helpKey: "memoryPage.dreaming.phaseFields.dedupeSimilarityHelp",
         bounds: RATIO,
+        defaultValue: 0.9,
       },
     ],
   },
@@ -142,6 +151,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.limit",
         helpKey: "memoryPage.dreaming.phaseFields.limitHelp",
         bounds: COUNT_FROM_ZERO,
+        defaultValue: 10,
       },
       {
         kind: "number",
@@ -149,6 +159,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.minScore",
         helpKey: "memoryPage.dreaming.phaseFields.minScoreHelp",
         bounds: RATIO,
+        defaultValue: 0.75,
       },
       {
         kind: "number",
@@ -156,6 +167,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.minRecallCount",
         helpKey: "memoryPage.dreaming.phaseFields.minRecallCountHelp",
         bounds: COUNT_FROM_ZERO,
+        defaultValue: 3,
       },
       {
         kind: "number",
@@ -163,6 +175,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.minUniqueQueries",
         helpKey: "memoryPage.dreaming.phaseFields.minUniqueQueriesHelp",
         bounds: COUNT_FROM_ZERO,
+        defaultValue: 3,
       },
       {
         kind: "number",
@@ -170,6 +183,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.recencyHalfLifeDays",
         helpKey: "memoryPage.dreaming.phaseFields.recencyHalfLifeDaysHelp",
         bounds: COUNT_FROM_ZERO,
+        defaultValue: 14,
       },
       {
         kind: "number",
@@ -177,6 +191,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.maxAgeDays",
         helpKey: "memoryPage.dreaming.phaseFields.maxAgeDaysHelp",
         bounds: COUNT_FROM_ONE,
+        defaultValue: 30,
       },
       {
         kind: "number",
@@ -184,6 +199,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.maxPromotedSnippetTokens",
         helpKey: "memoryPage.dreaming.phaseFields.maxPromotedSnippetTokensHelp",
         bounds: COUNT_FROM_ONE,
+        defaultValue: 160,
       },
     ],
   },
@@ -204,6 +220,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.lookbackDays",
         helpKey: "memoryPage.dreaming.phaseFields.lookbackDaysHelp",
         bounds: COUNT_FROM_ZERO,
+        defaultValue: 7,
       },
       {
         kind: "number",
@@ -211,6 +228,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.limit",
         helpKey: "memoryPage.dreaming.phaseFields.limitHelp",
         bounds: COUNT_FROM_ZERO,
+        defaultValue: 10,
       },
       {
         kind: "number",
@@ -218,6 +236,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         labelKey: "memoryPage.dreaming.phaseFields.minPatternStrength",
         helpKey: "memoryPage.dreaming.phaseFields.minPatternStrengthHelp",
         bounds: RATIO,
+        defaultValue: 0.75,
       },
     ],
   },
@@ -232,6 +251,8 @@ const DEFAULT_STORAGE_MODE: StorageMode = "separate";
 type DreamingSettingsProps = {
   /** `plugins.entries.<slot owner>.config.dreaming`, or null when unset. */
   dreaming: Record<string, unknown> | null;
+  /** agents.defaults.userTimezone, which the runtime inherits when present. */
+  timezoneDefault: string | null;
   disabled: boolean;
   onPatch: (path: readonly string[], value: unknown) => void;
 };
@@ -251,8 +272,29 @@ function readAtPath(root: Record<string, unknown> | null, path: readonly string[
   return undefined;
 }
 
+function hasAtPath(root: Record<string, unknown> | null, path: readonly string[]): boolean {
+  let current: Record<string, unknown> | null = root;
+  for (const [index, key] of path.entries()) {
+    if (!current || !Object.hasOwn(current, key)) {
+      return false;
+    }
+    if (index === path.length - 1) {
+      return true;
+    }
+    current = asConfigRecord(current[key]);
+  }
+  return false;
+}
+
 function normalizeStorageMode(value: unknown): StorageMode {
   return STORAGE_MODES.find((mode) => mode === value) ?? DEFAULT_STORAGE_MODE;
+}
+
+function resolveDreamingModelDefault(dreaming: Record<string, unknown> | null): string {
+  const model = readAtPath(dreaming, ["execution", "defaults", "model"]);
+  return typeof model === "string" && model.trim()
+    ? model.trim()
+    : t("memoryPage.dreaming.model.default");
 }
 
 /** Parses an edited number against its manifest bounds; null means "do not write". */
@@ -269,12 +311,36 @@ function parseDreamingNumber(raw: string, bounds: DreamingNumberBounds): number 
 
 function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
   const value = readAtPath(props.dreaming, spec.path);
+  const overridden = hasAtPath(props.dreaming, spec.path);
+  const defaultValue =
+    spec.kind === "toggle"
+      ? spec.fallback
+        ? t("common.enabled")
+        : t("common.disabled")
+      : spec.kind === "number"
+        ? String(spec.defaultValue)
+        : spec.path[0] === "timezone"
+          ? (props.timezoneDefault ?? t("memoryPage.dreaming.timezone.default"))
+          : spec.path[0] === "model"
+            ? resolveDreamingModelDefault(props.dreaming)
+            : spec.defaultValue
+              ? spec.defaultValue
+              : spec.defaultLabelKey
+                ? t(spec.defaultLabelKey)
+                : "";
+  const defaultState = renderSettingsDefaultState({
+    value: defaultValue,
+    overridden,
+    disabled: props.disabled,
+    onReset: () => props.onPatch(spec.path, undefined),
+  });
   if (spec.kind === "toggle") {
     return renderSettingsToggleRow({
       title: t(spec.labelKey),
-      description: t(spec.helpKey),
+      description: html`${t(spec.helpKey)} ${defaultState.description}`,
       checked: typeof value === "boolean" ? value : spec.fallback,
       disabled: props.disabled,
+      actions: defaultState.action,
       onChange: (checked) => props.onPatch(spec.path, checked),
     });
   }
@@ -289,8 +355,9 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
   const bounds = spec.kind === "number" ? spec.bounds : null;
   return renderSettingsRow({
     title: t(spec.labelKey),
-    description: t(spec.helpKey),
+    description: html`${t(spec.helpKey)} ${defaultState.description}`,
     control: html`
+      ${defaultState.action}
       <input
         class="settings-input"
         type=${spec.kind === "number" ? "number" : "text"}
@@ -301,7 +368,7 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
         aria-label=${t(spec.labelKey)}
         ?disabled=${props.disabled}
         .value=${text}
-        placeholder=${spec.kind === "text" && spec.placeholderKey ? t(spec.placeholderKey) : ""}
+        placeholder=${defaultValue}
         @change=${(event: Event) => {
           const input = event.currentTarget as HTMLInputElement;
           const next = input.value.trim();
@@ -329,7 +396,14 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
 
 /** The global dreaming knobs, editable only when the slot owner stores them. */
 export function renderDreamingSettings(props: DreamingSettingsProps): TemplateResult {
-  const storageMode = normalizeStorageMode(readAtPath(props.dreaming, ["storage", "mode"]));
+  const storageModeValue = readAtPath(props.dreaming, ["storage", "mode"]);
+  const storageMode = normalizeStorageMode(storageModeValue);
+  const storageDefaultState = renderSettingsDefaultState({
+    value: t("memoryPage.dreaming.storage.modes.separate"),
+    overridden: hasAtPath(props.dreaming, ["storage", "mode"]),
+    disabled: props.disabled,
+    onReset: () => props.onPatch(["storage", "mode"], undefined),
+  });
   return html`
     ${renderSettingsSection(
       {
@@ -346,18 +420,23 @@ export function renderDreamingSettings(props: DreamingSettingsProps): TemplateRe
       html`
         ${renderSettingsRow({
           title: t("memoryPage.dreaming.storage.modeLabel"),
-          description: t("memoryPage.dreaming.storage.modeHelp"),
+          description: html`
+            ${t("memoryPage.dreaming.storage.modeHelp")} ${storageDefaultState.description}
+          `,
           stacked: true,
-          control: renderSettingsSegmented<StorageMode>({
-            value: storageMode,
-            options: STORAGE_MODES.map((mode) => ({
-              value: mode,
-              label: t(`memoryPage.dreaming.storage.modes.${mode}`),
-            })),
-            ariaLabel: t("memoryPage.dreaming.storage.modeLabel"),
-            disabled: props.disabled,
-            onChange: (mode) => props.onPatch(["storage", "mode"], mode),
-          }),
+          control: html`
+            ${storageDefaultState.action}
+            ${renderSettingsSegmented<StorageMode>({
+              value: storageMode,
+              options: STORAGE_MODES.map((mode) => ({
+                value: mode,
+                label: t(`memoryPage.dreaming.storage.modes.${mode}`),
+              })),
+              ariaLabel: t("memoryPage.dreaming.storage.modeLabel"),
+              disabled: props.disabled,
+              onChange: (mode) => props.onPatch(["storage", "mode"], mode),
+            })}
+          `,
         })}
         ${renderField(props, {
           kind: "toggle",

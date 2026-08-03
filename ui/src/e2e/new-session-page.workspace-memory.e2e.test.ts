@@ -1,3 +1,4 @@
+import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   MOVED_WORKSPACE,
@@ -14,25 +15,125 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const BASE_CONTEXT: BrowserContextOptions = { locale: "en-US", serviceWorkers: "block" };
+const DESKTOP_CONTEXT: BrowserContextOptions = {
+  ...BASE_CONTEXT,
+  viewport: { height: 900, width: 1280 },
+};
+const MOBILE_CONTEXT: BrowserContextOptions = {
+  ...BASE_CONTEXT,
+  viewport: { height: 568, width: 320 },
+};
+const MODELS = [
+  { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+];
+const GIT_BRANCHES = {
+  branches: [{ kind: "local", name: "main" }],
+  defaultBranch: "main",
+  repositoryStatus: "git",
+};
+const FOLDER_LISTINGS = {
+  cases: [
+    {
+      match: { path: WORKSPACE },
+      response: {
+        path: WORKSPACE,
+        parent: "/home/peter",
+        home: "/home/peter",
+        entries: [{ name: "packages", path: PICKED }],
+      },
+    },
+    {
+      match: { path: PICKED },
+      response: { path: PICKED, parent: WORKSPACE, home: "/home/peter", entries: [] },
+    },
+  ],
+};
+
+function mainAgentList(workspace = WORKSPACE, workspaceGit = true) {
+  return {
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Main" },
+        name: "Main",
+        workspace,
+        workspaceGit,
+      },
+    ],
+    defaultId: "main",
+    mainKey: "main",
+    scope: "agent",
+  };
+}
+
+async function readMainPreference(page: Page): Promise<Record<string, unknown> | null> {
+  return page.evaluate(() => {
+    const key = Array.from({ length: localStorage.length }, (_, index) =>
+      localStorage.key(index),
+    ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
+    const value = key
+      ? (JSON.parse(localStorage.getItem(key) ?? "null") as {
+          agents?: Record<string, Record<string, unknown>>;
+        } | null)
+      : null;
+    return value?.agents?.main ?? null;
+  });
+}
+
+async function withNewSessionPage(
+  options: BrowserContextOptions,
+  run: (page: Page) => Promise<void>,
+): Promise<void> {
+  const context = await suite.browser.newContext(options);
+  try {
+    await run(await context.newPage());
+  } finally {
+    await context.close();
+  }
+}
 
 suite.define(() => {
+  it("keeps the mobile incognito and model controls separated", async () => {
+    await withNewSessionPage(MOBILE_CONTEXT, async (page) => {
+      await installMockGateway(page, {
+        models: [{ id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" }],
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
+      const incognito = page.getByRole("switch", { name: "Incognito" });
+      const model = page.locator(".new-session-page__composer .chat-composer-model-control");
+      await Promise.all([footer.waitFor(), incognito.waitFor(), model.waitFor()]);
+
+      const [footerBox, incognitoBox, modelBox] = await Promise.all([
+        footer.boundingBox(),
+        incognito.boundingBox(),
+        model.boundingBox(),
+      ]);
+      expect(footerBox).not.toBeNull();
+      expect(incognitoBox).not.toBeNull();
+      expect(modelBox).not.toBeNull();
+      expect((incognitoBox?.x ?? 0) + (incognitoBox?.width ?? 0)).toBeLessThanOrEqual(
+        modelBox?.x ?? 0,
+      );
+      for (const control of [incognitoBox, modelBox]) {
+        expect(control?.x ?? 0).toBeGreaterThanOrEqual(footerBox?.x ?? 0);
+        expect((control?.x ?? 0) + (control?.width ?? 0)).toBeLessThanOrEqual(
+          (footerBox?.x ?? 0) + (footerBox?.width ?? 0),
+        );
+      }
+    });
+  });
+
   it("selects the model for a plain new session", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      models: [
-        { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
-        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
-      ],
-      methodResponses: {
-        "sessions.create": { key: "agent:main:model-draft", runStarted: true },
-      },
-    });
-    try {
+    await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
+      const gateway = await installMockGateway(page, {
+        models: MODELS,
+        methodResponses: {
+          "sessions.create": { key: "agent:main:model-draft", runStarted: true },
+        },
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.waitFor();
@@ -80,73 +181,20 @@ suite.define(() => {
         message: "use this model",
         model: "anthropic/claude-sonnet-4-6",
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("restores valid preferences and repairs a worktree rejected by workspace metadata", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      models: [
-        { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
-        {
-          id: "claude-sonnet-4-6",
-          name: "Claude Sonnet 4.6",
-          provider: "anthropic",
+    await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
+      const gateway = await installMockGateway(page, {
+        workspaceGit: true,
+        models: MODELS,
+        methodResponses: {
+          "agents.list": mainAgentList(),
+          "worktrees.branches": GIT_BRANCHES,
+          "fs.listDir": FOLDER_LISTINGS,
         },
-      ],
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
-        "fs.listDir": {
-          cases: [
-            {
-              match: { path: WORKSPACE },
-              response: {
-                path: WORKSPACE,
-                parent: "/home/peter",
-                home: "/home/peter",
-                entries: [{ name: "packages", path: PICKED }],
-              },
-            },
-            {
-              match: { path: PICKED },
-              response: {
-                path: PICKED,
-                parent: WORKSPACE,
-                home: "/home/peter",
-                entries: [],
-              },
-            },
-          ],
-        },
-      },
-    });
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       const placeTrigger = page.locator("#new-session-place-trigger");
       await choosePackagesFolder(page);
@@ -194,95 +242,28 @@ suite.define(() => {
         main.workspace = workspace;
         localStorage.setItem(key, JSON.stringify(value));
       }, WORKSPACE);
-      await gateway.setMethodResponse("agents.list", {
-        agents: [
-          {
-            id: "main",
-            identity: { name: "Main" },
-            name: "Main",
-            workspace: WORKSPACE,
-            workspaceGit: false,
-          },
-        ],
-        defaultId: "main",
-        mainKey: "main",
-        scope: "agent",
-      });
+      await gateway.setMethodResponse("agents.list", mainAgentList(WORKSPACE, false));
       await page.reload();
       await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
-      const storedWorktree = await page.evaluate(() => {
-        const key = Array.from({ length: localStorage.length }, (_, index) =>
-          localStorage.key(index),
-        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
-        const value = key
-          ? (JSON.parse(localStorage.getItem(key) ?? "null") as {
-              agents?: Record<string, { worktree?: boolean }>;
-            } | null)
-          : null;
-        return value?.agents?.main?.worktree;
-      });
+      const storedWorktree = (await readMainPreference(page))?.worktree;
       expect(storedWorktree).toBe(false);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("blocks an immediate submit until remembered model and worktree choices validate", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const models = [
-      { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
-      {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        provider: "anthropic",
-      },
-    ];
-    const branches = {
-      branches: [{ kind: "local", name: "main" }],
-      defaultBranch: "main",
-      repositoryStatus: "git",
-    };
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      models,
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
+    await withNewSessionPage(BASE_CONTEXT, async (page) => {
+      const models = MODELS;
+      const branches = GIT_BRANCHES;
+      const gateway = await installMockGateway(page, {
+        workspaceGit: true,
+        models,
+        methodResponses: {
+          "agents.list": mainAgentList(),
+          "worktrees.branches": branches,
+          "fs.listDir": FOLDER_LISTINGS,
+          "sessions.create": { key: "agent:main:restored-fast-submit", runStarted: true },
         },
-        "worktrees.branches": branches,
-        "fs.listDir": {
-          cases: [
-            {
-              match: { path: WORKSPACE },
-              response: {
-                path: WORKSPACE,
-                parent: "/home/peter",
-                home: "/home/peter",
-                entries: [{ name: "packages", path: PICKED }],
-              },
-            },
-            {
-              match: { path: PICKED },
-              response: { path: PICKED, parent: WORKSPACE, home: "/home/peter", entries: [] },
-            },
-          ],
-        },
-        "sessions.create": { key: "agent:main:restored-fast-submit", runStarted: true },
-      },
-    });
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await choosePackagesFolder(page);
       const placeTrigger = page.locator("#new-session-place-trigger");
@@ -341,53 +322,25 @@ suite.define(() => {
         model: "anthropic/claude-sonnet-4-6",
         worktree: true,
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("repairs a remembered default folder when the agent workspace moves", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      models: [
-        { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
-        {
-          id: "claude-sonnet-4-6",
-          name: "Claude Sonnet 4.6",
-          provider: "anthropic",
+    await withNewSessionPage(BASE_CONTEXT, async (page) => {
+      const gateway = await installMockGateway(page, {
+        workspaceGit: true,
+        models: MODELS,
+        methodResponses: {
+          "agents.list": mainAgentList(),
+          "worktrees.branches": GIT_BRANCHES,
+          "fs.listDir": {
+            path: WORKSPACE,
+            parent: "/home/peter",
+            home: "/home/peter",
+            entries: [],
+          },
         },
-      ],
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
-        "fs.listDir": {
-          path: WORKSPACE,
-          parent: "/home/peter",
-          home: "/home/peter",
-          entries: [],
-        },
-      },
-    });
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       const placeTrigger = page.locator("#new-session-place-trigger");
       await placeTrigger.click();
@@ -396,20 +349,7 @@ suite.define(() => {
       await navigateInApp(page, "chat");
       await page.waitForURL((url) => url.pathname.endsWith("/chat"));
 
-      await gateway.setMethodResponse("agents.list", {
-        agents: [
-          {
-            id: "main",
-            identity: { name: "Main" },
-            name: "Main",
-            workspace: MOVED_WORKSPACE,
-            workspaceGit: true,
-          },
-        ],
-        defaultId: "main",
-        mainKey: "main",
-        scope: "agent",
-      });
+      await gateway.setMethodResponse("agents.list", mainAgentList(MOVED_WORKSPACE));
       await page.reload();
       await navigateInApp(page, "new-session");
       await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
@@ -420,75 +360,27 @@ suite.define(() => {
       await modelSelect.click();
       await page.locator('[data-chat-model-provider="anthropic"]').click();
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
-      const storedPreference = await page.evaluate(() => {
-        const key = Array.from({ length: localStorage.length }, (_, index) =>
-          localStorage.key(index),
-        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
-        if (!key) {
-          return null;
-        }
-        const value = JSON.parse(localStorage.getItem(key) ?? "null") as {
-          agents?: Record<string, unknown>;
-        } | null;
-        return value?.agents?.main ?? null;
-      });
+      const storedPreference = await readMainPreference(page);
       expect(storedPreference).toMatchObject({
         workspace: MOVED_WORKSPACE,
         folder: MOVED_WORKSPACE,
         model: "anthropic/claude-sonnet-4-6",
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("falls back to the current workspace when the remembered folder is gone", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
+    await withNewSessionPage(BASE_CONTEXT, async (page) => {
+      const gateway = await installMockGateway(page, {
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        methodResponses: {
+          "agents.list": mainAgentList(),
+          "worktrees.branches": GIT_BRANCHES,
+          "fs.listDir": FOLDER_LISTINGS,
+          "sessions.create": { key: "agent:main:stale-folder-fallback", runStarted: true },
         },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
-        "fs.listDir": {
-          cases: [
-            {
-              match: { path: WORKSPACE },
-              response: {
-                path: WORKSPACE,
-                parent: "/home/peter",
-                home: "/home/peter",
-                entries: [{ name: "packages", path: PICKED }],
-              },
-            },
-            {
-              match: { path: PICKED },
-              response: { path: PICKED, parent: WORKSPACE, home: "/home/peter", entries: [] },
-            },
-          ],
-        },
-        "sessions.create": { key: "agent:main:stale-folder-fallback", runStarted: true },
-      },
-    });
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await choosePackagesFolder(page);
 
@@ -549,58 +441,21 @@ suite.define(() => {
       await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).not.toHaveProperty("cwd");
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("keeps a newer folder choice when remembered-folder validation finishes late", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
+    await withNewSessionPage(BASE_CONTEXT, async (page) => {
+      const gateway = await installMockGateway(page, {
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        methodResponses: {
+          "agents.list": mainAgentList(),
+          "worktrees.branches": GIT_BRANCHES,
+          "fs.listDir": FOLDER_LISTINGS,
+          "sessions.create": { key: "agent:main:newer-folder-wins", runStarted: true },
         },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
-        "fs.listDir": {
-          cases: [
-            {
-              match: { path: WORKSPACE },
-              response: {
-                path: WORKSPACE,
-                parent: "/home/peter",
-                home: "/home/peter",
-                entries: [{ name: "packages", path: PICKED }],
-              },
-            },
-            {
-              match: { path: PICKED },
-              response: { path: PICKED, parent: WORKSPACE, home: "/home/peter", entries: [] },
-            },
-          ],
-        },
-        "sessions.create": { key: "agent:main:newer-folder-wins", runStarted: true },
-      },
-    });
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await choosePackagesFolder(page);
 
@@ -632,41 +487,20 @@ suite.define(() => {
       await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).not.toHaveProperty("cwd");
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("keeps a folder chosen before the agent roster finishes loading submit-ready", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["agents.list"],
-      workspaceGit: true,
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
+    await withNewSessionPage(BASE_CONTEXT, async (page) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["agents.list"],
+        workspaceGit: true,
+        methodResponses: {
+          "agents.list": mainAgentList(),
+          "fs.listDir": { path: TARGET_REPO, home: "/home/peter", entries: [] },
+          "worktrees.branches": GIT_BRANCHES,
         },
-        "fs.listDir": { path: TARGET_REPO, home: "/home/peter", entries: [] },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
-      },
-    });
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       const trigger = page.locator("#new-session-place-trigger");
       await trigger.click();
@@ -677,20 +511,7 @@ suite.define(() => {
       await expect.poll(() => browserPath.inputValue()).toBe(TARGET_REPO);
       await browserPath.fill(TARGET_REPO);
       await page.getByRole("button", { name: "Use this folder" }).click();
-      await gateway.resolveDeferred("agents.list", {
-        agents: [
-          {
-            id: "main",
-            identity: { name: "Main" },
-            name: "Main",
-            workspace: WORKSPACE,
-            workspaceGit: true,
-          },
-        ],
-        defaultId: "main",
-        mainKey: "main",
-        scope: "agent",
-      });
+      await gateway.resolveDeferred("agents.list", mainAgentList());
 
       await page.locator(".new-session-page__message").fill("keep my early folder choice");
       await expect
@@ -699,21 +520,8 @@ suite.define(() => {
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toContain(
         "target-repo",
       );
-      const storedPreference = await page.evaluate(() => {
-        const key = Array.from({ length: localStorage.length }, (_, index) =>
-          localStorage.key(index),
-        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
-        if (!key) {
-          return null;
-        }
-        const value = JSON.parse(localStorage.getItem(key) ?? "null") as {
-          agents?: Record<string, unknown>;
-        } | null;
-        return value?.agents?.main ?? null;
-      });
+      const storedPreference = await readMainPreference(page);
       expect(storedPreference).toMatchObject({ folder: TARGET_REPO });
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

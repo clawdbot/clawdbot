@@ -103,6 +103,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       req: createReq({
         host: "gateway.example.com",
         origin: "https://evil.example",
+        "sec-fetch-site": "cross-site",
       }),
       res: {} as ServerResponse,
       auth: {
@@ -120,6 +121,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
     expect(authParams.browserOriginPolicy).toEqual({
       requestHost: "gateway.example.com",
       origin: "https://evil.example",
+      fetchSite: "cross-site",
       allowedOrigins: ["https://control.example.com"],
       allowHostHeaderOriginFallback: false,
     });

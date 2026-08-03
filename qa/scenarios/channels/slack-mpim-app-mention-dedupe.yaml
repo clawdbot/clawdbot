@@ -1,4 +1,4 @@
-title: Slack MPIM app mention dispatches once
+title: Slack MPIM app mention dispatches once with thread context
 scenario:
   id: slack-mpim-app-mention-dedupe
   surface: channels

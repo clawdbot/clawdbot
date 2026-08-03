@@ -75,10 +75,38 @@ const OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS = 10_000;
 const OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS = 5;
 const OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS = 1000;
 const OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL = "gpt-4o-transcribe";
+const OPENAI_REALTIME_TRANSCRIPTION_MAX_UNRESOLVED_ITEMS = 64;
+const OPENAI_REALTIME_TRANSCRIPTION_MAX_ITEM_ID_BYTES = 1024;
+const OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES = 256 * 1024;
+const OPENAI_REALTIME_TRANSCRIPTION_MAX_SETTLED_ITEMS = 4096;
+const OPENAI_REALTIME_TRANSCRIPTION_MAX_SETTLED_ID_BYTES = 256 * 1024;
+const OPENAI_REALTIME_TRANSCRIPTION_ITEM_OVERFLOW_MESSAGE =
+  "OpenAI realtime transcription exceeded the 64 unresolved item limit";
+const OPENAI_REALTIME_TRANSCRIPTION_IDENTITY_OVERFLOW_MESSAGE =
+  "OpenAI realtime transcription exceeded the 1024-byte item identity limit";
+const OPENAI_REALTIME_TRANSCRIPTION_TEXT_OVERFLOW_MESSAGE =
+  "OpenAI realtime transcription exceeded the 256 KiB retained transcript limit";
+const OPENAI_REALTIME_TRANSCRIPTION_SETTLED_OVERFLOW_MESSAGE =
+  "OpenAI realtime transcription exceeded the terminal item history limit";
 const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED =
   "OpenAI Realtime transcription requires an OpenAI Platform API key";
 const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED =
   "OpenAI Realtime transcription rejected the selected API key. Update or remove the active OpenAI API-key source";
+
+function appendedUtf8ByteLength(previous: string, appended: string): number {
+  const appendedBytes = Buffer.byteLength(appended, "utf8");
+  if (!previous || !appended) {
+    return appendedBytes;
+  }
+  const previousCodeUnit = previous.charCodeAt(previous.length - 1);
+  const appendedCodeUnit = appended.charCodeAt(0);
+  const joinsSurrogatePair =
+    previousCodeUnit >= 0xd800 &&
+    previousCodeUnit <= 0xdbff &&
+    appendedCodeUnit >= 0xdc00 &&
+    appendedCodeUnit <= 0xdfff;
+  return joinsSurrogatePair ? appendedBytes - 2 : appendedBytes;
+}
 
 function normalizeProviderConfig(
   config: RealtimeTranscriptionProviderConfig,
@@ -172,35 +200,112 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
 function createOpenAIRealtimeTranscriptionSession(
   config: OpenAIRealtimeTranscriptionSessionConfig,
 ): RealtimeTranscriptionSession {
-  const pendingTranscripts = new Map<string, string>();
+  const pendingTranscripts = new Map<string, { bytes: number; text: string }>();
   const committedItemIds: string[] = [];
-  const committedItems = new Set<string>();
-  const previousItemIds = new Map<string, string | null | undefined>();
-  const settledItemIds = new Set<string>();
+  const committedItems = new Map<string, string | null | undefined>();
   const completedTranscripts = new Map<string, string | undefined>();
+  const trackedItemIds = new Set<string>();
+  const settledItemIds = new Set<string>();
   const unkeyedTranscript = "__openclaw_unkeyed_transcript__";
+  let retainedTranscriptBytes = 0;
+  let settledItemIdBytes = 0;
 
   const resetTranscriptionState = () => {
     pendingTranscripts.clear();
     committedItemIds.length = 0;
     committedItems.clear();
-    previousItemIds.clear();
-    settledItemIds.clear();
     completedTranscripts.clear();
+    trackedItemIds.clear();
+    settledItemIds.clear();
+    retainedTranscriptBytes = 0;
+    settledItemIdBytes = 0;
   };
 
-  const commitItem = (itemId: string, previousItemId: string | null | undefined) => {
-    if (committedItems.has(itemId)) {
+  const failTerminal = (error: Error, transport: RealtimeTranscriptionWebSocketTransport) => {
+    resetTranscriptionState();
+    transport.closeNow();
+    try {
+      config.onError?.(error);
+    } catch {
+      // The provider terminal owns this outcome; observer failures must not
+      // re-enter shared error dispatch or duplicate the terminal callback.
+    }
+  };
+
+  const trackItem = (
+    itemId: string,
+    transport: RealtimeTranscriptionWebSocketTransport,
+  ): boolean => {
+    if (settledItemIds.has(itemId) || completedTranscripts.has(itemId)) {
+      return false;
+    }
+    if (trackedItemIds.has(itemId)) {
+      return true;
+    }
+    if (trackedItemIds.size >= OPENAI_REALTIME_TRANSCRIPTION_MAX_UNRESOLVED_ITEMS) {
+      failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_ITEM_OVERFLOW_MESSAGE), transport);
+      return false;
+    }
+    if (Buffer.byteLength(itemId, "utf8") > OPENAI_REALTIME_TRANSCRIPTION_MAX_ITEM_ID_BYTES) {
+      failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_IDENTITY_OVERFLOW_MESSAGE), transport);
+      return false;
+    }
+    trackedItemIds.add(itemId);
+    return true;
+  };
+
+  const settleItem = (
+    itemId: string,
+    transport: RealtimeTranscriptionWebSocketTransport,
+  ): boolean => {
+    const itemIdBytes = Buffer.byteLength(itemId, "utf8");
+    if (
+      settledItemIds.size >= OPENAI_REALTIME_TRANSCRIPTION_MAX_SETTLED_ITEMS ||
+      itemIdBytes > OPENAI_REALTIME_TRANSCRIPTION_MAX_SETTLED_ID_BYTES - settledItemIdBytes
+    ) {
+      failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_SETTLED_OVERFLOW_MESSAGE), transport);
+      return false;
+    }
+    trackedItemIds.delete(itemId);
+    // Predecessor satisfaction belongs to each active item. Recording it here
+    // prevents terminal-history saturation from invalidating admitted state.
+    for (const [candidateId, previousItemId] of committedItems) {
+      if (previousItemId === itemId) {
+        committedItems.set(candidateId, null);
+      }
+    }
+    // Never evict terminal identities within a connection generation. Closing
+    // at the bound preserves first-terminal precedence without unbounded state.
+    settledItemIds.add(itemId);
+    settledItemIdBytes += itemIdBytes;
+    return true;
+  };
+
+  const commitItem = (
+    itemId: string,
+    previousItemId: string | null | undefined,
+    transport: RealtimeTranscriptionWebSocketTransport,
+  ) => {
+    if (settledItemIds.has(itemId) || committedItems.has(itemId) || !trackItem(itemId, transport)) {
       return;
     }
-    committedItems.add(itemId);
-    previousItemIds.set(itemId, previousItemId);
+    if (
+      previousItemId &&
+      Buffer.byteLength(previousItemId, "utf8") > OPENAI_REALTIME_TRANSCRIPTION_MAX_ITEM_ID_BYTES
+    ) {
+      failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_IDENTITY_OVERFLOW_MESSAGE), transport);
+      return;
+    }
+    committedItems.set(
+      itemId,
+      previousItemId && settledItemIds.has(previousItemId) ? null : previousItemId,
+    );
     committedItemIds.push(itemId);
 
     const arrivalOrder = committedItemIds.splice(0);
     const successors = new Map<string, string>();
     for (const candidateId of arrivalOrder) {
-      const previousId = previousItemIds.get(candidateId);
+      const previousId = committedItems.get(candidateId);
       if (previousId) {
         successors.set(previousId, candidateId);
       }
@@ -215,7 +320,7 @@ function createOpenAIRealtimeTranscriptionSession(
       }
     };
     for (const candidateId of arrivalOrder) {
-      const previousId = previousItemIds.get(candidateId);
+      const previousId = committedItems.get(candidateId);
       if (previousId == null || settledItemIds.has(previousId)) {
         appendChain(candidateId);
       }
@@ -225,44 +330,75 @@ function createOpenAIRealtimeTranscriptionSession(
     }
   };
 
-  const flushCompletedTranscripts = () => {
+  const flushCompletedTranscripts = (
+    transport: RealtimeTranscriptionWebSocketTransport,
+  ): boolean => {
     while (committedItemIds.length > 0) {
       const itemId = committedItemIds[0];
       if (!itemId || !completedTranscripts.has(itemId)) {
-        return;
+        return true;
       }
-      const previousItemId = previousItemIds.get(itemId);
+      const previousItemId = committedItems.get(itemId);
       if (
         previousItemId &&
         !settledItemIds.has(previousItemId) &&
         !committedItems.has(previousItemId)
       ) {
-        return;
+        return true;
       }
       committedItemIds.shift();
       committedItems.delete(itemId);
-      previousItemIds.delete(itemId);
-      settledItemIds.add(itemId);
+      if (!settleItem(itemId, transport)) {
+        return false;
+      }
       const transcript = completedTranscripts.get(itemId);
       completedTranscripts.delete(itemId);
-      pendingTranscripts.delete(itemId);
+      if (transcript) {
+        retainedTranscriptBytes -= Buffer.byteLength(transcript, "utf8");
+      }
       if (transcript) {
         config.onTranscript?.(transcript);
       }
     }
+    return true;
   };
 
-  const completeItem = (itemId: string | undefined, transcript: string | undefined) => {
+  const completeItem = (
+    itemId: string | undefined,
+    transcript: string | undefined,
+    transport: RealtimeTranscriptionWebSocketTransport,
+  ): boolean => {
     const key = itemId ?? unkeyedTranscript;
+    if (itemId && !trackItem(itemId, transport)) {
+      return false;
+    }
+    const partialBytes = pendingTranscripts.get(key)?.bytes ?? 0;
     pendingTranscripts.delete(key);
+    retainedTranscriptBytes -= partialBytes;
     if (!itemId || !committedItems.has(itemId)) {
+      if (itemId) {
+        if (!settleItem(itemId, transport)) {
+          return false;
+        }
+      } else {
+        trackedItemIds.delete(key);
+      }
       if (transcript) {
         config.onTranscript?.(transcript);
       }
-      return;
+      return true;
+    }
+    const transcriptBytes = transcript ? Buffer.byteLength(transcript, "utf8") : 0;
+    if (
+      transcriptBytes >
+      OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES - retainedTranscriptBytes
+    ) {
+      failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_TEXT_OVERFLOW_MESSAGE), transport);
+      return false;
     }
     completedTranscripts.set(itemId, transcript);
-    flushCompletedTranscripts();
+    retainedTranscriptBytes += transcriptBytes;
+    return flushCompletedTranscripts(transport);
   };
 
   const handleEvent = (
@@ -277,32 +413,63 @@ function createOpenAIRealtimeTranscriptionSession(
 
       case "input_audio_buffer.committed":
         if (event.item_id) {
-          commitItem(event.item_id, event.previous_item_id);
+          commitItem(event.item_id, event.previous_item_id, transport);
         }
         return;
 
       case "conversation.item.input_audio_transcription.delta":
         if (event.delta) {
           const key = event.item_id ?? unkeyedTranscript;
-          const pendingTranscript = `${pendingTranscripts.get(key) ?? ""}${event.delta}`;
-          pendingTranscripts.set(key, pendingTranscript);
-          config.onPartial?.(pendingTranscript);
+          if (!trackItem(key, transport)) {
+            return;
+          }
+          const pendingTranscript = pendingTranscripts.get(key);
+          const previousPartial = pendingTranscript?.text ?? "";
+          const deltaBytes = appendedUtf8ByteLength(previousPartial, event.delta);
+          if (
+            deltaBytes >
+            OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES - retainedTranscriptBytes
+          ) {
+            failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_TEXT_OVERFLOW_MESSAGE), transport);
+            return;
+          }
+          const partial = `${previousPartial}${event.delta}`;
+          pendingTranscripts.set(key, {
+            bytes: (pendingTranscript?.bytes ?? 0) + deltaBytes,
+            text: partial,
+          });
+          retainedTranscriptBytes += deltaBytes;
+          config.onPartial?.(partial);
         }
         return;
 
       case "conversation.item.input_audio_transcription.completed":
-        completeItem(event.item_id, event.transcript);
+        completeItem(event.item_id, event.transcript, transport);
         return;
 
       case "conversation.item.input_audio_transcription.failed":
-        completeItem(event.item_id, undefined);
-        config.onError?.(new Error(readRealtimeErrorDetail(event.error)));
+        if (
+          event.item_id &&
+          (settledItemIds.has(event.item_id) || completedTranscripts.has(event.item_id))
+        ) {
+          return;
+        }
+        if (completeItem(event.item_id, undefined, transport)) {
+          config.onError?.(new Error(readRealtimeErrorDetail(event.error)));
+        }
         return;
 
-      case "input_audio_buffer.speech_started":
-        pendingTranscripts.delete(event.item_id ?? unkeyedTranscript);
+      case "input_audio_buffer.speech_started": {
+        const key = event.item_id ?? unkeyedTranscript;
+        const partialBytes = pendingTranscripts.get(key)?.bytes ?? 0;
+        pendingTranscripts.delete(key);
+        retainedTranscriptBytes -= partialBytes;
+        if (!committedItems.has(key)) {
+          trackedItemIds.delete(key);
+        }
         config.onSpeechStart?.();
         return;
+      }
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);

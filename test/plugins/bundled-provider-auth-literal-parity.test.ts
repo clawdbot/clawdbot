@@ -190,7 +190,7 @@ beforeAll(() => {
           status: "fulfilled",
           value,
         }),
-        (reason): PromiseRejectedResult => ({ status: "rejected", reason }),
+        (reason: unknown): PromiseRejectedResult => ({ status: "rejected", reason }),
       ),
     );
   }

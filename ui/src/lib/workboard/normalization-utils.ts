@@ -1,7 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-export { isRecord };
-
 export function formatError(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message;

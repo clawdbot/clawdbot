@@ -13,6 +13,9 @@ import type { StatusScanResult } from "./status.scan-result.ts";
 const statusScanMemoryModuleLoader = createLazyImportLoader(
   () => import("./status.scan-memory.js"),
 );
+const statusScanPluginStatusModuleLoader = createLazyImportLoader(
+  () => import("../plugins/status.js"),
+);
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 const STATUS_JSON_CHANNEL_ENV_PREFIXES = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter(
@@ -105,13 +108,20 @@ export async function scanStatusJsonWithPolicy(
     includeLocalStatusRpcFallback: policy.includeLocalStatusRpcFallback,
     gatewayProbeTimeoutMs: policy.gatewayProbeTimeoutMs,
   });
+  const pluginCompatibility = opts.all
+    ? await statusScanPluginStatusModuleLoader
+        .load()
+        .then(({ buildPluginCompatibilitySnapshotNotices }) =>
+          buildPluginCompatibilitySnapshotNotices({ config: overview.cfg }),
+        )
+    : [];
   return await executeStatusScanFromOverview({
     overview,
     runtime,
     resolveMemory: policy.resolveMemory,
     channelIssues: [],
     channels: { rows: [], details: [] },
-    pluginCompatibility: [],
+    pluginCompatibility,
   });
 }
 

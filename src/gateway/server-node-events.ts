@@ -15,6 +15,7 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
@@ -50,7 +51,7 @@ import {
   resolveSessionModelRef,
   persistInboundImagesForTranscript,
   sendDurableMessageBatch,
-  canonicalizeSessionEntryAliases,
+  upsertSessionEntry,
 } from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -172,13 +173,7 @@ function shouldDropDuplicateVoiceTranscript(params: {
         break;
       }
     }
-    while (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
-      const oldestKey = recentVoiceTranscripts.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentVoiceTranscripts.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentVoiceTranscripts, MAX_RECENT_VOICE_TRANSCRIPTS);
   }
 
   return false;
@@ -328,13 +323,7 @@ function shouldDropDuplicateExecFinished(params: {
         break;
       }
     }
-    while (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
-      const oldestKey = recentExecFinishedRuns.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentExecFinishedRuns.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentExecFinishedRuns, MAX_RECENT_EXEC_FINISHED_RUNS);
   }
 
   return false;
@@ -356,13 +345,7 @@ function pruneBoundedTimestampMap(
       return;
     }
   }
-  while (map.size > params.maxEntries) {
-    const oldestKey = map.keys().next().value;
-    if (oldestKey === undefined) {
-      return;
-    }
-    map.delete(oldestKey);
-  }
+  pruneMapToMaxSize(map, params.maxEntries);
 }
 
 function compactExecEventOutput(raw: string) {
@@ -394,7 +377,6 @@ type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
 async function touchSessionStore(params: {
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
-  storeKeys: LoadedSessionEntry["storeKeys"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
@@ -403,14 +385,12 @@ async function touchSessionStore(params: {
   if (!storePath) {
     return;
   }
-  await canonicalizeSessionEntryAliases({
-    storePath,
-    target: {
-      canonicalKey: params.canonicalKey,
-      storeKeys: params.storeKeys,
+  await upsertSessionEntry(
+    {
+      sessionKey: params.canonicalKey,
+      storePath,
     },
-    update: (entry) => ({
-      ...entry,
+    {
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
@@ -420,15 +400,14 @@ async function touchSessionStore(params: {
       systemSent: params.entry?.systemSent,
       sendPolicy: params.entry?.sendPolicy,
       delivery: params.entry?.delivery,
-    }),
-  });
+    },
+  );
 }
 
 function queueSessionStoreTouch(params: {
   ctx: NodeEventContext;
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
-  storeKeys: LoadedSessionEntry["storeKeys"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
@@ -443,7 +422,6 @@ function queueSessionStoreTouch(params: {
     await touchSessionStore({
       storePath: params.storePath,
       canonicalKey: params.canonicalKey,
-      storeKeys: params.storeKeys,
       entry: params.entry,
       sessionId: params.sessionId,
       now: params.now,
@@ -584,7 +562,7 @@ export const handleNodeEvent = async (
       const cfg = getRuntimeConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
-      const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -623,7 +601,6 @@ export const handleNodeEvent = async (
             ctx,
             storePath,
             canonicalKey,
-            storeKeys,
             entry,
             sessionId,
             now: receivedAt,
@@ -673,7 +650,7 @@ export const handleNodeEvent = async (
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
-      const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -770,7 +747,6 @@ export const handleNodeEvent = async (
       await touchSessionStore({
         storePath,
         canonicalKey,
-        storeKeys,
         entry,
         sessionId,
         now,

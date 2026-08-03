@@ -1,9 +1,6 @@
 // Session key case tests cover preserving meaningful case in session keys.
 import { describe, expect, it } from "vitest";
-import {
-  resolveSessionEntryCandidates,
-  resolveSessionStoreEntry,
-} from "../config/sessions/store-entry.js";
+import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import {
@@ -254,26 +251,6 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
 });
 
 describe("resolveSessionStoreEntry — case-distinct Matrix session safety (codex #87366 P2)", () => {
-  it("returns the selected persisted key when resolving candidate rows", () => {
-    const staleExact = entry("room:!MixedRoomAbCdEf:example.org", 100);
-    const freshStructuralAlias = entry("room:!MixedRoomAbCdEf:example.org", 200);
-    const structuralAliasKey = "Agent:Main:Matrix:Channel:!MixedRoomAbCdEf:example.org";
-
-    const resolved = resolveSessionEntryCandidates({
-      entries: [
-        { sessionKey: ROOM_MIXED_KEY, entry: staleExact },
-        { sessionKey: structuralAliasKey, entry: freshStructuralAlias },
-      ],
-      sessionKey: ROOM_MIXED_KEY,
-    });
-
-    expect(resolved.existing).toEqual({
-      sessionKey: structuralAliasKey,
-      entry: freshStructuralAlias,
-    });
-    expect(resolved.legacyKeys).toContain(structuralAliasKey);
-  });
-
   it("does NOT collapse a case-distinct sibling room (different real room, not an alias)", () => {
     // Two genuinely distinct Matrix rooms whose ids differ only by case; each
     // delivers to its OWN id. Resolving one must not mark the other for deletion.

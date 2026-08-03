@@ -25,7 +25,6 @@ const unitFastCandidateGlobs = [
   "src/compat/**/*.test.ts",
   "src/config/**/*.test.ts",
   "src/daemon/**/*.test.ts",
-  "src/i18n/**/*.test.ts",
   "src/hooks/**/*.test.ts",
   "src/image-generation/**/*.test.ts",
   "src/infra/**/*.test.ts",
@@ -104,7 +103,6 @@ export const forcedUnitFastTestFiles = [
   "src/entry.test.ts",
   "src/flows/doctor-startup-channel-maintenance.test.ts",
   "src/flows/search-setup.test.ts",
-  "src/i18n/registry.test.ts",
   "src/image-generation/openai-compatible-image-provider.test.ts",
   "src/image-generation/provider-registry.test.ts",
   "src/install-sh-version.test.ts",
@@ -170,6 +168,7 @@ const broadUnitFastCandidateGlobs = [
 ];
 const ownerRoutedUnitTestPatterns = [
   "src/agents/openai-transport-stream.*.test.ts",
+  "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
 ];
 const broadUnitFastCandidateSkipGlobs = [

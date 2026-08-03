@@ -26,7 +26,7 @@ import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-comma
 import type { NodeSession } from "../node-registry.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
-  respondUnavailableOnNodeInvokeError,
+  respondUnavailableOnNodeInvokeErrorWithProvenance,
   respondUnavailableOnThrow,
   safeParseJson,
 } from "./nodes.helpers.js";
@@ -164,6 +164,7 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
     }
   }
   await respondUnavailableOnThrow(params.respond, async () => {
+    let nodeCommandDispatched = false;
     const res = await params.context.nodeRegistry.invoke({
       nodeId,
       ...(nodeSession
@@ -176,8 +177,15 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
         : {}),
       command: params.command,
       params: params.commandParams(parsedParams, nodeSession),
+      onDispatchReady: () => {
+        nodeCommandDispatched = true;
+      },
     });
-    if (!respondUnavailableOnNodeInvokeError(params.respond, res)) {
+    if (
+      !respondUnavailableOnNodeInvokeErrorWithProvenance(params.respond, res, {
+        nodeCommandDispatched,
+      })
+    ) {
       return;
     }
     const payload = params.readPayload(res);

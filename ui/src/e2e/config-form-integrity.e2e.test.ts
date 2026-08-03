@@ -1,5 +1,5 @@
 // Control UI tests cover schema-backed form constraints, draft recovery, and accessible names.
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -183,6 +183,132 @@ describeControlUiE2e("Control UI config form integrity mocked Gateway E2E", () =
       await expect
         .poll(() => codes.locator("input[aria-label='Codes']").last().inputValue())
         .toBe("123");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("matches rejected Settings-save errors to visible one-based model rows", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+    });
+    const page = await context.newPage();
+    const providerId = "z.ai";
+    const config = {
+      models: {
+        providers: {
+          [providerId]: {
+            models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, { name: "Fourth" }],
+          },
+        },
+      },
+    };
+    const issue = {
+      path: `models.providers.${providerId}.models.3.name`,
+      message: "Invalid model name",
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          appliedConfigHash: "model-row-e2e",
+          config,
+          configRevisionHash: "model-row-e2e",
+          hash: "model-row-e2e",
+          issues: [],
+          raw: JSON.stringify(config),
+          valid: true,
+        },
+        "config.schema": {
+          generatedAt: "2026-08-01T00:00:00.000Z",
+          schema: {
+            type: "object",
+            properties: {
+              models: {
+                type: "object",
+                title: "Models",
+                properties: {
+                  providers: {
+                    type: "object",
+                    title: "Providers",
+                    additionalProperties: {
+                      type: "object",
+                      properties: {
+                        models: {
+                          type: "array",
+                          title: "Configured models",
+                          items: {
+                            type: "object",
+                            properties: {
+                              name: { type: "string", title: "Model name" },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          uiHints: {},
+          version: "e2e",
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/advanced?section=models`);
+      expect(response?.status()).toBe(200);
+      const panel = page.locator("#config-section-panel");
+      const fourthRow = panel.locator(".settings-row__title").getByText("#4", { exact: true });
+      await expect.poll(() => fourthRow.isVisible()).toBe(true);
+
+      await gateway.deferNext("config.set");
+      await panel.getByRole("textbox", { name: "Model name" }).nth(3).fill("Broken");
+      const request = await gateway.waitForRequest("config.set");
+      const params = request.params as { baseHash?: string; raw?: string };
+      const submitted = JSON.parse(String(params.raw)) as {
+        models: { providers: Record<string, { models: Array<{ name: string }> }> };
+      };
+      expect(submitted.models.providers[providerId]?.models[3]?.name).toBe("Broken");
+      expect(params.baseHash).toBe("model-row-e2e");
+
+      const rejection = {
+        code: "INVALID_REQUEST",
+        message: `invalid config: ${issue.path}: ${issue.message}`,
+        details: { issues: [issue] },
+      };
+      await gateway.rejectDeferred("config.set", rejection);
+
+      const status = page.locator('.settings-save-indicator--danger[role="status"]');
+      await expect.poll(() => status.isVisible()).toBe(true);
+      await expect
+        .poll(() => status.getAttribute("title"))
+        .toBe(
+          `GatewayRequestError: invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
+        );
+      expect(await status.getAttribute("aria-label")).toContain(
+        `models.providers.${providerId}.models.#4.name`,
+      );
+      expect(await status.textContent()).toContain("Save failed");
+      expect(issue.path).toBe(`models.providers.${providerId}.models.3.name`);
+      expect(rejection.message).toContain(".3.name");
+
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(uiProofArtifactDir, "03-model-row-rejection.png"),
+        });
+        await writeFile(
+          path.join(uiProofArtifactDir, "03-model-row-rejection-accessibility.yml"),
+          await status.ariaSnapshot(),
+        );
+      }
     } finally {
       await context.close();
     }

@@ -176,7 +176,6 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     compactionTimeoutMs: input.compactionTimeoutMs,
     isProbeSession,
     abortRun,
-    markExternalAbort: input.lifecycle.markExternalAbort,
     markTimedOutDuringCompaction: input.lifecycle.markTimedOutDuringCompaction,
     markTimedOutByRunBudget: input.lifecycle.markTimedOutByRunBudget,
   });

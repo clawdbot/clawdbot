@@ -1,9 +1,9 @@
 import { Buffer } from "node:buffer";
 import crypto from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { stableStringify } from "../stable-stringify.js";
 
 type ProviderPromptSnapshot = {
   scopeDigest: string;

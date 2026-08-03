@@ -6,6 +6,7 @@ import {
   prepareSource,
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
+import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
@@ -104,6 +105,15 @@ describe("Code Mode master switch resolution", () => {
 });
 
 describe("Code Mode guest source validation", () => {
+  it("reports syntax errors at user-relative locations", () => {
+    expect(parseCodeModeScriptSyntax("const x = ;")).toEqual({
+      ok: false,
+      message: "Unexpected token",
+      line: 1,
+      column: 10,
+    });
+  });
+
   it.each([
     {
       name: "import-shaped template text",

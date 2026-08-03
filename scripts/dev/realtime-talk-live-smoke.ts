@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import {
   parseStrictIntegerOption,
   previewForDevToolLog,
@@ -211,6 +211,10 @@ function normalizeTranscript(text: string): string {
 
 function transcriptIncludesMarker(transcripts: string[], marker: string): boolean {
   return normalizeTranscript(transcripts.join(" ")).includes(normalizeTranscript(marker));
+}
+
+function resolveGatewayRelayModulePath(repoRoot = process.cwd()): string {
+  return `/@fs/${repoRoot.replaceAll("\\", "/")}/ui/src/pages/chat/realtime-talk-gateway-relay.ts`;
 }
 
 async function sendPcmAudioInChunks(
@@ -899,10 +903,8 @@ async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> 
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-realtime-talk-"));
   try {
     const { createServer } = await import("vite");
-    const repoRoot = process.cwd().replaceAll("\\", "/");
-    const relayModulePath = JSON.stringify(
-      `/@fs/${repoRoot}/ui/src/ui/chat/realtime-talk-gateway-relay.ts`,
-    );
+    const repoRoot = process.cwd();
+    const relayModulePath = JSON.stringify(resolveGatewayRelayModulePath(repoRoot));
     await writeFile(
       path.join(dir, "index.html"),
       '<!doctype html><meta charset="utf-8"><script type="module" src="/main.ts"></script>',
@@ -910,8 +912,6 @@ async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> 
     await writeFile(
       path.join(dir, "main.ts"),
       `
-const { GatewayRelayRealtimeTalkTransport } = await import(${relayModulePath});
-
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const listeners = new Set();
 const requests = [];
@@ -951,6 +951,7 @@ const client = {
 };
 
 try {
+  const { GatewayRelayRealtimeTalkTransport } = await import(${relayModulePath});
   const transport = new GatewayRelayRealtimeTalkTransport(
     {
       provider: "smoke",
@@ -972,7 +973,11 @@ try {
       },
     },
   );
-  await transport.start();
+  const startResult = await transport.start();
+  if (startResult !== "ready") {
+    throw new Error("Relay smoke transport did not become ready: " + startResult);
+  }
+  transport.activate();
   emit({ event: "talk.event", payload: { relaySessionId: "relay-live-smoke", type: "ready" } });
   emit({
     event: "talk.event",
@@ -1013,9 +1018,14 @@ try {
 `,
     );
     server = await createServer({
+      configFile: path.join(repoRoot, "ui/vite.config.ts"),
       root: dir,
       logLevel: "silent",
-      server: { host: "127.0.0.1", port: 0 },
+      server: {
+        host: "127.0.0.1",
+        port: 0,
+        fs: { allow: [dir, repoRoot] },
+      },
     });
     await server.listen();
     const address = server.httpServer?.address();
@@ -1154,6 +1164,7 @@ export const testing = {
   parseRealtimeSmokeArgs,
   readOpenAIRealtimeBrowserResponseText,
   readBoundedText,
+  resolveGatewayRelayModulePath,
   resolveOpenAIHttpTimeoutMs,
   sendPcmAudioInChunks,
   transcriptIncludesMarker,

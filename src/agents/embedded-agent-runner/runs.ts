@@ -29,6 +29,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
@@ -343,7 +344,7 @@ export function queueEmbeddedAgentMessageWithOutcome(
     .queueMessage(text, options ?? { steeringMode: "all" })
     .catch((err: unknown) => {
       diag.debug(
-        `queue message rejected after enqueue: sessionId=${sessionId} err=${formatQueueError(err)}`,
+        `queue message rejected after enqueue: sessionId=${sessionId} err=${formatErrorMessage(err)}`,
       );
     });
   return {
@@ -353,10 +354,6 @@ export function queueEmbeddedAgentMessageWithOutcome(
     gatewayHealth: "live",
     enqueuedAtMs: Date.now(),
   };
-}
-
-function formatQueueError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 function logActiveRunMessageAccepted(sessionId: string): void {
@@ -463,7 +460,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
       enqueuedAtMs,
     };
   } catch (err) {
-    const errorMessage = formatQueueError(err);
+    const errorMessage = formatErrorMessage(err);
     diag.debug(`queue message rejected: sessionId=${sessionId} err=${errorMessage}`);
     return createQueueFailureOutcome(sessionId, "runtime_rejected", errorMessage);
   }

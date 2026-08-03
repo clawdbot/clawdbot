@@ -22,18 +22,21 @@ const prepareOptions = [
     brandId: "ollama",
     label: "Ollama",
     hint: "Connect to an Ollama server and select a cloud or local model",
+    actionLabel: "Choose connection",
   },
   {
     id: "llama-cpp",
     brandId: "llama-cpp",
-    label: "Local model (llama.cpp)",
-    hint: "Download and run a private GGUF model",
+    label: "llama.cpp",
+    hint: "Run one private GGUF model directly inside this Gateway",
+    actionLabel: "Set up model",
   },
   {
     id: "lmstudio",
     brandId: "lmstudio",
     label: "LM Studio",
     hint: "Connect to a running LM Studio server and use an already loaded model",
+    actionLabel: "Connect server",
     icon: "https://cdn.simpleicons.org/lmstudio",
     website: "https://lmstudio.ai/download",
   },
@@ -103,7 +106,7 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
                 id: "llama-cpp-consent",
                 type: "confirm",
                 message:
-                  "Download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) for local llama.cpp inference?",
+                  "OpenClaw will download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) and run it directly inside this Gateway. Continue?",
                 initialValue: false,
               },
             },
@@ -137,7 +140,7 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}settings/model-setup`);
       expect(response?.status()).toBe(200);
       const llamaCppRow = page.locator('[data-prepare-choice="llama-cpp"]');
-      await llamaCppRow.getByRole("button", { name: "Check & set up" }).waitFor();
+      await llamaCppRow.getByRole("button", { name: "Set up model" }).waitFor();
       await expect
         .poll(() => llamaCppRow.locator('[data-provider-icon="llamacpp"]').count())
         .toBe(1);
@@ -154,11 +157,11 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
         });
       }
 
-      await llamaCppRow.getByRole("button", { name: "Check & set up" }).click();
+      await llamaCppRow.getByRole("button", { name: "Set up model" }).click();
       const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
       expect(start.params).toMatchObject({ authChoice: "llama-cpp" });
       await page.getByRole("heading", { name: "Set up a local model" }).waitFor();
-      await page.getByText("Download Gemma 4 E4B IT Q4_K_M").waitFor();
+      await page.getByText("OpenClaw will download Gemma 4 E4B IT Q4_K_M").waitFor();
 
       if (artifactDir) {
         await page.screenshot({
@@ -182,7 +185,7 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
           },
         ],
       });
-      await page.getByRole("button", { name: "Yes" }).click();
+      await page.getByRole("button", { name: "Continue" }).click();
       await page.getByRole("heading", { name: "Connection verified" }).waitFor();
       await expect
         .poll(() => page.locator(".model-setup-success").textContent())
@@ -223,7 +226,8 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
       await page.setViewportSize({ height: 900, width: 1280 });
       await page.getByRole("button", { name: "Stay in settings" }).click();
       const currentConnection = page.locator(".model-setup__current");
-      await currentConnection.getByText(modelRef, { exact: true }).waitFor();
+      await currentConnection.getByText("llama.cpp", { exact: true }).waitFor();
+      await currentConnection.getByText("gemma-4-e4b-it-q4_k_m", { exact: true }).waitFor();
       await expect
         .poll(() => currentConnection.locator('[data-provider-icon="llamacpp"]').count())
         .toBe(1);

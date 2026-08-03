@@ -131,6 +131,7 @@ describe("scripts/test-live-shard", () => {
       "extensions/openai/openai.live.test.ts",
       "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
       "extensions/openai/realtime-quicksilver.live.test.ts",
+      "extensions/openai/realtime-voice-provider.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-extensions-l-n", allFiles)).toEqual([
       "extensions/memory-lancedb/memory-lancedb.live.test.ts",
@@ -417,6 +418,40 @@ describe("scripts/test-live-shard", () => {
     ).toEqual({
       ok: false,
       reason: `Vitest report selected live test files had no passing assertions: ${reviewFile}`,
+    });
+  });
+
+  it("allows GPT-Live files to be skipped until their shared opt-in is enabled", () => {
+    const quicksilverFiles = [
+      "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
+      "extensions/openai/realtime-quicksilver.live.test.ts",
+    ];
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 3,
+      testResults: [
+        {
+          name: path.join(process.cwd(), "extensions/openai/openai.live.test.ts"),
+          assertionResults: [{ status: "passed" }],
+        },
+        ...quicksilverFiles.map((file) => ({
+          name: path.join(process.cwd(), file),
+          assertionResults: [{ status: "skipped" }],
+        })),
+      ],
+    };
+    const expectedFiles = ["extensions/openai/openai.live.test.ts", ...quicksilverFiles];
+
+    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
+      ok: true,
+    });
+    expect(
+      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
+        OPENCLAW_LIVE_GPT_LIVE: "1",
+      }),
+    ).toEqual({
+      ok: false,
+      reason: `Vitest report selected live test files had no passing assertions: ${quicksilverFiles.join(", ")}`,
     });
   });
 

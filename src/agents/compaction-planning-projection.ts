@@ -126,28 +126,21 @@ function jsonLengthWithin(
   return length;
 }
 
-function projectToolArguments(
-  value: unknown,
-  budget: ProjectionBudget,
-): { value: Record<string, never>; omittedChars: number; changed: boolean } {
+function projectToolArguments(value: unknown, budget: ProjectionBudget): number | undefined {
   const length = jsonLengthWithin(value, budget.remainingChars);
   if (length !== undefined) {
     budget.remainingChars -= length;
-    return { value: {}, omittedChars: 0, changed: false };
+    return undefined;
   }
   budget.remainingChars = 0;
-  return {
-    value: {},
-    // Unmeasurable arguments must force an oversized plan, never understate token pressure.
-    omittedChars:
-      jsonLengthWithin(value, MAX_ARGUMENT_ESTIMATE_CHARS) ?? UNMEASURABLE_ARGUMENT_OMITTED_CHARS,
-    changed: true,
-  };
+  // Unmeasurable arguments must force an oversized plan, never understate token pressure.
+  return (
+    jsonLengthWithin(value, MAX_ARGUMENT_ESTIMATE_CHARS) ?? UNMEASURABLE_ARGUMENT_OMITTED_CHARS
+  );
 }
 
 function projectContentBlock(
   block: unknown,
-  projectTextContent: boolean,
   budget: ProjectionBudget,
 ): { block: unknown; omittedChars: number; changed: boolean } {
   if (!block || typeof block !== "object") {
@@ -162,9 +155,6 @@ function projectContentBlock(
       changed: true,
     };
   }
-  if (!projectTextContent) {
-    return { block, omittedChars: 0, changed: false };
-  }
   const hasText = typeof record.text === "string" && record.text.length > 0;
   const textIsModelVisible =
     type === "text" || ((type === "toolResult" || type === "tool_result") && hasText);
@@ -172,50 +162,41 @@ function projectContentBlock(
     (type === "toolResult" || type === "tool_result") &&
     !hasText &&
     typeof record.content === "string";
-  const projectedText = typeof record.text === "string" ? projectText(record.text, budget) : null;
-  const projectedContent =
-    typeof record.content === "string" ? projectText(record.content, budget) : null;
-  const projectedThinking =
-    type === "thinking" && typeof record.thinking === "string"
-      ? projectText(record.thinking, budget)
-      : null;
-  const projectedArguments =
-    type === "toolCall" ? projectToolArguments(record.arguments, budget) : undefined;
-  // Tool-call IDs are provider-generated and bounded in practice. Planning never uses them as
-  // durable keys, so malformed giant IDs do not justify an ID-remapping protocol here.
-  const hasPlanningIrrelevantSignature =
-    "textSignature" in record || "thinkingSignature" in record || "thoughtSignature" in record;
-  if (
-    !projectedText &&
-    !projectedContent &&
-    !projectedThinking &&
-    !projectedArguments?.changed &&
-    !hasPlanningIrrelevantSignature
-  ) {
-    return { block, omittedChars: 0, changed: false };
-  }
-  const next = { ...record };
+  let next: Record<string, unknown> | undefined;
   let omittedChars = 0;
-  if (projectedText) {
-    next.text = projectedText.text;
-    omittedChars += textIsModelVisible ? projectedText.omittedChars : 0;
+  for (const field of ["text", "content", "thinking"] as const) {
+    if (field === "thinking" && type !== "thinking") {
+      continue;
+    }
+    const value = record[field];
+    const projected = typeof value === "string" ? projectText(value, budget) : null;
+    if (!projected) {
+      continue;
+    }
+    next ??= { ...record };
+    next[field] = projected.text;
+    const modelVisible =
+      field === "thinking" || (field === "text" ? textIsModelVisible : contentIsModelVisible);
+    omittedChars += modelVisible ? projected.omittedChars : 0;
   }
-  if (projectedContent) {
-    next.content = projectedContent.text;
-    omittedChars += contentIsModelVisible ? projectedContent.omittedChars : 0;
+  if (type === "toolCall") {
+    const omittedArguments = projectToolArguments(record.arguments, budget);
+    if (omittedArguments !== undefined) {
+      next ??= { ...record };
+      next.arguments = {};
+      omittedChars += omittedArguments;
+    }
   }
-  if (projectedThinking) {
-    next.thinking = projectedThinking.text;
-    omittedChars += projectedThinking.omittedChars;
+  // Signatures never contribute model-visible compaction text and can dwarf the planning payload.
+  for (const signature of ["textSignature", "thinkingSignature", "thoughtSignature"]) {
+    if (signature in record) {
+      next ??= { ...record };
+      delete next[signature];
+    }
   }
-  if (projectedArguments?.changed) {
-    next.arguments = projectedArguments.value;
-    omittedChars += projectedArguments.omittedChars;
-  }
-  delete next.textSignature;
-  delete next.thinkingSignature;
-  delete next.thoughtSignature;
-  return { block: next, omittedChars, changed: true };
+  return next
+    ? { block: next, omittedChars, changed: true }
+    : { block, omittedChars, changed: false };
 }
 
 function projectStringFields(
@@ -245,43 +226,24 @@ function projectStringFields(
 }
 
 function projectMessage(message: AgentMessage, budget: ProjectionBudget): AgentMessage {
-  const source = (() => {
-    switch (message.role) {
-      case "assistant":
-        return {
-          role: message.role,
-          content: message.content,
-          stopReason: message.stopReason,
-          timestamp: message.timestamp,
-        } as AgentMessage;
-      case "bashExecution": {
-        const { fullOutputPath: _, ...rest } = message;
-        return rest as AgentMessage;
-      }
-      case "compactionSummary": {
-        const { details: _, ...rest } = message;
-        return rest as AgentMessage;
-      }
-      case "custom": {
-        const { details: _, ...rest } = message;
-        return rest as AgentMessage;
-      }
-      default:
-        return message;
-    }
-  })();
-  const currentOmittedChars = readCompactionPlanningOmittedChars(source);
+  let source = message;
+  if (message.role === "assistant") {
+    source = {
+      role: message.role,
+      content: message.content,
+      stopReason: message.stopReason,
+      timestamp: message.timestamp,
+    } as AgentMessage;
+  } else if (message.role === "bashExecution") {
+    const { fullOutputPath: _, ...rest } = message;
+    source = rest as AgentMessage;
+  } else if (message.role === "compactionSummary" || message.role === "custom") {
+    const { details: _, ...rest } = message;
+    source = rest as AgentMessage;
+  }
   const content = (source as { content?: unknown }).content;
   if (typeof content === "string") {
-    const projected = projectText(content, budget);
-    if (!projected) {
-      return source;
-    }
-    return {
-      ...(source as unknown as Record<string, unknown>),
-      content: projected.text,
-      [OMITTED_CHARS_FIELD]: currentOmittedChars + projected.omittedChars,
-    } as unknown as AgentMessage;
+    return projectStringFields(source, ["content"], budget);
   }
   if (!Array.isArray(content)) {
     switch (source.role) {
@@ -298,7 +260,7 @@ function projectMessage(message: AgentMessage, budget: ProjectionBudget): AgentM
   let omittedChars = 0;
   let changed = false;
   const projectedContent = content.map((block) => {
-    const projected = projectContentBlock(block, true, budget);
+    const projected = projectContentBlock(block, budget);
     omittedChars += projected.omittedChars;
     changed ||= projected.changed;
     return projected.block;
@@ -309,7 +271,7 @@ function projectMessage(message: AgentMessage, budget: ProjectionBudget): AgentM
   return {
     ...(source as unknown as Record<string, unknown>),
     content: projectedContent,
-    [OMITTED_CHARS_FIELD]: currentOmittedChars + omittedChars,
+    [OMITTED_CHARS_FIELD]: readCompactionPlanningOmittedChars(source) + omittedChars,
   } as unknown as AgentMessage;
 }
 

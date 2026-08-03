@@ -11,7 +11,7 @@ describe("audit-seams cron seam classification", () => {
     const source = `
       import { runCliAgent } from "../../agents/cli-runner.js";
       import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
-      import { registerAgentRunContext } from "../../infra/agent-events.js";
+      import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
       import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
       import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 

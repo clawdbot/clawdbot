@@ -12,6 +12,7 @@ import {
   readConfigFileSnapshot,
   replaceConfigFile,
 } from "../config/config.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -20,6 +21,7 @@ import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import type {
+  PluginDoctorOptions,
   PluginMarketplaceEntriesOptions,
   PluginMarketplaceListOptions,
   PluginMarketplaceRefreshOptions,
@@ -140,7 +142,6 @@ function formatDisabledRuntimePluginGuidance(params: {
 
 function collectConfiguredRuntimePluginWarnings(params: {
   cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
   plugins: readonly { enabled?: boolean; id: string; status?: string }[];
 }): string[] {
   const enabledPluginIds = new Set(
@@ -205,12 +206,10 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   });
   // A blocked request must not displace the active slot or rewrite persisted state.
   if (!enableResult.enabled) {
-    defaultRuntime.log(
-      theme.warn(
-        `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
-      ),
+    defaultRuntime.error(
+      `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
     );
-    return;
+    return defaultRuntime.exit(1);
   }
 
   const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
@@ -357,7 +356,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
 }
 
 /** Print plugin install-tree, compatibility, and plugin-owned config diagnostics. */
-export async function runPluginsDoctorCommand(): Promise<void> {
+export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): Promise<void> {
   const {
     buildPluginCompatibilityNotices,
     buildPluginDiagnosticsReport,
@@ -370,33 +369,83 @@ export async function runPluginsDoctorCommand(): Promise<void> {
   } = await import("../commands/doctor/shared/stale-plugin-config.js");
   const cfg = getRuntimeConfig();
   const configSnapshot = await readConfigFileSnapshot().catch(() => null);
-  const sourceCfg = (configSnapshot?.sourceConfig ?? configSnapshot?.config ?? cfg) as
-    | OpenClawConfig
-    | undefined;
+  const sourceCfg = configSnapshot?.sourceConfig ?? configSnapshot?.config ?? cfg;
   const report = buildPluginDiagnosticsReport({ config: cfg, effectiveOnly: true });
   const errors = report.plugins.filter((p) => p.status === "error");
-  const diags = report.diagnostics.filter((d) => d.level === "error");
+  const diags = report.diagnostics.filter((entry) => !isConfigSelectedShadowDiagnostic(entry));
   const shadowed = report.diagnostics.filter((entry) =>
     isErroredConfigSelectedShadowDiagnostic({ entry, plugins: report.plugins }),
   );
   const compatibility = buildPluginCompatibilityNotices({ report });
-  const stalePluginConfigHits = scanStalePluginConfig(sourceCfg ?? cfg, process.env);
-  const stalePluginConfigWarnings = collectStalePluginConfigWarnings({
-    hits: stalePluginConfigHits,
-    doctorFixCommand: "openclaw doctor --fix",
-    autoRepairBlocked: isStalePluginAutoRepairBlocked(sourceCfg ?? cfg, process.env),
-  });
-  const configuredRuntimePluginWarnings = collectConfiguredRuntimePluginWarnings({
-    cfg: sourceCfg ?? cfg,
-    env: process.env,
-    plugins: report.plugins,
-  });
+  const pluginConfigWarnings = new Set([
+    ...formatConfigIssueLines(
+      (configSnapshot?.warnings ?? []).filter(
+        ({ path }) => path === "plugins" || path.startsWith("plugins."),
+      ),
+    ),
+    ...collectStalePluginConfigWarnings({
+      hits: scanStalePluginConfig(sourceCfg, process.env),
+      doctorFixCommand: "openclaw doctor --fix",
+      autoRepairBlocked: isStalePluginAutoRepairBlocked(sourceCfg, process.env),
+    }),
+    ...collectConfiguredRuntimePluginWarnings({ cfg: sourceCfg, plugins: report.plugins }),
+  ]);
   const hasInstallTreeIssues =
     errors.length > 0 || diags.length > 0 || shadowed.length > 0 || compatibility.length > 0;
-  const pluginConfigWarnings = [...stalePluginConfigWarnings, ...configuredRuntimePluginWarnings];
 
-  if (!hasInstallTreeIssues && pluginConfigWarnings.length === 0) {
-    defaultRuntime.log("No plugin issues detected.");
+  if (opts.json) {
+    defaultRuntime.writeJson({
+      ok: !hasInstallTreeIssues && pluginConfigWarnings.size === 0,
+      pluginErrors: errors.map((entry) => ({
+        id: entry.id,
+        ...(entry.failurePhase ? { failurePhase: entry.failurePhase } : {}),
+        error: shortenHomeInString(entry.error ?? "failed to load"),
+        source: shortenHomeInString(entry.source),
+      })),
+      diagnostics: diags.map((entry) => ({
+        level: entry.level,
+        ...(entry.pluginId ? { pluginId: entry.pluginId } : {}),
+        message: shortenHomeInString(entry.message),
+        ...(entry.source ? { source: shortenHomeInString(entry.source) } : {}),
+      })),
+      sourceShadowing: shadowed.map((entry) => {
+        const active = report.plugins.find((plugin) => plugin.id === entry.pluginId);
+        return {
+          ...(entry.pluginId ? { pluginId: entry.pluginId } : {}),
+          message: shortenHomeInString(entry.message),
+          ...(active
+            ? {
+                active: {
+                  source: shortenHomeInString(active.source),
+                  origin: active.origin,
+                  status: active.status,
+                  ...(active.error ? { error: shortenHomeInString(active.error) } : {}),
+                },
+              }
+            : {}),
+          ...(entry.source ? { shadowedSource: shortenHomeInString(entry.source) } : {}),
+          repair: [
+            `openclaw plugins inspect ${entry.pluginId ?? "<plugin-id>"}`,
+            "edit or remove the config-selected plugin source",
+            "openclaw plugins registry --refresh",
+            "openclaw gateway restart --force",
+          ],
+        };
+      }),
+      compatibility: compatibility.map((notice) => ({
+        ...notice,
+        message: shortenHomeInString(notice.message),
+      })),
+      configurationWarnings: Array.from(pluginConfigWarnings, shortenHomeInString),
+    });
+    return;
+  }
+
+  if (!hasInstallTreeIssues && pluginConfigWarnings.size === 0) {
+    defaultRuntime.log(
+      "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
+        'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.',
+    );
     return;
   }
 
@@ -453,14 +502,14 @@ export async function runPluginsDoctorCommand(): Promise<void> {
       lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
     }
   }
-  if (pluginConfigWarnings.length > 0) {
+  if (pluginConfigWarnings.size > 0) {
     if (lines.length > 0) {
       lines.push("");
     }
     lines.push(theme.warn("Plugin configuration:"));
     lines.push(...pluginConfigWarnings);
   }
-  if (!hasInstallTreeIssues && pluginConfigWarnings.length > 0) {
+  if (!hasInstallTreeIssues && pluginConfigWarnings.size > 0) {
     if (lines.length > 0) {
       lines.push("");
     }
@@ -775,6 +824,9 @@ function formatPinnedMarketplaceRefreshFailure(payload: MarketplaceRefreshPayloa
   return `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`;
 }
 
+const MARKETPLACE_GATEWAY_RESTART_GUIDANCE =
+  'The running Gateway could not refresh its marketplace catalog. Run "openclaw gateway restart" to apply the current catalog state.';
+
 /** List entries from the configured OpenClaw marketplace feed. */
 export async function runPluginMarketplaceEntriesCommand(
   opts: PluginMarketplaceEntriesOptions,
@@ -850,6 +902,13 @@ export async function runPluginMarketplaceRefreshCommand(
   const { clearManagedPluginOfficialCatalogCache } =
     await import("../plugins/management-service.js");
   clearManagedPluginOfficialCatalogCache();
+  let gatewayRefreshed = true;
+  // Reused snapshots can lose install authority as they age, so their Gateway projection is stale too.
+  if (result.source !== "bundled-fallback") {
+    const { notifyGatewayPluginMetadataChanged } =
+      await import("./plugins-update-gateway-signal.js");
+    gatewayRefreshed = await notifyGatewayPluginMetadataChanged(cfg);
+  }
   const payload = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
     feedUrl: opts.feedUrl,
   });
@@ -868,6 +927,9 @@ export async function runPluginMarketplaceRefreshCommand(
 
   if (opts.json) {
     defaultRuntime.writeJson(payload);
+    if (!gatewayRefreshed) {
+      defaultRuntime.error(MARKETPLACE_GATEWAY_RESTART_GUIDANCE);
+    }
     if (failedPinnedRefresh) {
       defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
       return defaultRuntime.exit(1);
@@ -876,6 +938,9 @@ export async function runPluginMarketplaceRefreshCommand(
   }
 
   const lines = formatMarketplaceFeedLines(payload, { includeChecksum: true });
+  if (!gatewayRefreshed) {
+    lines.push("", theme.warn(MARKETPLACE_GATEWAY_RESTART_GUIDANCE));
+  }
   defaultRuntime.log(lines.join("\n"));
   if (failedPinnedRefresh) {
     defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
@@ -889,10 +954,10 @@ export async function runPluginMarketplaceListCommand(
   opts: PluginMarketplaceListOptions,
 ): Promise<void> {
   const { listMarketplacePlugins } = await import("../plugins/marketplace.js");
-  const { createPluginInstallLogger } = await loadPluginsCommandHelpers();
+  const { createPluginInstallLogger, quietPluginJsonLogger } = await loadPluginsCommandHelpers();
   const result = await listMarketplacePlugins({
     marketplace: source,
-    logger: createPluginInstallLogger(),
+    logger: opts.json ? quietPluginJsonLogger : createPluginInstallLogger(),
   });
   if (!result.ok) {
     defaultRuntime.error(result.error);

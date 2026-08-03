@@ -39,8 +39,12 @@ function makeMismatchedWrapperRepo() {
   const originPath = join(root, "origin.git");
   mkdirSync(bin, { recursive: true });
   mkdirSync(home, { recursive: true });
-  writeFileSync(join(bin, "rg"), "#!/usr/bin/env sh\nexit 0\n");
-  chmodSync(join(bin, "rg"), 0o755);
+  // This fixture exercises wrapper trust routing, not the host command inventory.
+  for (const command of ["jq", "pnpm", "rg"]) {
+    const commandPath = join(bin, command);
+    writeFileSync(commandPath, "#!/bin/sh\nexit 0\n");
+    chmodSync(commandPath, 0o755);
+  }
 
   const fixtureEnv = {
     ...process.env,
@@ -186,6 +190,7 @@ describe("scripts/pr wrappers", () => {
     try {
       rmSync(join(fixture.bin, "rg"));
       for (const command of ["bash", "basename", "dirname", "git", "jq", "pnpm", "node"]) {
+        rmSync(join(fixture.bin, command), { force: true });
         symlinkSync(resolveCommand(command), join(fixture.bin, command));
       }
 
@@ -211,7 +216,9 @@ describe("scripts/pr wrappers", () => {
     const classifications = parseSubcommandClassifications(script);
     const dispatched = parseDispatchedSubcommands(script);
 
-    expect([...classifications.keys()].sort()).toEqual([...dispatched, "lock-recover"].sort());
+    expect([...classifications.keys()].toSorted()).toEqual(
+      [...dispatched, "lock-recover"].toSorted(),
+    );
     expect(classifications.get("ls")).toBe("advisory");
     expect(classifications.get("ci-dispatch")).toBe("advisory");
     for (const command of dispatched.filter((value) => !["ls", "ci-dispatch"].includes(value))) {

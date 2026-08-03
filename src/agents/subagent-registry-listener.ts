@@ -68,7 +68,6 @@ export function createSubagentRegistryListener(config: {
           const startedAt =
             typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
           if (startedAt) {
-            entry.startedAt = startedAt;
             if (typeof entry.sessionStartedAt !== "number") {
               entry.sessionStartedAt = startedAt;
             }
@@ -98,7 +97,7 @@ export function createSubagentRegistryListener(config: {
             markSubagentRunPausedAfterYield({
               entry,
               endedAt,
-              startedAt: startedAt ?? entry.startedAt,
+              startedAt: startedAt ?? entry.execution.startedAt,
             })
           ) {
             persist(entry.runId);

@@ -377,14 +377,14 @@ export async function renderPresentationForDelivery(
     presentationTextMode: _presentationTextMode,
     ...withoutPresentation
   } = payload;
+  // Native controls may be clipped or split; plain fallback must retain authored labels.
   return {
     ...withoutPresentation,
     text: textIsFallback
-      ? (payload.text ??
-        renderMessagePresentationFallbackText({ presentation: adaptedPresentation }))
+      ? (payload.text ?? renderMessagePresentationFallbackText({ presentation }))
       : renderMessagePresentationFallbackText({
           text: payload.text,
-          presentation: adaptedPresentation,
+          presentation,
         }),
   };
 }

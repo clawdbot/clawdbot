@@ -174,6 +174,7 @@ describe("runDaemonInstall integration", () => {
       ),
     );
     clearConfigCache();
+    serviceMock.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     await runDaemonInstall({ json: true });
 

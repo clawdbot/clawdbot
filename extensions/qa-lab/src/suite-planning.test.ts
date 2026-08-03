@@ -715,9 +715,13 @@ describe("qa suite planning helpers", () => {
         plugins: ["diagnostics-otel"],
         gatewayRuntime: { preserveDebugArtifacts: true },
       }),
+      makeQaSuiteTestScenario("blocked-channel", {
+        gatewayRuntime: { allowUnhealthyStartup: true },
+      }),
     ];
 
     expect(collectQaSuiteGatewayRuntimeOptions(scenarios)).toEqual({
+      allowUnhealthyStartup: true,
       forwardHostHome: true,
       preserveDebugArtifacts: true,
     });

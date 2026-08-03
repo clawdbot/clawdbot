@@ -20,7 +20,7 @@ import {
   notifyDiscordActiveTurnThreadCreated,
   notifyDiscordActiveTurnThreadReplyDelivered,
 } from "../active-turn-thread-route.js";
-import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
+import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
   isDiscordComponentSpecWithinMessageLimit,
@@ -104,13 +104,27 @@ export async function handleDiscordMessageAction(
     mediaReadFile: ctx.mediaReadFile,
     ...readPolicyOptions,
   } as const;
-  const notifyVisibleOutbound = (to: string, fallbackSessionKey?: string) =>
-    notifyDiscordInboundEventOutboundSuccess({
+  const notifyVisibleOutbound = (
+    result: AgentToolResult<unknown>,
+    to: string,
+    fallbackSessionKey?: string,
+  ) => {
+    const details =
+      result.details && typeof result.details === "object" && !Array.isArray(result.details)
+        ? (result.details as { ok?: unknown })
+        : undefined;
+    // Resolved failures are not delivery receipts; clearing room history would
+    // otherwise permanently discard context without any visible reply.
+    if (details?.ok !== true) {
+      return;
+    }
+    discordInboundEventDelivery.notify({
       sessionKey: ctx.sessionKey ?? fallbackSessionKey ?? undefined,
       to,
       accountId,
       inboundEventKind: ctx.inboundEventKind,
     });
+  };
   const withAdoptedThreadReplyRoute = (
     result: AgentToolResult<unknown>,
     to: string,
@@ -248,7 +262,7 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(to, sessionKey);
+    notifyVisibleOutbound(result, to, sessionKey);
     return withAdoptedThreadReplyRoute(result, to, sessionKey);
   }
 
@@ -287,7 +301,7 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(to, sessionKey);
+    notifyVisibleOutbound(result, to, sessionKey);
     return withAdoptedThreadReplyRoute(result, to, sessionKey);
   }
 
@@ -313,7 +327,7 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(to);
+    notifyVisibleOutbound(result, to);
     return result;
   }
 
@@ -453,17 +467,19 @@ export async function handleDiscordMessageAction(
     );
     const details =
       result.details && typeof result.details === "object" && !Array.isArray(result.details)
-        ? (result.details as { thread?: { id?: unknown } })
+        ? (result.details as { ok?: unknown; thread?: { id?: unknown } })
         : undefined;
-    const threadId = typeof details?.thread?.id === "string" ? details.thread.id : undefined;
-    await notifyDiscordActiveTurnThreadCreated({
-      sessionKey: ctx.sessionKey,
-      accountId,
-      sourceChannelId: resolveChannelId(),
-      sourceMessageId: messageId,
-      threadId,
-    });
-    notifyVisibleOutbound(resolveChannelId());
+    if (details?.ok === true) {
+      const threadId = typeof details.thread?.id === "string" ? details.thread.id : undefined;
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey: ctx.sessionKey,
+        accountId,
+        sourceChannelId: resolveChannelId(),
+        sourceMessageId: messageId,
+        threadId,
+      });
+    }
+    notifyVisibleOutbound(result, resolveChannelId());
     return result;
   }
 
@@ -485,7 +501,7 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(to);
+    notifyVisibleOutbound(result, to);
     return result;
   }
 
@@ -509,11 +525,12 @@ export async function handleDiscordMessageAction(
     ctx,
     resolveChannelId,
     readPolicyOptions,
+    actionOptions,
   });
   if (adminResult !== undefined) {
     if (action === "thread-reply") {
       const threadId = readStringParam(params, "threadId") ?? readTarget();
-      notifyVisibleOutbound(threadId);
+      notifyVisibleOutbound(adminResult, threadId);
       return withAdoptedThreadReplyRoute(adminResult, threadId);
     }
     return adminResult;

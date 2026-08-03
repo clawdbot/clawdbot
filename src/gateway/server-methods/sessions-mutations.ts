@@ -27,12 +27,12 @@ import {
   SESSION_ARCHIVE_ACTIVE_RUN_ERROR,
 } from "../../sessions/session-lifecycle-admission.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import {
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
+  resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionThinkingProjection,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
@@ -130,7 +130,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     let wasArchivedBeforePatch = false;
     const resolvePatchTarget = ({ entries }: SessionPatchProjectionSnapshot) => {
       const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
-      const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+      const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
         cfg,
         key,
         store,

@@ -1,6 +1,7 @@
 // Hook request handler validates hook tokens, applies mappings, dedupes requests, and dispatches wake or agent work.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
@@ -121,13 +122,7 @@ export function createHooksRequestHandler(
         hookReplayCache.delete(key);
       }
     }
-    while (hookReplayCache.size > DEDUPE_MAX) {
-      const oldestKey = hookReplayCache.keys().next().value;
-      if (!oldestKey) {
-        break;
-      }
-      hookReplayCache.delete(oldestKey);
-    }
+    pruneMapToMaxSize(hookReplayCache, DEDUPE_MAX);
   };
 
   const buildHookReplayCacheKey = (params: HookReplayScope): string | undefined => {

@@ -19,6 +19,7 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { deleteExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import {
@@ -30,8 +31,10 @@ import {
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
 import { formatExecCommand } from "../infra/system-run-command.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
@@ -58,6 +61,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   const sharedRuntimeBins = new Set<string>();
 
   beforeAll(() => {
+    closeOpenClawStateDatabaseForTest();
     sharedFixtureRoot = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-host-fixtures-")),
     );
@@ -68,6 +72,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   afterAll(() => {
+    closeOpenClawStateDatabaseForTest();
     if (sharedFixtureRoot) {
       fs.rmSync(sharedFixtureRoot, { recursive: true, force: true });
     }
@@ -82,14 +87,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   beforeEach(() => {
     previousOpenClawHome = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = sharedOpenClawHome;
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(resolveOpenClawStateSqlitePath(), { force: true });
     execApprovalsStoreTesting.reset();
+    // Cases isolate the canonical policy row, not shared-state schema bootstrap.
+    deleteExecApprovalsConfigRow(openOpenClawStateDatabase().db);
     clearRuntimeConfigSnapshot();
   });
 
   afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
     execApprovalsStoreTesting.reset();
     clearRuntimeConfigSnapshot();
     if (previousOpenClawHome === undefined) {
@@ -3371,6 +3375,19 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           expect(malicious.runCommand).not.toHaveBeenCalled();
           expectInvokeErrorMessage(malicious.sendInvokeResult, {
             message: "awk inline program requires explicit approval in strictInlineEval mode",
+          });
+
+          const abbreviated = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: [executablePath, '--s=BEGIN{system("id")}', "/dev/null"],
+            cwd: tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+          });
+
+          expect(abbreviated.runCommand).not.toHaveBeenCalled();
+          expectInvokeErrorMessage(abbreviated.sendInvokeResult, {
+            message: "gawk --source requires explicit approval in strictInlineEval mode",
           });
         },
       });

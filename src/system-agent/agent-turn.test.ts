@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
@@ -14,7 +14,11 @@ import {
 import { runSystemAgentTurnWithDeps, type SystemAgentTurnDeps } from "./agent-turn.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
-import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
+import {
+  createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
 import { createSystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
@@ -58,11 +62,13 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 }));
 
 const tempDirs: string[] = [];
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 function useTempStateDir(): string {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-turn-"));
   tempDirs.push(stateDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
   return stateDir;
 }
 
@@ -93,6 +99,14 @@ async function createVerifiedSession(config: OpenClawConfig) {
     session: createSystemAgentSession(fixture.binding),
   };
 }
+
+beforeAll(() => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot();
+});
+
+afterAll(() => {
+  pluginMetadataSnapshot?.restore();
+});
 
 beforeEach(() => {
   // Core tests install a contract-level selectable backend instead of loading
@@ -126,6 +140,7 @@ beforeEach(() => {
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   vi.unstubAllEnvs();
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
   vi.clearAllMocks();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });

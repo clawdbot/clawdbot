@@ -10,12 +10,14 @@ import {
 } from "./attempt-client-cleanup.js";
 import {
   isRetryableErrorNotification,
+  isTerminalTurnStatus,
   readCodexNotificationItem,
 } from "./attempt-notifications.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
 import { readModelListResult } from "./models.js";
+import { readCodexNotificationTurnId } from "./notification-correlation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
   assertCodexThreadStartResponse,
@@ -46,10 +48,11 @@ import {
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 
-const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
 const CODEX_APP_SERVER_ARGS_ENV_KEY = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const CODEX_BOUNDED_THREAD_CONFIG: JsonObject = {
+  "agents.enabled": false,
   "features.multi_agent": false,
+  "features.multi_agent_v2": false,
   "features.apps": false,
   "features.plugins": false,
   "features.image_generation": false,
@@ -184,7 +187,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   const abortController = new AbortController();
   let activeThreadId: string | undefined;
   let activeTurnId = "";
-  let interruptPromise: Promise<void> | undefined;
+  let interruptPromise: Promise<boolean> | undefined;
   const requestInterrupt = () => {
     if (!activeThreadId || interruptPromise) {
       return;
@@ -280,12 +283,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     );
     try {
       const turn = assertCodexTurnStartResponse(
+        // Inherit the empty thread environment; a cwd override recreates native tools.
         await client.request<unknown>(
           "turn/start",
           {
             threadId: thread.thread.id,
             input: params.input,
-            cwd: workspace.cwd,
             approvalPolicy: "on-request",
             model,
             effort: "low",
@@ -305,6 +308,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         model,
       };
     } finally {
+      await interruptPromise;
       requestCleanup();
       cleanup();
     }
@@ -372,6 +376,19 @@ function buildPrivateCodexAppServerStartOptions(
   start: ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"],
   codexHome: string,
 ): ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"] {
+  // Provider identity and model catalogs must survive isolation; hooks, MCP,
+  // sandbox policy, and other process overrides must not cross that boundary.
+  const providerArgs = start.args.flatMap((arg, index) => {
+    const override =
+      arg === "-c" || arg === "--config"
+        ? start.args[index + 1]
+        : arg.startsWith("--config=")
+          ? arg.slice("--config=".length)
+          : undefined;
+    return override && /^\s*(?:openai_base_url|model_catalog_json)\s*=/u.test(override)
+      ? ["-c", override]
+      : [];
+  });
   const privateEnv = Object.fromEntries(
     Object.entries(start.env ?? {}).filter(
       ([name]) => name.trim().toUpperCase() !== CODEX_APP_SERVER_ARGS_ENV_KEY,
@@ -383,7 +400,7 @@ function buildPrivateCodexAppServerStartOptions(
   });
   return {
     ...start,
-    args: [...CODEX_PRIVATE_STDIO_ARGS],
+    args: ["app-server", ...providerArgs, "--listen", "stdio://"],
     env: {
       ...privateEnv,
       CODEX_HOME: codexHome,
@@ -492,8 +509,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       pending.push(notification);
       return;
     }
-    const notificationTurnId = readNotificationTurnId(params);
-    if (notificationTurnId !== turnId) {
+    if (readCodexNotificationTurnId(params) !== turnId) {
       return;
     }
     if (notification.method === "item/completed") {
@@ -542,7 +558,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       options: { signal: AbortSignal; timeoutError: CodexBoundedTurnTimeoutError },
     ): Promise<Omit<CodexBoundedTurnResult, "model">> {
       turnId = startedTurn.id;
-      if (isTerminalTurn(startedTurn)) {
+      if (isTerminalTurnStatus(startedTurn.status)) {
         completedTurn = startedTurn;
       }
       for (const notification of pending.splice(0)) {
@@ -644,19 +660,7 @@ function collectAssistantTextFromItems(items: CodexThreadItem[] | undefined): st
     .trim();
 }
 
-function readNotificationTurnId(record: JsonObject): string | undefined {
-  const direct = readString(record, "turnId");
-  if (direct) {
-    return direct;
-  }
-  return isJsonObject(record.turn) ? readString(record.turn, "id") : undefined;
-}
-
 function readString(record: JsonObject, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
-}
-
-function isTerminalTurn(turn: CodexTurn): boolean {
-  return turn.status === "completed" || turn.status === "interrupted" || turn.status === "failed";
 }

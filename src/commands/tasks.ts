@@ -4,6 +4,7 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatLookupMiss } from "../cli/error-format.js";
@@ -42,6 +43,7 @@ import {
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
+import { formatTaskStatusDetail } from "../tasks/task-status.js";
 import {
   buildTaskSystemAuditJsonPayload,
   buildTaskSystemAuditFindings,
@@ -62,7 +64,7 @@ const info = theme.info;
 function formatTaskLookupMiss(lookup: string): string {
   return formatLookupMiss({
     noun: "Task",
-    value: lookup,
+    value: sanitizeTerminalText(lookup),
     listCommand: "openclaw tasks list",
     valueLabel: "task id",
   });
@@ -208,11 +210,11 @@ function truncate(value: string, maxChars: number) {
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
+  const sanitized = sanitizeTerminalText(normalizeOptionalString(value) ?? "").trim();
+  if (!sanitized) {
     return "n/a";
   }
-  return truncate(trimmed, maxChars);
+  return truncate(sanitized, maxChars);
 }
 
 function formatTaskStatusCell(status: string, rich: boolean) {
@@ -245,10 +247,9 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   const lines = [rich ? theme.heading(header) : header];
   for (const task of tasks) {
     const summary = truncate(
-      normalizeOptionalString(task.terminalSummary) ||
-        normalizeOptionalString(task.progressSummary) ||
-        normalizeOptionalString(task.label) ||
-        task.task.trim(),
+      sanitizeTerminalText(
+        formatTaskStatusDetail(task) || normalizeOptionalString(task.label) || task.task.trim(),
+      ),
       80,
     );
     const line = [
@@ -257,7 +258,7 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
       formatTaskStatusCell(task.status, rich),
       task.deliveryStatus.padEnd(DELIVERY_PAD),
       shortToken(task.runId, RUN_PAD).padEnd(RUN_PAD),
-      truncate(normalizeOptionalString(task.childSessionKey) || "n/a", 36).padEnd(36),
+      shortToken(task.childSessionKey, 36).padEnd(36),
       summary,
     ].join(" ");
     lines.push(line.trimEnd());
@@ -318,7 +319,7 @@ function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
         shortToken(finding.token).padEnd(ID_PAD),
         status,
         formatAgeMs(finding.ageMs).padEnd(8),
-        truncate(finding.detail, 88),
+        truncate(sanitizeTerminalText(finding.detail), 88),
       ]
         .join(" ")
         .trimEnd(),
@@ -372,10 +373,10 @@ export async function tasksListCommand(
   runtime.log(info(`Background tasks: ${tasks.length}`));
   runtime.log(info(`Task pressure: ${formatTaskListSummary(tasks)}`));
   if (runtimeFilter) {
-    runtime.log(info(`Runtime filter: ${runtimeFilter}`));
+    runtime.log(info(`Runtime filter: ${sanitizeTerminalText(runtimeFilter)}`));
   }
   if (statusFilter) {
-    runtime.log(info(`Status filter: ${statusFilter}`));
+    runtime.log(info(`Status filter: ${sanitizeTerminalText(statusFilter)}`));
   }
   if (tasks.length === 0) {
     runtime.log(
@@ -432,7 +433,7 @@ export async function tasksShowCommand(
     ...(task.terminalSummary ? [`terminalSummary: ${task.terminalSummary}`] : []),
   ];
   for (const line of lines) {
-    runtime.log(line);
+    runtime.log(sanitizeTerminalText(line));
   }
 }
 
@@ -456,7 +457,9 @@ export async function tasksNotifyCommand(
     runtime.exit(1);
     return;
   }
-  runtime.log(`Updated ${updated.taskId} notify policy to ${updated.notifyPolicy}.`);
+  runtime.log(
+    sanitizeTerminalText(`Updated ${updated.taskId} notify policy to ${updated.notifyPolicy}.`),
+  );
 }
 
 /** Cancels a detached task run by lookup token. */
@@ -470,18 +473,24 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
   const gatewayResult = await tryCancelGatewayOwnedTaskViaGateway(task);
   if (gatewayResult) {
     if (!gatewayResult.found) {
-      runtime.error(gatewayResult.reason ?? formatTaskLookupMiss(opts.lookup));
+      runtime.error(
+        sanitizeTerminalText(gatewayResult.reason ?? formatTaskLookupMiss(opts.lookup)),
+      );
       runtime.exit(1);
       return;
     }
     if (!gatewayResult.cancelled) {
-      runtime.error(gatewayResult.reason ?? `Could not cancel task: ${opts.lookup}`);
+      runtime.error(
+        sanitizeTerminalText(gatewayResult.reason ?? `Could not cancel task: ${opts.lookup}`),
+      );
       runtime.exit(1);
       return;
     }
     const updated = gatewayResult.task;
     runtime.log(
-      `Cancelled ${updated?.taskId ?? updated?.id ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
+      sanitizeTerminalText(
+        `Cancelled ${updated?.taskId ?? updated?.id ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
+      ),
     );
     return;
   }
@@ -490,18 +499,20 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     taskId: task.taskId,
   });
   if (!result.found) {
-    runtime.error(result.reason ?? formatTaskLookupMiss(opts.lookup));
+    runtime.error(sanitizeTerminalText(result.reason ?? formatTaskLookupMiss(opts.lookup)));
     runtime.exit(1);
     return;
   }
   if (!result.cancelled) {
-    runtime.error(result.reason ?? `Could not cancel task: ${opts.lookup}`);
+    runtime.error(sanitizeTerminalText(result.reason ?? `Could not cancel task: ${opts.lookup}`));
     runtime.exit(1);
     return;
   }
   const updated = getTaskById(task.taskId);
   runtime.log(
-    `Cancelled ${updated?.taskId ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
+    sanitizeTerminalText(
+      `Cancelled ${updated?.taskId ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
+    ),
   );
 }
 
@@ -549,10 +560,10 @@ export async function tasksAuditCommand(
     runtime.log(info(`Showing ${filteredFindings.length} matching findings.`));
   }
   if (severityFilter) {
-    runtime.log(info(`Severity filter: ${severityFilter}`));
+    runtime.log(info(`Severity filter: ${sanitizeTerminalText(severityFilter)}`));
   }
   if (codeFilter) {
-    runtime.log(info(`Code filter: ${codeFilter}`));
+    runtime.log(info(`Code filter: ${sanitizeTerminalText(codeFilter)}`));
   }
   if (limit) {
     runtime.log(info(`Limit: ${limit}`));

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
+import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
@@ -296,6 +297,57 @@ export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void 
   // SQLite requires a default for a NOT NULL additive column. The canonical
   // session projection replaces recoverable rows; backfill drops the rest.
   db.exec("ALTER TABLE conversations ADD COLUMN delivery_target TEXT NOT NULL DEFAULT '';");
+}
+
+/** Adds the validity projection and settles only rows left pending by older writers. */
+export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
+  const columns = readSqliteTableColumns(db, "session_nodes");
+  if (!columns) {
+    return;
+  }
+  const addedColumn = !columns.has("entry_valid");
+  if (addedColumn) {
+    db.exec(
+      "ALTER TABLE session_nodes ADD COLUMN entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1))",
+    );
+  }
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
+    AFTER INSERT ON session_nodes
+    BEGIN
+      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+    END;
+    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
+    AFTER UPDATE OF entry_json ON session_nodes
+    BEGIN
+      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+    END;
+    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_identity_update
+    AFTER UPDATE OF current_session_id, updated_at ON session_nodes
+    BEGIN
+      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+    END;
+  `);
+  const selectPending = db.prepare(
+    "SELECT current_session_id, entry_json, session_key, updated_at FROM session_nodes WHERE entry_valid = 0 ORDER BY session_key LIMIT 256",
+  );
+  const update = db.prepare("UPDATE session_nodes SET entry_valid = ? WHERE session_key = ?");
+  while (true) {
+    // Exhaust the bounded SELECT before updating its source table; SQLite does not define
+    // stepping a cursor while the same connection mutates rows visible to that cursor.
+    const rows = selectPending.all() as Array<{
+      current_session_id: string;
+      entry_json: string;
+      session_key: string;
+      updated_at: number;
+    }>;
+    if (rows.length === 0) {
+      break;
+    }
+    for (const row of rows) {
+      update.run(parseSqliteSessionEntryRecord(row) ? 1 : -1, row.session_key);
+    }
+  }
 }
 
 export function migrateSessionEntryStatusProjection(

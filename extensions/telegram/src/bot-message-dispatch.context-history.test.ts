@@ -153,12 +153,13 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
   it("moves recovered user-request history out of the original topic", async () => {
     const oldHistoryKey = "-1003774691294:topic:1";
     const recoveredHistoryKey = "-1003774691294:topic:3731";
+    const currentBody = "quote [Current message - respond to this] literally";
     const groupHistories = new Map([
       [
         oldHistoryKey,
         [
           { sender: "Alice", body: "general topic context", timestamp: 1 },
-          { sender: "Cara", body: "topic request", timestamp: 4, messageId: "27789" },
+          { sender: "Cara", body: currentBody, timestamp: 4, messageId: "27789" },
         ],
       ],
       [
@@ -186,12 +187,14 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
       context: createContext({
         ctxPayload: {
           InboundEventKind: "user_request",
-          BodyForAgent: "current recovered request",
+          Body: currentBody,
+          BodyForAgent: currentBody,
+          CommandBody: currentBody,
           ChatType: "group",
           From: "telegram:group:-1003774691294:topic:1",
           MessageSid: "27789",
           MessageThreadId: 1,
-          RawBody: "topic request",
+          RawBody: currentBody,
           SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
           TransportThreadId: 1,
         } as unknown as TelegramMessageContext["ctxPayload"],
@@ -220,7 +223,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
       expect.objectContaining({ body: "before self marker" }),
       expect.objectContaining({ body: "self marker" }),
       expect.objectContaining({ body: "after watermark" }),
-      expect.objectContaining({ body: "topic request", messageId: "27789" }),
+      expect.objectContaining({ body: currentBody, messageId: "27789" }),
     ]);
     const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
       threadId: 3731,
@@ -229,7 +232,12 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
     expect(outboundCtxPayload.InboundHistory).toEqual([
       expect.objectContaining({ body: "after watermark" }),
     ]);
-    expect(outboundCtxPayload.Body).toBe("current recovered request");
+    expect(outboundCtxPayload).toMatchObject({
+      Body: currentBody,
+      BodyForAgent: currentBody,
+      CommandBody: currentBody,
+      RawBody: currentBody,
+    });
     expect(outboundCtxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         label: "Conversation context",
@@ -252,9 +260,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
     expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "self marker",
     );
-    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
-      "topic request",
-    );
+    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(currentBody);
   });
 
   it("keeps retained overflow draft previews", async () => {

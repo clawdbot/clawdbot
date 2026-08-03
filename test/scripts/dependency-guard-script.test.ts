@@ -21,11 +21,13 @@ import {
   isDependencyManifest,
   isDependencyGuardTrustedForHead,
   isPackageLockfile,
+  isRemovalOnlyDependencyGraphChange,
   readBoundedGitHubErrorText,
   renderAuthorizedDependencyComment,
   renderAutoscrubbedDependencyComment,
   renderBlockedDependencyComment,
   renderClearedDependencyGuardComment,
+  renderRemovalOnlyDependencyComment,
   renderTrustedDependencyComment,
   sanitizeDisplayValue,
   securityApproverSet,
@@ -91,6 +93,43 @@ describe("dependency guard script", () => {
         },
       ),
     ).toEqual(["optionalDependencies", "peerDependencies", "overrides", "packageManager", "pnpm"]);
+  });
+
+  it("allows only dependency graph removals without approval", () => {
+    expect(
+      isRemovalOnlyDependencyGraphChange([
+        { change_type: "removed", name: "a" },
+        { change_type: "removed", name: "b" },
+      ]),
+    ).toBe(true);
+    expect(
+      isRemovalOnlyDependencyGraphChange([
+        { change_type: "removed", name: "a" },
+        { change_type: "added", name: "b" },
+      ]),
+    ).toBe(false);
+    expect(isRemovalOnlyDependencyGraphChange([{ change_type: "changed", name: "a" }])).toBe(false);
+    expect(isRemovalOnlyDependencyGraphChange([])).toBe(false);
+  });
+
+  it("renders dependency removals as informational", () => {
+    const body = renderRemovalOnlyDependencyComment({
+      dependencyGraphChanges: [
+        {
+          change_type: "removed",
+          manifest: "extensions/example/package.json",
+          name: "example-dependency",
+        },
+      ],
+      headSha,
+    });
+
+    expect(body).toContain("Dependency removals noted");
+    expect(body).toContain("does not require `/allow-dependencies-change`");
+    expect(body).toContain("Removed `example-dependency`");
+    expect(body).toContain("`extensions/example/package.json`");
+    expect(body).toContain(headSha);
+    expect(body).not.toContain("changes are blocked");
   });
 
   it("accepts only security-member override commands for the current head sha", () => {

@@ -19,6 +19,7 @@ type WorkflowStep = {
   run?: string;
   uses?: string;
   with?: Record<string, unknown>;
+  "working-directory"?: string;
 };
 
 type WorkflowJob = {
@@ -62,9 +63,17 @@ describe("cross-OS release checks workflow", () => {
   });
 
   it("bounds npm baseline packing during prepare", () => {
-    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+    const workflow = readWorkflow(WORKFLOW_PATH);
+    const baselineMetadata = step(job(workflow, "prepare"), "Capture baseline metadata");
 
-    expect(workflow).toContain("timeout --preserve-status 300s npm pack --ignore-scripts");
+    expect(readFileSync(WORKFLOW_PATH, "utf8")).toContain(
+      "timeout --preserve-status 300s npm pack --ignore-scripts",
+    );
+    expect(baselineMetadata["working-directory"]).toBe("workflow");
+    expect(baselineMetadata.run).toContain(
+      'import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";',
+    );
+    expect(baselineMetadata.run).toContain("const entry = resolveNpmJsonEntries(payload).at(-1);");
   });
 
   it("keeps release artifact tarball filenames local before upload paths use them", () => {

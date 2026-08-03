@@ -10,6 +10,7 @@ function createContext(configSnapshot: ConfigSnapshot | null): ApplicationContex
   return {
     gateway: {
       snapshot: {
+        client: {} as GatewayBrowserClient,
         phase: "connected",
         hello: {
           auth: { role: "operator", scopes: ["operator.admin", "operator.write"] },
@@ -232,6 +233,34 @@ describe("ChatComposerCapabilityHost", () => {
     expect(props.webSearchBaseEnabled).toBe(false);
   });
 
+  it("blocks tool override patches without exact sessions.patch access", async () => {
+    const host = new ChatComposerCapabilityHost(vi.fn());
+    const context = createContext({ runtimeConfig: {} });
+    context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.write"] },
+      features: { methods: ["tools.effective"] },
+    } as NonNullable<typeof context.gateway.snapshot.hello>;
+    const request = vi.fn();
+    const state = createState();
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const session = { key: "main" } as GatewaySessionRow;
+
+    const props = host.props(context, state, session, "main");
+    expect(props.mutationBlockedReason).toBeTruthy();
+    const result = await (
+      host as unknown as {
+        patch: (
+          context: ApplicationContext,
+          state: ChatPageHost,
+          next: { skills: Record<string, boolean> },
+        ) => Promise<{ ok: true } | { ok: false; error: string }>;
+      }
+    ).patch(context, state, { skills: { release: true } });
+
+    expect(result).toEqual({ ok: false, error: props.mutationBlockedReason });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("keeps Everywhere selectable while a missing session row blocks session submit", async () => {
     const host = new ChatComposerCapabilityHost(vi.fn());
     const context = createContext({ runtimeConfig: {} });
@@ -340,7 +369,7 @@ describe("ChatComposerCapabilityHost", () => {
     const host = new ChatComposerCapabilityHost(notify);
     const context = createContext({ runtimeConfig: {} });
     context.gateway.snapshot.hello = {
-      features: { methods: ["tools.effective"] },
+      features: { methods: ["sessions.patch", "tools.effective"] },
     } as NonNullable<typeof context.gateway.snapshot.hello>;
     let stateReads = 0;
     Object.defineProperty(context.sessions, "state", {

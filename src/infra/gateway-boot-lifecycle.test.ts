@@ -21,6 +21,7 @@ import {
   formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreaker,
   recordGatewayBootStart,
+  recordGatewayCrashLoopRecovery,
   repairGatewayAgentMediaMigrationStartupFailures,
 } from "./gateway-boot-lifecycle.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -176,6 +177,59 @@ describe("gateway crash-loop breaker", () => {
 
     expect(firstDecision).toMatchObject({ tripped: false, recovered: true });
     expect(secondDecision).toMatchObject({ tripped: false, recovered: false });
+  });
+
+  it("records a fresh lifecycle segment before recovered channel startup", () => {
+    const db = createLifecycleDb();
+    const nowMs = 1_000_000;
+    const safeModeBootId = recordGatewayBootStart(
+      db.env,
+      nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS - 1,
+      GATEWAY_CRASH_LOOP_BREAKER_REASON,
+    );
+
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs)).toMatchObject({
+      recovered: true,
+      uncleanBoots: 0,
+    });
+
+    const recoveredBootId = recordGatewayCrashLoopRecovery(safeModeBootId, db.env, nowMs);
+
+    expect(recoveredBootId).toBeDefined();
+    expect(
+      executeSqliteQuerySync(
+        db.db,
+        db.kysely
+          .selectFrom("gateway_boot_lifecycle")
+          .select(["boot_id", "completed_at_ms", "outcome", "startup_reason"])
+          .orderBy("started_at_ms"),
+      ).rows,
+    ).toEqual([
+      {
+        boot_id: safeModeBootId,
+        completed_at_ms: nowMs,
+        outcome: "safe_mode_stable",
+        startup_reason: GATEWAY_CRASH_LOOP_BREAKER_REASON,
+      },
+      {
+        boot_id: recoveredBootId,
+        completed_at_ms: null,
+        outcome: null,
+        startup_reason: GATEWAY_CRASH_LOOP_RECOVERED_REASON,
+      },
+    ]);
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs + 1)).toMatchObject({
+      recovered: false,
+      uncleanBoots: 1,
+    });
+    insertBootRows(db, [
+      { bootId: "post-recovery-crash-a", startedAtMs: nowMs + 2 },
+      { bootId: "post-recovery-crash-b", startedAtMs: nowMs + 3 },
+    ]);
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs + 4)).toMatchObject({
+      tripped: true,
+      uncleanBoots: GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD,
+    });
   });
 
   it("records forced stops without tripping the breaker", () => {

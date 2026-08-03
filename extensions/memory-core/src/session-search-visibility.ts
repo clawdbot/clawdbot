@@ -164,6 +164,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   sandboxed: boolean;
   hits: MemorySearchResult[];
   conversationRecall?: ConversationRecallContext;
+  /** Trusted control-plane calls may authorize only hits already scoped to this agent. */
+  trustedAgentScope?: boolean;
 }): Promise<MemorySearchResult[]> {
   const visibility = resolveEffectiveSessionToolsVisibility({
     cfg: params.cfg,
@@ -192,6 +194,9 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   );
 
   const conversationRecall = params.conversationRecall;
+  const trustedAgentScope = Boolean(
+    params.trustedAgentScope && scopedAgentId && !params.requesterSessionKey && !conversationRecall,
+  );
   const anchorSessionKey = conversationRecall?.anchorSessionKey.trim();
   const recallAgentId = anchorSessionKey
     ? resolveSessionAgentId({ sessionKey: anchorSessionKey, config: params.cfg })
@@ -235,7 +240,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
         scopedAgentId && isGlobalSessionKeyForSharedScope(params.cfg, key)
           ? `agent:${scopedAgentId}:global`
           : key;
-      return guard?.check(visibilityKey).allowed === true;
+      return trustedAgentScope || guard?.check(visibilityKey).allowed === true;
     }
     const candidateEntry = combinedSessionStore[key];
     // Canonical and legacy alias keys can identify one transcript. Exclude the
@@ -290,7 +295,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       }
       continue;
     }
-    if (!params.requesterSessionKey || (!guard && !conversationRecall)) {
+    if (!trustedAgentScope && (!params.requesterSessionKey || (!guard && !conversationRecall))) {
       continue;
     }
     const artifactIdentity = readQmdSessionArtifactIdentity(hit);

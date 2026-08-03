@@ -12,6 +12,11 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  clearLegacyPluginInternalHooks,
+  listLegacyPluginInternalHookEventKeys,
+  listLegacyPluginInternalHooks,
+} from "../plugins/legacy-internal-hook-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   InternalHookEvent,
@@ -265,6 +270,7 @@ export function unregisterInternalHook(eventKey: string, handler: InternalHookHa
  */
 export function clearInternalHooks(): void {
   handlers.clear();
+  clearLegacyPluginInternalHooks();
 }
 
 export function setInternalHooksEnabled(enabled: boolean): void {
@@ -275,12 +281,15 @@ export function setInternalHooksEnabled(enabled: boolean): void {
  * Get all registered event keys (useful for debugging)
  */
 export function getRegisteredEventKeys(): string[] {
-  return Array.from(handlers.keys());
+  return [...new Set([...handlers.keys(), ...listLegacyPluginInternalHookEventKeys()])];
 }
 
 export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
   return (
-    (handlers.get(type)?.length ?? 0) > 0 || (handlers.get(`${type}:${action}`)?.length ?? 0) > 0
+    (handlers.get(type)?.length ?? 0) + listLegacyPluginInternalHooks(type).length > 0 ||
+    (handlers.get(`${type}:${action}`)?.length ?? 0) +
+      listLegacyPluginInternalHooks(`${type}:${action}`).length >
+      0
   );
 }
 
@@ -304,8 +313,15 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     return;
   }
 
-  const typeHandlers = handlers.get(event.type) ?? [];
-  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const typeHandlers = [
+    ...(handlers.get(event.type) ?? []),
+    ...listLegacyPluginInternalHooks(event.type),
+  ];
+  const specificKey = `${event.type}:${event.action}`;
+  const specificHandlers = [
+    ...(handlers.get(specificKey) ?? []),
+    ...listLegacyPluginInternalHooks(specificKey),
+  ];
   const allHandlers = [...typeHandlers, ...specificHandlers];
 
   for (const handler of allHandlers) {

@@ -3,7 +3,7 @@ import { terminateManagedChild } from "./lib/managed-child-process.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import { resolveVitestNoOutputTimeoutMs } from "./run-vitest.mjs";
 import {
-  forwardSignalToVitestProcessGroup,
+  createVitestProcessCompletion,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mjs";
@@ -155,9 +155,10 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   let lastHeartbeatAt = startedAt;
   let timedOut = false;
 
+  const spawnParams = buildTestLiveSpawnParams(env);
   const child = spawnPnpmRunner({
     pnpmArgs: buildTestLivePnpmArgs(args),
-    ...buildTestLiveSpawnParams(env),
+    ...spawnParams,
   });
   let forwardedSignal = null;
   const teardownChildCleanup = installVitestProcessGroupCleanup({
@@ -216,37 +217,33 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   );
   heartbeat.unref?.();
 
-  child.on("exit", (code, signal) => {
-    teardown();
-    if (forwardedSignal) {
-      forwardSignalToVitestProcessGroup({
-        child,
-        kill: process.kill.bind(process),
-        signal: "SIGKILL",
-      });
-      process.kill(process.pid, forwardedSignal);
-      return;
-    }
-    if (timedOut) {
-      process.exit(1);
-      return;
-    }
-    if (signal) {
-      process.stderr.write(`[test:live] vitest exited via signal=${signal}\n`);
-      process.kill(process.pid, signal);
-      return;
-    }
-    if ((code ?? 1) !== 0) {
-      process.stderr.write(`[test:live] vitest exited code=${code ?? 1}\n`);
-    }
-    process.exit(code ?? 1);
-  });
-
-  child.on("error", (error) => {
-    teardown();
-    console.error(error);
-    process.exit(1);
-  });
+  createVitestProcessCompletion({ child, detached: spawnParams.detached })
+    .finally(teardown)
+    .then(
+      ({ code, signal }) => {
+        if (forwardedSignal) {
+          process.kill(process.pid, forwardedSignal);
+          return;
+        }
+        if (timedOut) {
+          process.exit(1);
+          return;
+        }
+        if (signal) {
+          process.stderr.write(`[test:live] vitest exited via signal=${signal}\n`);
+          process.kill(process.pid, signal);
+          return;
+        }
+        if ((code ?? 1) !== 0) {
+          process.stderr.write(`[test:live] vitest exited code=${code ?? 1}\n`);
+        }
+        process.exit(code ?? 1);
+      },
+      /** @param {unknown} error */ (error) => {
+        console.error(error);
+        process.exit(1);
+      },
+    );
 }
 
 if (import.meta.main) {

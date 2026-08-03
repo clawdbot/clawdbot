@@ -64,6 +64,12 @@ openclaw memory search [query] [--query <text>] [--agent <id>] [--max-results <n
 - `--max-results <n>`: cap result count (positive integer).
 - `--min-score <n>`: filter out matches below this score.
 
+If the index remains dirty after the bounded search-time refresh, human output
+warns that matches may be incomplete. With `--json`, the response adds
+`stale: true`, plus `warning` and `action` fields describing how to rebuild the
+index. Treat an empty `results` array as authoritative only when `stale` is
+absent.
+
 ## `memory promote`
 
 Rank short-term candidates from `memory/YYYY-MM-DD.md` and optionally append

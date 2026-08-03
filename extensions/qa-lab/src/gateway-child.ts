@@ -144,7 +144,7 @@ function createQaGatewayEmptyTransport() {
 }
 
 function resolveQaGatewayChildCommand(repoRoot: string): QaGatewayChildCommand {
-  for (const relativePath of ["dist/index.mjs", "dist/index.js"]) {
+  for (const relativePath of ["scripts/run-node.mjs", "dist/index.mjs", "dist/index.js"]) {
     const entryPath = path.join(repoRoot, relativePath);
     if (existsSync(entryPath)) {
       return {
@@ -156,16 +156,9 @@ function resolveQaGatewayChildCommand(repoRoot: string): QaGatewayChildCommand {
     }
   }
 
-  const sourceEntryPath = path.join(repoRoot, "src/entry.ts");
-  if (existsSync(sourceEntryPath)) {
-    return {
-      executablePath: process.execPath,
-      argsPrefix: ["--import", "tsx", sourceEntryPath],
-      cwd: repoRoot,
-    };
-  }
-
-  throw new Error("OpenClaw CLI entry not found: expected dist/index.(m)js or src/entry.ts");
+  throw new Error(
+    "OpenClaw CLI entry not found: expected scripts/run-node.mjs or dist/index.(m)js",
+  );
 }
 
 async function runQaGatewayCliCommand(params: {
@@ -450,6 +443,7 @@ export function buildQaRuntimeEnv(params: {
   };
   const normalizedEnv = normalizeQaProviderModeEnv(env, params.providerMode);
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
   return scrubQaGatewayChildSecretEnv(normalizedEnv);
@@ -1069,6 +1063,7 @@ export async function startQaGatewayChild(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
+  allowUnhealthyStartup?: boolean;
   forwardHostHome?: boolean;
   mockAuthAgentIds?: readonly string[];
   onListening?: (context: QaGatewayChildListeningContext) => Promise<void> | void;
@@ -1423,13 +1418,15 @@ export async function startQaGatewayChild(params: {
           configPath,
           runtimeEnv: env,
         });
-        await waitForGatewayReady({
-          baseUrl,
-          logs,
-          child: attemptChild,
-          getChildFailure: getAttemptChildFailure,
-          timeoutMs: 120_000,
-        });
+        if (!params.allowUnhealthyStartup) {
+          await waitForGatewayReady({
+            baseUrl,
+            logs,
+            child: attemptChild,
+            getChildFailure: getAttemptChildFailure,
+            timeoutMs: 120_000,
+          });
+        }
         const attemptRpcClient = await startQaGatewayRpcClient({
           wsUrl,
           token: gatewayToken,

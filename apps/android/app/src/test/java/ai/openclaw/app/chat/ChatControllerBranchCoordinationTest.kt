@@ -18,6 +18,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -63,11 +65,14 @@ class ChatControllerBranchCoordinationTest {
     )
   }
 
-  private suspend fun enqueue(text: String = "queued"): ChatOutboxItem =
+  private suspend fun enqueue(
+    text: String = "queued",
+    sessionKey: String = "main",
+  ): ChatOutboxItem =
     (
       outbox.enqueue(
         gatewayId = "gateway-a",
-        sessionKey = "main",
+        sessionKey = sessionKey,
         text = text,
         thinkingLevel = "off",
         nowMs = System.currentTimeMillis(),
@@ -723,52 +728,16 @@ class ChatControllerBranchCoordinationTest {
         ownerAgentId = "main",
       )
       val gateway = ScriptedGateway(json)
-      gateway.respondWith(
-        "chat.history",
-        historyResponse(
-          sessionId = "background",
-          messages = listOf(ReplayHistoryMessage("user", "old", 1, entryId = "leaf-old")),
-        ),
-      )
-      gateway.respondWith(
-        "sessions.branches.list",
-        """{"branches":[{"leafEntryId":"leaf-old","headline":"Old","messageCount":1,"active":true}]}""",
-      )
-      val controller = controller(gateway)
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      runCurrent()
       controller.awaitOutboxRestore()
-      controller.load(backgroundKey)
-      withContext(Dispatchers.Default.limitedParallelism(1)) {
-        withTimeout(5_000) { controller.sessionBranches.first { it.isNotEmpty() } }
-      }
-      controller.switchSession("main")
-      gateway.respondWith(
-        "chat.history",
-        historyResponse(
-          sessionId = "background",
-          messages = listOf(ReplayHistoryMessage("user", "new", 2, entryId = "leaf-new")),
-        ),
-      )
-      gateway.respondWith(
-        "sessions.branches.list",
-        """{"branches":[
-          {"leafEntryId":"leaf-old","headline":"Old","messageCount":1,"active":false},
-          {"leafEntryId":"leaf-new","headline":"New","messageCount":1,"active":true}
-        ]}""",
-      )
 
       controller.handleGatewayEvent(
         "sessions.changed",
         """{"reason":"branch-switch","sessionKey":"$backgroundKey","agentId":"main"}""",
       )
-      withContext(Dispatchers.Default.limitedParallelism(1)) {
-        withTimeout(5_000) {
-          while (outbox.load("gateway-a").single().status != ChatOutboxStatus.Failed) {
-            kotlinx.coroutines.delay(10)
-          }
-        }
-      }
-
-      assertEquals(ChatOutboxStatus.Failed, outbox.load("gateway-a").single().status)
+      runCurrent()
+      assertTrue(outbox.branchState("gateway-a", backgroundScope)?.needsReconciliation == true)
     }
 
   @Test
@@ -822,63 +791,75 @@ class ChatControllerBranchCoordinationTest {
   @Test
   fun reconcileOwnerDrainsRequestsQueuedDuringAnActivePass() =
     runTest {
-      val branchScope = ChatOutboxScope("main", "main")
-      val initial = requireNotNull(outbox.branchState("gateway-a", branchScope))
-      assertTrue(outbox.updateLastActiveLeafEntryId("gateway-a", branchScope, "leaf-current", initial.epoch, initial.revision))
-      enqueue("first queued")
-      assertTrue(outbox.demoteSessionMutationToReconciliation("gateway-a", branchScope, lease = null))
+      val backgroundScope = ChatOutboxScope("background", "main")
+      val backgroundState = requireNotNull(outbox.branchState("gateway-a", backgroundScope))
+      assertTrue(
+        outbox.updateLastActiveLeafEntryId(
+          "gateway-a",
+          backgroundScope,
+          "leaf-current",
+          backgroundState.epoch,
+          backgroundState.revision,
+        ),
+      )
+      val visibleScope = ChatOutboxScope("main", "main")
+      val visibleState = requireNotNull(outbox.branchState("gateway-a", visibleScope))
+      assertTrue(
+        outbox.updateLastActiveLeafEntryId(
+          "gateway-a",
+          visibleScope,
+          "leaf-current",
+          visibleState.epoch,
+          visibleState.revision,
+        ),
+      )
+      enqueue("first queued", sessionKey = "background")
+      assertTrue(outbox.demoteSessionMutationToReconciliation("gateway-a", backgroundScope, lease = null))
 
       val gateway = ScriptedGateway(json)
       val branchesEntered = CompletableDeferred<Unit>()
       val releaseBranches = CompletableDeferred<Unit>()
-      gateway.respondWith(
-        "chat.history",
+      val requestsDrained = CompletableDeferred<Unit>()
+      val sendCalls = AtomicInteger()
+      gateway.respond("chat.history") { paramsJson ->
         historyResponse(
-          sessionId = "main",
+          sessionId = gateway.sessionKeyOf(paramsJson) ?: "main",
           messages = listOf(ReplayHistoryMessage("user", "current", 1, entryId = "leaf-current")),
-        ),
-      )
-      gateway.respond("sessions.branches.list") {
-        branchesEntered.complete(Unit)
-        releaseBranches.await()
-        """{"branches":[{"leafEntryId":"leaf-current","headline":"Current","messageCount":1,"active":true}]}"""
-      }
-      gateway.respondChatSend("started")
-      gateway.respond("chat.history") {
-        val idempotencyKey = gateway.lastRunId?.let { "$it:user" }
-        historyResponse(
-          sessionId = "main",
-          messages =
-            listOf(
-              ReplayHistoryMessage(
-                "user",
-                "current",
-                1,
-                idempotencyKey = idempotencyKey,
-                entryId = "leaf-current",
-              ),
-            ),
         )
       }
-      val controller = controller(gateway)
+      gateway.respond("sessions.branches.list") {
+        if (!branchesEntered.isCompleted) {
+          branchesEntered.complete(Unit)
+          releaseBranches.await()
+        }
+        """{"branches":[{"leafEntryId":"leaf-current","headline":"Current","messageCount":1,"active":true}]}"""
+      }
+      gateway.respond("chat.send") { paramsJson ->
+        val runId =
+          requireNotNull(paramsJson)
+            .let(json::parseToJsonElement)
+            .jsonObject
+            .getValue("idempotencyKey")
+            .jsonPrimitive
+            .content
+        if (sendCalls.incrementAndGet() == 2) requestsDrained.complete(Unit)
+        """{"runId":"$runId","status":"started"}"""
+      }
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      runCurrent()
       controller.awaitOutboxRestore()
       controller.handleGatewayEvent("health", null)
-      withContext(Dispatchers.Default.limitedParallelism(1)) {
-        withTimeout(5_000) { controller.healthOk.first { it } }
-      }
+      runCurrent()
+      assertTrue(controller.healthOk.value)
       branchesEntered.await()
 
       assertTrue(controller.sendMessageAwaitAcceptance("second queued", "off", emptyList()))
+      assertEquals(2, outbox.load("gateway-a").size)
       releaseBranches.complete(Unit)
       withContext(Dispatchers.Default.limitedParallelism(1)) {
-        withTimeout(5_000) {
-          while (outbox.branchState("gateway-a", branchScope)?.needsReconciliation != false) {
-            kotlinx.coroutines.delay(10)
-          }
-        }
+        withTimeout(5_000) { requestsDrained.await() }
       }
 
-      assertEquals(2, outbox.load("gateway-a").size)
-      assertTrue(outbox.load("gateway-a").none { it.status == ChatOutboxStatus.Failed })
+      assertEquals(2, gateway.callCount("chat.send"))
     }
 }

@@ -206,3 +206,37 @@ describe("cron disable hint", () => {
     }
   });
 });
+
+describe("cron scheduler status warnings", () => {
+  beforeEach(() => {
+    callGatewayFromCli.mockReset();
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { status: undefined, disabled: false },
+    { status: null, disabled: false },
+    { status: {}, disabled: false },
+    { status: { enabled: true }, disabled: false },
+    { status: { enabled: false }, disabled: true },
+  ])("warns only when scheduler disabled is known ($status)", async ({ status, disabled }) => {
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "cron.status" ? status : { ok: true },
+    );
+
+    await runCronToggle("enable");
+
+    if (disabled) {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("scheduler is disabled"),
+      );
+    } else {
+      expect(defaultRuntime.error).not.toHaveBeenCalled();
+    }
+  });
+});

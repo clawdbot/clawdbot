@@ -19,6 +19,7 @@ import {
   createPanelRefreshStatus,
   type PanelRefreshStatus,
 } from "../../components/panel-refresh-status.ts";
+import { watchAgentScope } from "../../lib/agents/index.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -30,6 +31,10 @@ import {
   requestSessionUsageTimeSeries,
 } from "../../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import {
+  GatewayPageController,
+  type GatewayPageChange,
+} from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { mergeUsageCacheStatus } from "./cache-status.ts";
@@ -42,13 +47,13 @@ import {
   toUsageErrorMessage,
 } from "./helpers.ts";
 import { renderUsagePageShell } from "./page-shell.ts";
+import { UsageRefreshPolicy } from "./refresh-policy.ts";
 import {
   DEFAULT_VISIBLE_COLUMNS,
   type SessionLogEntry,
   type SessionLogRole,
   type UsageProps,
 } from "./types.ts";
-import { UsageRefreshRuntime } from "./usage-refresh-runtime.ts";
 import { renderUsage } from "./view.ts";
 
 export type UsageRouteData = {
@@ -133,25 +138,36 @@ class UsagePage extends OpenClawLightDomElement {
   private usageTaskActiveClient: GatewayBrowserClient | null = null;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
-  private observedAgentScopeId: string | null | undefined;
-  private readonly refreshRuntime = new UsageRefreshRuntime(this, {
-    getGateway: () => this.context?.gateway,
+  private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () => this.usageLoading,
-    isRouteDataInitialized: () => this.routeDataInitialized,
-    ensureAgents: () => void this.context.agents.ensureList(),
-    invalidateRequests: () => {
+    reload: () => this.performUsageReload(),
+  });
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    onIdentityChange: () => this.resetForClientChange(),
+    invalidateRequests: (change) => {
+      if (change.snapshot.phase === "connected") {
+        return;
+      }
+      this.refreshPolicy.interrupt();
       this.usageTaskActiveClient = null;
       void this.usageTask.run(this.usageTaskArgs(null));
       void this.usageTimeSeriesTask.run([null, ""]);
       void this.usageSessionLogsTask.run([null, ""]);
     },
-    resetForClientChange: () => this.resetForClientChange(),
-    reload: () => this.performUsageReload(),
+    onSnapshot: (change) => this.handleGatewaySnapshot(change),
+    onPageActivation: () => this.refreshPolicy.request("focus"),
+  });
+  private readonly observeAgentScope = watchAgentScope((scopeId) => {
+    if (this.routeDataInitialized && this.usageAgentId !== scopeId) {
+      this.usageAgentId = scopeId;
+      this.clearSelectionsAndDetails();
+      this.refreshPolicy.reload();
+    }
+    this.requestUpdate();
   });
 
-  private usageTaskArgs(
-    client = this.refreshRuntime.connected ? this.refreshRuntime.client : null,
-  ) {
+  private usageTaskArgs(client = this.gateway.connected ? this.gateway.client : null) {
     return [
       client,
       this.usageLoadStartDate,
@@ -172,7 +188,7 @@ class UsagePage extends OpenClawLightDomElement {
       if (this.routeDataEnabled) {
         return initialState;
       }
-      this.refreshRuntime.beginLoad();
+      this.refreshPolicy.beginLoad();
       const agentId = normalizedAgentId || undefined;
       const agentScopeParams = agentId ? { agentId } : { agentScope: "all" as const };
       const [result, costSummary, providerUsageSummary] = await Promise.all([
@@ -199,8 +215,8 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageCostSummary = value.costSummary;
       this.providerUsageSummary = value.providerUsageSummary;
       this.usageError = null;
-      this.refreshRuntime.markLoaded();
-      this.refreshRuntime.flushPending();
+      this.refreshPolicy.markLoaded();
+      this.refreshPolicy.flushPending();
     },
     onError: (error) => {
       this.usageTaskActiveClient = null;
@@ -211,7 +227,7 @@ class UsagePage extends OpenClawLightDomElement {
       } else {
         this.usageError = toUsageErrorMessage(error);
       }
-      this.refreshRuntime.flushPending();
+      this.refreshPolicy.flushPending();
     },
   });
 
@@ -224,7 +240,7 @@ class UsagePage extends OpenClawLightDomElement {
       autoRun: false,
       args: () =>
         [
-          this.refreshRuntime.connected ? this.refreshRuntime.client : null,
+          this.gateway.connected ? this.gateway.client : null,
           this.usageSelectedSessions.length === 1 ? (this.usageSelectedSessions[0] ?? "") : "",
         ] as const,
       task: async ([client, sessionKey]) =>
@@ -264,21 +280,7 @@ class UsagePage extends OpenClawLightDomElement {
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.agentSelection,
-      (selection) => {
-        const sync = () => {
-          const nextScopeId = selection.state.scopeId;
-          const changed = this.observedAgentScopeId !== nextScopeId;
-          this.observedAgentScopeId = nextScopeId;
-          if (changed && this.routeDataInitialized && this.usageAgentId !== nextScopeId) {
-            this.usageAgentId = nextScopeId;
-            this.clearSelectionsAndDetails();
-            this.refreshRuntime.reload();
-          }
-          this.requestUpdate();
-        };
-        sync();
-        return selection.subscribe(sync);
-      },
+      (selection) => this.observeAgentScope(selection),
     )
     .watch(
       () => this.context?.agents,
@@ -292,13 +294,7 @@ class UsagePage extends OpenClawLightDomElement {
     }
   }
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.refreshRuntime.connect();
-  }
-
   override disconnectedCallback() {
-    this.refreshRuntime.disconnect();
     this.subscriptions.clear();
     this.clearDateDebounce();
     this.clearQueryDebounce();
@@ -318,10 +314,7 @@ class UsagePage extends OpenClawLightDomElement {
     if (!this.routeDataEnabled) {
       return;
     }
-    const gateway = this.context.gateway;
-    const snapshot = gateway.snapshot;
-    this.refreshRuntime.adoptGatewaySnapshot(snapshot);
-    if (data.gateway !== gateway || data.gatewaySnapshot !== snapshot) {
+    if (!this.gateway.isRouteDataCurrent(data)) {
       this.routeDataEnabled = false;
       return;
     }
@@ -329,7 +322,7 @@ class UsagePage extends OpenClawLightDomElement {
     if (data.query.agentId !== currentAgentId) {
       this.usageAgentId = currentAgentId;
       this.clearSelectionsAndDetails();
-      this.refreshRuntime.reload();
+      this.refreshPolicy.reload();
       return;
     }
 
@@ -343,7 +336,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
     this.providerUsageSummary = data.providerUsageSummary;
-    this.refreshRuntime.setLastLoadedAtMs(data.loadedAtMs);
+    this.refreshPolicy.setLastLoadedAtMs(data.loadedAtMs);
     this.usageError = data.error;
   }
 
@@ -351,8 +344,8 @@ class UsagePage extends OpenClawLightDomElement {
     if (
       this.routeDataEnabled ||
       !this.routeDataInitialized ||
-      !this.refreshRuntime.client ||
-      !this.refreshRuntime.connected ||
+      !this.gateway.client ||
+      !this.gateway.connected ||
       this.usageLoading
     ) {
       return;
@@ -370,7 +363,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageResult = null;
     this.usageCostSummary = null;
     this.providerUsageSummary = null;
-    this.refreshRuntime.resetPayload();
+    this.refreshPolicy.resetPayload();
     this.usageError = null;
     this.usageAgentId = this.context.agentSelection.state.scopeId;
     this.clearSelectionsAndDetails();
@@ -389,9 +382,9 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   private loadUsage(): Promise<void> {
-    const client = this.refreshRuntime.client;
-    if (!client || !this.refreshRuntime.connected) {
-      this.refreshRuntime.markLoadDeferred();
+    const client = this.gateway.client;
+    if (!client || !this.gateway.connected) {
+      this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
     if (this.usageLoading) {
@@ -406,8 +399,8 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   private loadSessionTimeSeries(sessionKey: string): Promise<void> {
-    const client = this.refreshRuntime.client;
-    if (!client || !this.refreshRuntime.connected) {
+    const client = this.gateway.client;
+    if (!client || !this.gateway.connected) {
       return Promise.resolve();
     }
     if (this.usageTimeSeriesValue?.sessionKey !== sessionKey) {
@@ -419,8 +412,8 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   private loadSessionLogs(sessionKey: string): Promise<void> {
-    const client = this.refreshRuntime.client;
-    if (!client || !this.refreshRuntime.connected) {
+    const client = this.gateway.client;
+    if (!client || !this.gateway.connected) {
       return Promise.resolve();
     }
     if (this.usageSessionLogsValue?.sessionKey !== sessionKey) {
@@ -472,6 +465,16 @@ class UsagePage extends OpenClawLightDomElement {
   private performUsageReload() {
     this.clearDateDebounce();
     void this.loadUsage();
+  }
+
+  private handleGatewaySnapshot(change: GatewayPageChange) {
+    if (!this.gateway.connected || !this.gateway.client) {
+      return;
+    }
+    void this.context.agents.ensureList();
+    if (this.routeDataInitialized && (change.identityChanged || change.becameConnected)) {
+      this.refreshPolicy.request("reconnect");
+    }
   }
 
   private clearQueryDebounce() {
@@ -581,16 +584,16 @@ class UsagePage extends OpenClawLightDomElement {
           onScopeChange: (scope) => {
             this.usageScope = scope;
             this.clearSelectionsAndDetails();
-            this.refreshRuntime.reload();
+            this.refreshPolicy.reload();
           },
           onAgentChange: (agentId) => {
             this.context.agentSelection.setScope(agentId);
           },
-          onRefresh: () => this.refreshRuntime.request("manual"),
+          onRefresh: () => this.refreshPolicy.request("manual"),
           onTimeZoneChange: (timeZone) => {
             this.usageTimeZone = timeZone;
             this.clearSelectionsAndDetails();
-            this.refreshRuntime.reload();
+            this.refreshPolicy.reload();
           },
           onToggleHeaderPinned: () => {
             this.usageHeaderPinned = !this.usageHeaderPinned;

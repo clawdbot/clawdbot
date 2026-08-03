@@ -31,15 +31,15 @@ function configResponse(fallback: string | undefined, workboardEnabled: boolean,
   const config = {
     agents: {
       defaults: { model: { primary: "openai/gpt-5" } },
-      list: [
-        {
-          id: "main",
+      entries: {
+        main: {
+          default: true,
           model: {
             primary: "openai/gpt-5",
             ...(fallback ? { fallbacks: [fallback] } : {}),
           },
         },
-      ],
+      },
     },
     plugins: {
       entries: { workboard: { enabled: workboardEnabled } },

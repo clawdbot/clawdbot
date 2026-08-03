@@ -6,21 +6,13 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../packages/gateway-protocol/src/client-info.js";
-import {
   readConnectPairingRequiredMessage,
   type ConnectPairingRequiredDetails,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import {
-  buildGatewayConnectionDetails,
-  callGateway,
-  formatGatewayTransportErrorJson,
-} from "../gateway/call.js";
+import { buildGatewayConnectionDetails, formatGatewayTransportErrorJson } from "../gateway/call.js";
 import {
   ADMIN_SCOPE,
   PAIRING_SCOPE,
@@ -46,8 +38,7 @@ import {
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { formatCliCommand } from "./command-format.js";
-import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
-import { withProgress } from "./progress.js";
+import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
 type DevicesRpcOpts = {
@@ -137,25 +128,11 @@ const callGatewayCli = async (
   params?: unknown,
   callOpts?: { scopes?: OperatorScope[] },
 ) =>
-  withProgress(
-    {
-      label: `Devices ${method}`,
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await callGateway({
-        url: opts.url,
-        token: opts.token,
-        password: opts.password,
-        method,
-        params,
-        timeoutMs: parseTimeoutMsWithFallback(opts.timeout, DEFAULT_DEVICES_TIMEOUT_MS),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-        scopes: callOpts?.scopes,
-      }),
-  );
+  callGatewayFromCliWithTransport(method, opts, params, {
+    label: `Devices ${method}`,
+    defaultTimeoutMs: DEFAULT_DEVICES_TIMEOUT_MS,
+    scopes: callOpts?.scopes,
+  });
 
 function isPendingNodeApprovalState(
   state: unknown,
@@ -1163,7 +1140,17 @@ export async function runDevicesRejectCommand(
   requestId: string,
   opts: DevicesRpcOpts,
 ): Promise<void> {
-  const result = await callGatewayCli("device.pair.reject", opts, { requestId });
+  const normalizedRequestId = normalizeOptionalString(requestId);
+  if (!normalizedRequestId) {
+    defaultRuntime.error(
+      `requestId is required. Run ${formatCliCommand("openclaw devices list")} to choose a pending request.`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+  const result = await callGatewayCli("device.pair.reject", opts, {
+    requestId: normalizedRequestId,
+  });
   if (opts.json) {
     defaultRuntime.writeJson(result);
     return;

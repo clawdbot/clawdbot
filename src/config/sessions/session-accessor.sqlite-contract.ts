@@ -76,6 +76,10 @@ export type SessionTranscriptInstance = SessionEntrySummary & {
 
 export type TranscriptEvent = unknown;
 
+export type TranscriptEventAppendOptions = {
+  appendIntent?: "active-branch";
+};
+
 export type SessionTranscriptStats = {
   eventCount: number;
   lastMutationAtMs?: number;
@@ -146,6 +150,7 @@ export type SessionTranscriptTurnWriteContext = {
 };
 
 export type SessionEntryPatchOptions = {
+  assertCommitAllowed?: () => void;
   fallbackEntry?: SessionEntry;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   preserveActivity?: boolean;

@@ -38,6 +38,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   convertPcmToMulaw8k,
+  createRealtimeVoiceAudioQueue,
   mulawToPcm,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -61,13 +62,18 @@ const GOOGLE_REALTIME_INPUT_SAMPLE_RATE = 16_000;
 const GOOGLE_REALTIME_BROWSER_API_VERSION = "v1alpha";
 const GOOGLE_REALTIME_BROWSER_WEBSOCKET_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
-const MAX_PENDING_AUDIO_CHUNKS = 320;
 const DEFAULT_AUDIO_STREAM_END_SILENCE_MS = 500;
 const GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS = 30 * 60 * 1000;
 const GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS = 60 * 1000;
 const GOOGLE_REALTIME_RECONNECT_MAX_ATTEMPTS = 3;
 const GOOGLE_REALTIME_RECONNECT_BASE_DELAY_MS = 250;
 const GOOGLE_REALTIME_RECONNECT_MAX_DELAY_MS = 2_000;
+const GOOGLE_REALTIME_MAX_TOOL_CALL_IDS = 1_024;
+const GOOGLE_REALTIME_MAX_PENDING_TOOL_RESPONSES = 1_024;
+const GOOGLE_REALTIME_MAX_PENDING_TOOL_RESPONSE_BYTES = 1024 * 1024;
+const GOOGLE_REALTIME_MAX_PENDING_TRANSCRIPT_BYTES = 256 * 1024;
+const GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE =
+  "Google Live transcript exceeded the 256 KiB UTF-8 pending buffer limit";
 // Google Live requires a leading letter/underscore and caps function names at 128 characters.
 const GOOGLE_REALTIME_TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
@@ -143,6 +149,10 @@ type GoogleRealtimeLiveConfig = {
 
 type GoogleRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & GoogleRealtimeLiveConfig;
 type GoogleLiveTranscription = NonNullable<LiveServerContent["inputTranscription"]>;
+type GoogleLiveTranscriptAccumulator = {
+  text: string;
+  byteCount: number;
+};
 
 function trimToUndefined(value: unknown): string | undefined {
   return normalizeOptionalString(value);
@@ -455,33 +465,49 @@ type GoogleLiveConnectionAttempt = {
   cancel: () => void;
 };
 
+type GooglePendingToolResponse = {
+  callId: string;
+  payload: string;
+  byteLength: number;
+};
+
 class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   readonly supportsToolResultContinuation: boolean;
   readonly supportsToolResultSuppression = false;
 
   private session: Session | null = null;
   private connected = false;
+  private setupCompleteReceived = false;
   private sessionConfigured = false;
   private intentionallyClosed = false;
-  private pendingAudio: Buffer[] = [];
+  // Native reconnect keeps the already accepted FIFO prefix stable.
+  private readonly pendingAudio = createRealtimeVoiceAudioQueue("reject-newest");
   private sessionReadyFired = false;
   private consecutiveSilenceMs = 0;
   private audioStreamEnded = false;
   private pendingFunctionNames = new Map<string, string>();
+  private seenFunctionCallIds = new Set<string>();
+  private pendingToolResponses: GooglePendingToolResponse[] = [];
+  private pendingToolResponseBytes = 0;
   private readonly audioFormat: RealtimeVoiceAudioFormat;
   private readonly model: string;
   private resumptionHandle: string | undefined;
+  private resumingSession = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private hasConnectedSession = false;
+  private continuityResetEmitted = false;
   private terminalError: Error | undefined;
   private closeNotified = false;
   private connectionOwner: GoogleLiveConnectionAttempt | undefined;
   private connectAttempt: GoogleLiveConnectionAttempt | undefined;
-  private readonly pendingTranscripts: Record<RealtimeVoiceRole, string> = {
-    user: "",
-    assistant: "",
-  };
+  // Google can interleave independent input/output transcripts, so each role
+  // owns its own in-progress byte budget until `finished` or terminal cleanup.
+  private readonly pendingTranscripts: Record<RealtimeVoiceRole, GoogleLiveTranscriptAccumulator> =
+    {
+      user: { text: "", byteCount: 0 },
+      assistant: { text: "", byteCount: 0 },
+    };
 
   constructor(private readonly config: GoogleRealtimeVoiceBridgeConfig) {
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
@@ -519,20 +545,19 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private async connectOwned(attempt: GoogleLiveConnectionAttempt): Promise<void> {
-    const canResumeSession =
-      this.config.sessionResumption !== false && Boolean(this.resumptionHandle);
-    if (this.hasConnectedSession && !canResumeSession) {
-      // An unfinished recognition hypothesis cannot cross into a fresh server session.
-      // Dropping it avoids treating a transport break as a completed user utterance.
-      this.resetPendingTranscripts();
-    }
     this.intentionallyClosed = false;
     this.closeNotified = false;
+    this.setupCompleteReceived = false;
     this.sessionConfigured = false;
     this.sessionReadyFired = false;
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
-    this.pendingFunctionNames.clear();
+    const resumesExistingSession =
+      this.config.sessionResumption !== false && Boolean(this.resumptionHandle);
+    this.resumingSession = resumesExistingSession;
+    if (!resumesExistingSession) {
+      this.resetToolCallOwnership();
+    }
     const ai = createGoogleGenAI({
       apiKey: this.config.apiKey,
       httpOptions: {
@@ -560,6 +585,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
               return;
             }
             this.connected = true;
+            this.maybeActivateSession();
           },
           onmessage: (message) => {
             if (this.connectionOwner !== attempt) {
@@ -586,8 +612,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
             this.connectionOwner = undefined;
             this.cancelConnectAttempt(attempt);
             this.connected = false;
+            this.setupCompleteReceived = false;
             this.sessionConfigured = false;
-            this.pendingFunctionNames.clear();
             this.session = null;
             if (this.terminalError) {
               this.notifyClose("error");
@@ -601,6 +627,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
             if (this.scheduleReconnect(closeDetails)) {
               return;
             }
+            this.resetToolCallOwnership();
             // Transport failure is not an utterance boundary. Preserve transcript
             // fragments across reconnects and finalize only when recovery is exhausted.
             this.flushPendingTranscripts();
@@ -617,21 +644,27 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
       this.session = session;
       this.hasConnectedSession = true;
+      this.maybeActivateSession();
     } catch (error) {
       if (this.connectionOwner === attempt) {
         this.connectionOwner = undefined;
         this.connected = false;
+        this.setupCompleteReceived = false;
         this.sessionConfigured = false;
+        const session = this.session;
+        this.session = null;
+        session?.close();
       }
       throw error;
     }
   }
 
   sendAudio(audio: Buffer): void {
+    if (this.terminalError || this.intentionallyClosed || this.closeNotified) {
+      return;
+    }
     if (!this.session || !this.connected || !this.sessionConfigured) {
-      if (this.pendingAudio.length < MAX_PENDING_AUDIO_CHUNKS) {
-        this.pendingAudio.push(audio);
-      }
+      this.pendingAudio.enqueue(audio);
       return;
     }
     const silent = this.isSilence(audio);
@@ -697,11 +730,11 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
   ): void {
-    if (!this.session) {
-      return;
-    }
     const name = this.pendingFunctionNames.get(callId);
     if (!name) {
+      if (this.seenFunctionCallIds.has(callId)) {
+        return;
+      }
       this.config.onError?.(
         new Error(
           `Google Live function response is missing a matching function call for ${callId}`,
@@ -738,16 +771,28 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         );
         return;
       }
-      this.session.sendToolResponse({
-        functionResponses: [functionResponse],
-      });
+      const session = this.session;
+      const canSendImmediately = Boolean(
+        session && (!this.resumingSession || this.sessionConfigured),
+      );
+      if (session && canSendImmediately) {
+        session.sendToolResponse({
+          functionResponses: [functionResponse],
+        });
+      } else {
+        this.queueToolResponseForReconnect(callId, functionResponse);
+      }
       if (options?.willContinue !== true) {
         this.pendingFunctionNames.delete(callId);
       }
     } catch (error) {
-      this.config.onError?.(
-        error instanceof Error ? error : new Error("Failed to send Google Live function response"),
-      );
+      const sendError =
+        error instanceof Error ? error : new Error("Failed to send Google Live function response");
+      if (this.session && (!this.resumingSession || this.sessionConfigured)) {
+        this.config.onError?.(sendError);
+      } else {
+        this.failConnection(sendError);
+      }
     }
   }
 
@@ -759,15 +804,16 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     );
     this.intentionallyClosed = true;
     this.connected = false;
+    this.setupCompleteReceived = false;
     this.sessionConfigured = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    this.pendingAudio = [];
+    this.clearPendingAudio();
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
-    this.pendingFunctionNames.clear();
+    this.resetToolCallOwnership();
     this.flushPendingTranscripts();
     const owner = this.connectionOwner;
     this.connectionOwner = undefined;
@@ -824,6 +870,14 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (message.toolCall) {
       this.handleToolCall(message.toolCall);
     }
+    if (message.toolCallCancellation) {
+      this.handleToolCallCancellation(message.toolCallCancellation.ids);
+    }
+    if (message.setupComplete) {
+      // Apply cancellation and tool facts from the same server message before
+      // setup activation flushes responses retained across a resumable reconnect.
+      this.maybeActivateSession();
+    }
   }
 
   private captureSessionLifecycle(message: LiveServerMessage): void {
@@ -832,7 +886,9 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       sessionResumptionUpdate?: { newHandle?: string; resumable?: boolean };
     };
     const update = raw.sessionResumptionUpdate;
-    if (update?.resumable && update.newHandle) {
+    if (update?.resumable === false) {
+      this.resumptionHandle = undefined;
+    } else if (update?.resumable && update.newHandle) {
       this.resumptionHandle = update.newHandle;
     }
     if (raw.goAway?.timeLeft) {
@@ -841,9 +897,30 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleSetupComplete(): void {
+    if (!this.setupCompleteReceived) {
+      // setupComplete proves Google selected a new server session. A later
+      // continuity loss therefore owns a new reset generation.
+      if (this.continuityResetEmitted) {
+        this.config.onEvent?.({ direction: "server", type: "session.created" });
+      }
+      this.continuityResetEmitted = false;
+    }
+    this.setupCompleteReceived = true;
+  }
+
+  private maybeActivateSession(): void {
+    // The SDK delivers setupComplete before Live.connect() returns its Session.
+    // Readiness requires both facts or queued audio can be drained without a transport.
+    if (this.sessionConfigured || !this.connected || !this.setupCompleteReceived || !this.session) {
+      return;
+    }
     this.sessionConfigured = true;
     this.reconnectAttempts = 0;
-    for (const chunk of this.pendingAudio.splice(0)) {
+    if (!this.flushPendingToolResponses()) {
+      return;
+    }
+    this.resumingSession = false;
+    for (const chunk of this.pendingAudio.drain()) {
       this.sendAudio(chunk);
     }
     if (!this.sessionReadyFired) {
@@ -858,13 +935,17 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
 
     if (content.inputTranscription) {
-      this.appendTranscript("user", content.inputTranscription);
+      if (!this.appendTranscript("user", content.inputTranscription)) {
+        return;
+      }
     }
 
     if (content.outputTranscription) {
       // outputAudioTranscription is requested in the session config. Keep that
       // official stream canonical; modelTurn text has no transcript turn identity.
-      this.appendTranscript("assistant", content.outputTranscription);
+      if (!this.appendTranscript("assistant", content.outputTranscription)) {
+        return;
+      }
     }
 
     for (const part of content.modelTurn?.parts ?? []) {
@@ -886,10 +967,18 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
   }
 
-  private appendTranscript(role: RealtimeVoiceRole, transcript: GoogleLiveTranscription): void {
+  private appendTranscript(role: RealtimeVoiceRole, transcript: GoogleLiveTranscription): boolean {
     const text = transcript.text;
     if (text) {
-      this.pendingTranscripts[role] += text;
+      const pending = this.pendingTranscripts[role];
+      const textBytes = Buffer.byteLength(text, "utf8");
+      if (pending.byteCount + textBytes > GOOGLE_REALTIME_MAX_PENDING_TRANSCRIPT_BYTES) {
+        this.resetPendingTranscripts();
+        this.failConnection(new Error(GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE));
+        return false;
+      }
+      pending.text += text;
+      pending.byteCount += textBytes;
       this.emitTranscript(role, text, false);
     }
     // turnComplete belongs to model generation and is unordered with transcription.
@@ -897,11 +986,14 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (transcript.finished) {
       this.flushPendingTranscript(role);
     }
+    return true;
   }
 
   private flushPendingTranscript(role: RealtimeVoiceRole): void {
-    const completeText = this.pendingTranscripts[role].trim();
-    this.pendingTranscripts[role] = "";
+    const pending = this.pendingTranscripts[role];
+    const completeText = pending.text.trim();
+    pending.text = "";
+    pending.byteCount = 0;
     if (completeText) {
       this.emitTranscript(role, completeText, true);
     }
@@ -927,8 +1019,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private resetPendingTranscripts(): void {
-    this.pendingTranscripts.user = "";
-    this.pendingTranscripts.assistant = "";
+    this.pendingTranscripts.user = { text: "", byteCount: 0 };
+    this.pendingTranscripts.assistant = { text: "", byteCount: 0 };
   }
 
   private failConnection(error: Error): void {
@@ -938,12 +1030,13 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.terminalError = error;
     this.intentionallyClosed = true;
     this.connected = false;
+    this.setupCompleteReceived = false;
     this.sessionConfigured = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    this.pendingFunctionNames.clear();
+    this.resetToolCallOwnership();
     this.flushPendingTranscripts();
     const owner = this.connectionOwner;
     this.connectionOwner = undefined;
@@ -965,8 +1058,13 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.closeNotified) {
       return;
     }
+    this.clearPendingAudio();
     this.closeNotified = true;
     this.config.onClose?.(reason);
+  }
+
+  private clearPendingAudio(): void {
+    this.pendingAudio.clear();
   }
 
   private cancelConnectAttempt(attempt: GoogleLiveConnectionAttempt | undefined): void {
@@ -986,6 +1084,16 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         continue;
       }
       const callId = call.id?.trim() || `google-live-${randomUUID()}`;
+      if (this.seenFunctionCallIds.has(callId)) {
+        continue;
+      }
+      // The Live protocol defines no replay window, so dropping old IDs could execute
+      // a very late duplicate. End an extreme session instead of weakening dedupe.
+      if (this.seenFunctionCallIds.size >= GOOGLE_REALTIME_MAX_TOOL_CALL_IDS) {
+        this.failConnection(new Error("Google Live tool-call session limit exceeded"));
+        return;
+      }
+      this.seenFunctionCallIds.add(callId);
       this.pendingFunctionNames.set(callId, name);
       this.config.onToolCall?.({
         itemId: callId,
@@ -996,9 +1104,107 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
   }
 
+  private handleToolCallCancellation(ids: string[] | undefined): void {
+    for (const rawId of ids ?? []) {
+      const callId = rawId.trim();
+      if (!callId) {
+        continue;
+      }
+      const removedPendingCall = this.pendingFunctionNames.delete(callId);
+      const removedQueuedResponse = this.removePendingToolResponses(callId);
+      if (!removedPendingCall && !removedQueuedResponse) {
+        continue;
+      }
+      // Provider cancellation invalidates any late consumer result for this call ID.
+      this.config.onEvent?.({
+        direction: "server",
+        type: "tool.call.cancelled",
+        itemId: callId,
+      });
+    }
+  }
+
+  private resetToolCallOwnership(): void {
+    this.pendingFunctionNames.clear();
+    this.seenFunctionCallIds.clear();
+    this.pendingToolResponses = [];
+    this.pendingToolResponseBytes = 0;
+  }
+
+  private queueToolResponseForReconnect(callId: string, functionResponse: FunctionResponse): void {
+    const payload = JSON.stringify(functionResponse);
+    const payloadBytes = Buffer.byteLength(payload, "utf8");
+    if (
+      this.pendingToolResponses.length >= GOOGLE_REALTIME_MAX_PENDING_TOOL_RESPONSES ||
+      this.pendingToolResponseBytes + payloadBytes > GOOGLE_REALTIME_MAX_PENDING_TOOL_RESPONSE_BYTES
+    ) {
+      throw new Error("Google Live reconnect tool-response buffer limit exceeded");
+    }
+    // Store the serialized wire shape so a stalled reconnect cannot retain an
+    // arbitrarily large caller-owned object graph through the tool result.
+    this.pendingToolResponses.push({ callId, payload, byteLength: payloadBytes });
+    this.pendingToolResponseBytes += payloadBytes;
+  }
+
+  private removePendingToolResponses(callId: string): boolean {
+    const retained: GooglePendingToolResponse[] = [];
+    let removed = false;
+    for (const response of this.pendingToolResponses) {
+      if (response.callId === callId) {
+        this.pendingToolResponseBytes -= response.byteLength;
+        removed = true;
+      } else {
+        retained.push(response);
+      }
+    }
+    this.pendingToolResponses = retained;
+    return removed;
+  }
+
+  private flushPendingToolResponses(): boolean {
+    const session = this.session;
+    if (!session) {
+      return false;
+    }
+    try {
+      while (this.pendingToolResponses.length > 0) {
+        const response = this.pendingToolResponses[0];
+        if (!response) {
+          break;
+        }
+        session.sendToolResponse({
+          functionResponses: [JSON.parse(response.payload) as FunctionResponse],
+        });
+        this.pendingToolResponses.shift();
+        this.pendingToolResponseBytes -= response.byteLength;
+      }
+      return true;
+    } catch (error) {
+      this.failConnection(
+        error instanceof Error
+          ? error
+          : new Error("Failed to flush Google Live function responses"),
+      );
+      return false;
+    }
+  }
+
   private scheduleReconnect(closeDetails: string): boolean {
     if (this.reconnectAttempts >= GOOGLE_REALTIME_RECONNECT_MAX_ATTEMPTS) {
       return false;
+    }
+    const canResumeSession =
+      this.config.sessionResumption !== false && Boolean(this.resumptionHandle);
+    if (this.hasConnectedSession && !canResumeSession && !this.continuityResetEmitted) {
+      // A non-resumable close ends the provider generation immediately. Reset
+      // consumers before backoff so stale work cannot finish into the replacement.
+      this.continuityResetEmitted = true;
+      this.resetPendingTranscripts();
+      this.resetToolCallOwnership();
+      this.config.onEvent?.({
+        direction: "client",
+        type: "session.continuity.reset",
+      });
     }
     const attempt = ++this.reconnectAttempts;
     const delayMs = Math.min(
@@ -1019,6 +1225,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         const message = error instanceof Error ? error.message : String(error);
         this.config.onError?.(error instanceof Error ? error : new Error(message));
         if (!this.scheduleReconnect(`connect failed: ${message}`)) {
+          this.resetToolCallOwnership();
           this.flushPendingTranscripts();
           this.notifyClose("error");
         }
@@ -1130,7 +1337,7 @@ async function createGoogleRealtimeBrowserSession(
     initialMessage: buildBrowserInitialSetup(model),
     model,
     voice,
-    expiresAt: Math.floor(expiresAtMs / 1000),
+    expiresAt: newSessionExpiresAtMs,
   };
 }
 

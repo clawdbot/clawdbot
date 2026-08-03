@@ -4,11 +4,8 @@ import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
 import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
-import {
-  emitAgentEvent,
-  registerAgentRunContext,
-  resetAgentEventsForTest,
-} from "../infra/agent-events.js";
+import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   requestHeartbeat,
   setHeartbeatWakeHandler,
@@ -26,6 +23,7 @@ import {
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { CRON_TASK_KIND } from "./cron-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { ensureTaskRuntimeStateReady } from "./runtime-internal.js";
 import {
@@ -961,7 +959,7 @@ describe("task-registry", () => {
     });
   });
 
-  it("keeps stronger run-scoped terminal states when a late success arrives", async () => {
+  it("keeps signal-only cancellation when a late success arrives", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
@@ -990,7 +988,7 @@ describe("task-registry", () => {
       });
 
       expectRecordFields(requireTaskByRunId("run-timeout-then-success"), {
-        status: "timed_out",
+        status: "cancelled",
         endedAt: 200,
       });
     });
@@ -4775,7 +4773,8 @@ describe("task-registry", () => {
 
   it.each([
     {
-      name: "cancels stale cron tasks without an active runtime abort handle",
+      name: "cancels stale legacy childless cron tasks without an active runtime abort handle",
+      taskKind: undefined,
       childSessionKey: undefined,
       cancelled: true,
       reason: undefined,
@@ -4783,17 +4782,28 @@ describe("task-registry", () => {
       error: "Cancelled by operator.",
     },
     {
+      name: "does not cancel canonical childless cron tasks without an active runtime abort handle",
+      taskKind: CRON_TASK_KIND,
+      childSessionKey: undefined,
+      cancelled: false,
+      reason: "Cron task has no active cancellation handle.",
+      status: "running",
+      error: undefined,
+    },
+    {
       name: "does not mark session-backed cron tasks cancelled without an active runtime abort handle",
+      taskKind: undefined,
       childSessionKey: "agent:main:cron:daily-repost",
       cancelled: false,
       reason: "Cron task has no active cancellation handle.",
       status: "running",
       error: undefined,
     },
-  ])("$name", async ({ childSessionKey, cancelled, reason, status, error }) => {
+  ])("$name", async ({ taskKind, childSessionKey, cancelled, reason, status, error }) => {
     await withTaskRegistryTempDir(async () => {
       const task = createTaskFixture("cron", {
         sourceId: "daily-repost",
+        taskKind,
         ownerKey: "",
         scopeKind: "system",
         childSessionKey,

@@ -554,11 +554,20 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
   });
 
-  it("validates release tags before immutable Docker publication", async () => {
+  it("validates immutable release identity before Docker publication", async () => {
     const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
 
-    expect(workflow).toContain("Existing stable, extended-stable, or beta release tag");
+    expect(workflow).toContain("workflow_call:");
+    expect(workflow).toContain("Immutable stable, extended-stable, or beta release tag");
+    expect(workflow).toContain("Full immutable commit SHA resolved from tag");
     expect(workflow).toContain('! "${RELEASE_TAG}" =~ ^v[0-9]{4}');
+    expect(workflow).toContain('! "${RELEASE_SHA}" =~ ^[a-f0-9]{40}$');
+    expect(workflow).toContain('git rev-parse "refs/tags/${RELEASE_TAG}^{commit}"');
+    expect(workflow).toContain('"${tag_sha}" != "${RELEASE_SHA}"');
+    expect(workflow).toContain('"v${package_version}" != "${RELEASE_TAG}"');
+    expect(workflow).toContain("^v${package_version}-[1-9][0-9]*$");
+    expect(workflow).not.toContain("workflow_dispatch:");
+    expect(workflow).not.toContain("push:\n");
     expect(workflow).toContain("(-(beta\\.)?[1-9][0-9]*)?");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-slim");

@@ -33,9 +33,11 @@ workflow instead of relying on GStreamer packages from the user's system.
 
 ## Develop and build
 
-The frontend is static HTML, CSS, and JavaScript. It has no package install or build step.
+The companion frontend is static HTML, CSS, and JavaScript. The shared Canvas A2UI renderer is
+generated from the Canvas plugin, so install repository dependencies once before building:
 
 ```bash
+pnpm install
 cd apps/linux/src-tauri
 cargo run
 cargo build
@@ -55,7 +57,10 @@ The companion checks the latest GitHub release shortly after launch and from **C
 
 The running app gives the headless `openclaw node run` host a single Canvas WebView. The bundled `linux-canvas` plugin advertises `canvas.*` only while the app socket exists. The app listens at `$XDG_RUNTIME_DIR/openclaw-canvas.sock` (or `/tmp/openclaw-canvas-$UID.sock`) with mode `0600`; a headless Linux node without the app does not advertise Canvas.
 
-The plugin-generated A2UI renderer in `extensions/canvas/src/host/a2ui/` remains the source of truth. The app embeds its committed, synced OpenClawKit mirror from `apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/`. Run `node scripts/sync-native-a2ui.mjs --check` from the repository root after changing those assets.
+The Canvas plugin sources remain the source of truth for the A2UI renderer. Each native build
+generates `index.html` and `a2ui.bundle.js` into its isolated build output before compiling. Run
+`node scripts/sync-native-a2ui.mjs --check` from the repository root to verify fresh bundles are
+byte-identical and every native build owner is wired.
 
 ## Quick Chat widgets
 

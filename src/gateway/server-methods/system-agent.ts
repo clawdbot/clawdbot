@@ -20,6 +20,7 @@ import {
 } from "../../infra/system-agent-approvals.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
@@ -237,15 +238,19 @@ function queueDelegatedApproval(params: {
     deliverRequest: () => false,
     keepPendingWithoutRoute: true,
     requireDeliveryRoute: false,
-    afterDecision: async (decision) => {
-      if (params.sessions.get(params.sessionId) !== params.session) {
-        return;
-      }
-      if (params.session.pendingApproval?.id === record.id) {
-        params.session.pendingApproval = undefined;
-      }
-      await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
-    },
+    afterDecision: async (decision) =>
+      await runWithGatewayIndependentRootWorkContinuation(() =>
+        runSystemAgentGatewayTask(async () => {
+          // The original request has returned; keep approval, audit, and restart drain-visible.
+          if (params.sessions.get(params.sessionId) !== params.session) {
+            return;
+          }
+          if (params.session.pendingApproval?.id === record.id) {
+            params.session.pendingApproval = undefined;
+          }
+          await params.session.engine.resolveOperatorApproval(decision, params.proposal.hash);
+        }),
+      ),
     afterDecisionErrorLabel: "OpenClaw approval apply failed",
   });
   return record.id;

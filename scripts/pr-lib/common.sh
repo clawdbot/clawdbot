@@ -26,7 +26,7 @@ file_list_is_docsish_only() {
     if ! path_is_docsish "$path"; then
       return 1
     fi
-  done <<<"$files"
+  done <<< "$files"
 
   [ "$saw_any" = "true" ]
 }
@@ -185,30 +185,33 @@ common_repo_root() {
 worktree_path_for_branch() {
   local branch="$1"
   local ref="refs/heads/$branch"
-  local field worktree=""
-  while IFS= read -r -d '' field; do
-    case "$field" in
-      worktree\ *) worktree="${field#worktree }" ;;
-      "branch $ref")
-        [ -n "$worktree" ] || return 1
-        printf '%s\n' "$worktree"
-        return 0
-        ;;
-      "") worktree="" ;;
-    esac
-  done < <(git worktree list --porcelain -z)
-  return 1
+  local field worktree="" match=""
+  # Drain foreground Git before the supervisor checks for leftover children.
+  git worktree list --porcelain -z | {
+    while IFS= read -r -d '' field; do
+      case "$field" in
+        worktree\ *) worktree="${field#worktree }" ;;
+        "branch $ref") match="$worktree" ;;
+        "") worktree="" ;;
+      esac
+    done
+    [ -n "$match" ] || return 1
+    printf '%s\n' "$match"
+  }
 }
 
 worktree_is_registered() {
   local path="$1"
-  local field
-  while IFS= read -r -d '' field; do
-    case "$field" in
-      worktree\ *) [ "${field#worktree }" = "$path" ] && return 0 ;;
-    esac
-  done < <(git worktree list --porcelain -z)
-  return 1
+  local field found=false
+  # Git must finish before a successful operation can release its lock.
+  git worktree list --porcelain -z | {
+    while IFS= read -r -d '' field; do
+      case "$field" in
+        worktree\ *) [ "${field#worktree }" != "$path" ] || found=true ;;
+      esac
+    done
+    [ "$found" = true ]
+  }
 }
 
 resolve_existing_dir_path() {

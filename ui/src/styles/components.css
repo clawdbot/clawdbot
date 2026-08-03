@@ -2522,6 +2522,14 @@ openclaw-chat-session-rail {
   color: var(--text);
 }
 
+.data-table-sort-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
 .data-table-sort-icon {
   display: inline-flex;
   vertical-align: middle;

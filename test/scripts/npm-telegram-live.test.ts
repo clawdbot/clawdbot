@@ -163,7 +163,7 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('package_install_source="openclaw@$(read_package_version');
     expect(script).toContain('-v "$resolved_package_dir:/package-under-test:ro"');
     expect(script).toContain(
-      '-v "$ROOT_DIR/scripts/e2e/lib/bounded-response-text.mjs:/tmp/openclaw-e2e/lib/bounded-response-text.mjs:ro"',
+      '-v "$ROOT_DIR/scripts/lib/bounded-response.mjs:/tmp/lib/bounded-response.mjs:ro"',
     );
     expect(script).toContain(
       '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs:ro"',

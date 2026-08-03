@@ -12,11 +12,12 @@ type SubagentAnnounceDeliveryFailureReason =
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "requester_abandoned"
+  | "source_owner_changed"
   | "visible_reply_missing";
 
 type SubagentAnnounceSteerOutcome =
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
-  | { status: "none" | "dropped" };
+  | { status: "none" | "dropped" | "source_owner_changed" };
 
 /** Result of trying to deliver a subagent announcement. */
 export type SubagentAnnounceDeliveryResult = {
@@ -55,6 +56,15 @@ function mapSteerOutcomeToDeliveryResult(
       enqueuedAt: outcome.enqueuedAt,
     };
   }
+  if (outcome.status === "source_owner_changed") {
+    return {
+      delivered: false,
+      path: "none",
+      reason: "source_owner_changed",
+      error: "subagent source lifecycle changed before completion delivery",
+      terminal: true,
+    };
+  }
   return {
     delivered: false,
     path: "none",
@@ -64,6 +74,7 @@ function mapSteerOutcomeToDeliveryResult(
 /** Runs the ordered steer/direct announcement delivery strategy. */
 export async function runSubagentAnnounceDispatch(params: {
   expectsCompletionMessage: boolean;
+  requireDirectDelivery?: boolean;
   signal?: AbortSignal;
   steer: () => Promise<SubagentAnnounceSteerOutcome>;
   direct: () => Promise<SubagentAnnounceDeliveryResult>;
@@ -95,11 +106,22 @@ export async function runSubagentAnnounceDispatch(params: {
     });
   }
 
+  if (params.requireDirectDelivery) {
+    // Settle synthesis needs its own delivery turn; steering can inherit a
+    // message-tool-only completion turn and silently suppress the final reply.
+    const primaryDirect = await params.direct();
+    appendPhase("direct-primary", primaryDirect);
+    return withPhases(primaryDirect);
+  }
+
   if (!params.expectsCompletionMessage) {
     const primarySteerOutcome = await params.steer();
     const primarySteer = mapSteerOutcomeToDeliveryResult(primarySteerOutcome);
     appendPhase("steer-primary", primarySteer);
     if (primarySteer.delivered) {
+      return withPhases(primarySteer);
+    }
+    if (primarySteer.terminal) {
       return withPhases(primarySteer);
     }
     if (primarySteerOutcome.status === "dropped") {
@@ -127,6 +149,9 @@ export async function runSubagentAnnounceDispatch(params: {
   const fallbackSteer = mapSteerOutcomeToDeliveryResult(fallbackSteerOutcome);
   appendPhase("steer-fallback", fallbackSteer);
   if (fallbackSteer.delivered) {
+    return withPhases(fallbackSteer);
+  }
+  if (fallbackSteer.terminal) {
     return withPhases(fallbackSteer);
   }
 

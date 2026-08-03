@@ -13,7 +13,6 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue, withEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
@@ -23,6 +22,7 @@ import {
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
+import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -46,10 +46,6 @@ const { announceSpy } = vi.hoisted(() => ({
 }));
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
-}));
-
-vi.mock("./subagent-orphan-recovery.js", () => ({
-  scheduleOrphanRecovery: vi.fn(),
 }));
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
@@ -196,7 +192,7 @@ describe("subagent registry persistence", () => {
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) =>
     saveSubagentRegistryToSqlite(runs);
 
-  function saveCanonicalRunFixtures(runs: Map<string, SubagentRunRecord>) {
+  function saveCanonicalRunFixtures(runs: ReadonlyMap<string, SubagentRunFixture>) {
     saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
   }
 
@@ -214,7 +210,6 @@ describe("subagent registry persistence", () => {
       startedAt: 111,
       endedAt: 222,
     });
-    vi.mocked(scheduleOrphanRecovery).mockReset();
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
   });
@@ -249,6 +244,7 @@ describe("subagent registry persistence", () => {
       task: "persist progress source",
       cleanup: "keep",
       createdAt: 1,
+      execution: { status: "running" },
     };
 
     await writePersistedRegistry(
@@ -282,12 +278,10 @@ describe("subagent registry persistence", () => {
       task: "persist timing",
       cleanup: "keep",
       createdAt: startedAt,
-      startedAt,
       sessionStartedAt: startedAt,
       accumulatedRuntimeMs: 0,
-      endedAt,
-      outcome: { status: "ok" },
-    } as never);
+      execution: { status: "terminal", startedAt, endedAt, outcome: { status: "ok" } },
+    });
 
     const store = await readSubagentSessionStore(storePath);
     const persisted = store["agent:main:subagent:timing"];
@@ -317,10 +311,13 @@ describe("subagent registry persistence", () => {
         task: "do not persist stale timing",
         cleanup: "keep",
         createdAt: startedAt,
-        startedAt,
-        endedAt: startedAt + 500,
-        outcome: { status: "ok" },
-      } as never,
+        execution: {
+          status: "terminal",
+          startedAt,
+          endedAt: startedAt + 500,
+          outcome: { status: "ok" },
+        },
+      },
       { isCurrentGeneration: () => false },
     );
 
@@ -365,11 +362,14 @@ describe("subagent registry persistence", () => {
       task: "preserve completion",
       cleanup: "keep",
       createdAt: startedAt,
-      startedAt,
-      endedAt: completedAt + 1,
       endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-    } as never);
+      execution: {
+        status: "terminal",
+        startedAt,
+        endedAt: completedAt + 1,
+        outcome: { status: "error", error: "manual kill" },
+      },
+    });
 
     const persisted = (await readSubagentSessionStore(storePath))["agent:main:subagent:kill-race"];
     expect(persisted).toMatchObject({
@@ -394,7 +394,7 @@ describe("subagent registry persistence", () => {
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
           task: "do the other thing",
-          cleanup: "keep",
+          cleanup: "keep" as const,
           createdAt: 1,
           startedAt: 1,
           endedAt: 2,
@@ -402,9 +402,7 @@ describe("subagent registry persistence", () => {
         },
       },
     };
-    saveCanonicalRunFixtures(
-      new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
-    );
+    saveCanonicalRunFixtures(new Map(Object.entries(persisted.runs)));
     await writeChildSessionEntry({
       sessionKey: "agent:main:subagent:two",
       sessionId: "sess-two",
@@ -505,7 +503,7 @@ describe("subagent registry persistence", () => {
       task: "persist collector result",
       cleanup: "keep",
       createdAt: 1,
-      endedAt: 2,
+      execution: { status: "terminal", endedAt: 2 },
       collect: true,
       swarmRequesterSessionKey: "agent:worker:subagent:owner",
       swarmWaitOwnerSessionKeys: ["agent:worker:subagent:owner", "agent:main:main"],
@@ -522,7 +520,7 @@ describe("subagent registry persistence", () => {
     await writeChildSessionEntry({
       sessionKey: run.childSessionKey,
       sessionId: "session-swarm-restart",
-      updatedAt: run.endedAt,
+      updatedAt: run.execution.endedAt,
     });
 
     closeOpenClawStateDatabaseForTest();
@@ -832,13 +830,13 @@ describe("subagent registry persistence", () => {
     );
 
     restartRegistry();
-    await waitForRegistryWork(() => vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0);
+    await flushQueuedRegistryWork();
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
     expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
       expect.objectContaining({ runId, terminalOwner: "interrupted-recovery" }),
     ]);
+    await testing.sweepOnceForTests();
   });
 
   it("reconciles stale unended restored runs that are not restart-recoverable", async () => {
@@ -872,7 +870,7 @@ describe("subagent registry persistence", () => {
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("keeps stale unended restored runs with abortedLastRun for lifecycle recovery", async () => {
+  it("finalizes stale unended restored runs with abortedLastRun in the sweeper", async () => {
     vi.mocked(callGateway).mockImplementationOnce(async (request) => {
       expectFields(request, {
         method: "agent.wait",
@@ -913,15 +911,15 @@ describe("subagent registry persistence", () => {
     });
 
     restartRegistry();
-    await waitForRegistryWork(() => vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0);
+    await flushQueuedRegistryWork();
+    await testing.sweepOnceForTests();
 
-    // The dead pre-restart run must not be queried before orphan recovery can
-    // replace it with a fresh turn through the Gateway-owned runtime.
+    // The dead pre-restart run is terminalized without querying its stale run id.
     expect(callGateway).not.toHaveBeenCalled();
-    expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
-    expect(
-      listSubagentRunsForRequester("agent:main:main").some((entry) => entry.runId === runId),
-    ).toBe(true);
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.outcome).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("stale aborted subagent run"),
+    });
   });
 
   it("removes attachments when pruning orphaned restored runs", async () => {
@@ -943,9 +941,7 @@ describe("subagent registry persistence", () => {
       attachmentsDir,
     });
 
-    saveCanonicalRunFixtures(
-      new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
-    );
+    saveCanonicalRunFixtures(new Map(Object.entries(persisted.runs)));
 
     restartRegistry();
     await waitForRegistryWork(async () => {
@@ -1005,7 +1001,7 @@ describe("subagent registry persistence", () => {
       runId: "run-active",
       childSessionKey,
     });
-    expect(resolved?.endedAt).toBeUndefined();
+    expect(resolved?.execution.endedAt).toBeUndefined();
   });
 
   it("can resolve the newest child-session row even when an older stale row is still active", async () => {
@@ -1051,7 +1047,7 @@ describe("subagent registry persistence", () => {
       runId: "run-current-ended",
       childSessionKey,
     });
-    expect(resolved?.endedAt).toBe(220);
+    expect(resolved?.execution.endedAt).toBe(220);
   });
 
   it("resume guard prunes orphan runs before announce retry", async () => {

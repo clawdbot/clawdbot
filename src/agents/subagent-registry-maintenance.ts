@@ -14,7 +14,7 @@ function isCleanupCompleteForMaintenance(entry: SubagentRunRecord): boolean {
 }
 
 function isActiveForMaintenance(entry: SubagentRunRecord): boolean {
-  return typeof entry.endedAt !== "number";
+  return typeof entry.execution.endedAt !== "number";
 }
 
 function isPendingFinalDeliveryForMaintenance(entry: SubagentRunRecord): boolean {
@@ -26,7 +26,7 @@ function isAwaitingCompletionAnnounceForMaintenance(entry: SubagentRunRecord): b
 }
 
 function shouldPreserveForMaintenance(entry: SubagentRunRecord): boolean {
-  if (entry.killReconciliation) {
+  if (entry.killReconciliation || entry.killIntent) {
     // The killed row is a reconciliation tombstone. Its session owns the
     // provider result until the sweeper accepts completion or finalizes cancellation.
     return true;

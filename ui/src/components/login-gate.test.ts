@@ -81,4 +81,22 @@ describe("login gate failure recovery", () => {
     expect(element.querySelector(".login-gate__failure")?.getAttribute("data-kind")).toBe(kind);
     expect(element.querySelector(".login-gate__failure-refresh")).toBeNull();
   });
+
+  it("offers a one-command recovery before manual pairing approval", async () => {
+    const element = await mountFailure(
+      "pairing required",
+      ConnectErrorDetailCodes.PAIRING_REQUIRED,
+    );
+
+    const steps = Array.from(
+      element.querySelectorAll<HTMLElement>(".login-gate__failure-steps li"),
+      (entry) => entry.textContent?.trim(),
+    );
+    expect(steps).toEqual([
+      "On the Gateway host, run openclaw dashboard to open a secure one-time pairing link.",
+      "Run openclaw devices list on the Gateway host.",
+      "Approve the pending browser/device request from that list.",
+      "Reconnect after the approval completes.",
+    ]);
+  });
 });

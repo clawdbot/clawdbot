@@ -8,7 +8,7 @@
   },
   "rules": {
     "curly": "error",
-    "eslint/no-underscore-dangle": "error",
+    "eslint/no-underscore-dangle": ["error", { "allow": ["__typename", "_meta"] }],
     "eslint-plugin-unicorn/prefer-array-find": "error",
     "eslint/no-array-constructor": "error",
     "eslint/no-await-in-loop": "off",
@@ -210,6 +210,9 @@
     "dist/",
     "dist-runtime/",
     "docs/_layouts/",
+    // Intentional negative-test corpora contain parser and lint violations by contract.
+    ".agents/skills/autoreview/tests/fixtures/**",
+    "test/fixtures/oxlint-boundary-guards/**",
     "**/a2ui.bundle.js",
     "extensions/browser/chrome-extension/modules/copilot-runtime.js",
     "extensions/diffs/assets/viewer-runtime.js",

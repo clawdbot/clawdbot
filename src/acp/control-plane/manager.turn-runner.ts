@@ -122,6 +122,7 @@ export async function runManagerTurn(params: {
         ? new AcpRuntimeError(
             error.code,
             `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
+            { detailCode: error.detailCode },
           )
         : error;
     params.recordTurnCompletion({

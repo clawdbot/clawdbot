@@ -17,6 +17,7 @@ const listRawChannelPluginCatalogEntriesMock = vi.hoisted(() =>
   vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
 );
 const channelsAddCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const channelsResolveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const runtimeMock = vi.hoisted(() => ({
   log: vi.fn(),
   error: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock("../channels/plugins/catalog.js", () => ({
 
 vi.mock("../commands/channels.js", () => ({
   channelsAddCommand: channelsAddCommandMock,
+  channelsResolveCommand: channelsResolveCommandMock,
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -87,6 +89,38 @@ describe("registerChannelsCli", () => {
     await registerChannelsCli(program);
 
     expect(getChannelSubcommandNames(program, "dead-letters")).toEqual(["list", "resubmit"]);
+  });
+
+  it.each(["auto", "user", "group", "channel"])(
+    "forwards the supported %s resolve target kind",
+    async (kind) => {
+      const program = new Command().name("openclaw").exitOverride();
+      const args = ["channels", "resolve", "--kind", kind, "room"];
+
+      await registerChannelsCli(program, ["node", "openclaw", ...args]);
+      await program.parseAsync(args, { from: "user" });
+
+      expect(channelsResolveCommandMock).toHaveBeenCalledWith(
+        expect.objectContaining({ kind, entries: ["room"] }),
+        runtimeMock,
+      );
+    },
+  );
+
+  it("rejects unsupported resolve target kinds before dispatching", async () => {
+    const writeErr = vi.fn();
+    const program = new Command().name("openclaw").exitOverride().configureOutput({ writeErr });
+    const args = ["channels", "resolve", "--kind", "person", "room"];
+
+    await registerChannelsCli(program, ["node", "openclaw", ...args]);
+
+    await expect(program.parseAsync(args, { from: "user" })).rejects.toMatchObject({
+      code: "commander.invalidArgument",
+    });
+    expect(writeErr).toHaveBeenCalledWith(
+      expect.stringContaining("Allowed choices are auto, user, group, channel."),
+    );
+    expect(channelsResolveCommandMock).not.toHaveBeenCalled();
   });
 
   it("registers ClickClack setup options before an external channel plugin is installed", async () => {

@@ -986,37 +986,49 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
-  it("runs a targeted notification wake for an agent without a heartbeat schedule", async () => {
+  it.each([
+    {
+      name: "an agent without a heartbeat schedule",
+      cfg: {
+        agents: { list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "ops" }] },
+      } as OpenClawConfig,
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      heartbeat: { target: "last" },
+    },
+    {
+      name: "the global main session when periodic heartbeats are disabled",
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+        session: { scope: "global" },
+      } as OpenClawConfig,
+      agentId: "main",
+      sessionKey: "global",
+      heartbeat: { every: "0m", target: "last" },
+    },
+  ])("runs one targeted notification wake for $name", async (testCase) => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const runner = startHeartbeatRunner({
-      cfg: {
-        agents: {
-          list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "ops" }],
-        },
-      } as OpenClawConfig,
-      runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
-    });
-
-    requestHeartbeat({
-      source: "notifications-event",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey: "agent:ops:main",
-      heartbeat: { target: "last" },
-      coalesceMs: 0,
-    });
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(runSpy).toHaveBeenCalledTimes(1);
-    expectRunCallFields(runSpy, 0, {
-      agentId: "ops",
-      source: "notifications-event",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey: "agent:ops:main",
-      heartbeat: { target: "last" },
+    const runner = await expectWakeDispatch({
+      cfg: testCase.cfg,
+      runSpy,
+      wake: {
+        source: "notifications-event",
+        intent: "immediate",
+        reason: "wake",
+        ...(testCase.sessionKey === "global" ? { agentId: testCase.agentId } : {}),
+        sessionKey: testCase.sessionKey,
+        heartbeat: { target: "last" },
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: testCase.agentId,
+        source: "notifications-event",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: testCase.sessionKey,
+        heartbeat: testCase.heartbeat,
+      },
     });
     runner.stop();
   });

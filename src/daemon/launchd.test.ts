@@ -1,4 +1,5 @@
 // Launchd tests cover macOS service plist generation and command handling.
+import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +26,7 @@ import {
   stageLaunchAgent,
   startLaunchAgent,
   stopLaunchAgent,
+  uninstallLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -422,10 +424,26 @@ vi.mock("node:fs/promises", async () => {
     ...actual,
     access: vi.fn(async (p: string) => {
       const key = p;
-      if (state.files.has(key) || state.dirs.has(key)) {
+      if (
+        (state.files.has(key) && state.files.get(key) !== "dangling-launchagent-symlink") ||
+        state.dirs.has(key)
+      ) {
         return;
       }
-      throw new Error(`ENOENT: no such file or directory, access '${key}'`);
+      throw Object.assign(new Error(`ENOENT: no such file or directory, access '${key}'`), {
+        code: "ENOENT",
+      });
+    }),
+    lstat: vi.fn(async (p: string) => {
+      const key = p;
+      if (state.files.has(key) || state.dirs.has(key)) {
+        return {
+          isSymbolicLink: () => state.files.get(key) === "dangling-launchagent-symlink",
+        };
+      }
+      throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${key}'`), {
+        code: "ENOENT",
+      });
     }),
     mkdir: vi.fn(async (p: string, opts?: { mode?: number }) => {
       const key = p;
@@ -1358,6 +1376,87 @@ describe("launchd bootstrap repair", () => {
   });
 });
 
+describe("launchd uninstall", () => {
+  it("reports a surviving LaunchAgent when moving its plist to Trash is denied", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "RunAtLoad=true");
+    vi.mocked(fs.rename).mockRejectedValueOnce(
+      Object.assign(new Error(`EACCES: permission denied, rename '${plistPath}'`), {
+        code: "EACCES",
+      }),
+    );
+
+    const uninstall = uninstallLaunchAgent({ env, stdout: new PassThrough() });
+
+    await expect(uninstall).rejects.toThrow("LaunchAgent removal failed (EACCES)");
+    await expect(uninstall).rejects.not.toThrow(plistPath);
+    expect(state.files.has(plistPath)).toBe(true);
+  });
+
+  it("reports inaccessible LaunchAgents instead of claiming they are missing", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    vi.mocked(fs.lstat).mockRejectedValueOnce(
+      Object.assign(new Error(`EACCES: permission denied, lstat '${plistPath}'`), {
+        code: "EACCES",
+      }),
+    );
+
+    const uninstall = uninstallLaunchAgent({ env, stdout: new PassThrough() });
+
+    await expect(uninstall).rejects.toThrow("LaunchAgent removal failed (EACCES)");
+    await expect(uninstall).rejects.not.toThrow(plistPath);
+  });
+
+  it("keeps missing LaunchAgent removal idempotent", async () => {
+    const env = createDefaultLaunchdEnv();
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).resolves.toBeUndefined();
+  });
+
+  it("removes dangling LaunchAgent symlinks instead of treating their targets as missing", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "dangling-launchagent-symlink");
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).resolves.toBeUndefined();
+    expect(state.files.has(plistPath)).toBe(false);
+  });
+
+  it("keeps concurrently removed LaunchAgent removal idempotent", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "RunAtLoad=true");
+    vi.mocked(fs.rename).mockImplementationOnce(async () => {
+      state.files.delete(plistPath);
+      throw Object.assign(new Error(`ENOENT: no such file, rename '${plistPath}'`), {
+        code: "ENOENT",
+      });
+    });
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).resolves.toBeUndefined();
+    expect(state.files.has(plistPath)).toBe(false);
+  });
+
+  it("reports a missing Trash destination while the LaunchAgent still exists", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "RunAtLoad=true");
+    vi.mocked(fs.rename).mockRejectedValueOnce(
+      Object.assign(new Error(`ENOENT: missing destination for '${plistPath}'`), {
+        code: "ENOENT",
+      }),
+    );
+
+    const uninstall = uninstallLaunchAgent({ env, stdout: new PassThrough() });
+
+    await expect(uninstall).rejects.toThrow("LaunchAgent removal failed (ENOENT)");
+    await expect(uninstall).rejects.not.toThrow(plistPath);
+    expect(state.files.has(plistPath)).toBe(true);
+  });
+});
+
 describe("launchd install", () => {
   it("refuses install and stage before any user LaunchAgent mutation", async () => {
     const env = createDefaultLaunchdEnv();
@@ -1470,6 +1569,44 @@ describe("launchd install", () => {
     expect(command?.environment?.OPENAI_API_KEY).toBe(apiKey);
     expect(command?.environmentValueSources?.TMPDIR).toBe("file");
     expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
+  });
+
+  it("retains custom Node CA trust when reinstalling a generated owner-only LaunchAgent", async () => {
+    const env = createDefaultLaunchdEnv();
+    const extraCaCerts = "/Users/test/certs/corporate-ca.pem";
+    const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { NODE_EXTRA_CA_CERTS: extraCaCerts },
+    });
+
+    const installedCommand = await readLaunchAgentProgramArguments(env);
+    expect(installedCommand?.environment?.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
+    expect(installedCommand?.environmentValueSources?.NODE_EXTRA_CA_CERTS).toBe("file");
+    const initialEnvWrites = countMatching(state.fileWrites, ({ path }) => path === envFilePath);
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: installedCommand?.environment,
+    });
+
+    const refreshedCommand = await readLaunchAgentProgramArguments(env);
+    expect(refreshedCommand?.environment?.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
+    expect(refreshedCommand?.environmentValueSources?.NODE_EXTRA_CA_CERTS).toBe("file");
+    expect(countMatching(state.fileWrites, ({ path }) => path === envFilePath)).toBeGreaterThan(
+      initialEnvWrites,
+    );
+    expect(state.files.get(envFilePath)).toContain(`export NODE_EXTRA_CA_CERTS='${extraCaCerts}'`);
+    expect(state.files.get(resolveLaunchAgentPlistPath(env))).not.toContain(extraCaCerts);
+    expect(state.fileModes.get(envFilePath)).toBe(0o600);
+    expect(state.fileModes.get(wrapperPath)).toBe(0o700);
+    expect(state.dirModes.get("/Users/test/.openclaw/service-env")).toBe(0o700);
   });
 
   it("warns before overwriting a customized generated LaunchAgent env wrapper", async () => {

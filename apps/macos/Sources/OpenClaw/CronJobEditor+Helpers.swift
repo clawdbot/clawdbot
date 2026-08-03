@@ -148,6 +148,13 @@ extension CronJobEditor {
             } else if self.job?.delivery?.bestEffort == true {
                 delivery["bestEffort"] = false
             }
+            if let destination = self.job?.delivery?.completionDestination {
+                delivery["completionDestination"] = destination.mapValues(\.value)
+            }
+        }
+        if let threadId = self.job?.delivery?.threadId { delivery["threadId"] = threadId.value }
+        if let destination = self.job?.delivery?.failureDestination {
+            delivery["failureDestination"] = destination.mapValues(\.value)
         }
         return delivery
     }

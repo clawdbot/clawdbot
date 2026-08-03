@@ -1,8 +1,7 @@
 // Pure grouping helpers for the sessions table "Group by" modes.
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { parseSessionKeyParts } from "../format.ts";
 import { moveSessionOrderEntry, normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
-import { parseAgentSessionKey } from "./session-key.ts";
+import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
 
 export const SESSION_GROUP_MODES = [
   "none",

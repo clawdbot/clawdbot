@@ -2,6 +2,7 @@
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import type { Compilable, CompiledQuery, Kysely, QueryResult } from "kysely";
 import { InsertQueryNode, Kysely as KyselyInstance, SqliteDialect } from "kysely";
+import { pruneMapToMaxSize } from "./map-size.js";
 
 // Sync query helpers execute compiled Kysely SQL against node:sqlite without
 // going through Kysely's async driver path.
@@ -201,12 +202,7 @@ function executeWithCachedStatement<Result>(
     statement = db.prepare(sql);
     if (!cached && cache.candidates.delete(sql)) {
       cache.statements.set(sql, statement);
-      if (cache.statements.size > statementCacheCapacity) {
-        const oldestSql = cache.statements.keys().next().value;
-        if (oldestSql !== undefined) {
-          cache.statements.delete(oldestSql);
-        }
-      }
+      pruneMapToMaxSize(cache.statements, statementCacheCapacity);
     } else if (!cached) {
       // Admit only on second use so variable placeholder counts cannot fill
       // the native statement cache with one-shot SQL strings.

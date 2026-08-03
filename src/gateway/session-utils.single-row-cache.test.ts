@@ -135,6 +135,21 @@ function runningChildSession(
   };
 }
 
+function runningControlledChildSession(
+  sessionId: string,
+  spawnedBy: string,
+  now: number,
+  parentSessionKey?: string,
+): SessionEntry {
+  return {
+    sessionId,
+    spawnedBy,
+    ...(parentSessionKey ? { parentSessionKey } : {}),
+    updatedAt: now,
+    status: "running",
+  };
+}
+
 async function seedSessionEntries(
   storePath: string,
   store: Record<string, SessionEntry>,
@@ -155,6 +170,7 @@ function setSubagentControllerRun(
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       createdAt,
+      execution: { status: "running", startedAt: createdAt },
     },
   ]);
 }
@@ -234,6 +250,13 @@ describe("single gateway session row child-session cache", () => {
       "/tmp/openclaw-single-row-cache-fresh-registry",
       async ({ now, storePath }) => {
         const fixture = createMovingChildFixture(now);
+        // This fixture moves runtime control only; an explicit parent would
+        // instead declare durable navigation lineage that must remain linked.
+        fixture.store[fixture.child] = runningControlledChildSession(
+          "child",
+          fixture.oldParent,
+          now,
+        );
         await seedSessionEntries(storePath, fixture.store);
 
         setSubagentControllerRun(fixture.child, fixture.oldParent, now);
@@ -242,6 +265,36 @@ describe("single gateway session row child-session cache", () => {
         ]);
 
         setSubagentControllerRun(fixture.child, fixture.newParent, now + 25);
+        expectChildMovedToNewParent(fixture, now);
+      },
+    );
+  });
+
+  test("keeps independent navigation lineage while cached runtime control moves", async () => {
+    await withSingleRowCacheStore(
+      "openclaw-single-row-cache-navigation-owner-",
+      "/tmp/openclaw-single-row-cache-navigation-owner",
+      async ({ now, storePath }) => {
+        const fixture = createMovingChildFixture(now);
+        const navigationParent = "agent:main:dashboard:navigation-parent";
+        fixture.store[navigationParent] = parentSession("navigation-parent", now);
+        fixture.store[fixture.child] = runningControlledChildSession(
+          "child",
+          fixture.oldParent,
+          now,
+          navigationParent,
+        );
+        await seedSessionEntries(storePath, fixture.store);
+
+        setSubagentControllerRun(fixture.child, fixture.oldParent, now);
+        expect(loadGatewaySessionRow(navigationParent, { now })?.childSessions).toEqual([
+          fixture.child,
+        ]);
+
+        setSubagentControllerRun(fixture.child, fixture.newParent, now + 25);
+        expect(loadGatewaySessionRow(navigationParent, { now: now + 50 })?.childSessions).toEqual([
+          fixture.child,
+        ]);
         expectChildMovedToNewParent(fixture, now);
       },
     );

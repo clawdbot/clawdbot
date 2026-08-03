@@ -991,6 +991,11 @@ describe("node.invoke APNs wake path", () => {
     expect(call[0]).toBe(false);
     expect(call[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
     expect(call[2]?.message).toBe("node not connected");
+    expect(call[2]?.details).toEqual({
+      code: "NOT_CONNECTED",
+      nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+      nodeCommandDispatched: false,
+    });
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
