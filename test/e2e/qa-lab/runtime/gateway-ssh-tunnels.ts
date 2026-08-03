@@ -560,7 +560,12 @@ export async function runGatewaySshTunnels(
           identityPath: sshd.clientKeyPath,
           sshPort: sshd.port,
         });
-        const successTarget = requireTarget(success.payload, "sshTunnel");
+        const successTarget = success.payload.targets?.find((entry) => entry.kind === "sshTunnel");
+        if (!successTarget) {
+          throw new Error(
+            `gateway status did not emit sshTunnel target: ${JSON.stringify(success.payload.warnings ?? [])}`,
+          );
+        }
         const localPort = successTarget.tunnel?.localPort;
         if (
           success.exitCode !== null ||
