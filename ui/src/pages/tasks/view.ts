@@ -97,9 +97,7 @@ function renderTask(task: TaskSummary, props: TasksProps) {
         ${blocked
           ? html`<div class="callout warn">
               ${t("tasksPage.deliveryBlocked")}
-              ${task.duplicateRisk
-                ? html`<div class="muted">${t("tasksPage.duplicateRisk")}</div>`
-                : nothing}
+              <div class="muted">${t("tasksPage.duplicateRisk")}</div>
             </div>`
           : nothing}
       </div>
@@ -132,7 +130,7 @@ function renderTask(task: TaskSummary, props: TasksProps) {
               <button
                 class="btn"
                 type="button"
-                ?disabled=${cancelling || !props.connected || !task.canRetryDelivery}
+                ?disabled=${cancelling || !props.connected}
                 @click=${() => props.onRetry(task.taskId)}
               >
                 ${t("tasksPage.retryDelivery")}
@@ -140,7 +138,7 @@ function renderTask(task: TaskSummary, props: TasksProps) {
               <button
                 class="btn"
                 type="button"
-                ?disabled=${cancelling || !props.connected || !task.canDismissDelivery}
+                ?disabled=${cancelling || !props.connected}
                 @click=${() => props.onDismiss(task.taskId)}
               >
                 ${t("tasksPage.dismissDelivery")}

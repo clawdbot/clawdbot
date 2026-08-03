@@ -55,11 +55,6 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
   const result = opts?.includePrompt
     ? sanitizeTaskStatusText(task.progressSummary, { maxChars: TASK_RESULT_MAX_CHARS }) || undefined
     : undefined;
-  const recoverableDelivery =
-    task.runtime === "subagent" &&
-    task.status === "succeeded" &&
-    task.deliveryStatus === "failed" &&
-    task.terminalOutcome === "blocked";
   const toolUseCount =
     typeof task.toolUseCount === "number" && Number.isInteger(task.toolUseCount)
       ? Math.max(0, task.toolUseCount)
@@ -90,9 +85,6 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
     ...(error ? { error } : {}),
     deliveryStatus: task.deliveryStatus,
     ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
-    ...(recoverableDelivery
-      ? { canRetryDelivery: true, canDismissDelivery: true, duplicateRisk: true }
-      : {}),
     ...(result ? { result } : {}),
     ...(prompt ? { prompt } : {}),
   };

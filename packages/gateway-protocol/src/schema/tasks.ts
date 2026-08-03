@@ -58,9 +58,6 @@ export const TaskSummarySchema = closedObject({
   error: Type.Optional(Type.String()),
   deliveryStatus: Type.Optional(TaskDeliveryStatusSchema),
   terminalOutcome: Type.Optional(TaskTerminalOutcomeSchema),
-  canRetryDelivery: Type.Optional(Type.Boolean()),
-  canDismissDelivery: Type.Optional(Type.Boolean()),
-  duplicateRisk: Type.Optional(Type.Boolean()),
   /** Bounded canonical completion result. Returned only by tasks.get. */
   result: Type.Optional(Type.String()),
   /** Bounded task input. Returned by tasks.get; omitted from list/event summaries. */

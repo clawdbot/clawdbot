@@ -13,6 +13,7 @@ import {
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
 } from "../infra/session-delivery-queue-storage.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { findTaskByRunId, getTaskById } from "../tasks/runtime-internal.js";
 import { publishTaskRecordAfterAtomicStore } from "../tasks/task-registry.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
@@ -27,6 +28,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const CLAIM_LEASE_MS = 125_000;
 const SUSPENDED_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const MAX_DELIVERY_GENERATION = 10;
 const CANONICAL_RESULT_PROMPT =
   "A completed subagent task is ready for parent review. The canonical result follows.";
 
@@ -58,6 +60,25 @@ function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskRecord):
     subagentRuns.set(subagent.runId, subagent);
   }
   publishTaskRecordAfterAtomicStore(task);
+}
+
+function projectRedrivenTask(
+  task: TaskRecord,
+  subagent: SubagentRunRecord,
+  deliveryStatus: "pending" | "session_queued",
+  now: number,
+): TaskRecord {
+  return {
+    ...task,
+    status: "succeeded",
+    deliveryStatus,
+    terminalOutcome: "succeeded",
+    lastEventAt: now,
+    progressSummary: ensureCompletionState(subagent).resultText ?? task.progressSummary,
+    error: undefined,
+    terminalSummary: undefined,
+    cleanupAfter: undefined,
+  };
 }
 
 /** Atomically admits a queue generation and publishes process mirrors only after commit. */
@@ -108,14 +129,7 @@ export function admitCorrelatedSubagentSessionDelivery(params: {
     enqueuedAt: now,
   });
   delete delivery.payload;
-  const projectedTask: TaskRecord = {
-    ...task,
-    status: "succeeded",
-    deliveryStatus: "session_queued",
-    terminalOutcome: "succeeded",
-    lastEventAt: now,
-    progressSummary: ensureCompletionState(subagent).resultText ?? task.progressSummary,
-  };
+  const projectedTask = projectRedrivenTask(task, subagent, "session_queued", now);
   const admission = admitSubagentCompletionDelivery({
     queueEntry,
     subagent,
@@ -213,7 +227,10 @@ export async function settleCorrelatedSubagentDelivery(
   }
 }
 
-export async function retrySubagentCompletionDelivery(taskId: string): Promise<{
+export async function retrySubagentCompletionDelivery(
+  taskId: string,
+  databaseOptions?: OpenClawStateDatabaseOptions,
+): Promise<{
   ok: boolean;
   reason?: string;
   task?: TaskRecord;
@@ -230,8 +247,36 @@ export async function retrySubagentCompletionDelivery(taskId: string): Promise<{
     await scheduleSessionDelivery(delivery.queueId);
     return { ok: true, task: getTaskById(taskId) };
   }
-  if (delivery.status !== "suspended" || !delivery.queueId) {
+  if (delivery.status !== "suspended") {
     return { ok: false, reason: "completion delivery is not blocked" };
+  }
+  const generation = (delivery.generation ?? 1) + 1;
+  if (generation > MAX_DELIVERY_GENERATION) {
+    return { ok: false, reason: "completion delivery redrive limit reached" };
+  }
+  const now = Date.now();
+  const redrive = structuredClone(current);
+  Object.assign(ensureDeliveryState(redrive), {
+    status: "pending" as const,
+    disposition: "retryable" as const,
+    generation,
+    queueId: undefined,
+    windowStartedAt: now,
+    deadlineAt: now + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+    suspendedAt: undefined,
+    suspendedReason: undefined,
+    attemptCount: 0,
+    lastError: undefined,
+    nextAttemptAt: undefined,
+  });
+  redrive.cleanupHandled = false;
+  if (!delivery.queueId) {
+    const projectedTask = projectRedrivenTask(task, redrive, "pending", now);
+    settleSubagentCompletionDelivery({ subagent: redrive, task: projectedTask, databaseOptions });
+    publishCommittedRecords(redrive, projectedTask);
+    const { resumeSubagentRun } = await import("./subagent-registry.js");
+    resumeSubagentRun(redrive.runId);
+    return { ok: true, task: getTaskById(taskId), duplicateRisk: true };
   }
   const failed = loadDeliveryQueueEntryAnyStatus(
     SESSION_DELIVERY_QUEUE_NAME,
@@ -240,20 +285,6 @@ export async function retrySubagentCompletionDelivery(taskId: string): Promise<{
   if (!failed || failed.kind !== "agentTurn" || failed.owner?.kind !== "subagent_completion") {
     return { ok: false, reason: "retained delivery route is unavailable" };
   }
-  const generation = (delivery.generation ?? failed.owner.generation) + 1;
-  const redrive = structuredClone(current);
-  Object.assign(ensureDeliveryState(redrive), {
-    status: "pending" as const,
-    disposition: "retryable" as const,
-    generation,
-    queueId: undefined,
-    windowStartedAt: undefined,
-    deadlineAt: undefined,
-    suspendedAt: undefined,
-    suspendedReason: undefined,
-    attemptCount: 0,
-    lastError: undefined,
-  });
   const payload: Extract<QueuedSessionDeliveryPayload, { kind: "agentTurn" }> = {
     ...failed,
     idempotencyKey: `${failed.idempotencyKey ?? failed.messageId}:generation:${generation}`,

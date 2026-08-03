@@ -387,7 +387,6 @@ describe("TasksPage cancellation lifecycle", () => {
     const blocked = createTask("task-blocked", "completed", {
       deliveryStatus: "failed",
       terminalOutcome: "blocked",
-      canRetryDelivery: true,
     });
     const request = vi.fn((method: string) => {
       if (method === "tasks.retry") {

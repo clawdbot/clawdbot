@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareClaimedSessionDelivery } from "../infra/session-delivery-queue.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
@@ -8,13 +8,22 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { ensureTaskRegistryReady, getTaskById } from "../tasks/runtime-internal.js";
+import { publishTaskRecordAfterAtomicStore } from "../tasks/task-registry.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import {
   admitSubagentCompletionDelivery,
   settleSubagentCompletionDelivery,
 } from "./subagent-completion-admission.store.js";
+import { retrySubagentCompletionDelivery } from "./subagent-completion-delivery.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
+
+const resumeSubagentRun = vi.hoisted(() => vi.fn());
+
+vi.mock("./subagent-registry.js", () => ({ resumeSubagentRun }));
 
 describe("atomic subagent completion admission store", () => {
   let tempDir: string;
@@ -28,6 +37,8 @@ describe("atomic subagent completion admission store", () => {
   });
 
   afterEach(() => {
+    subagentRuns.clear();
+    resetTaskRegistryForTests({ persist: false });
     closeOpenClawStateDatabaseForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -193,5 +204,94 @@ describe("atomic subagent completion admission store", () => {
     expect(rowCount("delivery_queue_entries")).toBe(0);
     expect(rowCount("subagent_runs")).toBe(0);
     expect(rowCount("task_runs")).toBe(0);
+  });
+
+  it("redrives an ordinary text completion through its retained registry owner", async () => {
+    const input = records();
+    const now = Date.now();
+    input.subagent.delivery = {
+      status: "suspended",
+      disposition: "permanent_failure",
+      generation: 1,
+      windowStartedAt: now - 31 * 60_000,
+      deadlineAt: now - 60_000,
+      suspendedAt: now,
+      suspendedReason: "expiry",
+      lastError: "requester unavailable",
+      payload: {
+        requesterSessionKey: input.task.requesterSessionKey,
+        childSessionKey: input.task.childSessionKey,
+        childRunId: input.subagent.runId,
+        task: input.task.task,
+        endedAt: input.task.endedAt,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+      },
+    };
+    input.task.deliveryStatus = "failed";
+    input.task.terminalOutcome = "blocked";
+    input.task.error = "requester unavailable";
+    input.task.terminalSummary = "Task completed, but result delivery is blocked.";
+    input.task.cleanupAfter = now + 7 * 24 * 60 * 60_000;
+    settleSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
+    subagentRuns.set(input.subagent.runId, input.subagent);
+    ensureTaskRegistryReady();
+    publishTaskRecordAfterAtomicStore(input.task);
+    expect(getTaskById(input.task.taskId)).toBeDefined();
+
+    const result = await retrySubagentCompletionDelivery(input.task.taskId, { database });
+
+    expect(result.reason).toBeUndefined();
+    expect(result).toMatchObject({ ok: true, duplicateRisk: true });
+    expect(resumeSubagentRun).toHaveBeenCalledWith(input.subagent.runId);
+    expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
+      status: "pending",
+      disposition: "retryable",
+      generation: 2,
+      attemptCount: 0,
+    });
+    expect(result.task).toMatchObject({
+      deliveryStatus: "pending",
+      terminalOutcome: "succeeded",
+      progressSummary: "canonical result",
+    });
+    expect(result.task?.error).toBeUndefined();
+    expect(result.task?.terminalSummary).toBeUndefined();
+    const persisted = database.db
+      .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+      .get(input.subagent.runId) as { payload_json: string };
+    expect(JSON.parse(persisted.payload_json).delivery).toMatchObject({
+      status: "pending",
+      generation: 2,
+    });
+
+    const cappedSubagent = structuredClone(subagentRuns.get(input.subagent.runId)!);
+    Object.assign(cappedSubagent.delivery!, {
+      status: "suspended",
+      generation: 10,
+      suspendedAt: now,
+      suspendedReason: "expiry",
+    });
+    const cappedTask: TaskRecord = {
+      ...result.task!,
+      deliveryStatus: "failed",
+      terminalOutcome: "blocked",
+    };
+    settleSubagentCompletionDelivery({
+      subagent: cappedSubagent,
+      task: cappedTask,
+      databaseOptions: { database },
+    });
+    subagentRuns.set(cappedSubagent.runId, cappedSubagent);
+    publishTaskRecordAfterAtomicStore(cappedTask);
+    resumeSubagentRun.mockClear();
+
+    await expect(retrySubagentCompletionDelivery(input.task.taskId, { database })).resolves.toEqual(
+      {
+        ok: false,
+        reason: "completion delivery redrive limit reached",
+      },
+    );
+    expect(resumeSubagentRun).not.toHaveBeenCalled();
   });
 });
