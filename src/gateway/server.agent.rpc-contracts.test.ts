@@ -55,7 +55,7 @@ function sendAgentRequest(params: {
 
 describe("gateway agent RPC contracts", () => {
   test("downgrades ambiguous delivery and replays one ordered run across reconnect", async () => {
-    const runCompletion = createDeferred<void>();
+    const runCompletion = createDeferred();
     vi.mocked(agentCommand).mockImplementationOnce(async () => {
       await runCompletion.promise;
     });
@@ -116,7 +116,9 @@ describe("gateway agent RPC contracts", () => {
     });
 
     first.ws.close();
-    await new Promise<void>((resolve) => first.ws.once("close", () => resolve()));
+    await new Promise<void>((resolve) => {
+      first.ws.once("close", () => resolve());
+    });
 
     const second = await harness.openClient();
     try {
