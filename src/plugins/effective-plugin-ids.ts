@@ -167,6 +167,8 @@ export function resolveEffectivePluginIds(params: {
   const autoEnabled = applyPluginAutoEnable({
     config: params.config,
     env: params.env,
+    ...(prepared ? { manifestRegistry: prepared.manifestRegistry } : {}),
+    ...(prepared?.discovery ? { discovery: prepared.discovery } : {}),
   });
   const effectiveConfig = autoEnabled.config;
   const ids = new Set(collectExplicitEffectivePluginIds(effectiveConfig));
