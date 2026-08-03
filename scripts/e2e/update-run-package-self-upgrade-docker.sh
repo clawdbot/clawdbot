@@ -25,6 +25,7 @@ SKIP_BUILD="${OPENCLAW_UPDATE_RUN_SELF_UPGRADE_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPDATE_RUN_SELF_UPGRADE_DOCKER_RUN_TIMEOUT:-1800s}"
 ARTIFACT_DIR="${OPENCLAW_UPDATE_RUN_SELF_UPGRADE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/update-run-package-self-upgrade}"
 QA_CHANNEL_FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-update-run-qa-channel.XXXXXX")"
+QA_CHANNEL_FIXTURE_ARCHIVE="$QA_CHANNEL_FIXTURE_ROOT/qa-channel.tar"
 
 cleanup() {
   rm -rf "$QA_CHANNEL_FIXTURE_ROOT"
@@ -102,6 +103,7 @@ prepare_qa_channel_fixture() {
       return 1
     fi
   done
+  tar -C "$checkout_root" -cf "$QA_CHANNEL_FIXTURE_ARCHIVE" dist/extensions/qa-channel
 }
 
 mkdir -p "$ARTIFACT_DIR"
@@ -123,7 +125,9 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_UPDATE_RUN_SELF_UPGRADE_ARTIFACT_DIR=/tmp/openclaw-update-run-artifacts \
   -e OPENCLAW_UPDATE_RUN_SELF_UPGRADE_SOURCE_VERSION="$SOURCE_VERSION" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-update-run-artifacts" \
-  -v "$QA_CHANNEL_FIXTURE_ROOT/checkout:/tmp/openclaw-update-run-build:ro" \
+  -v "$QA_CHANNEL_FIXTURE_ARCHIVE:/tmp/openclaw-update-run-qa-channel.tar:ro" \
   "$IMAGE_NAME" \
   timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
-  bash scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh
+  bash -lc 'mkdir -p /tmp/openclaw-update-run-build
+tar --no-same-owner -xf /tmp/openclaw-update-run-qa-channel.tar -C /tmp/openclaw-update-run-build
+exec bash scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh'
