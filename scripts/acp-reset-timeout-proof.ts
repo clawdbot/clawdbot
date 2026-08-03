@@ -43,11 +43,7 @@ type RuntimeIdentity = {
   sessionId: string;
 };
 
-type ScenarioName =
-  | "close-timeout"
-  | "cancel-timeout"
-  | "late-turn"
-  | "runtime-option-timeout";
+type ScenarioName = "close-timeout" | "cancel-timeout" | "late-turn" | "runtime-option-timeout";
 type GatewayProcess = ChildProcessByStdio<null, Readable, Readable>;
 type ChatFinalEvent = Extract<ChatEvent, { state: "final" }>;
 
@@ -862,7 +858,11 @@ async function runScenario(params: {
       });
       if (runtimeOptionRunId) {
         await client
-          .request("agent.wait", { runId: runtimeOptionRunId, timeoutMs: 5_000 }, { timeoutMs: 10_000 })
+          .request(
+            "agent.wait",
+            { runId: runtimeOptionRunId, timeoutMs: 5_000 },
+            { timeoutMs: 10_000 },
+          )
           .catch(() => undefined);
       }
       await logDriverEvent(scenarioDir, "late_runtime_option_completed", {
