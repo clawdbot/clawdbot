@@ -23,7 +23,7 @@ function setPreparedPluginRuntimeLoadContext(
   (registry as PreparedPluginRegistry)[preparedPluginRuntimeLoadContext] = context;
 }
 
-export function preparePluginLoadContext(
+function preparePluginLoadContext(
   input: PreparedModelRuntimeInput,
   env: NodeJS.ProcessEnv,
   registry: PluginRegistry | undefined,

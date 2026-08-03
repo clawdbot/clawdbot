@@ -8,11 +8,15 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { preparePluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import {
+  getPreparedPluginRuntimeLoadContext,
+  prepareOwnedPluginLoadContext,
+} from "./prepared-model-runtime.plugin-context.js";
 
 const hoisted = vi.hoisted(() => ({
   resolvePluginTools: vi.fn(),
@@ -170,12 +174,24 @@ describe("createOpenClawTools browser plugin integration", () => {
       manifestRegistry: makeRegistry([]),
       workspaceDir: "/tmp",
     });
-    const loadContext = preparePluginLoadContext(
-      { agentDir: "/tmp/agent", config, workspaceDir: "/tmp" },
-      process.env,
-      pluginRegistry,
-      metadataSnapshot,
-    );
+    const resolveMetadata = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+      .mockReturnValue(metadataSnapshot);
+    try {
+      expect(
+        prepareOwnedPluginLoadContext(
+          { agentDir: "/tmp/agent", config, workspaceDir: "/tmp" },
+          process.env,
+          pluginRegistry,
+        ),
+      ).toBe(metadataSnapshot);
+    } finally {
+      resolveMetadata.mockRestore();
+    }
+    const loadContext = getPreparedPluginRuntimeLoadContext(pluginRegistry);
+    if (!loadContext) {
+      throw new Error("expected prepared plugin load context");
+    }
 
     resolveOpenClawPluginToolsForOptions({
       options: {
