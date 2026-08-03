@@ -1,4 +1,4 @@
 interface:
   display_name: "OpenClaw Testing"
-  short_description: "Choose cheap, targeted OpenClaw validation"
-  default_prompt: "Use $openclaw-testing to choose the cheapest safe test or CI verification path, inspect failures, and rerun only the relevant OpenClaw lane."
+  short_description: "Write minimal, high-value OpenClaw tests"
+  default_prompt: "Use $openclaw-testing before writing or changing tests. Identify the unique risk, put coverage at the cheapest useful level, avoid duplicate branches, choose the smallest valid command, and require installed-artifact proof when source tests cannot prove the product path."

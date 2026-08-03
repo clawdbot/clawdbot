@@ -1,827 +1,313 @@
 ---
 name: openclaw-testing
-description: Choose, run, rerun, or debug OpenClaw tests, CI checks, Docker E2E lanes, release validation, and the cheapest safe verification path.
+description: >-
+  Must be used whenever an agent writes, adds, removes, refactors, reviews,
+  chooses, runs, reruns, or debugs OpenClaw tests or evals; decides whether a
+  change needs a test; selects test or product validation for a change; or
+  chooses CI, package, Docker, E2E, live, or release proof. Forces the smallest
+  set of tests that can detect the actual risk, prevents duplicate branch
+  coverage, and requires installed-artifact proof when source tests cannot
+  prove the product path. Do not use when the operator explicitly excludes test
+  or validation work, including implementation-only, RCA-only, or review scopes
+  that say not to add, run, select, or review tests.
 ---
 
 # OpenClaw Testing
 
-Use this skill when deciding what to test, debugging failures, rerunning CI,
-or validating a change without wasting hours.
+Use this skill before editing a test file or choosing a test command. The goal
+is not more tests. The goal is the cheapest evidence that can fail for the
+right reason.
 
-## Read First
+## Load Only What The Task Needs
 
-- `docs/reference/test.md` for local test commands.
-- `docs/ci.md` for CI scope, release checks, Docker chunks, and runner behavior.
-- Scoped `AGENTS.md` files before editing code under a subtree.
+Always read the root and scoped `AGENTS.md` files for the paths in scope.
 
-## Default Rule
+- For ordinary source or test work, use this skill and the scoped guides.
+- Read `docs/reference/test.md` when command or harness details matter.
+- Read the relevant part of `docs/ci.md` for CI, package acceptance, Docker,
+  release, cross-platform, or live/E2E work.
+- Use `$crabbox` only when this skill routes the proof to a remote backend.
 
-Prove the touched surface first. Do not reflexively run the whole suite.
+Do not load all release and Docker documentation for a focused unit-test edit.
 
-Route by source trust first, then proof size. Only trusted source may run
-locally; never execute untrusted repository tooling locally, regardless of
-proof size. Run one/few focused tests and cheap static checks locally when the
-existing dependency install is ready. Use a
-remote backend for larger suites, changed gates with typecheck/lint fan-out,
-builds, Docker, packaging, E2E, live proof, and cross-platform work. Trusted
-maintainer heavy proof defaults to Blacksmith Testbox. Untrusted contributor
-or fork code must use secretless fork CI or sanitized direct AWS Crabbox;
-never sync or run it on the credential-hydrated Blacksmith workflow.
+## Decide Whether A New Test Is Needed
 
-Do not pre-warm for anticipated work. Acquire the backend lazily when the
-first heavy command is ready to run, save its id, reuse it for later heavy
-commands, and stop it before handoff. A single late heavy command can remain a
-one-shot.
+Before writing a test, state:
 
-For untrusted heavy proof, switch to a clean trusted `main` checkout and lazily
-warm direct AWS with an installed trusted Crabbox binary. Do not execute the
-untrusted checkout's wrapper or config locally:
+1. The user-visible failure, security property, or owner contract at risk.
+2. The production decision that controls it.
+3. The closest existing test that already exercises that decision.
+4. The one new failure the proposed test would detect.
+5. The cheapest command that proves it.
+6. The exact condition that would justify broader proof.
 
-```bash
-cd <trusted-openclaw-main>
-env -u CRABBOX_AWS_INSTANCE_PROFILE \
-  crabbox config show --json | \
-  jq -e '.aws.instanceProfile == ""' >/dev/null
-env -u CRABBOX_AWS_INSTANCE_PROFILE \
-  -u CRABBOX_TAILSCALE \
-  -u CRABBOX_TAILSCALE_AUTH_KEY \
-  -u CRABBOX_TAILSCALE_AUTH_KEY_ENV \
-  -u CRABBOX_TAILSCALE_EXIT_NODE \
-  -u CRABBOX_TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS \
-  -u CRABBOX_TAILSCALE_HOSTNAME_TEMPLATE \
-  -u CRABBOX_TAILSCALE_TAGS \
-  crabbox warmup \
-  --provider aws \
-  --network public \
-  --tailscale=false \
-  --tailscale-exit-node= \
-  --tailscale-exit-node-allow-lan-access=false \
-  --keep \
-  --timing-json
-crabbox inspect --provider aws --id <cbx_id> --json | \
-  jq -e '.network == "public" and .tailscale == null' >/dev/null
+If item 4 cannot be named, do not add the test. Strengthen or reuse existing
+coverage instead. A code change does not automatically require a new test.
+
+It is correct to add no test when existing coverage already fails for the
+regression, the change is behavior-neutral, and no new boundary is introduced.
+
+## Put Each Test At The Cheapest Useful Level
+
+| Risk                                                                       | Default proof                                                                   |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Pure decision, parser, validator, or state transition                      | Unit test beside the owner                                                      |
+| Mapping between two owned components                                       | Narrow integration test at that boundary                                        |
+| Consumer of an already-tested decision                                     | One positive and one representative negative only when consumer wiring can fail |
+| Security capability or authorization tuple                                 | Complete decision table at the owner, plus one fail-closed boundary test        |
+| Concurrency, cleanup, retry, restart, or deduplication                     | One lifecycle test only when that behavior changed or is the reported failure   |
+| Public API or plugin contract                                              | Owner contract test plus the smallest representative consumer                   |
+| Build output, export map, lazy import, generated dist, or package contents | Build/package inspection and installed execution                                |
+| Cross-platform behavior                                                    | Focused proof on the affected platform                                          |
+| Live provider, channel, or external API behavior                           | A bounded real-path probe after deterministic checks                            |
+
+Mocks can prove an owner's logic or a caller's wiring. They cannot prove that a
+tarball contains a file, an export resolves after installation, a lazy chunk
+loads, two separately packaged components interoperate, or a live service
+accepts the request.
+
+## Test Design Rules
+
+### One Complete Decision Table At The Owner
+
+Put exhaustive cases where the decision is implemented. Do not repeat the same
+expired, missing, mismatch, revoked, or rejected table in every consumer.
+
+A consumer normally needs:
+
+- one successful wiring case; and
+- at most one representative failure proving that invalid owner output is not
+  widened, ignored, or restored.
+
+Add another consumer failure only when it exercises different consumer code or
+protects a separately named contract.
+
+### Distinguish Policy Dimensions From Duplicate Inputs
+
+Keep cases separate when account, actor, channel, thread, tenant, provider,
+target kind, or permission scope are independent policy dimensions. Combine
+cases when they only feed different values into the same comparison and have
+the same externally observable result.
+
+Do not use a parameterized table to make repeated cases look cheaper. Every row
+must have a distinct reason to fail.
+
+### Test Properties At Real Boundaries
+
+Prefer one strong boundary property over many internal examples. Useful
+properties include:
+
+- concurrent requests cannot exchange authority or state;
+- rejected input cannot reach the side-effect callback;
+- a permission or secret cannot appear in model input, transcripts, logs, or
+  stored records;
+- restart ownership produces one terminal result;
+- an installed core and plugin can execute the first lazy path together.
+
+### Do Not Preserve Obsolete Internals
+
+Tests protect current behavior, shipped migration boundaries, security
+properties, and public contracts. Delete tests for removed fallback paths,
+private implementation order, retired aliases, or impossible states.
+
+### Keep Test Helpers Honest
+
+Extract a helper only when two or more nearby tests share meaningful setup.
+Keep the behavior and expected outcome visible at the call site. Do not hide
+important authorization fields, failure reasons, or side effects inside a
+generic fixture builder.
+
+## Refactoring Existing Tests
+
+For a test-only cleanup:
+
+1. Run the directly affected files once to establish a green baseline.
+2. Map each test or table row to the production decision and observable failure
+   it protects.
+3. Remove or combine cases that protect no unique decision or boundary.
+4. Rerun only the changed file after each cleanup family.
+5. Run all changed test files together once when the diff is frozen.
+6. Run the relevant test TypeScript and targeted formatting/lint checks once.
+7. Report cases and lines before and after, plus where removed coverage remains.
+
+Do not run builds, package checks, live proof, or broad source suites for a
+test-only refactor unless the test harness or generated/package surface itself
+changed.
+
+## Execution Ladder
+
+### 1. Classify Source Trust
+
+- Trusted source may run one or a few focused tests locally when dependencies
+  are already ready.
+- Untrusted contributor or fork source must not execute repository tooling
+  locally. Follow the root `AGENTS.md` secretless CI or sanitized remote path.
+- Do not reinstall or reconcile dependencies in a linked worktree merely to
+  run proof locally.
+
+### 2. Reproduce Narrowly
+
+Run the smallest existing test that demonstrates the failure. If no existing
+test can do so, add one at the owning decision or real boundary, then confirm
+that it fails for the intended reason.
+
+### 3. Rerun The Same Proof
+
+After the fix, rerun the exact failing command. If it passes, do not immediately
+replace it with a broad suite.
+
+### 4. Prove The Changed Cluster Once
+
+Run the changed test files and the smallest directly affected consumer tests.
+Run relevant static checks once after the code and tests are frozen.
+
+### 5. Escalate Only For A Named Risk
+
+Broaden only when one of these is true:
+
+- a shared harness, test config, package manifest, workspace config, or public
+  contract changed;
+- the changed-target resolver cannot identify a safe focused set;
+- multiple independent consumers implement the affected contract;
+- cross-platform, installed-package, restart, concurrency, or live behavior is
+  the actual risk;
+- this is a frozen release candidate and the release workflow requires the
+  broader matrix.
+
+Review activity, elapsed time, a packaging-only change, or a desire for extra
+confidence is not by itself a reason to rerun an unchanged source suite.
+
+## No Duplicate Green Reruns
+
+Treat the tuple below as already proven:
+
+```text
+candidate diff + command + relevant environment + artifact identity
 ```
 
-Bind the returned lease to one immutable reviewed head SHA; never repurpose a
-trusted or previously hydrated lease, and stop/rewarm if the head changes.
-Record the reviewed PR's full head SHA with
-`gh pr view <number> --repo <owner/repo> --json headRefOid --jq .headRefOid`.
-Every untrusted AWS run must override the repo env allowlist, skip Actions
-hydration, and upload the trusted bootstrap script from clean `main` alongside
-`--fresh-pr`. The script bypasses raw-box JavaScript preflight, proves the
-identity boundary, installs pinned Node/pnpm, verifies the exact SHA and
-package-manager pin, isolates `HOME`, installs dependencies, then runs the
-requested test command:
+Do not rerun a green command when that tuple has not changed. A review does not
+invalidate test evidence. An edit that cannot reach the packed artifact (for
+example, test-only or docs-only) does not invalidate an unchanged package
+artifact test; a production source edit that can reach it does. A
+packaging-only edit does not invalidate unchanged source behavior tests.
 
-```bash
-env -u CRABBOX_AWS_INSTANCE_PROFILE \
-  CRABBOX_ENV_ALLOW=CI \
-  crabbox run \
-  --provider aws \
-  --id <cbx_id> \
-  --fresh-pr <owner/repo#number> \
-  --no-hydrate \
-  --timing-json \
-  --script scripts/crabbox-untrusted-bootstrap.sh -- \
-  <expected_head_sha> /usr/local/bin/pnpm test <path-or-filter>
-# After all proof:
-env -u CRABBOX_AWS_INSTANCE_PROFILE \
-  crabbox stop --provider aws <cbx_id>
-```
+Rerun when:
 
-Once heavy proof starts, save the returned id, reuse it for later heavy gates,
-sync the current checkout on every run, and stop it before handoff.
+- relevant files changed;
+- the command or test selection changed;
+- the runtime, platform, configuration, installed package, or external state
+  changed;
+- the prior run was flaky, interrupted, stale, or did not test the claimed
+  artifact.
 
-1. Inspect the diff and classify the touched surface:
-   - trusted source, one/few focused tests with ready local dependencies:
-     `node scripts/run-vitest.mjs <path-or-filter>`
-   - if focused proof fans out, becomes expensive, or lacks ready dependencies:
-     acquire the safe remote backend selected by source trust
-   - changed gates, builds, typechecks, lint fan-out, Docker, package, E2E, or
-     live work: run it remotely; these are never routine laptop work
-   - `check:changed` classifies first; docs-only, no-change, and small metadata
-     plans stay local when dependencies are ready, while heavy or dependency-
-     missing plans delegate remotely
-   - direct AWS Crabbox proof: pass `--provider aws`; untrusted code also
-     requires the sanitized invocation above
-   - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
-   - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested
-2. Reproduce narrowly before fixing.
-3. Fix root cause.
-4. Rerun the same narrow proof.
-5. Broaden only when the touched contract demands it.
+## Source Proof And Product Proof Are Different
 
-## Guardrails
+When a change affects package contents, export maps, build entries, generated
+files, lazy imports, plugin/core boundaries, installation, or runtime loading,
+the minimum product proof is:
 
-- Do not kill unrelated processes or tests. If something is running elsewhere, treat it as owned by the user or another agent.
-- Keep trusted-source local proof bounded to one/few focused tests and cheap
-  static checks with ready dependencies. Untrusted repository tooling never
-  runs locally. Full suites and computationally intensive commands run remotely.
-- Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
-- Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
-- If dependencies are missing on the selected remote box, run `pnpm install` there, retry
-  once, then report the first actionable error. Do not reconcile or reinstall a
-  local Codex worktree merely to run validation.
-- In a Codex worktree or linked/sparse checkout, do not run direct local
-  `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, or `scripts/committer`. Use
-  `node scripts/crabbox-wrapper.mjs` for remote proof and
-  `node scripts/check-changed.mjs` for classify-first changed checks. Use
-  `node scripts/run-vitest.mjs` for bounded focused local proof when the
-  dependency install is ready. Use `git commit --no-verify` only after the
-  relevant proof is already clean.
-- For remote proof, use the Crabbox wrapper first, but name the actual backend.
-  Direct AWS Crabbox uses `provider=aws` and `cbx_...` ids. Delegated
-  Blacksmith Testbox through Crabbox uses `provider=blacksmith-testbox`,
-  `syncDelegated=true`, and `tbx_...` ids. Both satisfy "remote proof" when the
-  requested proof surface allows either.
-- Treat contributor and fork patches as untrusted unless a maintainer
-  explicitly approves credentialed execution after review. For untrusted AWS
-  runs, `CRABBOX_ENV_ALLOW=CI` must replace the repo's
-  `OPENCLAW_*` allowlist, `--no-hydrate` must block auth-profile hydration, and
-  the remote command must use a fresh temporary `HOME`. The lease must be newly
-  warmed for and bound to one reviewed head SHA, never trusted or previously
-  hydrated; stop and rewarm when the SHA changes. Do
-  not execute repo scripts or config from the untrusted local checkout: launch
-  an installed trusted Crabbox binary from a clean trusted `main` checkout and
-  fetch the PR with `--fresh-pr`. Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail
-  closed unless `crabbox config show --json` resolves an empty
-  `aws.instanceProfile`. Before any install/test, use trusted absolute-path
-  tools to require an IMDSv2 token, prove the IAM credentials endpoint returns
-  404, and compare remote `git rev-parse HEAD` with the full reviewed head SHA.
-  Unset all `CRABBOX_TAILSCALE*` overrides, pass `--network public
---tailscale=false`, clear exit-node/LAN flags, then require `crabbox inspect`
-  to report `network=public` and no Tailscale state before uploading any script.
-  Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` with `--fresh-pr`; it
-  bootstraps Node 24 and repository-pinned pnpm before executing PR code and
-  rejects a changed `packageManager` pin before install.
-  If the broker cannot provide that no-role proof or no remote PR exists, use
-  secretless fork CI. Do not select `hydrate-github` or a credential-hydrated
-  Testbox workflow.
-- Do not infer "no Testbox is running" from plain `blacksmith testbox list`.
-  Use `blacksmith testbox list --all` or `blacksmith testbox status <tbx_id>`
-  before reporting cloud state.
-- Reuse only an id/slug created in this operator session unless explicitly
-  coordinating with another lane. If Testbox queues, fails capacity, or cannot
-  allocate, report the blocker or switch to direct AWS Crabbox only when that
-  still proves the requested surface.
-- Reuse does not mean stale source: omit `--no-sync` so every run uploads the
-  current checkout. Use `--no-sync` only to rerun an unchanged, already-synced
-  tree intentionally.
+1. Typecheck the project containing the changed scripts or build configuration.
+2. Run the focused static package/release contract test.
+3. Produce a clean build.
+4. Inspect the packed artifact, not the source directory.
+5. Install the exact artifact or artifact pair in a disposable environment.
+6. Execute the first lazy or runtime path that imports the changed surface.
 
-## Local Focused Proof
+For an external or official plugin, prove both package shape and trust shape.
+When core and plugin are packaged separately, install and execute the exact pair
+together. A mocked resolver, synthetic source file, discovery listing, or
+successful plugin registration is not enough when the failing code is loaded
+later.
 
-Use these commands only while the dependency install is ready and the proof
-remains bounded. If it fans out or becomes expensive, acquire a remote backend.
+Do not rerun broad source tests after a packaging-only correction unless source
+behavior also changed.
 
-```bash
-pnpm changed:lanes --json
-pnpm check:changed       # local small plan or delegated heavy plan; no Vitest
-pnpm test:changed        # cheap smart changed Vitest targets
-pnpm verify              # full check, then full Vitest
-OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed
-pnpm test <path-or-filter> -- --reporter=verbose
-OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
-```
+## Commands
 
-Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
-`pnpm test` wrapper so project routing, workers, and setup stay correct. If raw
-Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch
-mode and will not exit on its own.
-When the checkout is a Codex worktree, prefer the direct node harness instead:
+In a Codex worktree with ready dependencies, use the direct harness:
 
 ```bash
 node scripts/run-vitest.mjs <path-or-filter>
 ```
 
-That keeps the test scoped without giving pnpm a chance to run dependency
-status checks or install reconciliation in a linked worktree.
-
-## Plugin Package And Live Proof
-
-When validating an external or official plugin package, prove the package shape
-and trust shape separately. Do not use raw archive/path installs to prove the
-managed dependency path, and do not treat `npm-pack:` as proof of catalog-linked
-official trust.
-
-- For local release-candidate proof, pack the plugin and install it with
-  `openclaw plugins install npm-pack:<path.tgz> --force`. This uses the managed
-  per-plugin npm project and is the closest local substitute for the registry
-  artifact's dependency behavior.
-- If the behavior depends on bundled-plugin or trusted official plugin status,
-  add a second proof through a catalog-backed official install or a published
-  package path that records official trust. Local `npm-pack:` proof alone is
-  not sufficient for privileged helpers or trusted-official scope handling.
-- Treat missing runtime imports as package-manifest bugs first. Runtime code
-  must depend on packages declared in the plugin package `dependencies` or
-  `optionalDependencies`; do not make a final proof depend on manually running
-  `npm install` inside `~/.openclaw/npm/projects/...`.
-- After moving dependencies between dev and runtime sections, run the transient
-  npm package-lock check and inspect the bundled runtime payload when enabled.
-- Inspect the packed tarball when dependency ownership or generated `dist/`
-  matters: verify `package/package.json`, the expected runtime files, the
-  bundled `node_modules` payload when enabled, and the absence of npm lockfiles
-  before installing it on a live host.
-- After installing the package, restart the Gateway when the touched surface is
-  plugin registration, runtime dependency loading, privileged helpers, provider
-  routing, or generated dist.
-- For live provider or channel probes, add only temporary config needed for the
-  proof, then remove it and verify the cleanup state before closeout.
-
-## Command Semantics
-
-- `pnpm check` and `pnpm check:changed` do not run Vitest tests. They are for
-  typecheck, lint, and guard proof.
-- `pnpm test` and `pnpm test:changed` run Vitest tests.
-- `pnpm verify` runs `pnpm check`, then `pnpm test`, with Crabbox phase markers
-  so remote summaries show which half failed.
-- `pnpm test:changed` is intentionally cheap by default: direct test edits,
-  sibling tests, explicit source mappings, and import-graph dependents.
-- `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` is the explicit broad
-  fallback for harness/config/package edits that genuinely need it.
-- Do not run extension sweeps just because core changed. If a core edit is for a
-  specific plugin bug, run that plugin's tests explicitly. If a public SDK or
-  contract change needs consumer proof, choose the smallest representative
-  plugin/contract tests first, then broaden only when the risk justifies it.
-- The test wrapper prints a short `[test] passed|failed|skipped ... in ...`
-  line. Vitest's own duration is still the per-shard detail.
-
-## Routing Model
-
-- `pnpm changed:lanes --json` answers "which check lanes does this diff touch?"
-  It is used by `pnpm check:changed` for typecheck/lint/guard selection.
-- `pnpm test:changed` answers "which Vitest targets are worth running now?" It
-  uses the same changed path list, but applies a cheaper test-target resolver.
-- Direct test edits run themselves. Source edits prefer explicit mappings,
-  sibling `*.test.ts`, then import-graph dependents. Shared harness/config/root
-  edits are skipped by default unless they have precise mapped tests.
-- Shared group-room delivery config and source-reply prompt edits are precise
-  mapped tests: they run the core auto-reply regressions plus Discord and Slack
-  delivery tests so cross-channel default changes fail before a PR push.
-- Public SDK or contract edits do not automatically run every plugin test.
-  `check:changed` proves extension type contracts; the agent chooses the
-  smallest plugin/contract Vitest proof that matches the actual risk.
-- Use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when a harness,
-  config, package, or unknown-root edit really needs the broad Vitest fallback.
-
-## CI Debugging
-
-Start with current run state, not logs for everything:
+In a trusted normal checkout or the selected remote backend:
 
 ```bash
-gh run list --branch main --limit 10
-gh run view <run-id> --json status,conclusion,headSha,url,jobs
-gh run view <run-id> --job <job-id> --log
+pnpm test:changed
+pnpm test <path-or-filter> -- --reporter=verbose
+pnpm changed:lanes --json
+pnpm check:changed
 ```
 
-- Check exact SHA. Ignore newer unrelated `main` unless asked.
-- For cancelled same-branch runs, confirm whether a newer run superseded it.
-- Fetch full logs only for failed or relevant jobs.
-- Prefer `gh run view <run-id> --json jobs` over PR rollup while debugging; rollup can be stale/noisy.
-- For `prompt:snapshots:check` failures, treat Linux Node 24 as CI truth. If macOS passes but CI drifts, reproduce in a Linux Node 24 container or Testbox, commit that generated output, then rerun.
-
-## GitHub Release Workflows
-
-Use the smallest workflow that proves the current risk. The full umbrella is
-available, but it is usually the last step after narrower proof, not the first
-rerun after a focused patch.
-
-### Full Release Validation
-
-`Full Release Validation` (`.github/workflows/full-release-validation.yml`) is
-the manual product-validation umbrella. Run the full child matrix on the
-product-complete pre-changelog **Code SHA**. It resolves a target ref, then
-dispatches:
-
-- manual `CI` for the full normal CI graph, with Android enabled via
-  `include_android=true`
-- `Plugin Prerelease` for release-only plugin static checks, extension shards,
-  the release-only `agentic-plugins` shard, and plugin product Docker lanes
-- `OpenClaw Release Checks` for install smoke, cross-OS release checks, live and
-  E2E checks, Docker release-path suites, OpenWebUI, QA Lab, fast Matrix, and
-  Telegram release lanes
-- optional post-publish Telegram E2E when a package spec is supplied
-
-Run the full matrix only when validating an actual Code SHA, after broad shared
-CI or release orchestration changes, or when explicitly asked:
-
-```bash
-node scripts/full-release-validation-at-sha.mjs \
-  --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
-```
-
-That helper is for regular releases. Extended-stable dispatches Full Release
-Validation directly from and against `extended-stable/YYYY.M.33` with
-`release_profile=stable`; its exact branch-tip evidence is fresh and cannot be
-replaced by a `release-ci/*` run. Use `$release-openclaw-ci` for its failure
-classification and run-identity rules.
-
-The helper pins the trusted workflow revision on current `main` while targeting
-the historical release SHA and recording the canonical release branch as
-context. It infers `beta` for alpha/beta package versions and `stable` for
-stable/correction versions. Pass `-f release_profile=full` only for the broad
-advisory provider/media sweep. Do not make `full` faster by silently dropping
-suites; optimize setup, artifact reuse, and sharding instead. The parent
-verifier job appends a child overview plus slowest-job tables for child runs;
-rerun only that verifier after a child rerun turns green.
-
-Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
-extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
-lanes are intentionally reserved for the separate `Plugin Prerelease` child so
-PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
-all-plugin runtime time on release-only product coverage.
-
-If a full run is already active on a newer `origin/main`, prefer watching that
-run over dispatching a duplicate. Do not cancel release, release-check, or child
-workflow runs unless Peter explicitly asks for cancellation.
-
-The child-dispatch jobs record the child run ids. The final
-`Verify full validation` job re-queries those child runs and is the canonical
-parent gate. If a child workflow failed but was later rerun successfully, rerun
-only the failed parent verifier job; do not dispatch a new full umbrella unless
-the release evidence is stale.
-
-Once the Code SHA is green, generate and commit only `CHANGELOG.md`. The new
-**Release SHA** is eligible for product-evidence reuse only when GitHub proves
-that it is a descendant of the Code SHA and the complete changed path set is
-exactly `CHANGELOG.md`. Dispatch the same SHA-pinned helper for the Release SHA;
-the resulting parent records `changelog-only-release-v1` and reuses the Code
-SHA children. Package, install/update, and release-note proof still runs on the
-Release SHA because its tarball bytes changed. Any non-changelog path
-invalidates reuse and requires a new Code SHA full matrix.
-
-For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
-Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
-`release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
-`qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
-the failed box. After a targeted release-check fix, do not restart the full
-umbrella by habit: dispatch the matching `rerun_group` and rerun only the parent
-verifier/evidence step after the child is green unless the release evidence is
-stale. For a single failed live/E2E shard, use
-`-f rerun_group=live-e2e -f live_suite_filter=<suite_id>` so the Blacksmith
-workflow only spends setup and queue time on that suite.
-
-### Release Evidence
-
-After release-candidate validation or before a release decision, record the
-important run ids in the public `openclaw/releases` evidence ledger.
-Use the manual `OpenClaw Release Evidence`
-(`openclaw-release-evidence.yml`) workflow there. It writes durable summaries
-under `evidence/<release-id>/` and commits:
-
-- `release-evidence.md`
-- `release-evidence.json`
-- `index.json`
-- `runs/<label>.json`
-
-Use one run per line:
-
-```text
-full-release-validation openclaw/openclaw <run-id> blocking
-package-acceptance openclaw/openclaw <run-id> blocking
-release-checks openclaw/openclaw <run-id> blocking
-```
-
-Store summaries, run URLs, artifact metadata, timings, pass/fail state, and
-short release-manager notes there. Do not store raw logs, provider
-prompts/responses, channel transcripts, signing material, or secret-bearing
-config in git; raw logs stay in Actions artifacts.
-
-When `Full Release Validation` completes and `OPENCLAW_RELEASES_DISPATCH_TOKEN`
-is configured in the source repo, it requests the public
-`OpenClaw Release Evidence From Full Validation` workflow. That workflow reads
-the parent full-validation run, extracts the child CI/release-checks/Telegram
-run ids from the parent logs, and opens the evidence PR automatically. If the
-token is absent or the run predates this wiring, trigger that workflow manually
-with the full-validation run id.
-
-### Release Checks
-
-`OpenClaw Release Checks` (`openclaw-release-checks.yml`) is the release child
-workflow. It is broader than normal CI but narrower than the umbrella because it
-does not dispatch the separate full normal CI child. It runs Package Acceptance
-with artifact-native delta lanes and `telegram_mode=mock-openai`, so the release
-package tarball also goes through offline plugin proof, bundled-channel compat,
-and Telegram package QA. The Docker release-path chunks cover the overlapping
-package/update/plugin lanes. Use it when release-path validation is needed
-without rerunning the entire umbrella.
-
-```bash
-gh workflow run openclaw-release-checks.yml \
-  --repo openclaw/openclaw \
-  --ref main \
-  -f ref=<branch-or-sha> \
-  -f provider=openai \
-  -f mode=both \
-  -f release_profile=stable \
-  -f rerun_group=all
-```
-
-Release-check rerun groups are `all`, `install-smoke`, `cross-os`, `live-e2e`,
-`package`, `qa`, `qa-parity`, and `qa-live`.
-`OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
-ref once as `release-package-under-test` and passes that artifact into cross-OS
-release checks, release-path Docker live/E2E checks, and Package Acceptance.
-When `Full Release Validation` dispatches release checks, it passes the requested
-branch/tag plus an `expected_sha` so branch/tag refs resolve through the fast
-remote-ref path while the package and QA jobs still validate the exact SHA.
-
-The full install-smoke child is split on purpose: one job prepares or reuses the
-target-SHA GHCR root Dockerfile smoke image, QR package install runs in its own
-job, root Dockerfile/gateway smokes pull the prepared image, and installer/Bun
-smokes pull the same image while building only their small installer images.
-If install-smoke gets slow again, first check whether the root image was reused
-or rebuilt before adding/removing coverage.
-
-The full-profile native live media shards use the prebuilt
-`ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04` container so
-`ffmpeg`/`ffprobe` are already present. If those jobs suddenly spend minutes in
-dependency setup again, first check the `Live Media Runner Image` workflow and
-the `Verify preinstalled live media dependencies` step before assuming the media
-tests themselves slowed down.
-
-The release Docker path intentionally shards the plugin/runtime tail. The
-workflow uses `plugins-runtime-plugins`, `plugins-runtime-services`,
-`plugins-runtime-install-a` through `plugins-runtime-install-h`, and a
-dedicated `openwebui` job; aggregate aliases such as `plugins-runtime-core`,
-`plugins-runtime`, and `plugins-integrations` remain for manual reruns.
-
-The release QA parity box is internally split into candidate and baseline lane
-jobs, followed by a report job that downloads both artifacts and runs
-`pnpm openclaw qa parity-report`. For parity failures, inspect the failed lane
-first; inspect the report job when both lane summaries exist but the comparison
-fails.
-
-### Reusable Live/E2E Checks
-
-`OpenClaw Live And E2E Checks (Reusable)`
-(`openclaw-live-and-e2e-checks-reusable.yml`) is the preferred entry point for
-targeted live, Docker, model, and E2E proof. Inputs let you turn off unrelated
-lanes:
-
-```bash
-gh workflow run openclaw-live-and-e2e-checks-reusable.yml \
-  --repo openclaw/openclaw \
-  --ref main \
-  -f ref=<sha> \
-  -f include_repo_e2e=false \
-  -f include_release_path_suites=false \
-  -f include_openwebui=false \
-  -f include_live_suites=true \
-  -f live_models_only=true \
-  -f live_model_providers=fireworks
-```
-
-Useful knobs:
-
-- `docker_lanes='<lane[,lane]>'`: run selected Docker scheduler lanes against
-  prepared artifacts instead of the release chunk matrix. Multiple selected
-  lanes fan out as parallel targeted Docker jobs after one shared package/image
-  preparation step.
-- `include_live_suites=false`: skip live/provider suites when testing Docker
-  scheduler or release packaging only.
-- `live_models_only=true`: run only Docker live model coverage.
-- `live_model_providers=fireworks` (or comma/space separated providers): run one
-  targeted Docker live model job instead of the full provider matrix.
-- blank `live_model_providers`: run the full live-model provider matrix.
-
-Release-path Docker chunks are currently `core`, `package-update-openai`,
-`package-update-anthropic`, `package-update-core`,
-`plugins-runtime-plugins`, `plugins-runtime-services`,
-`plugins-runtime-install-a`, `plugins-runtime-install-b`,
-`plugins-runtime-install-c`, `plugins-runtime-install-d`,
-`plugins-runtime-install-e`, `plugins-runtime-install-f`,
-`plugins-runtime-install-g`, `plugins-runtime-install-h`, and the dedicated
-`openwebui` job. The aggregate
-`bundled-channels`, `plugins-runtime-core`, `plugins-runtime`, and
-`plugins-integrations` chunks remain valid for manual one-shot reruns, but
-release checks use the split chunks.
-
-When live suites are enabled, the workflow shards broad native `pnpm test:live`
-coverage through `scripts/test-live-shard.mjs` instead of one serial `live-all`
-job:
-
-- `native-live-src-agents`
-- `native-live-src-gateway-core`
-- `native-live-src-gateway-profiles` (release CI runs this with provider
-  filters such as `OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic`)
-- `native-live-src-gateway-backends`
-- `native-live-test`
-- `native-live-extensions-a-k`
-- `native-live-extensions-l-n`
-- `native-live-extensions-openai`
-- `native-live-extensions-o-z`
-- `native-live-extensions-o-z-other`
-- `native-live-extensions-xai`
-- `native-live-extensions-media`
-- `native-live-extensions-media-audio`
-- `native-live-extensions-media-music`
-- `native-live-extensions-media-music-google`
-- `native-live-extensions-media-music-minimax`
-- `native-live-extensions-media-video`
-
-Use `node scripts/test-live-shard.mjs <shard> --list` to see the exact files
-before rerunning a failed native live shard. The aggregate `o-z` and `media`
-shards remain useful locally; release CI uses the smaller provider/media shards
-so one live-provider flake does not force a broad native live rerun.
-
-For model-list or provider-selection fixes, use `live_models_only=true` plus the
-specific `live_model_providers` allowlist. Confirm logs show the expected
-`OPENCLAW_LIVE_PROVIDERS` and selected model ids before declaring proof.
-
-## Docker
-
-Docker is expensive. First inspect the scheduler without running Docker:
-
-```bash
-OPENCLAW_DOCKER_ALL_DRY_RUN=1 pnpm test:docker:all
-OPENCLAW_DOCKER_ALL_DRY_RUN=1 OPENCLAW_DOCKER_ALL_LANES=install-e2e pnpm test:docker:all
-OPENCLAW_DOCKER_ALL_LANES=install-e2e node scripts/test-docker-all.mjs --plan-json
-```
-
-Run one failed lane locally only when explicitly asked or when GitHub is not
-usable:
-
-```bash
-OPENCLAW_DOCKER_ALL_LANES=<lane> \
-OPENCLAW_DOCKER_ALL_BUILD=0 \
-OPENCLAW_DOCKER_ALL_PREFLIGHT=0 \
-OPENCLAW_SKIP_DOCKER_BUILD=1 \
-OPENCLAW_DOCKER_E2E_BARE_IMAGE='<prepared-bare-image>' \
-OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE='<prepared-functional-image>' \
-pnpm test:docker:all
-```
-
-For release validation, prefer the reusable GitHub workflow input:
-
-```yaml
-docker_lanes: install-e2e
-```
-
-Multiple lanes are allowed:
-
-```yaml
-docker_lanes: install-e2e bundled-channel-update-acpx
-```
-
-That skips the release chunk matrix and runs one targeted Docker job against
-the selected package. The default no-push path builds the required images for
-that run and moves them through immutable workflow artifacts. The rerun helper
-reads the exact selected target SHA from the failure artifact and repacks that
-ref; manual dispatch does not accept the reusable workflow's internal package
-artifact tuple. Generated commands add `docker_e2e_bare_image`,
-`docker_e2e_functional_image`, and `shared_image_policy=existing-only` only for
-GHCR-backed images; runner-local artifact images are rebuilt on a fresh rerun.
-Live-only targeted reruns skip the E2E images and build only the live-test
-image. Release-path normal mode fans out into smaller Docker chunk jobs:
-
-- `core`
-- `package-update-openai`
-- `package-update-anthropic`
-- `package-update-core`
-- `plugins-runtime-plugins`
-- `plugins-runtime-services`
-- `plugins-runtime-install-a`
-- `plugins-runtime-install-b`
-- `plugins-runtime-install-c`
-- `plugins-runtime-install-d`
-- `plugins-runtime-install-e`
-- `plugins-runtime-install-f`
-- `plugins-runtime-install-g`
-- `plugins-runtime-install-h`
-- `openwebui`
-
-OpenWebUI runs as a standalone `openwebui` chunk on a dedicated large-disk
-runner whenever stable or full release-path coverage requests it. The legacy
-`package-update`, `plugins-runtime-core`,
-`plugins-runtime`, and `plugins-integrations` chunks still work as aggregate
-aliases for manual reruns and may still fold in OpenWebUI, but the release
-workflow uses the split chunks so
-provider installer checks, plugin runtime checks, bundled plugin
-install/uninstall shards, and bundled-channel checks can run on separate
-machines. The bundled-channel runtime-dependency coverage
-inside `bundled-channels`
-uses the split `bundled-channel-*` and `bundled-channel-update-*` lanes rather
-than the serial `bundled-channel-deps` lane, so failures produce cheap targeted
-reruns for the exact channel/update scenario. The bundled plugin
-install/uninstall sweep is also split into
-`bundled-plugin-install-uninstall-0` through
-`bundled-plugin-install-uninstall-23`; selecting the legacy
-`bundled-plugin-install-uninstall` lane expands to all 24 shards.
-
-## Package Acceptance
-
-Use the manual `Package Acceptance` workflow when the question is "does this
-installable package work as a product?" rather than "does this source diff pass
-Vitest?"
-
-In release validation, treat Package Acceptance as the package-candidate shard
-inside the larger release umbrella, not as a competing full-test path. Full
-Release Validation and private release gauntlets should call Package Acceptance
-for tarball resolution, Docker product/package proof, and optional Telegram QA
-against the same resolved `package-under-test` artifact; keep orchestration,
-secret policy, blocking/advisory status, and evidence rollup in the caller.
-
-Good defaults:
-
-```bash
-gh workflow run package-acceptance.yml --ref main \
-  -f source=npm \
-  -f workflow_ref=main \
-  -f package_spec=openclaw@beta \
-  -f suite_profile=product \
-  -f telegram_mode=mock-openai
-```
-
-Npm candidate selection:
-
-- Resolve the registry immediately before dispatch:
-  `npm view openclaw dist-tags --json --prefer-online --cache /tmp/openclaw-npm-cache-verify-$$`
-  and `npm view openclaw@beta version dist.tarball dist.integrity --json --prefer-online --cache /tmp/openclaw-npm-cache-verify-$$`.
-- If Peter asks for "latest beta", use `source=npm` with
-  `package_spec=openclaw@beta`, then record the resolved version from `npm view`
-  or the workflow summary.
-- For reruns, release proof, or comparing one known package, prefer the exact
-  immutable spec: `package_spec=openclaw@YYYY.M.D-beta.N` or
-  `package_spec=openclaw@YYYY.M.D`.
-- For stable package proof, use `package_spec=openclaw@latest` only when the
-  question is explicitly the current stable dist-tag; otherwise pin the exact
-  version.
-- `source=npm` only accepts registry specs for `openclaw@extended-stable`,
-  `openclaw@beta`, `openclaw@latest`, or exact OpenClaw release versions. Do
-  not pass semver ranges, git refs, file paths, tarball URLs, or plugin package
-  names there.
-- If the candidate is a tarball URL, use `source=url` with `package_sha256`. If
-  it is an Actions tarball artifact, use `source=artifact`. If it is an
-  unpublished source candidate, use `source=ref` with a trusted ref or SHA.
-- Package acceptance tests exactly the selected package candidate. Do not apply
-  `openclaw update --channel beta` fallback semantics here; if `beta` is absent,
-  stale, older than `latest`, or points at a broken tarball, report that tag
-  state instead of silently testing `latest`.
-
-Profiles:
-
-- `smoke`: quick confidence that the tarball installs, can onboard a channel,
-  can run an agent turn, and basic gateway/config lanes work.
-- `package`: release-package contract. Adds installer/update, doctor install
-  switching, bundled plugin runtime deps, plugin install/update, and package
-  repair lanes. This is the default native replacement for most Parallels
-  package/update coverage.
-- `product`: package profile plus broader product surfaces: MCP channels,
-  cron/subagent cleanup, OpenAI web search, and OpenWebUI.
-- `full`: split Docker release-path chunks with OpenWebUI.
-- `custom`: exact `docker_lanes` list for a focused rerun.
-
-Candidate sources:
-
-- `source=npm`: `openclaw@extended-stable`, `openclaw@beta`,
-  `openclaw@latest`, or an exact release version.
-- `source=ref`: pack `package_ref` using the trusted `workflow_ref` harness.
-  This intentionally separates old package commits from new workflow/test code.
-- `source=url`: HTTPS `.tgz` plus required `package_sha256`.
-- `source=artifact`: download one `.tgz` from `artifact_run_id`/`artifact_name`.
-
-Ref model:
-
-- `gh workflow run ... --ref <workflow-ref>` selects the workflow file revision
-  GitHub executes.
-- `workflow_ref` is the trusted harness/script ref passed to reusable Docker
-  E2E.
-- `package_ref` is the source ref to build when `source=ref`. It can be an
-  older branch/tag/SHA as long as it is reachable from an OpenClaw branch or
-  release tag.
-
-Example: run latest package acceptance harness against an older trusted commit:
-
-```bash
-gh workflow run package-acceptance.yml --ref main \
-  -f workflow_ref=main \
-  -f source=ref \
-  -f package_ref=<branch-or-sha> \
-  -f suite_profile=package \
-  -f telegram_mode=mock-openai
-```
-
-Use `telegram_mode=mock-openai` or `telegram_mode=live-frontier` when the same
-resolved `package-under-test` tarball should also run through the Telegram QA
-workflow in the `qa-live-shared` environment. The standalone Telegram workflow
-still accepts a published npm spec for post-publish checks, but Package
-Acceptance passes the resolved artifact for `source=npm`, `ref`, `url`, and
-`artifact`. Use `telegram_mode=none` only when intentionally skipping Telegram
-credentialed package proof for a focused rerun.
-
-Docker E2E images never copy repo sources as the app under test: the bare image
-is a Node/Git runner, and the functional image installs the same prebuilt npm
-tarball that bare lanes mount. `scripts/package-openclaw-for-docker.mjs` is the
-single packer for local scripts and CI and validates the tarball inventory
-before Docker consumes it. `scripts/test-docker-all.mjs --plan-json` is the
-scheduler-owned CI plan for image kind, package, live image, lane, and
-credential needs. Docker lane definitions live in the single scenario catalog
-`scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in
-`scripts/lib/docker-e2e-plan.mjs`. `scripts/docker-e2e.mjs` converts plan and
-summary JSON into GitHub outputs and step summaries. Every scheduler run writes
-`.artifacts/docker-tests/**/summary.json` plus `failures.json`. Read those
-before rerunning. Lane entries include `command`, `rerunCommand`, status,
-timing, timeout state, image kind, and log file path. The summary also includes
-top-level phase timings for preflight, image build, package prep, lane pools,
-and cleanup. Use `pnpm test:docker:timings <summary.json>` to rank slow lanes
-and phases before deciding whether a broader rerun is justified.
-
-Skill install proof: use `pnpm test:docker:skill-install` or targeted
-`docker_lanes=skill-install` for live ClawHub skill-install validation. The
-lane installs the package tarball in a bare runner, keeps
-`skills.install.allowUploadedArchives=false`, resolves the current live slug
-from `openclaw skills search`, installs it, and verifies `.clawhub` origin/lock
-metadata. Prefer this checked-in script over inline heredoc Testbox recipes.
-
-## Cheap Docker Reruns
-
-First derive the smallest rerun command from artifacts:
-
-```bash
-pnpm test:docker:rerun <github-run-id>
-pnpm test:docker:rerun .artifacts/docker-tests/<run>/failures.json
-```
-
-The script downloads Docker E2E artifacts for a GitHub run, reads
-`summary.json`/`failures.json`, and prints a combined targeted workflow command
-plus per-lane commands. Prefer the combined targeted command when several lanes
-failed for the same patch:
-
-```bash
-gh workflow run openclaw-live-and-e2e-checks-reusable.yml \
-  -f ref=<sha> \
-  -f include_repo_e2e=false \
-  -f include_release_path_suites=false \
-  -f include_openwebui=false \
-  -f docker_lanes='install-e2e bundled-channel-update-acpx' \
-  -f include_live_suites=false \
-  -f live_models_only=false
-```
-
-That path still runs the prepare job, so it creates a new tarball for `<sha>`
-and, by default, rebuilds the required image into an immutable workflow
-artifact for the targeted lane job. A generated command skips the image rebuild
-only when it carries explicit GHCR image refs plus
-`shared_image_policy=existing-only`. Do not rerun the full release path unless
-the failed lane list or touched surface really requires it.
-
-The helper never recovers the workflow-definition `--ref` from an artifact
-command because full-release temporary branches are deleted. It uses the
-repository default branch unless the operator sets
-`OPENCLAW_DOCKER_E2E_WORKFLOW_REF`; this is separate from the artifact target
-SHA passed as the workflow's `ref` input. An explicit target SHA override drops
-recovered GHCR image refs unless the artifact proves they belong to that SHA.
-
-## Docker Expected Timings
-
-Treat these as ballpark. Blacksmith queue time, GHCR pull speed, provider
-latency, npm cache state, and Docker daemon health can dominate.
-
-Current local timing artifact (`.artifacts/docker-tests/lane-timings.json`) has
-these rough bands:
-
-- Tiny lanes, seconds to under 1 minute:
-  `agents-delete-shared-workspace` ~3s, `plugin-update` ~7s,
-  `config-reload` ~14s, `pi-bundle-mcp-tools` ~15s, `onboard` ~18s,
-  `session-runtime-context` ~20s, `gateway-network` ~34s, `qr` ~44s.
-- Medium deterministic lanes, ~1-5 minutes:
-  `npm-onboard-channel-agent` ~96s, `openai-image-auth` ~99s,
-  bundled channel/update lanes usually ~90-300s when split, `openwebui` ~225s,
-  `mcp-channels` ~274s.
-- Heavy deterministic lanes, ~6-10 minutes:
-  `bundled-channel-root-owned` ~429s,
-  `bundled-channel-setup-entry` ~420s,
-  `bundled-channel-load-failure` ~383s,
-  `cron-mcp-cleanup` ~567s.
-- Live provider lanes, often ~15-20 minutes:
-  `live-gateway` ~958s, `live-models` ~1054s.
-- Installer/release lanes:
-  `install-e2e` and package-update paths can vary widely with npm, provider,
-  and package registry behavior. Budget tens of minutes; prefer GitHub targeted
-  reruns over local repeats.
-
-Default fallback lane timeout is 120 minutes. A timeout usually means debug the
-lane log/artifacts first, not “run the whole thing again.”
+Command meanings:
+
+- `check:changed` selects formatting, typecheck, lint, and guard lanes. It does
+  not run Vitest.
+- `test:changed` selects cheap changed Vitest targets.
+- `verify` runs the full check and test paths. Use it only when full proof is
+  actually required.
+- In a Codex worktree, use `node scripts/check-changed.mjs` for changed-check
+  classification and remote delegation; do not run direct local `pnpm check*`.
+- Never use raw `vitest`. If unavoidable, use `vitest run`; bare `vitest`
+  starts watch mode.
+
+Do not run independent Vitest commands concurrently in one worktree.
+
+## Remote, CI, Docker, And Release Work
+
+Heavy proof belongs on the backend selected by source trust. Acquire it only
+when the first heavy command is ready, reuse the same lease for the unchanged
+candidate, and stop it before handoff.
+
+For exact CI jobs, release workflows, package-acceptance profiles, Docker lane
+selection, failure artifacts, rerun commands, runner policy, and current timing
+expectations, read the relevant section of `docs/ci.md`. That document is the
+canonical operational reference; do not duplicate its changing command matrix
+inside this skill.
+
+Rerun the failed job or named lane first. Do not restart a full umbrella after
+a focused fix unless the candidate identity or required release evidence is no
+longer valid.
 
 ## Failure Workflow
 
-1. Identify exact failing job, SHA, lane, and artifact path.
-2. Read `failures.json`, `summary.json`, and the failed lane log tail.
-3. Use `pnpm test:docker:rerun <run-id|failures.json>` to generate targeted
-   GitHub rerun commands.
-4. If the lane has `rerunCommand`, use that only as a local starting point.
-5. For Docker release failures, dispatch targeted `docker_lanes=<failed-lane>`
-   on GitHub before considering local Docker.
-6. Patch narrowly, then rerun the failed file/lane only.
-7. Broaden to `pnpm check:changed` or CI only after the isolated proof passes.
+1. Identify the exact candidate, command, test, job, lane, and artifact.
+2. Decide whether the failure is product, test, environment, or infrastructure.
+3. Reproduce the smallest actionable failure.
+4. Fix the owning cause.
+5. Rerun the same proof.
+6. Broaden only for a named risk from the escalation list.
 
-## When To Escalate
+Do not change production code merely to satisfy a bad test. Do not change a
+test merely to make a real production failure green.
 
-- Public SDK/plugin contract changes: run changed gate plus relevant extension
-  validation.
-- Build output, lazy imports, package boundaries, or published surfaces:
-  include `pnpm build`.
-- Workflow edits: run `pnpm check:workflows`.
-- Release branch or tag validation: use release docs and GitHub workflows; avoid
-  local Docker unless Peter explicitly asks.
+## Review And Handoff
+
+Before review, provide:
+
+- the changed behavior and risk;
+- tests added, changed, removed, or deliberately not added;
+- the unique failure each retained case detects;
+- exact commands, results, durations, candidate identity, and artifact identity;
+- broader tests deliberately skipped and the condition that would require them;
+- installed or live proof when source tests cannot support the claim.
+
+Use the minimum independent review required by repository and operator policy.
+Assign test value, duplicate coverage, missed boundaries, and proof
+proportionality to one reviewer. If policy requires additional reviewers, give
+each a distinct question instead of having several lanes reread the same tests
+under different labels. If review changes the candidate, rerun only invalidated
+proof and review the corrected diff.
+
+## Common Mistakes
+
+- Adding a rejection table to every consumer of an already-tested validator.
+- Counting parameterized rows instead of asking what unique failure they catch.
+- Running restart, retry, dedupe, or broad security suites when those paths did
+  not change.
+- Treating mocked resolvers or source files as proof of an installed package.
+- Running core typechecks while missing the changed scripts or test project.
+- Repeating green suites after reviews or small packaging edits.
+- Using broad runs to compensate for not identifying the owning decision.
+- Reporting thousands of passing tests without proving the user path that
+  previously failed.

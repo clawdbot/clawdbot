@@ -1,0 +1,126 @@
+{
+  "skill": "openclaw-testing",
+  "version": 1,
+  "cases": [
+    {
+      "id": "write-unit-tests",
+      "prompt": "Add unit tests for the new capability expiry behavior.",
+      "should_trigger": true,
+      "reason": "Writes tests."
+    },
+    {
+      "id": "refactor-duplicate-tests",
+      "prompt": "These Slack tests repeat the same rejection branch. Clean them up without losing security coverage.",
+      "should_trigger": true,
+      "reason": "Refactors existing tests."
+    },
+    {
+      "id": "decide-if-test-needed",
+      "prompt": "Does this one-line rename need another test, or is existing coverage enough?",
+      "should_trigger": true,
+      "reason": "Decides whether a test is needed."
+    },
+    {
+      "id": "choose-focused-command",
+      "prompt": "What is the smallest test command for this message-tool change?",
+      "should_trigger": true,
+      "reason": "Selects test execution."
+    },
+    {
+      "id": "debug-vitest",
+      "prompt": "This Vitest file fails only when run after the gateway suite. Diagnose it.",
+      "should_trigger": true,
+      "reason": "Debugs tests."
+    },
+    {
+      "id": "package-proof",
+      "prompt": "We changed a private plugin SDK export. Prove the packed core and Codex plugin still work together.",
+      "should_trigger": true,
+      "reason": "Chooses package and installed execution proof."
+    },
+    {
+      "id": "ci-rerun",
+      "prompt": "The release package lane failed. Tell me exactly what to rerun.",
+      "should_trigger": true,
+      "reason": "Selects a CI rerun."
+    },
+    {
+      "id": "review-test-value",
+      "prompt": "Review this PR's tests for duplicated cases and missing real boundaries.",
+      "should_trigger": true,
+      "reason": "Reviews test quality."
+    },
+    {
+      "id": "live-proof-selection",
+      "prompt": "Choose the cheapest real Slack proof after these deterministic tests pass.",
+      "should_trigger": true,
+      "reason": "Selects live validation."
+    },
+    {
+      "id": "test-only-cleanup",
+      "prompt": "Delete obsolete restart tests left behind by the removed fallback path.",
+      "should_trigger": true,
+      "reason": "Removes tests."
+    },
+    {
+      "id": "implement-no-test-request",
+      "prompt": "Implement the display-name formatting change. Do not add or run tests.",
+      "should_trigger": false,
+      "reason": "The operator explicitly excludes test work."
+    },
+    {
+      "id": "docs-copyedit",
+      "prompt": "Copyedit the installation guide for clarity.",
+      "should_trigger": false,
+      "reason": "Documentation work with no test decision."
+    },
+    {
+      "id": "architecture-explanation",
+      "prompt": "Explain how the gateway owns session state. Do not change anything.",
+      "should_trigger": false,
+      "reason": "Read-only architecture explanation."
+    },
+    {
+      "id": "production-rca-only",
+      "prompt": "Find the production root cause of this Slack timeout. Stop before proposing tests or fixes.",
+      "should_trigger": false,
+      "reason": "The requested phase excludes testing."
+    },
+    {
+      "id": "release-notes",
+      "prompt": "Draft release-note language from these merged commits.",
+      "should_trigger": false,
+      "reason": "Release writing, not release validation."
+    },
+    {
+      "id": "github-triage",
+      "prompt": "Summarize the open issues labeled provider-openai.",
+      "should_trigger": false,
+      "reason": "Issue triage with no testing request."
+    },
+    {
+      "id": "skill-authoring",
+      "prompt": "Create a skill for Gmail source selection.",
+      "should_trigger": false,
+      "reason": "Skill authoring unrelated to tests."
+    },
+    {
+      "id": "config-readback",
+      "prompt": "Read the current configured model and report it without mutation.",
+      "should_trigger": false,
+      "reason": "Read-only configuration inspection."
+    },
+    {
+      "id": "code-review-no-tests",
+      "prompt": "Review only the error-message wording in this diff; ignore its tests.",
+      "should_trigger": false,
+      "reason": "The review scope explicitly excludes tests."
+    },
+    {
+      "id": "runtime-status",
+      "prompt": "Is the OpenClaw gateway currently healthy?",
+      "should_trigger": false,
+      "reason": "Operational status, not test selection."
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "skill_name": "openclaw-testing",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "A validator already exhaustively tests expired, revoked, run mismatch, session-key mismatch, and session-id mismatch. A message-tool consumer currently repeats all five cases. Plan the test change.",
+      "expected_output": "Keep exhaustive rejection coverage at the validator and retain no more than one consumer rejection when consumer wiring has a distinct failure mode.",
+      "expectations": [
+        "Keeps the complete decision table at the validator.",
+        "Retains at most one representative consumer rejection when consumer wiring can fail.",
+        "Does not repeat all five rejection cases in the consumer.",
+        "Avoids a broad suite for the focused cleanup."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "A Slack authorization check compares provider, account, channel, and thread. Decide which negative cases to keep.",
+      "expected_output": "Preserve independent security dimensions and collapse only inputs that execute the same policy with no distinct boundary behavior.",
+      "expectations": [
+        "Treats account, channel, and thread as potentially independent policy dimensions.",
+        "Inspects whether provider and missing-context cases execute distinct policy.",
+        "Keeps one real boundary test.",
+        "Does not collapse every mismatch into one case without reading the decision."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Source tests pass, but an external plugin lazily imports a private core runtime path. The package manifest and build entries changed. Choose proof.",
+      "expected_output": "Use scripts/build typechecking, artifact inspection, an exact installed core/plugin pair, and execution of the first lazy path instead of more source tests.",
+      "expectations": [
+        "Typechecks the changed scripts or build project.",
+        "Builds and inspects the packed artifact.",
+        "Installs the exact core and plugin pair.",
+        "Executes the first lazy path.",
+        "Does not claim source tests prove installed resolution.",
+        "Does not rerun unchanged broad source suites after a packaging-only fix."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Remove duplicated table rows from three test files without changing production code. Choose the verification sequence.",
+      "expected_output": "Use a focused baseline, file-level reruns during cleanup, one combined frozen run, and one relevant static-check pass.",
+      "expectations": [
+        "Runs the affected files for a baseline.",
+        "Reruns each changed file after its cleanup.",
+        "Runs the combined changed files once when frozen.",
+        "Runs relevant test static checks once.",
+        "Does not run builds or package acceptance.",
+        "Does not run a thousand-test source suite."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "A focused suite passed. An independent reviewer read the same unchanged diff and approved it. Should the suite run again?",
+      "expected_output": "No. The unchanged candidate, command, environment, and artifact identity preserve the existing evidence.",
+      "expectations": [
+        "Does not rerun when the diff, command, environment, and artifact are unchanged.",
+        "Does not treat review activity as invalidating proof."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "The shared Vitest setup and project routing changed, so direct import dependents are incomplete. Choose proof.",
+      "expected_output": "Name the shared-harness risk, use changed-target classification, and broaden once on the appropriate remote backend.",
+      "expectations": [
+        "Names the shared harness risk.",
+        "Uses changed-target classification.",
+        "Broadens once because focused mapping is incomplete.",
+        "Uses remote heavy proof when required.",
+        "Does not pretend one sibling test proves global harness routing."
+      ]
+    }
+  ]
+}
