@@ -244,11 +244,15 @@ export async function startTranscripts(params: {
     }
     startupPending = false;
     activeSessions.set(session.sessionId, { session, providerId: provider.id });
-    return toolText(`Transcripts started: ${session.sessionId}`, {
-      sessionId: session.sessionId,
-      providerId: provider.id,
-      ...(session.source.accountId ? { accountId: session.source.accountId } : {}),
-    });
+    const effectiveAccount = session.source.accountId;
+    return toolText(
+      `Transcripts started: ${session.sessionId}${effectiveAccount ? `\nAccount: ${effectiveAccount}` : ""}`,
+      {
+        sessionId: session.sessionId,
+        providerId: provider.id,
+        ...(effectiveAccount ? { accountId: effectiveAccount } : {}),
+      },
+    );
   } finally {
     startingSessionIds.delete(session.sessionId);
   }

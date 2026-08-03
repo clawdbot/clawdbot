@@ -153,6 +153,9 @@ describe("transcripts tool", () => {
       source: { accountId: "account-a" },
     });
     expect(result.details).toMatchObject({ accountId: "account-a" });
+    expect(result.content).toEqual([
+      { type: "text", text: "Transcripts started: account-bound\nAccount: account-a" },
+    ]);
   });
 
   it("preserves an explicit account for a different provider channel", async () => {
