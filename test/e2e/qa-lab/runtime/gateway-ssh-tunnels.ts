@@ -416,14 +416,6 @@ function requireStatusPayload(value: unknown): StatusPayload {
   return value as StatusPayload;
 }
 
-function requireTarget(payload: StatusPayload, kind: string): StatusTarget {
-  const target = payload.targets?.find((entry) => entry.kind === kind);
-  if (!target) {
-    throw new Error(`gateway status did not emit ${kind} target`);
-  }
-  return target;
-}
-
 function requireWarning(payload: StatusPayload, code: string): StatusWarning {
   const warning = payload.warnings?.find((entry) => entry.code === code);
   if (!warning) {
