@@ -175,6 +175,24 @@ describe("OpenAI plugin manifest", () => {
     });
   });
 
+  it("keeps the Azure transport alias and Spark suppression owned by the manifest", () => {
+    expect(manifest.modelCatalog?.aliases?.["azure-openai-responses"]).toEqual({
+      provider: "openai",
+      api: "azure-openai-responses",
+    });
+    const azureSparkSuppression = manifest.modelCatalog?.suppressions?.find(
+      (suppression) =>
+        suppression.provider === "azure-openai-responses" &&
+        suppression.model === "gpt-5.3-codex-spark",
+    );
+
+    expect(azureSparkSuppression).toMatchObject({
+      provider: "azure-openai-responses",
+      model: "gpt-5.3-codex-spark",
+    });
+    expect(azureSparkSuppression).not.toHaveProperty("when");
+  });
+
   it("keeps auth choice copy aligned with provider wizard metadata", () => {
     const wizards = providerWizardByKey();
 
