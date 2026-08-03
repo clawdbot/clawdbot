@@ -94,7 +94,7 @@ function resolveCompletionFromTerminalTask(task: TaskRecord | undefined, entry: 
         ? { status: "timeout" }
         : { status: "error", error: task.error };
   return {
-    startedAt: entry.startedAt ?? task.startedAt,
+    startedAt: entry.execution.startedAt ?? task.startedAt,
     endedAt: task.endedAt,
     outcome,
     reason: task.status === "failed" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
@@ -172,7 +172,7 @@ export async function reconcileProvisionalSubagentKill(params: {
     storeCache: params.storeCache,
   });
   const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
-    notBeforeMs: entry.startedAt ?? entry.createdAt,
+    notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
   });
   const completionEndedAt = completion
     ? resolveSubagentRunEffectiveEndedAt(entry, completion.endedAt, completion.startedAt)
@@ -246,7 +246,9 @@ export async function reconcileProvisionalSubagentKill(params: {
     taskBeforeResolution.lookup === "unavailable" || isUnstableTask(taskBefore);
   if (taskNeedsStabilization) {
     const observedError =
-      entry.outcome?.status === "error" ? entry.outcome.error?.trim() : undefined;
+      entry.execution.outcome?.status === "error"
+        ? entry.execution.outcome.error?.trim()
+        : undefined;
     try {
       const finalizedTasks = finalizeTaskRunByRunId({
         runId: taskBefore?.runId ?? entry.taskRunId ?? runId,

@@ -15,6 +15,18 @@ import {
 
 const suite = createSessionManagementE2eSuite();
 
+async function confirmDelete(page: import("playwright").Page, proofName?: string) {
+  const dialog = page.locator("openclaw-modal-dialog").last();
+  const nativeDialog = dialog.locator("wa-dialog").locator("dialog");
+  await expect
+    .poll(() => nativeDialog.evaluate((element) => getComputedStyle(element).opacity))
+    .toBe("1");
+  if (proofName) {
+    await captureUiProof(page, proofName);
+  }
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+}
+
 suite.define(() => {
   it("deletes every archived thread exactly once when the paged roster reorders", async () => {
     const context = await suite.browser.newContext({
@@ -53,8 +65,8 @@ suite.define(() => {
           sessionsListResponse(archived, { totalCount: 3 }),
         ],
       });
-      page.once("dialog", (dialog) => void dialog.accept());
       await remove.click();
+      await confirmDelete(page, "styled-confirm-delete-archived.png");
 
       await expect
         .poll(async () =>
@@ -108,11 +120,11 @@ suite.define(() => {
       await expect.poll(() => page.locator(".data-table-bulk-bar").count()).toBe(0);
 
       await rowFor("Bravo").locator('input[type="checkbox"]').check();
-      page.once("dialog", (dialog) => void dialog.accept());
       await page
         .locator(".data-table-bulk-bar")
         .getByRole("button", { name: "Delete", exact: true })
         .click();
+      await confirmDelete(page);
       await gateway.waitForRequest("sessions.delete");
 
       await expect
@@ -502,7 +514,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps a session row when the Gateway reports no deletion", async () => {
+  it("archive-gates a row-menu delete and keeps the row when the Gateway reports no deletion", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -515,15 +527,15 @@ suite.define(() => {
         "sessions.delete": { ok: true, deleted: false },
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
+          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z"), {
+            archived: true,
+          }),
         ]),
       },
       sessionKey: "agent:main:main",
     });
-    page.on("dialog", (dialog) => void dialog.accept());
-
     try {
-      await page.goto(`${suite.server.baseUrl}sessions`);
+      await page.goto(`${suite.server.baseUrl}sessions?status=archived`);
       const row = page.locator(".session-data-row").filter({ hasText: "Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
@@ -531,9 +543,14 @@ suite.define(() => {
       await activateMenuItem(
         page.locator("openclaw-session-menu").getByRole("menuitem", { name: "Delete…" }),
       );
+      await confirmDelete(page);
 
       const request = await gateway.waitForRequest("sessions.delete");
-      expect(requireRecord(request.params)).toMatchObject({ key });
+      expect(requireRecord(request.params)).toMatchObject({
+        archivedOnly: true,
+        deleteTranscript: true,
+        key,
+      });
       await row.waitFor({ state: "visible" });
     } finally {
       await context.close();

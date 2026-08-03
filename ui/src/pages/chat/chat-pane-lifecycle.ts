@@ -19,8 +19,10 @@ import {
 import { t } from "../../i18n/index.ts";
 import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
 import { resolveChatPaneObserverRunId } from "../../lib/observer-digest.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { resolveSessionCreateParams } from "../../lib/sessions/create.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -55,7 +57,33 @@ import { exportChatMarkdown } from "./export.ts";
 import { admitInitialTurnHandoff, admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
+const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
+const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
+
 export abstract class ChatPaneLifecycle extends ChatPaneBoard {
+  private clearComposerPrefillAttention(): void {
+    if (this.composerPrefillAttentionTimer !== null) {
+      window.clearTimeout(this.composerPrefillAttentionTimer);
+      this.composerPrefillAttentionTimer = null;
+    }
+    this.composerPrefillAttentionTarget?.classList.remove(COMPOSER_PREFILL_ATTENTION_CLASS);
+    this.composerPrefillAttentionTarget = null;
+  }
+
+  private showComposerPrefillAttention(input: HTMLElement): void {
+    this.clearComposerPrefillAttention();
+    // Force a fresh animation frame when the same mounted composer is prompted again.
+    void input.offsetWidth;
+    input.classList.add(COMPOSER_PREFILL_ATTENTION_CLASS);
+    this.composerPrefillAttentionTarget = input;
+    // Reduced motion disables animation events, so timer cleanup owns both modes.
+    this.composerPrefillAttentionTimer = window.setTimeout(() => {
+      if (this.composerPrefillAttentionTarget === input) {
+        this.clearComposerPrefillAttention();
+      }
+    }, COMPOSER_PREFILL_ATTENTION_DURATION_MS);
+  }
+
   protected confirmConversationReset(): Promise<boolean> {
     const board = this.resolveBoardView();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
@@ -146,6 +174,27 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     const client = state.client;
     const previousSessionKey = state.sessionKey;
     const preservesBoard = this.resolveBoardView().hasBoard;
+    const createParams = {
+      currentSessionKey: previousSessionKey,
+      agentId:
+        scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+        resolveAgentIdFromSessionKey(previousSessionKey),
+    };
+    const createRequestParams = {
+      ...resolveSessionCreateParams(createParams.currentSessionKey, createParams.agentId),
+    };
+    const readCreateAccess = () =>
+      readSessionMethodAccess(context.gateway.snapshot, {
+        method: preservesBoard ? "sessions.reset" : "sessions.create",
+        ...(preservesBoard
+          ? { requiredScope: "operator.admin" as const }
+          : { params: createRequestParams }),
+      });
+    const publishCreateAccessError = (reason: string) => {
+      state.lastError = reason;
+      state.chatError = reason;
+      state.requestUpdate?.();
+    };
     const connectionGeneration = this.connectionGeneration;
     const isCurrent = () =>
       this.isConnected &&
@@ -170,6 +219,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       state.requestUpdate?.();
       return false;
     }
+    const initialAccess = readCreateAccess();
+    if (!initialAccess.allowed) {
+      publishCreateAccessError(initialAccess.reason);
+      return false;
+    }
     if (
       !(await this.confirmConversationReset()) ||
       !isCurrent() ||
@@ -181,6 +235,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       state.lastError = NEW_SESSION_ACTIVE_RUN_MESSAGE;
       state.chatError = state.lastError;
       state.requestUpdate?.();
+      return false;
+    }
+    const currentAccess = readCreateAccess();
+    if (!currentAccess.allowed) {
+      publishCreateAccessError(currentAccess.reason);
       return false;
     }
 
@@ -206,12 +265,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       }
       return resetResult !== "failed";
     }
-    const nextSessionKey = await sessions.create({
-      currentSessionKey: previousSessionKey,
-      agentId:
-        scopedAgentParamsForSession(state, previousSessionKey).agentId ??
-        resolveAgentIdFromSessionKey(previousSessionKey),
-    });
+    const nextSessionKey = await sessions.create(createParams);
     if (!isCurrent()) {
       return false;
     }
@@ -609,7 +663,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     }
   }
 
-  override updated() {
+  override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
+    if (changedProperties.has("focusComposer") && this.focusComposer) {
+      const textarea = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
+      const input = textarea?.closest<HTMLElement>(".agent-chat__input");
+      textarea?.focus({ preventScroll: true });
+      if (input) {
+        this.showComposerPrefillAttention(input);
+      }
+    }
     this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
     const board = this.resolveBoardView();
@@ -641,6 +703,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
   }
 
   override disconnectedCallback() {
+    this.clearComposerPrefillAttention();
     this.boardProviderLifecycleConnected = false;
     this.releaseBoardProviderLease();
     this.settleResetConfirmation(false);

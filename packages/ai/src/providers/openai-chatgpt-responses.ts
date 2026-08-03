@@ -43,14 +43,12 @@ import {
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
-  Api,
   AssistantMessage,
   Context,
   Model,
   SimpleStreamOptions,
   StreamFunction,
   StreamOptions,
-  Usage,
 } from "../types.js";
 import {
   appendAssistantMessageDiagnostic,
@@ -71,8 +69,10 @@ import { inspectTlsCertificateError } from "../utils/tls-certificate-errors.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
+  applyResponsesServiceTierPricing,
   convertResponsesMessages,
   convertResponsesToolPayload,
+  createResponsesAssistantOutput,
   resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -266,23 +266,7 @@ export const streamOpenAICodexResponses: StreamFunction<
     let requestTimeoutSignal: AbortSignal | undefined;
     let activeSignal: AbortSignal | undefined;
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
-    const output: AssistantMessage = {
-      role: "assistant",
-      content: [],
-      api: "openai-chatgpt-responses" as Api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: Date.now(),
-    };
+    const output = createResponsesAssistantOutput(model);
 
     try {
       const unresolvedApiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -601,38 +585,6 @@ function buildRequestBody(
   return body;
 }
 
-function getServiceTierCostMultiplier(
-  model: Pick<Model<"openai-chatgpt-responses">, "id">,
-  serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-): number {
-  switch (serviceTier) {
-    case "flex":
-      return 0.5;
-    case "priority":
-      return model.id === "gpt-5.5" ? 2.5 : 2;
-    default:
-      return 1;
-  }
-}
-
-function applyServiceTierPricing(
-  usage: Usage,
-  serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  model: Pick<Model<"openai-chatgpt-responses">, "id">,
-) {
-  const multiplier = getServiceTierCostMultiplier(model, serviceTier);
-  if (multiplier === 1) {
-    return;
-  }
-
-  usage.cost.input *= multiplier;
-  usage.cost.output *= multiplier;
-  usage.cost.cacheRead *= multiplier;
-  usage.cost.cacheWrite *= multiplier;
-  usage.cost.total =
-    usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
-}
-
 function resolveCodexServiceTier(
   responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
   requestServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
@@ -689,7 +641,7 @@ async function processStream(
     signal: options?.signal,
     resolveServiceTier: resolveCodexServiceTier,
     applyServiceTierPricing: (usage, serviceTier) =>
-      applyServiceTierPricing(usage, serviceTier, model),
+      applyResponsesServiceTierPricing(usage, serviceTier, model),
   });
 }
 
@@ -1564,7 +1516,7 @@ async function processWebSocketStream(
         signal: options?.signal,
         resolveServiceTier: resolveCodexServiceTier,
         applyServiceTierPricing: (usage, serviceTier) =>
-          applyServiceTierPricing(usage, serviceTier, model),
+          applyResponsesServiceTierPricing(usage, serviceTier, model),
       },
     );
     if (options?.signal?.aborted) {

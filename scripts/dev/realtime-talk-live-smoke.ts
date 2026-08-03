@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import {
   parseStrictIntegerOption,
   previewForDevToolLog,
@@ -973,7 +973,11 @@ try {
       },
     },
   );
-  await transport.start();
+  const startResult = await transport.start();
+  if (startResult !== "ready") {
+    throw new Error("Relay smoke transport did not become ready: " + startResult);
+  }
+  transport.activate();
   emit({ event: "talk.event", payload: { relaySessionId: "relay-live-smoke", type: "ready" } });
   emit({
     event: "talk.event",

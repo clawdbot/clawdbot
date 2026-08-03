@@ -1,9 +1,6 @@
 // Projects plugin "tab" Control UI descriptors into the hello payload so the
 // dashboard renders plugin tabs without hardcoding plugin ids in core.
-// Read the session-extension registry (gateway-pinned at startup), not the
-// mutable active registry: agent-turn standalone loads swap the active registry
-// for one without control-UI descriptors, which would empty hello for every
-// connection made after the first agent run.
+// Descriptors come from the process-root registry installed by the gateway.
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginSessionExtensionRegistry } from "../plugins/runtime.js";

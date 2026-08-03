@@ -12,11 +12,8 @@ import {
   type ExecApprovalContinuationPromptRange,
 } from "../../agents/bash-tools.exec-approval-output.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
-import {
-  restoreAdmittedRecoveryWithRetries,
-  scheduleAdmittedRecoveryRestore,
-} from "../../agents/main-session-recovery-restore.js";
 import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryPendingTarget,
@@ -324,11 +321,6 @@ export function startAgentRunExecution(params: {
           params.client.internal.runtimePluginToolGrant?.pluginId
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
-      const trustedInternalHandoff =
-        params.client?.internal?.delegatedToolPolicyHandoff === true &&
-        params.inputProvenance?.kind === "inter_session" &&
-        params.inputProvenance.sourceTool === "subagent_announce";
-
       const restartRecoveryChannelContext = resolveAgentRestartRecoveryChannelContext({
         canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
         expectedExistingSessionId: params.request.expectedExistingSessionId,
@@ -398,7 +390,7 @@ export function startAgentRunExecution(params: {
           bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
           toolsAllow: params.restoredCronContinuation?.toolsAllow,
           runtimePluginToolGrant,
-          trustedInternalHandoff,
+          trustedInternalHandoff: prepared.trustedInternalHandoff,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
           scheduledToolPolicy: params.restoredCronContinuation
             ? resolveScheduledToolPolicyContext({
@@ -449,6 +441,7 @@ export function startAgentRunExecution(params: {
             resolvedSessionKey: params.resolvedSessionKey,
             lifecycleStorePath: prepared.lifecycleStorePath,
             activeSessionAgentId: params.activeSessionAgentId,
+            trustedInternalHandoff: prepared.trustedInternalHandoff,
           }),
           onSessionIdChanged: (sessionId) => {
             if (prepared.activeRunAbort.entry) {
@@ -515,17 +508,16 @@ export function startAgentRunExecution(params: {
           claimId: execApprovalFollowupHandoffClaimId,
         });
         try {
-          if (prepared.restoreAdmittedRestartRecoveryInterrupted) {
-            try {
-              pendingRecovery ??= await restoreAdmittedRecoveryWithRetries(
-                prepared.restoreAdmittedRestartRecoveryInterrupted,
-              );
-            } catch (err) {
-              params.context.logGateway.warn(
-                `failed to restore undispatched restart recovery: ${formatForLog(err)}`,
-              );
-              scheduleAdmittedRecoveryRestore(prepared.restoreAdmittedRestartRecoveryInterrupted);
-            }
+          const restoreAdmittedRecovery = prepared.restoreAdmittedRestartRecoveryInterrupted;
+          if (restoreAdmittedRecovery) {
+            pendingRecovery ??= await repairMainSessionRecoveryMutation({
+              mutation: restoreAdmittedRecovery,
+              onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
+              onError: (err) =>
+                params.context.logGateway.warn(
+                  `failed to restore undispatched restart recovery: ${formatForLog(err)}`,
+                ),
+            });
           }
         } finally {
           try {

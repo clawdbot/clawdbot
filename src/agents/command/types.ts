@@ -22,6 +22,7 @@ import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -119,8 +120,8 @@ export type AgentCommandOpts = {
   toolsAllow?: string[];
   /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
-  /** Trusted in-process subagent-completion handoff; never accepted from public RPC params. */
-  trustedInternalHandoff?: boolean;
+  /** Consumed in-process subagent-completion capability; never accepted from public RPC params. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Internal marker identifying a server-managed default cap. */
   toolsAllowIsDefault?: boolean;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */

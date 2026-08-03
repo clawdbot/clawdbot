@@ -621,7 +621,7 @@ describe("Slack live QA runtime helpers", () => {
     );
   });
 
-  it("verifies progress commentary by Slack message identity", () => {
+  it("verifies progress commentary from history or successful captured message writes", () => {
     const cases = [
       {
         id: "slack-progress-commentary-true",
@@ -780,6 +780,37 @@ describe("Slack live QA runtime helpers", () => {
         ],
       }),
     ).toThrow("exactly one Slack message identity containing commentary");
+  });
+
+  it("accepts one standalone commentary identity even when Slack prefixes it as commentary", () => {
+    const scenario = testing.findScenario(["slack-progress-commentary-verbose-dedupe"])[0];
+    const run = scenario?.buildRun("U_SUT");
+    if (
+      !run ||
+      run.kind === "approval" ||
+      run.kind === "codex-approval" ||
+      run.kind === "direct-transport" ||
+      !run.verifyObserved
+    ) {
+      throw new Error("expected Slack commentary message scenario");
+    }
+    const commentaryMarker = run.input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+    const toolMarker = run.input.match(/SLACK-QA-TOOL-[0-9A-F]{8}/u)?.[0];
+    const finalMarker = run.input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0];
+    if (!commentaryMarker || !toolMarker || !finalMarker) {
+      throw new Error("missing Slack progress markers");
+    }
+
+    expect(() =>
+      run.verifyObserved?.({
+        finalMessage: { text: finalMarker, ts: "3.000000" },
+        messages: [
+          { channelId: "C123456789", text: `💬 ${commentaryMarker}`, ts: "1.000000" },
+          { channelId: "C123456789", text: toolMarker, ts: "2.000000" },
+          { channelId: "C123456789", text: finalMarker, ts: "3.000000" },
+        ],
+      }),
+    ).not.toThrow();
   });
 
   it("settles complete channel and thread observations after the final reply", async () => {
@@ -1155,24 +1186,21 @@ describe("Slack live QA runtime helpers", () => {
     expect(probe.fallbackText.split("\n")).toContain(probe.finalRowText);
   });
 
-  it("proves the public Slack send path stores one complete formatting-disabled fallback", async () => {
+  it("proves the public Slack send path stores complete ordered fallback chunks", async () => {
     const probe = testing.buildSlackInvalidBlocksTableProbe();
-    let storedPayload: Record<string, unknown> | undefined;
+    const storedPayloads: Array<Record<string, unknown> & { ts: string }> = [];
     const postMessage = vi.fn(async (payload: Record<string, unknown>) => {
-      storedPayload = payload;
-      return { channel: "C123456789", ok: true, ts: "2.000000" };
+      const ts = `2.${String(storedPayloads.length + 1).padStart(6, "0")}`;
+      storedPayloads.push({ ...payload, ts });
+      return { channel: "C123456789", ok: true, ts };
     });
     const history = vi.fn(async () => ({
-      messages: storedPayload
-        ? [
-            {
-              blocks: storedPayload.blocks,
-              text: storedPayload.text,
-              ts: "2.000000",
-              user: "U999999999",
-            },
-          ]
-        : [],
+      messages: storedPayloads.toReversed().map((payload) => ({
+        blocks: payload.blocks,
+        text: typeof payload.text === "string" ? payload.text.replace(/\s+/gu, " ") : payload.text,
+        ts: payload.ts,
+        user: "U999999999",
+      })),
     }));
     const sutWriteClient = { chat: { postMessage } };
     const cfg = testing.buildSlackQaConfig(
@@ -1196,22 +1224,88 @@ describe("Slack live QA runtime helpers", () => {
       timeoutMs: 0,
     });
 
-    expect(postMessage).toHaveBeenCalledTimes(1);
-    const [fallbackRequest] = postMessage.mock.calls[0] ?? [];
-    expect(fallbackRequest).not.toHaveProperty("blocks");
-    expect(fallbackRequest).toMatchObject({ mrkdwn: false });
-    const fallbackText = typeof fallbackRequest?.text === "string" ? fallbackRequest.text : "";
+    expect(postMessage).toHaveBeenCalledTimes(3);
+    const fallbackRequests = postMessage.mock.calls.map(([request]) => request);
+    expect(fallbackRequests.every((request) => !Object.hasOwn(request, "blocks"))).toBe(true);
+    expect(fallbackRequests.every((request) => request.mrkdwn === false)).toBe(true);
+    const fallbackText = fallbackRequests.map((request) => request.text).join("");
+    expect(fallbackText).toHaveLength(probe.fallbackText.length);
     expect(fallbackText.split("\n")).toContain(probe.firstRowText);
     expect(fallbackText.split("\n")).toContain(probe.finalRowText);
-    expect(result.message).toMatchObject({
-      text: fallbackText,
-      ts: "2.000000",
-      user: "U999999999",
-    });
+    expect(storedPayloads.map((payload) => payload.ts)).toEqual([
+      "2.000001",
+      "2.000002",
+      "2.000003",
+    ]);
+    expect(
+      storedPayloads
+        .map((payload) =>
+          typeof payload.text === "string" ? payload.text.replace(/\s+/gu, " ") : "",
+        )
+        .join(""),
+    ).toBe(fallbackText.replace(/\s+/gu, " "));
+    expect(result.message).toMatchObject({ ts: "2.000003", user: "U999999999" });
     expect(result.details).toContain("first API failure=invalid_blocks");
+    expect(result.details).toContain("API attempts=4");
     expect(result.details).toContain("fallback formatting disabled=true");
+    expect(result.details).toContain("fallback chunks=3");
+    expect(result.details).toContain("first row=present");
+    expect(result.details).toContain("final row=present");
     expect(result.details).toContain("complete delivery=true");
     expect(sutWriteClient.chat.postMessage).toBe(postMessage);
+  });
+
+  it("bounds invalid_blocks readback diagnostics while showing the observed text", async () => {
+    const malformedReadback = `BROKEN-${"x".repeat(2_000)}`;
+    let postCount = 0;
+    const postMessage = vi.fn(async () => {
+      postCount += 1;
+      return {
+        channel: "C123456789",
+        ok: true,
+        ts: `2.${String(postCount).padStart(6, "0")}`,
+      };
+    });
+    const sutWriteClient = { chat: { postMessage } };
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U111111111",
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    const error = await testing
+      .runSlackTableInvalidBlocksFallbackScenario({
+        cfg,
+        channelId: "C123456789",
+        sutAccountId: "sut",
+        sutIdentity: { userId: "U999999999" },
+        sutReadClient: {
+          conversations: {
+            history: vi.fn(async () => ({
+              messages: [
+                { text: "", ts: "2.000003", user: "U999999999" },
+                { text: "", ts: "2.000002", user: "U999999999" },
+                { text: malformedReadback, ts: "2.000001", user: "U999999999" },
+              ],
+            })),
+          },
+        } as never,
+        sutWriteClient: sutWriteClient as never,
+        timeoutMs: 0,
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain(`${malformedReadback.length} characters`);
+    expect(message).toContain('actual="BROKEN-');
+    expect(message).toContain("…");
+    expect(message.length).toBeLessThan(700);
   });
 
   it("reports the real Slack error when the fallback request fails", async () => {
@@ -1242,7 +1336,9 @@ describe("Slack live QA runtime helpers", () => {
         sutWriteClient: sutWriteClient as never,
         timeoutMs: 0,
       }),
-    ).rejects.toThrow("Slack fallback failed after invalid_blocks; observed invalid_arguments");
+    ).rejects.toThrow(
+      "Slack fallback part 1 failed after invalid_blocks; observed invalid_arguments",
+    );
     expect(sutWriteClient.chat.postMessage).toBe(postMessage);
   });
 
@@ -1275,8 +1371,46 @@ describe("Slack live QA runtime helpers", () => {
         timeoutMs: 0,
       }),
     ).rejects.toThrow(
-      "Slack fallback failed after invalid_blocks; observed no fallback API failure code",
+      "Slack fallback part 1 failed after invalid_blocks; observed no fallback API failure code",
     );
+    expect(sutWriteClient.chat.postMessage).toBe(postMessage);
+  });
+
+  it("reports a later Slack fallback chunk failure", async () => {
+    const postMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ channel: "C123456789", ok: true, ts: "2.000001" })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("do not persist this raw platform detail"), {
+          data: { error: "invalid_arguments", ok: false },
+        }),
+      );
+    const sutWriteClient = { chat: { postMessage } };
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U111111111",
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    await expect(
+      testing.runSlackTableInvalidBlocksFallbackScenario({
+        cfg,
+        channelId: "C123456789",
+        sutAccountId: "sut",
+        sutIdentity: { userId: "U999999999" },
+        sutReadClient: { conversations: { history: vi.fn() } } as never,
+        sutWriteClient: sutWriteClient as never,
+        timeoutMs: 0,
+      }),
+    ).rejects.toThrow(
+      "Slack fallback part 2 failed after invalid_blocks; observed invalid_arguments",
+    );
+    expect(postMessage).toHaveBeenCalledTimes(2);
     expect(sutWriteClient.chat.postMessage).toBe(postMessage);
   });
 

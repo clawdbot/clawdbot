@@ -20,7 +20,7 @@ import {
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
 import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
 import { mergeManualRunSnapshotAfterReload } from "./startup-run-repair.js";
-import type { CronServiceState, CronWakeMode } from "./state.js";
+import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
@@ -174,6 +174,7 @@ async function finishPreparedManualRun(
           : mode === "force"
             ? "force-preserve"
             : "advance";
+      const postPersistNotifications: DeferredCronNotifications = [];
 
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
@@ -187,7 +188,11 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleMode, triggerOwnership },
+          {
+            scheduleMode,
+            triggerOwnership,
+            deferredNotifications: postPersistNotifications,
+          },
         );
       } else {
         shouldDelete = applyJobResult(
@@ -204,6 +209,7 @@ async function finishPreparedManualRun(
             scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
             scheduleOwnership,
             scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
+            deferredNotifications: postPersistNotifications,
           },
         );
         applyTriggerRunResult(
@@ -287,13 +293,16 @@ async function finishPreparedManualRun(
       });
       recomputeNextRunsForMaintenance(state, {
         recomputeExpired: true,
+        deferredNotifications: postPersistNotifications,
         ...(mode === "force"
           ? {
               preserveExpiredPacedNextRunJobId: jobId,
             }
           : {}),
       });
-      await persistOrRestore(state, rollbackSnapshot);
+      await persistOrRestore(state, rollbackSnapshot, {
+        postPersistNotifications,
+      });
       if (removedJob) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
       }

@@ -12,6 +12,7 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
+import { toOpenAiResponsesUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -70,6 +71,7 @@ import {
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
+import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
@@ -342,43 +344,11 @@ function applyToolChoice(params: {
 export { buildAgentPrompt } from "./openresponses-prompt.js";
 
 function createEmptyUsage(): Usage {
-  return { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
-}
-
-function toUsage(
-  value:
-    | {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        total?: number;
-      }
-    | undefined,
-): Usage {
-  if (!value) {
-    return createEmptyUsage();
-  }
-  const input = value.input ?? 0;
-  const output = value.output ?? 0;
-  const cacheRead = value.cacheRead ?? 0;
-  const cacheWrite = value.cacheWrite ?? 0;
-  const total = value.total ?? input + output + cacheRead + cacheWrite;
-  return {
-    input_tokens: Math.max(0, input),
-    output_tokens: Math.max(0, output),
-    total_tokens: Math.max(0, total),
-  };
+  return toOpenAiResponsesUsage(undefined);
 }
 
 function extractUsageFromResult(result: unknown): Usage {
-  const meta = (result as { meta?: { agentMeta?: { usage?: unknown } } } | null)?.meta;
-  const usage = meta && typeof meta === "object" ? meta.agentMeta?.usage : undefined;
-  return toUsage(
-    usage as
-      | { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number }
-      | undefined,
-  );
+  return toOpenAiResponsesUsage(resolveAgentRunUsage(result));
 }
 
 type PendingToolCall = { id: string; name: string; arguments: string };
@@ -932,6 +902,7 @@ export async function handleOpenResponsesHttpRequest(
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
   let finalizeScheduled = false;
   let finalizeErrorMessage: string | undefined;
+  let terminalLifecyclePhase: "end" | "error" = "end";
 
   const maybeFinalize = () => {
     if (closed || finalizeScheduled) {
@@ -1188,15 +1159,24 @@ export async function handleOpenResponsesHttpRequest(
     }
   });
 
+  // Agent cleanup and deferred SSE delivery have independent lifetimes;
+  // shutdown must wait until both have settled, whichever finishes last.
+  const releaseAgentRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseResponseRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseStreamRootWork = () => {
+    res.off("finish", releaseStreamRootWork);
+    res.off("close", releaseStreamRootWork);
+    releaseResponseRootWork?.();
+  };
+  res.once("finish", releaseStreamRootWork);
+  res.once("close", releaseStreamRootWork);
+
   stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
+    releaseStreamRootWork();
   });
 
-  // The streamed run outlives this handler, whose root-work admission is
-  // released on return. Without retaining it, subordinate session/lane
-  // admissions inherit a released lease and fail as GatewayDrainingError.
-  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await runResponsesAgentCommand({
@@ -1389,6 +1369,7 @@ export async function handleOpenResponsesHttpRequest(
       if (closed || abortController.signal.aborted) {
         return;
       }
+      terminalLifecyclePhase = "error";
       logWarn(`openresponses: streaming response failed: ${String(err)}`);
 
       finalUsage = finalUsage ?? createEmptyUsage();
@@ -1403,11 +1384,6 @@ export async function handleOpenResponsesHttpRequest(
         });
 
         finalizeFailedResponse(errorResponse);
-        emitAgentEvent({
-          runId: responseId,
-          stream: "lifecycle",
-          data: { phase: "error" },
-        });
         return;
       }
       const errorResponse = createResponseResource({
@@ -1434,28 +1410,18 @@ export async function handleOpenResponsesHttpRequest(
         });
         rememberResponseSession();
         finalizeFailedResponse(mappedResponse);
-        emitAgentEvent({
-          runId: responseId,
-          stream: "lifecycle",
-          data: { phase: "error" },
-        });
         return;
       }
       rememberResponseSession();
       finalizeFailedResponse(errorResponse);
-      emitAgentEvent({
-        runId: responseId,
-        stream: "lifecycle",
-        data: { phase: "error" },
-      });
     } finally {
-      releaseRootWork?.();
-      if (!closed) {
-        // Emit lifecycle end to trigger completion
+      releaseAgentRootWork?.();
+      // Existing provider terminals must not be replaced or emitted twice.
+      if (finalizeStatus === null && (terminalLifecyclePhase === "error" || !closed)) {
         emitAgentEvent({
           runId: responseId,
           stream: "lifecycle",
-          data: { phase: "end" },
+          data: { phase: terminalLifecyclePhase },
         });
       }
     }

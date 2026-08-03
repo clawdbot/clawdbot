@@ -43,6 +43,7 @@ type RuntimeLifecycleSnapshot = {
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
   healthState?: string | null;
+  lifecycle?: ChannelAccountSnapshot["lifecycle"] | null;
   ingressUnavailable?: true | null;
   terminalDisconnect?: boolean | null;
   lastStartAt?: number | null;
@@ -403,6 +404,7 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
       ? { lastTransportActivityAt: runtime.lastTransportActivityAt }
       : {}),
     ...(typeof runtime?.healthState === "string" ? { healthState: runtime.healthState } : {}),
+    ...(runtime?.lifecycle ? { lifecycle: runtime.lifecycle } : {}),
     // Absence means unknown; only a recorded ingress failure crosses the projection.
     ...(runtime?.ingressUnavailable === true ? { ingressUnavailable: true as const } : {}),
     ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),

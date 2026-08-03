@@ -69,7 +69,7 @@ export function createTelegramHandlerInboundRuntime(
     resolveTelegramDebounceLane,
   } = createTelegramInboundDebounceRuntime({ cfg, bot, runtime }, messageRuntime);
 
-  const { handleMediaGroup, shouldSkipMediaDownloadForUnaddressedMentionGroup } =
+  const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition } =
     createTelegramInboundMediaGroupRuntime(
       {
         accountId,
@@ -204,23 +204,22 @@ export function createTelegramHandlerInboundRuntime(
       return;
     }
 
-    if (
-      await shouldSkipMediaDownloadForUnaddressedMentionGroup({
-        authorizationCfg,
-        ctx,
-        msg,
-        chatId,
-        isGroup,
-        isForum,
-        resolvedThreadId,
-        dmThreadId,
-        senderId,
-        effectiveGroupAllow,
-        effectiveDmAllow,
-        groupConfig,
-        topicConfig,
-      })
-    ) {
+    const mediaDisposition = await resolveUnaddressedGroupMediaDisposition({
+      authorizationCfg,
+      ctx,
+      msg,
+      chatId,
+      isGroup,
+      isForum,
+      resolvedThreadId,
+      dmThreadId,
+      senderId,
+      effectiveGroupAllow,
+      effectiveDmAllow,
+      groupConfig,
+      topicConfig,
+    });
+    if (mediaDisposition === "skip") {
       releaseDispatchDedupeClaims(dispatchDedupeClaims);
       return;
     }
@@ -254,7 +253,7 @@ export function createTelegramHandlerInboundRuntime(
         return;
       }
       if (isMediaSizeLimitError(mediaErr)) {
-        if (sendOversizeWarning) {
+        if (sendOversizeWarning && mediaDisposition !== "silent-ingest") {
           const limitMb =
             mediaErr instanceof TelegramBotApiFileTooLargeError
               ? Math.min(mediaErr.limitMb, Math.round(mediaMaxBytes / (1024 * 1024)))
@@ -281,18 +280,20 @@ export function createTelegramHandlerInboundRuntime(
           releaseDispatchDedupeClaims(dispatchDedupeClaims, mediaErr);
           return;
         }
-        await withTelegramApiErrorLogging({
-          operation: "sendMessage",
-          runtime,
-          fn: () =>
-            bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-              ...warningThreadParams,
-              reply_parameters: {
-                message_id: msg.message_id,
-                allow_sending_without_reply: true,
-              },
-            }),
-        }).catch(() => {});
+        if (mediaDisposition !== "silent-ingest") {
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+                ...warningThreadParams,
+                reply_parameters: {
+                  message_id: msg.message_id,
+                  allow_sending_without_reply: true,
+                },
+              }),
+          }).catch(() => {});
+        }
       }
     }
 

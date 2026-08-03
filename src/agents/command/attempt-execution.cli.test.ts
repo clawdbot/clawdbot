@@ -24,6 +24,7 @@ import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
+import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
@@ -40,6 +41,10 @@ const SUBAGENT_ANNOUNCE_REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "me
 
 function createSubagentAnnounceHandoffOptions(params: {
   sourceReplyDeliveryMode: "automatic" | "message_tool_only";
+  targetSessionKey: string;
+  targetSessionId: string;
+  provider: string;
+  model: string;
   disableMessageTool?: boolean;
   requireExplicitMessageTarget?: boolean;
   modelRun?: boolean;
@@ -54,7 +59,19 @@ function createSubagentAnnounceHandoffOptions(params: {
     ...(params.modelRun ? { modelRun: true } : {}),
     ...(params.promptMode ? { promptMode: params.promptMode } : {}),
     toolsAllow: params.runtimeToolsAllow ?? [...SUBAGENT_ANNOUNCE_REQUESTER_TOOLS],
-    trustedInternalHandoff: params.trustedInternalHandoff ?? true,
+    ...(params.trustedInternalHandoff === false
+      ? {}
+      : {
+          trustedInternalHandoff: {
+            kind: "subagent-completion" as const,
+            sourceSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
+            sourceSessionId: "subagent-announce-child",
+            targetSessionKey: params.targetSessionKey,
+            targetSessionId: params.targetSessionId,
+            provider: params.provider,
+            model: params.model,
+          },
+        }),
     inputProvenance: {
       kind: "inter_session",
       sourceSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
@@ -66,6 +83,7 @@ function createSubagentAnnounceHandoffOptions(params: {
         type: "task_completion",
         source: "subagent",
         childSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
+        childSessionId: "subagent-announce-child",
         announceType: "subagent task",
         taskLabel: "review",
         status: "ok",
@@ -123,12 +141,21 @@ const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] 
     expectedDisableTools: true,
   },
   {
-    name: "a coding-only parent allowlist",
+    name: "a coding profile with a source-bound message grant",
     sourceReplyDeliveryMode: "message_tool_only",
     disableMessageTool: false,
     inheritedToolAllow: ["read", "exec", "sessions_spawn"],
     operatorTools: { profile: "coding" },
-    expectedDisableTools: true,
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "an operator allowlist with a source-bound message grant",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    operatorTools: { allow: ["read", "exec"] },
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
   },
   {
     name: "an inherited explicit message deny",
@@ -211,7 +238,22 @@ const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] 
 ];
 
 const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
-  ...SUBAGENT_ANNOUNCE_DELIVERY_CASES,
+  ...SUBAGENT_ANNOUNCE_DELIVERY_CASES.map((testCase) => {
+    if (testCase.name === "automatic source replies") {
+      return {
+        ...testCase,
+        expectedDisableTools: false,
+        expectedToolsAllow: SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
+      };
+    }
+    if (!testCase.expectedDisableTools) {
+      return {
+        ...testCase,
+        expectedToolsAllow: testCase.runtimeToolsAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
+      };
+    }
+    return testCase;
+  }),
   {
     name: "a raw model run despite message-tool-only delivery",
     sourceReplyDeliveryMode: "message_tool_only",
@@ -471,6 +513,7 @@ describe("CLI attempt execution", () => {
       "inheritedToolAllow" | "inheritedToolDeny"
     >;
     runId?: string;
+    sessionKey?: string;
     body?: string;
     transcriptBody?: string;
     providerOverride?: string;
@@ -479,12 +522,13 @@ describe("CLI attempt execution", () => {
     fallbackRuntimeState?: RunAgentAttemptParams["fallbackRuntimeState"];
     userTurnTranscriptRecorder?: RunAgentAttemptParams["userTurnTranscriptRecorder"];
     sessionEntry?: Partial<SessionEntry>;
+    additionalSessionEntries?: Record<string, Partial<SessionEntry>>;
     configuredAuthProfileId?: string;
     timeoutMs?: number;
     runTimeoutOverrideMs?: number;
   }) {
     const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
-    const sessionKey = `agent:main:direct:${runId}`;
+    const sessionKey = overrides?.sessionKey ?? `agent:main:direct:${runId}`;
     const sessionEntry: SessionEntry = {
       sessionId: `session-${runId}`,
       updatedAt: Date.now(),
@@ -497,6 +541,15 @@ describe("CLI attempt execution", () => {
           overrides.subagentAnnounceEnvelope,
         )
       : { [sessionKey]: sessionEntry };
+    for (const [additionalSessionKey, additionalEntry] of Object.entries(
+      overrides?.additionalSessionEntries ?? {},
+    )) {
+      sessionStore[additionalSessionKey] = {
+        sessionId: `${additionalSessionKey}-session`,
+        updatedAt: Date.now(),
+        ...additionalEntry,
+      } as SessionEntry;
+    }
     await writeSessionStoreSeed(sessionStore);
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
@@ -508,7 +561,7 @@ describe("CLI attempt execution", () => {
       originalProvider: "openai",
       modelOverride: overrides?.modelOverride ?? "gpt-5.4",
       configuredAuthProfileId: overrides?.configuredAuthProfileId,
-      cfg: overrides?.config ?? ({} as OpenClawConfig),
+      cfg: overrides?.config ?? ({ session: { store: storePath } } as OpenClawConfig),
       sessionEntry,
       sessionId: sessionEntry.sessionId,
       sessionKey,
@@ -556,6 +609,24 @@ describe("CLI attempt execution", () => {
     providerAuthAliasMocks.resolveProviderAuthAliasMap.mockClear();
     providerAuthAliasMocks.resolveProviderIdForAuth.mockClear();
     sessionWriteLockMocks.acquireSessionWriteLock.mockClear();
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolvePluginSetupRegistry: () => ({ cliBackends: [] }) as never,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude", forkArg: "--fork-session" },
+        },
+        {
+          id: "google-gemini-cli",
+          modelProvider: "google",
+          pluginId: "google",
+          config: { command: "gemini" },
+        },
+      ],
+    });
   });
 
   async function writeSessionStoreSeed(sessionStore: Record<string, SessionEntry>): Promise<void> {
@@ -596,9 +667,10 @@ describe("CLI attempt execution", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    cliBackendsTesting.resetDepsForTest();
+    closeOpenClawAgentDatabasesForTest();
     homeEnvSnapshot?.restore();
     homeEnvSnapshot = undefined;
-    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -2848,6 +2920,10 @@ describe("CLI attempt execution", () => {
         runId: "run-cli-announce",
         opts: createSubagentAnnounceHandoffOptions({
           sourceReplyDeliveryMode,
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionEntry.sessionId,
+          provider: "claude-cli",
+          model: "opus",
           disableMessageTool,
           requireExplicitMessageTarget,
           runtimeToolsAllow,
@@ -2895,8 +2971,11 @@ describe("CLI attempt execution", () => {
       expectedDisableTools,
       expectedToolsAllow,
     }) => {
+      const runId = `embedded-announce-${sourceReplyDeliveryMode}-${disableMessageTool}`;
+      const sessionKey = `agent:main:direct:${runId}`;
+      const sessionId = `session-${runId}`;
       const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
-        runId: `embedded-announce-${sourceReplyDeliveryMode}-${disableMessageTool}`,
+        runId,
         body: "A background task finished. Process the completion update now.",
         config: {
           session: { store: storePath },
@@ -2906,6 +2985,10 @@ describe("CLI attempt execution", () => {
         subagentAnnounceEnvelope: { inheritedToolAllow, inheritedToolDeny },
         opts: createSubagentAnnounceHandoffOptions({
           sourceReplyDeliveryMode,
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionId,
+          provider: "openai",
+          model: "gpt-5.4",
           disableMessageTool,
           requireExplicitMessageTarget,
           modelRun,
@@ -2929,6 +3012,97 @@ describe("CLI attempt execution", () => {
       expect(runCliAgentMock).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps trusted CLI completion handoffs tool-free when inherited policy is restricted", async () => {
+    const sessionKey = "agent:main:direct:claude-trusted-announce";
+    const childSessionKey = "agent:openclaw:subagent:child";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cli-trusted-announce",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: sessionEntry,
+      [childSessionKey]: {
+        sessionId: "child-session-id",
+        updatedAt: Date.now(),
+        spawnedBy: sessionKey,
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolDeny: ["exec"],
+      },
+    };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("trusted announce"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "A background task finished. Process the completion update now.",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-trusted-announce",
+      opts: {
+        trustedInternalHandoff: {
+          kind: "subagent-completion",
+          sourceSessionKey: childSessionKey,
+          sourceSessionId: "child-session-id",
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionEntry.sessionId,
+          provider: "claude-cli",
+          model: "opus",
+        },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: childSessionKey,
+          sourceChannel: "internal",
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey,
+            childSessionId: "child-session-id",
+            announceType: "subagent task",
+            taskLabel: "review",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child output",
+            replyInstruction: "Relay this completion.",
+          },
+        ],
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runCliAgentMock, {
+      provider: "claude-cli",
+      disableTools: true,
+      allowEmptyAssistantReplyAsSilent: true,
+    });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
 
   it("stamps CLI prompts with current timestamp context", async () => {
     vi.useFakeTimers();
@@ -3219,6 +3393,225 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.suppressLiveStreamOutput).toBe(true);
+  });
+
+  it("preserves embedded OpenAI-compatible tools for the exact trusted completion", async () => {
+    const runId = "trusted-glm-completion";
+    const childSessionKey = "agent:main:subagent:glm-child";
+    const sessionKey = `agent:main:direct:${runId}`;
+    const sessionId = `session-${runId}`;
+    const trustedInternalHandoff = {
+      kind: "subagent-completion" as const,
+      sourceSessionKey: childSessionKey,
+      sourceSessionId: "glm-child-session",
+      targetSessionKey: sessionKey,
+      targetSessionId: sessionId,
+      provider: "openai",
+      model: "glm-4.5",
+    };
+
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId,
+      modelOverride: "glm-4.5",
+      additionalSessionEntries: {
+        [childSessionKey]: {
+          sessionId: "glm-child-session",
+          spawnedBy: sessionKey,
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+          inheritedToolPolicyVersion: 1,
+        },
+      },
+      opts: {
+        trustedInternalHandoff,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: childSessionKey,
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey,
+            childSessionId: "glm-child-session",
+            announceType: "subagent task",
+            taskLabel: "review",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child output",
+            replyInstruction: "Review and continue.",
+          },
+        ],
+      },
+    });
+
+    expect(embeddedArg.disableTools).toBe(false);
+    expect(embeddedArg.trustedInternalHandoff).toEqual(trustedInternalHandoff);
+  });
+
+  it("preserves embedded tools for a verified nested subagent completion", async () => {
+    const runId = "trusted-nested-glm-completion";
+    const requesterSessionKey = "agent:main:subagent:parent-child";
+    const childSessionKey = "agent:main:subagent:leaf";
+    const requesterSessionId = "parent-child-session";
+    const childSessionId = "leaf-session";
+    const trustedInternalHandoff = {
+      kind: "subagent-completion" as const,
+      sourceSessionKey: childSessionKey,
+      sourceSessionId: childSessionId,
+      targetSessionKey: requesterSessionKey,
+      targetSessionId: requesterSessionId,
+      provider: "openai",
+      model: "glm-4.5",
+    };
+
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId,
+      sessionKey: requesterSessionKey,
+      modelOverride: "glm-4.5",
+      sessionEntry: {
+        sessionId: requesterSessionId,
+        spawnedBy: "agent:main:direct:root",
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolDeny: ["exec"],
+      },
+      additionalSessionEntries: {
+        [childSessionKey]: {
+          sessionId: childSessionId,
+          spawnedBy: requesterSessionKey,
+          spawnDepth: 2,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+          inheritedToolPolicyVersion: 1,
+          inheritedToolDeny: ["exec", "read"],
+        },
+      },
+      opts: {
+        trustedInternalHandoff,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: childSessionKey,
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey,
+            childSessionId,
+            announceType: "subagent task",
+            taskLabel: "review",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child output",
+            replyInstruction: "Review and continue.",
+          },
+        ],
+      },
+    });
+
+    expect(embeddedArg.disableTools).toBe(false);
+    expect(embeddedArg.trustedInternalHandoff).toEqual(trustedInternalHandoff);
+  });
+
+  it("keeps duplicate completion events tool-free despite an otherwise exact capability", async () => {
+    const runId = "duplicate-glm-completion";
+    const childSessionKey = "agent:main:subagent:duplicate-child";
+    const sessionKey = `agent:main:direct:${runId}`;
+    const sessionId = `session-${runId}`;
+    const completionEvent = {
+      type: "task_completion" as const,
+      source: "subagent" as const,
+      childSessionKey,
+      childSessionId: "duplicate-child-session",
+      announceType: "subagent task",
+      taskLabel: "review",
+      status: "ok" as const,
+      statusLabel: "completed",
+      result: "child output",
+      replyInstruction: "Review and continue.",
+    };
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId,
+      modelOverride: "glm-4.5",
+      additionalSessionEntries: {
+        [childSessionKey]: {
+          sessionId: completionEvent.childSessionId,
+          spawnedBy: sessionKey,
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+          inheritedToolPolicyVersion: 1,
+        },
+      },
+      opts: {
+        trustedInternalHandoff: {
+          kind: "subagent-completion",
+          sourceSessionKey: childSessionKey,
+          sourceSessionId: completionEvent.childSessionId,
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionId,
+          provider: "openai",
+          model: "glm-4.5",
+        },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: childSessionKey,
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [completionEvent, completionEvent],
+      },
+    });
+
+    expect(embeddedArg.disableTools).toBe(true);
+    expect(embeddedArg.trustedInternalHandoff).toBeUndefined();
+  });
+
+  it("keeps an exact completion capability tool-free when persisted lineage is missing", async () => {
+    const runId = "missing-lineage-completion";
+    const childSessionKey = "agent:main:subagent:missing";
+    const sessionKey = `agent:main:direct:${runId}`;
+    const sessionId = `session-${runId}`;
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId,
+      modelOverride: "glm-4.5",
+      opts: {
+        trustedInternalHandoff: {
+          kind: "subagent-completion",
+          sourceSessionKey: childSessionKey,
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionId,
+          provider: "openai",
+          model: "glm-4.5",
+        },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: childSessionKey,
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey,
+            announceType: "subagent task",
+            taskLabel: "review",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child output",
+            replyInstruction: "Review and continue.",
+          },
+        ],
+      },
+    });
+
+    expect(embeddedArg.disableTools).toBe(true);
+    expect(embeddedArg.trustedInternalHandoff).toBeUndefined();
   });
 
   it("forwards canonical transcript text without replacing embedded image content", async () => {

@@ -31,9 +31,6 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
     task: "check sqlite persistence",
     cleanup: "keep",
     createdAt: 100,
-    startedAt: 110,
-    endedAt: 250,
-    outcome: { status: "ok", startedAt: 110, endedAt: 250, elapsedMs: 140 },
     expectsCompletionMessage: true,
     execution: {
       status: "terminal",
@@ -97,7 +94,12 @@ describe("subagent registry sqlite store", () => {
         requesterTurnYielded: true,
         retireAfterRequesterTurn: true,
         endedReason: "subagent-error",
-        outcome: { status: "error", error: "restart interrupted run", endedAt: 250 },
+        execution: {
+          status: "terminal",
+          startedAt: 110,
+          endedAt: 250,
+          outcome: { status: "error", error: "restart interrupted run", endedAt: 250 },
+        },
         terminalOwner: "interrupted-recovery",
         completion: { required: true, resultText: null, capturedAt: 250 },
         requesterSettleWake: {
@@ -125,8 +127,7 @@ describe("subagent registry sqlite store", () => {
         requesterTurnRunId: "run-requester",
         requesterTurnYielded: true,
         retireAfterRequesterTurn: true,
-        endedAt: run.endedAt,
-        outcome: run.outcome,
+        execution: run.execution,
         terminalOwner: "interrupted-recovery",
         completion: run.completion,
         delivery: run.delivery,
@@ -187,9 +188,9 @@ describe("subagent registry sqlite store", () => {
       expect(restored?.completion?.resultText).toBe("done");
       expect(restored?.delivery).toMatchObject({ status: "pending", lastError: "retry later" });
       expect(restored?.requesterSettleWake).toEqual(run.requesterSettleWake);
-      expect(restored?.outcome?.status).toBe("ok");
+      expect(restored?.execution.outcome?.status).toBe("ok");
       const sessionListRun = loadSubagentSessionListRunsFromSqlite().get(run.runId);
-      expect(sessionListRun?.outcome?.status).toBe("ok");
+      expect(sessionListRun?.execution.outcome?.status).toBe("ok");
       expect(sessionListRun?.delivery?.status).toBe("pending");
     });
   });
@@ -204,7 +205,12 @@ describe("subagent registry sqlite store", () => {
         runTimeoutSeconds: 7_200,
         endedReason: "subagent-error",
         cleanupCompletedAt: 300,
-        outcome: { status: "error", error: "full payload detail" },
+        execution: {
+          status: "terminal",
+          startedAt: 110,
+          endedAt: 250,
+          outcome: { status: "error", error: "full payload detail" },
+        },
         delivery: {
           status: "suspended",
           suspendedAt: 275,
@@ -221,13 +227,15 @@ describe("subagent registry sqlite store", () => {
         model: "openai/gpt-5.6",
         generation: 3,
         createdAt: 100,
-        startedAt: 110,
+        execution: {
+          startedAt: 110,
+          endedAt: 250,
+          outcome: { status: "error" },
+        },
         sessionStartedAt: 105,
         accumulatedRuntimeMs: 90,
-        endedAt: 250,
         runTimeoutSeconds: 7_200,
         endedReason: "subagent-error",
-        outcome: { status: "error" },
         cleanupCompletedAt: 300,
         delivery: { status: "suspended", suspendedAt: 275 },
       });

@@ -213,6 +213,13 @@ resolved config unchanged, stopping one account settles only that account's
 monitor and drain, and a fresh monitor recovers that account's rows exactly
 once. If any guarantee cannot be proved, omit the flag.
 
+### Runtime lifecycle status
+
+For channel-authored runtime state, `ChannelAccountSnapshot.lifecycle` is the
+successor to `healthState`. Existing plugins may keep publishing `healthState`
+during adoption, and core-derived policy writes remain supported. There is no
+removal date; removal waits for external channel-plugin adoption.
+
 ### Typing indicators
 
 If your channel supports typing indicators outside inbound replies, expose
@@ -533,6 +540,10 @@ surfaces:
 - `openclaw/plugin-sdk/inbound-envelope` and
   `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
+- `createInboundEventDeliveryCorrelation(...)` from
+  `openclaw/plugin-sdk/inbound-event-delivery` when successful outbound sends must
+  retire an active inbound-event marker; create one tracker per channel and
+  keep target matching in the channel plugin
 - `openclaw/plugin-sdk/channel-targets` for target parsing helpers
 - `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
   and typed payload planning

@@ -28,6 +28,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 ## Open in Android Studio
 
+- Run `pnpm install` from the repository root so native Canvas resources can be generated.
 - Open the folder `apps/android`.
 
 ## Wear OS companion

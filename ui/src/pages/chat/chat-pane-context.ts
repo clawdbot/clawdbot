@@ -183,6 +183,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presencePayload = presence ? { presence } : undefined;
     }
     if (sourceChanged) {
+      this.cancelHeaderRename();
       releaseChatMediaResourceSubscriber(state.requestUpdate);
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.

@@ -14,6 +14,7 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -32,7 +33,6 @@ const hoisted = vi.hoisted(() => {
   const startGatewayTailscaleExposure = vi.fn(async () => null);
   const logGatewayStartup = vi.fn();
   const scheduleSubagentOrphanRecovery = vi.fn();
-  const markRestartAbortedMainSessionsFromLocks = vi.fn(async () => {});
   const markStartupOrphanedMainSessionsForRecovery = vi.fn(async () => ({
     marked: 0,
     skipped: 0,
@@ -65,7 +65,7 @@ const hoisted = vi.hoisted(() => {
   const refreshPreparedModelRuntimeSnapshots = vi.fn(
     async (_cfg?: unknown, _options?: unknown) => {},
   );
-  const ensureRuntimePluginsLoaded = vi.fn();
+  const loadAgentRuntimePluginRegistryHandle = vi.fn();
   const ensureContextWindowCacheLoaded = vi.fn(async () => {});
   const scheduleGatewayHandlerPrewarm = vi.fn(() => ({ stop: vi.fn() }));
   const clearCurrentProviderAuthState = vi.fn();
@@ -92,7 +92,6 @@ const hoisted = vi.hoisted(() => {
     startGatewayTailscaleExposure,
     logGatewayStartup,
     scheduleSubagentOrphanRecovery,
-    markRestartAbortedMainSessionsFromLocks,
     markStartupOrphanedMainSessionsForRecovery,
     scheduleRestartAbortedMainSessionRecovery,
     scheduleRestartSentinelWake,
@@ -106,7 +105,7 @@ const hoisted = vi.hoisted(() => {
     getModelRefStatus,
     prepareModelRuntimeSnapshot,
     refreshPreparedModelRuntimeSnapshots,
-    ensureRuntimePluginsLoaded,
+    loadAgentRuntimePluginRegistryHandle,
     ensureContextWindowCacheLoaded,
     scheduleGatewayHandlerPrewarm,
     clearCurrentProviderAuthState,
@@ -121,17 +120,15 @@ vi.mock("../agents/session-dirs.js", () => ({
   resolveAgentSessionDirs: vi.fn(async () => []),
 }));
 
-vi.mock("../agents/session-write-lock.js", () => ({
-  cleanStaleLockFiles: vi.fn(async () => {}),
-}));
-
 vi.mock("../agents/subagent-registry.js", () => ({
   scheduleSubagentOrphanRecovery: hoisted.scheduleSubagentOrphanRecovery,
 }));
 
-vi.mock("../agents/main-session-restart-recovery.js", () => ({
-  markRestartAbortedMainSessionsFromLocks: hoisted.markRestartAbortedMainSessionsFromLocks,
+vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
   markStartupOrphanedMainSessionsForRecovery: hoisted.markStartupOrphanedMainSessionsForRecovery,
+}));
+
+vi.mock("../agents/main-session-restart-recovery.js", () => ({
   scheduleRestartAbortedMainSessionRecovery: hoisted.scheduleRestartAbortedMainSessionRecovery,
 }));
 
@@ -215,7 +212,7 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: hoisted.ensureRuntimePluginsLoaded,
+  loadAgentRuntimePluginRegistryHandle: hoisted.loadAgentRuntimePluginRegistryHandle,
 }));
 
 vi.mock("../agents/context.js", () => ({
@@ -340,7 +337,6 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.startGatewayTailscaleExposure.mockClear();
     hoisted.logGatewayStartup.mockClear();
     hoisted.scheduleSubagentOrphanRecovery.mockClear();
-    hoisted.markRestartAbortedMainSessionsFromLocks.mockClear();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockReset();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockResolvedValue({
       marked: 0,
@@ -370,7 +366,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.prepareModelRuntimeSnapshot.mockResolvedValue({});
     hoisted.refreshPreparedModelRuntimeSnapshots.mockReset();
     hoisted.refreshPreparedModelRuntimeSnapshots.mockResolvedValue(undefined);
-    hoisted.ensureRuntimePluginsLoaded.mockReset();
+    hoisted.loadAgentRuntimePluginRegistryHandle.mockReset();
     hoisted.ensureContextWindowCacheLoaded.mockReset();
     hoisted.ensureContextWindowCacheLoaded.mockResolvedValue(undefined);
     hoisted.scheduleGatewayHandlerPrewarm.mockClear();
@@ -891,7 +887,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("loads deferred startup plugins before channel sidecars", async () => {
+  it("loads startup plugins after bind and before channel sidecars", async () => {
     const events: string[] = [];
     const trace = createStartupTraceRecorder();
     const loadedPluginRegistry = {
@@ -956,7 +952,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
-  it("waits for deferred startup plugin attachment before channel sidecars", async () => {
+  it("waits for startup plugin attachment before channel sidecars", async () => {
     const events: string[] = [];
     let finishAttachment: (() => void) | undefined;
     const attachmentFinished = new Promise<void>((resolve) => {
@@ -1030,103 +1026,6 @@ describe("startGatewayPostAttachRuntime", () => {
     ).toEqual({ mode: "off" });
   });
 
-  it("cleans startup session locks with bounded concurrency", async () => {
-    let active = 0;
-    let maxActive = 0;
-    const cleanedLock = {
-      lockPath: "/tmp/openclaw-state/agents/main/sessions/a.jsonl.lock",
-      pid: null,
-      pidAlive: false,
-      createdAt: null,
-      ageMs: null,
-      stale: true,
-      staleReasons: ["missing-pid"],
-      removed: true,
-    };
-    const releaseQueue: Array<() => void> = [];
-    const cleanStaleLockFiles = vi.fn(
-      async ({ sessionsDir }: { sessionsDir: string }) =>
-        await new Promise<{ locks: []; cleaned: (typeof cleanedLock)[] }>((resolve) => {
-          active += 1;
-          maxActive = Math.max(maxActive, active);
-          releaseQueue.push(() => {
-            active -= 1;
-            resolve({
-              locks: [],
-              cleaned: sessionsDir.endsWith("/b") ? [cleanedLock] : [],
-            });
-          });
-        }),
-    );
-    const markRestartAbortedMainSessionsFromLocks = vi.fn(async () => {});
-    const cleanupPromise = testing.cleanupStaleSessionLocks({
-      sessionDirs: ["/sessions/a", "/sessions/b", "/sessions/c", "/sessions/d"],
-      cfg: {} as never,
-      log: { warn: vi.fn() },
-      isStopped: () => false,
-      cleanStaleLockFiles: cleanStaleLockFiles as never,
-      markRestartAbortedMainSessionsFromLocks: markRestartAbortedMainSessionsFromLocks as never,
-      concurrency: 2,
-    });
-
-    await waitForGatewayTestState(() => {
-      expect(cleanStaleLockFiles).toHaveBeenCalledTimes(2);
-    });
-    expect(maxActive).toBe(2);
-
-    releaseQueue.shift()?.();
-    releaseQueue.shift()?.();
-    await waitForGatewayTestState(() => {
-      expect(cleanStaleLockFiles).toHaveBeenCalledTimes(4);
-    });
-    releaseQueue.shift()?.();
-    releaseQueue.shift()?.();
-    await cleanupPromise;
-
-    expect(cleanStaleLockFiles).toHaveBeenCalledTimes(4);
-    expect(maxActive).toBe(2);
-    expect(markRestartAbortedMainSessionsFromLocks).toHaveBeenCalledWith({
-      sessionsDir: "/sessions/b",
-      cleanedLocks: [cleanedLock],
-    });
-  });
-
-  it("marks cleaned startup session locks even when cleanup is stopped after removal", async () => {
-    let stopped = false;
-    const cleanedLock = {
-      lockPath: "/tmp/openclaw-state/agents/main/sessions/a.jsonl.lock",
-      pid: null,
-      pidAlive: false,
-      createdAt: null,
-      ageMs: null,
-      stale: true,
-      staleReasons: ["missing-pid"],
-      removed: true,
-    };
-    const cleanStaleLockFiles = vi.fn(async () => {
-      stopped = true;
-      return {
-        locks: [],
-        cleaned: [cleanedLock],
-      };
-    });
-    const markRestartAbortedMainSessionsFromLocks = vi.fn(async () => {});
-
-    await testing.cleanupStaleSessionLocks({
-      sessionDirs: ["/sessions/a"],
-      cfg: {} as never,
-      log: { warn: vi.fn() },
-      isStopped: () => stopped,
-      cleanStaleLockFiles: cleanStaleLockFiles as never,
-      markRestartAbortedMainSessionsFromLocks: markRestartAbortedMainSessionsFromLocks as never,
-    });
-
-    expect(markRestartAbortedMainSessionsFromLocks).toHaveBeenCalledWith({
-      sessionsDir: "/sessions/a",
-      cleanedLocks: [cleanedLock],
-    });
-  });
-
   it("waits for sidecars by default before returning", async () => {
     let resumeSidecars: (() => void) | undefined;
     const sidecarsReady = new Promise<{ pluginServices: null; postReadySidecars: [] }>(
@@ -1185,7 +1084,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersToNextTimerAsync();
       await vi.advanceTimersToNextTimerAsync();
       expect(postReadyRequestTurn).toHaveBeenCalledTimes(1);
-      expect(onPostReadySidecars.mock.calls[0]?.[0]).toHaveLength(2);
+      expect(onPostReadySidecars.mock.calls[0]?.[0]).toHaveLength(1);
       expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(4);
       await vi.dynamicImportSettled();
       await waitForGatewayTestState(() => {
@@ -1258,17 +1157,27 @@ describe("startGatewayPostAttachRuntime", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    expect(hoisted.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+    expect(hoisted.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
 
+    const admission = tryBeginGatewayRootWorkAdmission();
+    if (!admission) {
+      throw new Error("Expected request work admission");
+    }
     releaseGatewayReady();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(hoisted.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+
+    admission.release();
     await waitForGatewayTestState(() => {
-      expect(hoisted.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      expect(hoisted.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
         config: currentConfig,
         workspaceDir: "/tmp/openclaw-workspace",
         allowGatewaySubagentBinding: true,
       });
     });
-    expect(hoisted.ensureRuntimePluginsLoaded).not.toHaveBeenCalledWith(
+    expect(hoisted.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalledWith(
       expect.objectContaining({ config: startupConfig }),
     );
   });
@@ -1280,6 +1189,10 @@ describe("startGatewayPostAttachRuntime", () => {
   it("defers context-window cache prewarm to a post-ready sidecar", async () => {
     vi.useFakeTimers();
     const cfg = { agents: { defaults: { model: "openai/gpt-5.5" } } } as never;
+    const admission = tryBeginGatewayRootWorkAdmission();
+    if (!admission) {
+      throw new Error("Expected request work admission");
+    }
     const sidecar = scheduleContextCachePrewarm({
       cfgAtStart: cfg,
       log: { warn: vi.fn() },
@@ -1292,11 +1205,18 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersByTimeAsync(4_999);
       expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalledWith(cfg);
       await vi.advanceTimersByTimeAsync(1);
+      expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalledWith(cfg);
+
+      admission.release();
+      await vi.advanceTimersByTimeAsync(249);
+      expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalledWith(cfg);
+      await vi.advanceTimersByTimeAsync(1);
       await vi.dynamicImportSettled();
       await waitForGatewayTestState(() => {
         expect(hoisted.ensureContextWindowCacheLoaded).toHaveBeenCalledWith(cfg);
       });
     } finally {
+      admission.release();
       await sidecar.stop();
     }
   });
@@ -1355,7 +1275,7 @@ describe("startGatewayPostAttachRuntime", () => {
       const lifetimeSidecars = onGatewayLifetimeSidecars.mock.calls[0]?.[0] as
         | { stop: () => void }[]
         | undefined;
-      expect(gmailSidecars).toHaveLength(3);
+      expect(gmailSidecars).toHaveLength(2);
       expect(lifetimeSidecars).toHaveLength(4);
 
       for (const sidecar of gmailSidecars ?? []) {
@@ -1417,7 +1337,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const lifetimeSidecars = onGatewayLifetimeSidecars.mock.calls[0]?.[0] as
       | Array<{ stop: () => Promise<void> | void }>
       | undefined;
-    expect(gmailSidecars).toHaveLength(3);
+    expect(gmailSidecars).toHaveLength(2);
     expect(lifetimeSidecars).toHaveLength(4);
 
     await waitForGatewayTestState(() => {
@@ -1917,9 +1837,12 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
-  it("marks startup main-session orphans before channel startup", async () => {
+  it("marks startup main-session orphans before model runtime and channel startup", async () => {
     const events: string[] = [];
     let releaseMarking: (() => void) | undefined;
+    const prewarmPrimaryModel = vi.fn(async () => {
+      events.push("model-runtime");
+    });
     const startChannels = vi.fn(async () => {
       events.push("channels");
     });
@@ -1940,6 +1863,7 @@ describe("startGatewayPostAttachRuntime", () => {
       defaultWorkspaceDir: "/tmp/openclaw-workspace",
       deps: {} as never,
       startChannels,
+      prewarmPrimaryModel,
       log: { warn: vi.fn() },
       logHooks: {
         info: vi.fn(),
@@ -1963,9 +1887,52 @@ describe("startGatewayPostAttachRuntime", () => {
     releaseMarking();
     await sidecars;
 
-    expect(events).toEqual(["main-session-mark:start", "main-session-mark:done", "channels"]);
+    expect(events).toEqual([
+      "main-session-mark:start",
+      "main-session-mark:done",
+      "model-runtime",
+      "channels",
+    ]);
+    expect(prewarmPrimaryModel).toHaveBeenCalledTimes(1);
     expect(startChannels).toHaveBeenCalledTimes(1);
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).not.toHaveBeenCalled();
+  });
+
+  it("marks startup main-session orphans before propagating model runtime failure", async () => {
+    const modelRuntimeError = new Error("model runtime unavailable");
+    const startChannels = vi.fn(async () => {});
+    const prewarmPrimaryModel = vi.fn(async () => {
+      throw modelRuntimeError;
+    });
+    hoisted.markStartupOrphanedMainSessionsForRecovery.mockResolvedValueOnce({
+      marked: 1,
+      skipped: 0,
+    });
+
+    await expect(
+      startGatewaySidecars({
+        cfg: { hooks: { internal: { enabled: false } } } as never,
+        pluginRegistry: createPostAttachParams().pluginRegistry,
+        defaultWorkspaceDir: "/tmp/openclaw-workspace",
+        deps: {} as never,
+        startChannels,
+        prewarmPrimaryModel,
+        log: { warn: vi.fn() },
+        logHooks: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        logChannels: {
+          info: vi.fn(),
+          error: vi.fn(),
+        },
+      }),
+    ).rejects.toBe(modelRuntimeError);
+
+    expect(hoisted.markStartupOrphanedMainSessionsForRecovery).toHaveBeenCalledTimes(1);
+    expect(prewarmPrimaryModel).toHaveBeenCalledTimes(1);
+    expect(startChannels).not.toHaveBeenCalled();
   });
 
   it("logs startup main-session marker failures and still starts channels", async () => {
@@ -2014,7 +1981,7 @@ describe("startGatewayPostAttachRuntime", () => {
       name: "sidecars.ready",
       metrics: [
         ["loadedPluginCount", 2],
-        ["postReadySidecarCount", 5],
+        ["postReadySidecarCount", 4],
       ],
     });
   });
@@ -2075,7 +2042,7 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
-    expect(result.postReadySidecars).toHaveLength(3);
+    expect(result.postReadySidecars).toHaveLength(2);
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
     onPostReadySidecars(result.postReadySidecars);
     expect(onPostReadySidecars).toHaveBeenCalledWith(result.postReadySidecars);
@@ -2120,7 +2087,7 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
-    expect(result.postReadySidecars).toHaveLength(3);
+    expect(result.postReadySidecars).toHaveLength(2);
     await waitForGatewayTestState(() => {
       expect(log.warn).toHaveBeenCalledWith(
         "sidecars.gmail-watch failed after gateway ready: Error: boom",
@@ -2149,7 +2116,7 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
-    expect(result.postReadySidecars).toHaveLength(3);
+    expect(result.postReadySidecars).toHaveLength(2);
     for (const sidecar of result.postReadySidecars) {
       await sidecar.stop();
     }
@@ -2280,7 +2247,7 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
-    expect(result.postReadySidecars).toHaveLength(3);
+    expect(result.postReadySidecars).toHaveLength(2);
     expect(hoisted.loadModelCatalog).not.toHaveBeenCalled();
 
     await waitForGatewayTestState(() => {
@@ -2452,7 +2419,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startWorkerEnvironmentRuntime).not.toHaveBeenCalled();
   });
 
-  it("loads lazy startup plugins before returning with deferred sidecars", async () => {
+  it("loads startup plugins before returning with deferred sidecars", async () => {
     const pluginRegistry = {
       plugins: [{ id: "lazy", status: "loaded" }],
       typedHooks: [],
@@ -2571,7 +2538,7 @@ describe("startGatewayPostAttachRuntime", () => {
       waitForPostReadyWork: () => postReadyWork,
     });
 
-    expect(result.postReadySidecars).toHaveLength(3);
+    expect(result.postReadySidecars).toHaveLength(2);
     testing.stopPostReadySidecarsAfterCloseStarted({
       postReadySidecars: result.postReadySidecars,
       closeStarted: true,

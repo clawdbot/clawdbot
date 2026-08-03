@@ -23,7 +23,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   pluginRuntimeOwnerId?: string;
   pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
-  delegatedToolPolicyHandoff?: boolean;
+  delegatedToolPolicyHandoffId?: string;
   sessionCreation?: TrustedSessionCreation;
   scopes?: string[];
 }): NonNullable<GatewayRequestOptions["client"]> {
@@ -64,8 +64,8 @@ export function createSyntheticPluginRuntimeClient(params?: {
       ...(params?.runtimePluginToolGrant
         ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
         : {}),
-      ...(params?.delegatedToolPolicyHandoff === true
-        ? { delegatedToolPolicyHandoff: true as const }
+      ...(params?.delegatedToolPolicyHandoffId
+        ? { delegatedToolPolicyHandoffId: params.delegatedToolPolicyHandoffId }
         : {}),
     },
   };

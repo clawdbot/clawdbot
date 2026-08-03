@@ -18,6 +18,7 @@ const gatewayMocks = vi.hoisted(() => ({
     | undefined,
   onMessageError: undefined as ((error: Error) => void) | undefined,
   onFatalError: undefined as ((error: Error) => void) | undefined,
+  onRoomDirectoryChanged: undefined as (() => void) | undefined,
   resolveAgentIdentity: vi.fn(),
   resolveAgentRoute: vi.fn(),
   startBuzzBus: vi.fn(),
@@ -63,6 +64,7 @@ describe("Buzz gateway lifecycle", () => {
     gatewayMocks.onMessage = undefined;
     gatewayMocks.onMessageError = undefined;
     gatewayMocks.onFatalError = undefined;
+    gatewayMocks.onRoomDirectoryChanged = undefined;
     gatewayMocks.busSendText.mockResolvedValue("event-id");
     gatewayMocks.busSendTyping.mockResolvedValue(undefined);
     gatewayMocks.sendBuzzTextOneShot.mockResolvedValue("standalone-event-id");
@@ -91,13 +93,48 @@ describe("Buzz gateway lifecycle", () => {
         ) => Promise<void>;
         onMessageError?: (error: Error) => void;
         onFatalError?: (error: Error) => void;
+        onRoomDirectoryChanged?: () => void;
       }): Promise<BuzzBus> => {
         gatewayMocks.onMessage = options.onMessage;
         gatewayMocks.onMessageError = options.onMessageError;
         gatewayMocks.onFatalError = options.onFatalError;
+        gatewayMocks.onRoomDirectoryChanged = options.onRoomDirectoryChanged;
         return createMockBus();
       },
     );
+  });
+
+  it("invalidates cached room targets after initial discovery and newer room metadata", async () => {
+    const abortController = new AbortController();
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.com",
+          privateKey: PRIVATE_KEY,
+          groups: { [CHANNEL_ID]: {} },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveBuzzAccount({ cfg });
+    const invalidateDirectoryCache = vi.fn();
+    const lifecycle = startBuzzGatewayAccount({
+      cfg,
+      accountId: account.accountId,
+      account,
+      runtime: {},
+      abortSignal: abortController.signal,
+      getStatus: vi.fn(),
+      setStatus: vi.fn(),
+      invalidateDirectoryCache,
+    } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>);
+
+    await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+    expect(invalidateDirectoryCache).toHaveBeenCalledOnce();
+    gatewayMocks.onRoomDirectoryChanged?.();
+    expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
+
+    abortController.abort();
+    await expect(lifecycle).resolves.toBeUndefined();
   });
 
   it("restarts the account lifecycle when the bus reports a failure", async () => {
@@ -128,6 +165,16 @@ describe("Buzz gateway lifecycle", () => {
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
     expect(gatewayMocks.startBuzzBus.mock.calls[0]?.[0].profileName).toBe("Molt");
+    expect(setStatus).toHaveBeenCalledWith({
+      accountId: account.accountId,
+      running: true,
+      lifecycle: "ready",
+      configured: true,
+      enabled: account.enabled,
+      baseUrl: account.relayUrl,
+      publicKey: BOT_PUBLIC_KEY,
+      lastError: null,
+    });
     gatewayMocks.onFatalError?.(new Error("relay failed"));
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
@@ -137,6 +184,7 @@ describe("Buzz gateway lifecycle", () => {
     expect(setStatus).toHaveBeenCalledWith({
       accountId: account.accountId,
       running: false,
+      lifecycle: "recovering",
       lastError: "relay failed",
     });
 
@@ -389,6 +437,7 @@ describe("Buzz gateway lifecycle", () => {
       },
     } as OpenClawConfig;
     const account = resolveBuzzAccount({ cfg });
+    const invalidateDirectoryCache = vi.fn();
     const ctx = {
       cfg,
       accountId: account.accountId,
@@ -398,6 +447,7 @@ describe("Buzz gateway lifecycle", () => {
       log: { info: vi.fn(), error: vi.fn() },
       getStatus: vi.fn(),
       setStatus: vi.fn(),
+      invalidateDirectoryCache,
     } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
     const lifecycle = startBuzzGatewayAccount(ctx);
 
@@ -422,6 +472,7 @@ describe("Buzz gateway lifecycle", () => {
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
       timeout: 3_000,
     });
+    expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
     const secondSince = gatewayMocks.startBuzzBus.mock.calls[1]?.[0].since as number;
     expect(secondSince).toBeGreaterThanOrEqual(reconnectStartedAt - 24 * 60 * 60);
     expect(secondSince).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) - 24 * 60 * 60);

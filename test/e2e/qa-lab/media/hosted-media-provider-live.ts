@@ -406,7 +406,7 @@ async function selectProviders(params: {
   const candidates = explicit
     ? params.suite.providers
     : (params.suite.defaultProviders ?? params.suite.providers);
-  let providers = candidates.filter((provider) => (explicit ? explicit.has(provider) : true));
+  const providers = candidates.filter((provider) => (explicit ? explicit.has(provider) : true));
   if (!params.requireAuth) {
     return providers;
   }

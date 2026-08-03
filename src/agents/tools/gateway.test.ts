@@ -680,6 +680,7 @@ describe("gateway tool defaults", () => {
       {
         name: "GatewayClientRequestError",
         gatewayCode: "INVALID_REQUEST",
+        details: { nodeCommandDispatched: false },
       },
     );
     mocks.callGateway.mockRejectedValueOnce(schemaError).mockResolvedValueOnce({ ok: true });
@@ -747,6 +748,39 @@ describe("gateway tool defaults", () => {
           ),
       ),
     ).rejects.toBe(dispatchedError);
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a node invoke schema rejection without pre-dispatch provenance", async () => {
+    const ambiguousError = Object.assign(
+      new Error("invalid node.invoke params: at root: unexpected property 'turnSourceChannel'"),
+      {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      },
+    );
+    mocks.callGateway.mockRejectedValueOnce(ambiguousError);
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "chat:123",
+        },
+        async () =>
+          await callGatewayTool(
+            "node.invoke",
+            {},
+            {
+              nodeId: "node-1",
+              command: "device.info",
+              idempotencyKey: "invoke-ambiguous",
+            },
+          ),
+      ),
+    ).rejects.toBe(ambiguousError);
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
   });
 

@@ -9,6 +9,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
@@ -121,19 +122,34 @@ async function downloadTrackFromUrl(params: {
     },
   });
   try {
+    try {
+      assertProviderBinaryResponseContent(
+        result.response,
+        "MiniMax generated music download",
+        "audio",
+      );
+    } catch (error) {
+      // Release the unread response before its guarded dispatcher is closed.
+      await result.response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
     const mimeType =
       normalizeOptionalString(result.response.headers.get("content-type")) ?? "audio/mpeg";
     const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
+    const buffer = await readResponseWithLimit(result.response, params.maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `MiniMax generated music download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
+      onOverflow: ({ maxBytes }) =>
+        new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`),
+    });
+    if (buffer.byteLength === 0) {
+      throw new Error("MiniMax generated music download: malformed audio response");
+    }
     return {
-      buffer: await readResponseWithLimit(result.response, params.maxBytes, {
-        timeoutMs,
-        onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-          new Error(
-            `MiniMax generated music download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-          ),
-        onOverflow: ({ maxBytes }) =>
-          new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`),
-      }),
+      buffer,
       mimeType,
       fileName: `track-1.${ext}`,
     };

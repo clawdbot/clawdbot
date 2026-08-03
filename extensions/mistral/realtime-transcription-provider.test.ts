@@ -378,7 +378,11 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       { type: "transcription.segment", text: "late segment", start: 0, end: 1 },
       { type: "transcription.done", text: "late done" },
     ]);
-    const onError = vi.fn();
+    let resolveError: (() => void) | undefined;
+    const errorReceived = new Promise<void>((resolve) => {
+      resolveError = resolve;
+    });
+    const onError = vi.fn(() => resolveError?.());
     const onTranscript = vi.fn();
     let lastPartialLength = 0;
     let partialCalls = 0;
@@ -393,6 +397,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
 
     await session.connect();
+    await errorReceived;
     await vi.waitFor(() => {
       expect(onError).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({

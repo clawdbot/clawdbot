@@ -59,12 +59,13 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   const run = targetResolution.entry;
   const { entry: sessionEntry } = loadSubagentSessionEntry(params, run.childSessionKey);
   const runtime =
-    run.startedAt && Number.isFinite(run.startedAt)
-      ? (formatDurationCompact((run.endedAt ?? Date.now()) - run.startedAt) ?? "n/a")
+    run.execution.startedAt && Number.isFinite(run.execution.startedAt)
+      ? (formatDurationCompact((run.execution.endedAt ?? Date.now()) - run.execution.startedAt) ??
+        "n/a")
       : "n/a";
-  const outcomeError = sanitizeTaskStatusText(run.outcome?.error, { errorContext: true });
-  const outcome = run.outcome
-    ? `${run.outcome.status}${outcomeError ? ` (${outcomeError})` : ""}`
+  const outcomeError = sanitizeTaskStatusText(run.execution.outcome?.error, { errorContext: true });
+  const outcome = run.execution.outcome
+    ? `${run.execution.outcome.status}${outcomeError ? ` (${outcomeError})` : ""}`
     : "n/a";
   const linkedTask = findTaskByRunIdForOwner({
     runId: run.runId,
@@ -95,8 +96,8 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
     `Runtime: ${runtime}`,
     `Created: ${formatTimestampWithAge(run.createdAt)}`,
-    `Started: ${formatTimestampWithAge(run.startedAt)}`,
-    `Ended: ${formatTimestampWithAge(run.endedAt)}`,
+    `Started: ${formatTimestampWithAge(run.execution.startedAt)}`,
+    `Ended: ${formatTimestampWithAge(run.execution.endedAt)}`,
     `Cleanup: ${run.cleanup}`,
     run.archiveAtMs ? `Archive: ${formatTimestampWithAge(run.archiveAtMs)}` : undefined,
     run.cleanupHandled ? "Cleanup handled: yes" : undefined,

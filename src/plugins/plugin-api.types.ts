@@ -1,7 +1,6 @@
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ContextEngineFactory } from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
@@ -53,7 +52,6 @@ import type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import type { PluginLogger } from "./logger-types.js";
-import type { MemoryCorpusSupplement } from "./memory-state.js";
 import type {
   MigrationProviderPlugin,
   PluginConfigMigration,
@@ -77,6 +75,14 @@ import type {
 } from "./plugin-registration.types.js";
 import type { UnifiedModelCatalogProviderPlugin } from "./provider-catalog.types.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
+import type {
+  ContextEngineFactory,
+  MemoryCorpusSupplement,
+  MemoryEmbeddingProviderAdapter,
+  MemoryPluginCapability,
+  MemoryPromptSectionBuilder,
+  MemoryPromptSectionParams,
+} from "./registry-contribution-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
@@ -426,18 +432,12 @@ export type OpenClawPluginApi = {
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (runtime: DetachedTaskLifecycleRuntime) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
-  registerMemoryCapability: (
-    capability: import("./memory-state.js").MemoryPluginCapability,
-  ) => void;
+  registerMemoryCapability: (capability: MemoryPluginCapability) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */
-  registerMemoryPromptSupplement: (
-    builder: import("./memory-state.js").MemoryPromptSectionBuilder,
-  ) => void;
+  registerMemoryPromptSupplement: (builder: MemoryPromptSectionBuilder) => void;
   /** Register an async memory prompt preparation step (non-exclusive). */
   registerMemoryPromptPreparation: (
-    prepare: (
-      params: import("./memory-state.js").MemoryPromptSectionParams,
-    ) => Promise<readonly string[]>,
+    prepare: (params: MemoryPromptSectionParams) => Promise<readonly string[]>,
   ) => void;
   /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
   registerMemoryCorpusSupplement: (supplement: MemoryCorpusSupplement) => void;
@@ -447,9 +447,7 @@ export type OpenClawPluginApi = {
    * and `contracts.embeddingProviders`. This memory-specific seam is retained
    * while existing memory providers migrate.
    */
-  registerMemoryEmbeddingProvider: (
-    adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
-  ) => void;
+  registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

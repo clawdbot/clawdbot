@@ -10,9 +10,11 @@ import {
   convertPcmToMulaw8k,
   mulawToPcm,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  RealtimeVoiceSessionLifecycle,
   resamplePcm,
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeCreateRequest,
+  type RealtimeVoiceSessionConnection,
   type RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import WebSocket, { type RawData } from "ws";
@@ -31,15 +33,9 @@ import {
   type OpenAIQuicksilverInboundEvent,
   type OpenAIQuicksilverRequestIds,
 } from "./realtime-quicksilver-wire.js";
-import {
-  OpenAIRealtimeVoiceLifecycle,
-  type OpenAIRealtimeVoiceConnection,
-} from "./realtime-voice-lifecycle.js";
 
 const OPENAI_QUICKSILVER_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const OPENAI_QUICKSILVER_READY_TIMEOUT_MS = 15_000;
-const OPENAI_QUICKSILVER_PENDING_AUDIO_CHUNKS = 320;
-const OPENAI_QUICKSILVER_PENDING_AUDIO_BYTES = 1024 * 1024;
 const OPENAI_QUICKSILVER_SAMPLE_RATE = 24_000;
 const WEBSOCKET_OPEN = 1;
 
@@ -86,11 +82,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   readonly handlesInputAudioBargeIn = false;
 
   private socket: OpenAIQuicksilverSocket | undefined;
-  private connection: OpenAIRealtimeVoiceConnection | undefined;
-  private connectPromise: Promise<void> | undefined;
-  private readonly lifecycle = new OpenAIRealtimeVoiceLifecycle();
-  private pendingAudio: Buffer[] = [];
-  private pendingAudioBytes = 0;
+  private readonly lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI");
   private activeDelegations = new Set<string>();
   private readonly flowId = randomUUID();
   private readonly requestIds: OpenAIQuicksilverRequestIds = {
@@ -102,26 +94,10 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   constructor(private readonly config: OpenAIQuicksilverVoiceBridgeConfig) {}
 
   async connect(): Promise<void> {
-    if (this.lifecycle.isReady()) {
-      return;
-    }
-    if (this.connectPromise) {
-      return this.connectPromise;
-    }
-    const connection = this.lifecycle.connect();
-    this.connection = connection;
-    const connectPromise = this.connectConnection(connection);
-    this.connectPromise = connectPromise;
-    try {
-      await connectPromise;
-    } finally {
-      if (this.connectPromise === connectPromise) {
-        this.connectPromise = undefined;
-      }
-    }
+    await this.lifecycle.connect((connection) => this.connectConnection(connection));
   }
 
-  private async connectConnection(connection: OpenAIRealtimeVoiceConnection): Promise<void> {
+  private async connectConnection(connection: RealtimeVoiceSessionConnection): Promise<void> {
     let connected: Awaited<ReturnType<typeof connectOpenAIQuicksilverSideband>>;
     try {
       const auth = await this.waitForConnection(this.config.resolveAuth(), connection);
@@ -316,7 +292,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     if (!this.lifecycle.isReady() || this.socket?.readyState !== WEBSOCKET_OPEN) {
-      this.enqueuePendingAudio(audio);
+      this.lifecycle.enqueuePendingAudio(audio);
       return;
     }
     this.sendAudioNow(audio);
@@ -360,7 +336,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   acknowledgeMark(_markName?: string): void {}
 
   close(): void {
-    const connection = this.connection;
+    const connection = this.lifecycle.currentConnection();
     if (!this.lifecycle.cancel()) {
       return;
     }
@@ -397,7 +373,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   private async waitForConnection<T>(
     promise: Promise<T>,
-    connection: OpenAIRealtimeVoiceConnection,
+    connection: RealtimeVoiceSessionConnection,
   ): Promise<T | undefined> {
     if (connection.signal.aborted) {
       return undefined;
@@ -424,7 +400,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   private handleEvent(
     event: OpenAIQuicksilverInboundEvent,
-    connection: OpenAIRealtimeVoiceConnection,
+    connection: RealtimeVoiceSessionConnection,
     settleReady: () => void,
     failStartup: (error: Error, reason: string) => void,
   ): void {
@@ -433,9 +409,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     }
     if (event.kind === "session-started") {
       if (this.lifecycle.ready(connection)) {
-        const pendingAudio = this.pendingAudio.splice(0);
-        this.pendingAudioBytes = 0;
-        for (const audio of pendingAudio) {
+        for (const audio of this.lifecycle.drainPendingAudio()) {
           this.sendAudioNow(audio);
         }
         this.config.onReady?.();
@@ -541,7 +515,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private fail(
-    connection: OpenAIRealtimeVoiceConnection,
+    connection: RealtimeVoiceSessionConnection,
     error: Error,
     reason = "bridge error",
   ): boolean {
@@ -553,7 +527,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     return true;
   }
 
-  private failLifecycle(connection: OpenAIRealtimeVoiceConnection): boolean {
+  private failLifecycle(connection: RealtimeVoiceSessionConnection): boolean {
     if (!this.lifecycle.failure(connection)) {
       return false;
     }
@@ -561,20 +535,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     return true;
   }
 
-  private enqueuePendingAudio(audio: Buffer): void {
-    if (
-      this.pendingAudio.length >= OPENAI_QUICKSILVER_PENDING_AUDIO_CHUNKS ||
-      this.pendingAudioBytes + audio.byteLength > OPENAI_QUICKSILVER_PENDING_AUDIO_BYTES
-    ) {
-      return;
-    }
-    this.pendingAudio.push(audio);
-    this.pendingAudioBytes += audio.byteLength;
-  }
-
   private resetTerminalState(): void {
-    this.pendingAudio = [];
-    this.pendingAudioBytes = 0;
     this.activeDelegations.clear();
   }
 
@@ -587,7 +548,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private notifyClose(
-    connection: OpenAIRealtimeVoiceConnection,
+    connection: RealtimeVoiceSessionConnection,
     reason: "completed" | "error",
   ): void {
     const outcome = this.lifecycle.close(connection, reason);

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
@@ -98,6 +99,133 @@ describe("plugins cli list", () => {
 
     expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ config: {}, effectiveOnly: true });
     expect(runtimeLogs).toContain(cleanDoctorMessage);
+  });
+
+  it("emits one sanitized JSON doctor report without human decoration", async () => {
+    const homeDir = "/tmp/openclaw-plugin-doctor-home";
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [
+        createPluginRecord({
+          id: "broken",
+          origin: "config",
+          source: `${homeDir}/plugins/broken/index.ts`,
+          status: "error",
+          error: `failed to load ${homeDir}/plugins/broken/runtime.ts`,
+        }),
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "broken",
+          source: `${homeDir}/plugins/shadowed/index.ts`,
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; " +
+            `global plugin will be overridden by config plugin (${homeDir}/plugins/broken/index.ts)`,
+        },
+        {
+          level: "warn",
+          message: `failed to inspect ${homeDir}/plugins/unreadable`,
+        },
+      ],
+    });
+
+    await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
+      await runPluginsCommand(["plugins", "doctor", "--json"]);
+    });
+
+    expect(runtimeLogs).toHaveLength(1);
+    expect(runtimeErrors).toEqual([]);
+    expect(runtimeLogs[0]).not.toContain(homeDir);
+    expect(runtimeLogs[0]).not.toContain("Plugin errors:");
+    expect(runtimeLogs[0]).not.toContain("Docs:");
+    expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
+      ok: false,
+      pluginErrors: [
+        {
+          id: "broken",
+          error: "failed to load $OPENCLAW_HOME/plugins/broken/runtime.ts",
+          source: "$OPENCLAW_HOME/plugins/broken/index.ts",
+        },
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          message: "failed to inspect $OPENCLAW_HOME/plugins/unreadable",
+        },
+      ],
+      sourceShadowing: [
+        {
+          pluginId: "broken",
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; " +
+            "global plugin will be overridden by config plugin ($OPENCLAW_HOME/plugins/broken/index.ts)",
+          active: {
+            source: "$OPENCLAW_HOME/plugins/broken/index.ts",
+            origin: "config",
+            status: "error",
+            error: "failed to load $OPENCLAW_HOME/plugins/broken/runtime.ts",
+          },
+          shadowedSource: "$OPENCLAW_HOME/plugins/shadowed/index.ts",
+          repair: [
+            "openclaw plugins inspect broken",
+            "edit or remove the config-selected plugin source",
+            "openclaw plugins registry --refresh",
+            "openclaw gateway restart --force",
+          ],
+        },
+      ],
+      compatibility: [],
+      configurationWarnings: [],
+    });
+  });
+
+  it.each([
+    {
+      description: "a required plugin is missing",
+      diagnostic: {
+        level: "warn" as const,
+        pluginId: "calendar",
+        message: 'plugin "calendar" requires plugin "contacts"; install "contacts" to use it',
+      },
+      expected: 'calendar: plugin "calendar" requires plugin "contacts"',
+    },
+    {
+      description: "discovery cannot read an extensions directory",
+      diagnostic: {
+        level: "warn" as const,
+        message: "failed to read extensions dir: /tmp/plugins (permission denied)",
+      },
+      expected: "failed to read extensions dir: /tmp/plugins (permission denied)",
+    },
+  ])(
+    "reports actionable discovery warnings when $description",
+    async ({ diagnostic, expected }) => {
+      buildPluginDiagnosticsReport.mockReturnValue({ plugins: [], diagnostics: [diagnostic] });
+
+      await runPluginsCommand(["plugins", "doctor"]);
+
+      const output = runtimeLogs.join("\n");
+      expect(output).toContain("Diagnostics:");
+      expect(output).toContain(expected);
+      expect(output).not.toContain(cleanDoctorMessage);
+    },
+  );
+
+  it("keeps actionable discovery warnings alongside existing errors", async () => {
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        { level: "error", pluginId: "broken", message: "plugin manifest invalid" },
+        { level: "warn", pluginId: "calendar", message: "required plugin contacts is missing" },
+      ],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("broken: plugin manifest invalid");
+    expect(output).toContain("calendar: required plugin contacts is missing");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports stale plugin config in doctor output without claiming full plugin health", async () => {

@@ -328,16 +328,28 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         },
         media: async () => {
           const onDeliveryResult = vi.fn();
+          const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+          const mediaAccess = {
+            localRoots: ["/approved/workspace"],
+            workspaceDir: "/approved/workspace",
+            readFile: mediaReadFile,
+          };
           const result = await adapterSendMedia({
             cfg: emptyConfig,
             to: "chat:chat-1",
             text: "",
-            mediaUrl: "https://example.com/image.png",
+            mediaUrl: "image.png",
+            mediaAccess,
+            mediaLocalRoots: mediaAccess.localRoots,
+            mediaReadFile,
             accountId: "default",
             onDeliveryResult,
           });
           expect(sendMediaCall()?.to).toBe("chat:chat-1");
-          expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/image.png");
+          expect(sendMediaCall()?.mediaUrl).toBe("image.png");
+          expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
+          expect(sendMediaCall()?.mediaLocalRoots).toBe(mediaAccess.localRoots);
+          expect(sendMediaCall()?.mediaReadFile).toBe(mediaReadFile);
           expect(sendMediaCall()?.accountId).toBe("default");
           expect(result.receipt.platformMessageIds).toEqual(["feishu-media-1"]);
           expect(onDeliveryResult.mock.calls[0]?.[0]?.receipt.platformMessageIds).toEqual([
@@ -384,9 +396,15 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
   }
 
   it("sends missing TTS text before its voice supplement", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("approved audio"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+      readFile: mediaReadFile,
+    };
     const payload = {
       text: "Readable answer",
-      mediaUrl: "https://example.com/reply.ogg",
+      mediaUrl: "reply.ogg",
       audioAsVoice: true,
       ttsSupplement: { spokenText: "Readable answer" },
     };
@@ -396,11 +414,16 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       to: "chat_1",
       text: payload.text,
       accountId: "main",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
       payload,
     });
 
     expect(sendMessageCall()?.text).toBe("Readable answer");
-    expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/reply.ogg");
+    expect(sendMediaCall()?.mediaUrl).toBe("reply.ogg");
+    expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
+    expect(sendMediaCall()?.mediaReadFile).toBe(mediaReadFile);
     expect(sendMediaCall()?.audioAsVoice).toBe(true);
     expect(sendMessageFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
       sendMediaFeishuMock.mock.invocationCallOrder[0] ?? 0,
@@ -463,19 +486,25 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     "sends an existing absolute %s image path as media instead of leaking it",
     async (extension) => {
       const { dir, file } = await createTmpImage(extension);
+      const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+      const mediaAccess = { localRoots: [dir], workspaceDir: dir, readFile: mediaReadFile };
       try {
         const result = await sendText({
           cfg: emptyConfig,
           to: "chat_1",
           text: file,
           accountId: "main",
+          mediaAccess,
           mediaLocalRoots: [dir],
+          mediaReadFile,
         });
 
         expect(sendMediaCall()?.to).toBe("chat_1");
         expect(sendMediaCall()?.mediaUrl).toBe(file);
         expect(sendMediaCall()?.accountId).toBe("main");
+        expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
         expect(sendMediaCall()?.mediaLocalRoots).toEqual([dir]);
+        expect(sendMediaCall()?.mediaReadFile).toBe(mediaReadFile);
         expect(sendMessageFeishuMock).not.toHaveBeenCalled();
         expectFeishuResult(result, "media_msg");
       } finally {
@@ -913,16 +942,22 @@ describe("feishuOutbound.sendPayload native cards", () => {
   });
 
   it("sends media once before chunking an oversized table fallback", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+      readFile: mediaReadFile,
+    };
     const presentation = createOversizedTablePresentation();
     const rendered = await feishuOutbound.renderPresentation?.({
-      payload: { presentation, mediaUrl: "/tmp/pipeline.png" },
+      payload: { presentation, mediaUrl: "pipeline.png" },
       presentation,
       ctx: {
         cfg: emptyConfig,
         to: "chat_1",
         text: "",
         accountId: "main",
-        payload: { presentation, mediaUrl: "/tmp/pipeline.png" },
+        payload: { presentation, mediaUrl: "pipeline.png" },
       },
     });
     if (!rendered) {
@@ -935,7 +970,9 @@ describe("feishuOutbound.sendPayload native cards", () => {
       to: "chat_1",
       text: coreRenderedPayload.text ?? "",
       accountId: "main",
-      mediaLocalRoots: ["/tmp"],
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
       replyToId: "   ",
       threadId: "om_thread",
       payload: coreRenderedPayload,
@@ -950,10 +987,13 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(sendMediaCall()).toEqual(
       expect.objectContaining({
         to: "chat_1",
-        mediaUrl: "/tmp/pipeline.png",
-        mediaLocalRoots: ["/tmp"],
+        mediaUrl: "pipeline.png",
+        mediaAccess,
+        mediaLocalRoots: mediaAccess.localRoots,
+        mediaReadFile,
       }),
     );
+    expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
     expect(sendMediaCall()?.text).toBeUndefined();
     expect(sendMediaCall()?.replyToMessageId).toBe("om_thread");
     expect(sendMediaCall()?.replyInThread).toBe(true);
@@ -1768,25 +1808,39 @@ describe("feishuOutbound.sendPayload native cards", () => {
   });
 
   it("sends payload media before final native cards", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+      readFile: mediaReadFile,
+    };
+    const mediaUrls = ["image.png", "summary.png"];
     const result = await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
       to: "chat_1",
       text: "See attached",
       accountId: "main",
-      mediaLocalRoots: ["/tmp"],
+      mediaAccess,
+      mediaLocalRoots: ["/legacy/workspace"],
+      mediaReadFile,
       payload: {
         text: "See attached",
-        mediaUrl: "/tmp/image.png",
+        mediaUrls,
         interactive: {
           blocks: [{ type: "buttons", buttons: [{ label: "Open", url: "https://example.com" }] }],
         },
       },
     });
 
-    expect(sendMediaCall()?.to).toBe("chat_1");
-    expect(sendMediaCall()?.mediaUrl).toBe("/tmp/image.png");
-    expect(sendMediaCall()?.mediaLocalRoots).toEqual(["/tmp"]);
-    expect(sendMediaCall()?.accountId).toBe("main");
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(mediaUrls.length);
+    for (const [index, mediaUrl] of mediaUrls.entries()) {
+      expect(sendMediaCall(index)?.to).toBe("chat_1");
+      expect(sendMediaCall(index)?.mediaUrl).toBe(mediaUrl);
+      expect(sendMediaCall(index)?.mediaAccess).toBe(mediaAccess);
+      expect(sendMediaCall(index)?.mediaLocalRoots).toEqual(["/legacy/workspace"]);
+      expect(sendMediaCall(index)?.mediaReadFile).toBe(mediaReadFile);
+      expect(sendMediaCall(index)?.accountId).toBe("main");
+    }
     expect(sendCardCall()?.to).toBe("chat_1");
     expect(sendCardCall()?.accountId).toBe("main");
     expectFeishuResult(result, "native_card_msg");
@@ -1889,20 +1943,26 @@ describe("feishuOutbound.sendPayload native cards", () => {
 
   it("keeps text/media fallback behavior for non-card payloads, including local image text", async () => {
     const { dir, file } = await createTmpImage();
+    const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+    const mediaAccess = { localRoots: [dir], workspaceDir: dir, readFile: mediaReadFile };
     try {
       const result = await feishuOutbound.sendPayload?.({
         cfg: emptyConfig,
         to: "chat_1",
         text: file,
         accountId: "main",
+        mediaAccess,
         mediaLocalRoots: [dir],
+        mediaReadFile,
         payload: { text: file },
       });
 
       expect(sendCardFeishuMock).not.toHaveBeenCalled();
       expect(sendMediaCall()?.to).toBe("chat_1");
       expect(sendMediaCall()?.mediaUrl).toBe(file);
+      expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
       expect(sendMediaCall()?.mediaLocalRoots).toEqual([dir]);
+      expect(sendMediaCall()?.mediaReadFile).toBe(mediaReadFile);
       expect(sendMediaCall()?.accountId).toBe("main");
       expect(sendMessageFeishuMock).not.toHaveBeenCalled();
       expectFeishuResult(result, "media_msg");
@@ -2551,15 +2611,28 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
   });
 
   it("forwards replyToId to sendMediaFeishu", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("approved image"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+      readFile: mediaReadFile,
+    };
     await feishuOutbound.sendMedia?.({
       cfg: emptyConfig,
       to: "chat_1",
       text: "",
-      mediaUrl: "https://example.com/image.png",
+      mediaUrl: "image.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
       replyToId: "om_reply_target",
       accountId: "main",
     });
 
+    expect(sendMediaCall()?.mediaUrl).toBe("image.png");
+    expect(sendMediaCall()?.mediaAccess).toBe(mediaAccess);
+    expect(sendMediaCall()?.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(sendMediaCall()?.mediaReadFile).toBe(mediaReadFile);
     expect(sendMediaCall()?.replyToMessageId).toBe("om_reply_target");
     expect(sendMediaCall()?.replyInThread).toBe(false);
   });

@@ -162,6 +162,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .command("get")
       .description("Get an automation as JSON")
       .argument("<id>", "Job id")
+      .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.get", opts, { id: String(id) });
@@ -202,6 +203,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .command("runs")
       .description("Show automation run history")
       .requiredOption("--id <id>", "Job id")
+      .option("--json", "Output JSON", false)
       .option("--run-id <runId>", "Filter by cron run id")
       .option("--limit <n>", "Max entries (default 50)", "50")
       .action(async (opts) => {

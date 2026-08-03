@@ -267,7 +267,7 @@ function resumeSubagentRun(runId: string) {
       entry.delivery?.status === "failed");
   if (
     entry.requesterSettleWake &&
-    typeof entry.endedAt === "number" &&
+    typeof entry.execution.endedAt === "number" &&
     !yieldedWakeWaitingForDelivery
   ) {
     resumeRequesterSettleWake(runId, entry);
@@ -276,7 +276,7 @@ function resumeSubagentRun(runId: string) {
   if (entry.cleanupCompletedAt) {
     return;
   }
-  if (typeof entry.endedAt === "number" && isDeliverySuspended(entry)) {
+  if (typeof entry.execution.endedAt === "number" && isDeliverySuspended(entry)) {
     return;
   }
   // Yielded runs stay paused until explicitly steered, except orchestrators
@@ -291,8 +291,8 @@ function resumeSubagentRun(runId: string) {
   }
   if (
     entry.expectsCompletionMessage !== true &&
-    typeof entry.endedAt === "number" &&
-    Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
+    typeof entry.execution.endedAt === "number" &&
+    Date.now() - entry.execution.endedAt > ANNOUNCE_EXPIRY_MS
   ) {
     finalizeResumedAnnounceGiveUpInBackground(runId, entry, "expiry");
     return;
@@ -309,7 +309,7 @@ function resumeSubagentRun(runId: string) {
     return;
   }
 
-  if (typeof entry.endedAt === "number" && entry.endedAt > 0) {
+  if (typeof entry.execution.endedAt === "number" && entry.execution.endedAt > 0) {
     if (entry.killReconciliation) {
       // Restored kills remain reconciliation tombstones; only the sweeper may
       // accept late provider completion or stabilize their task cancellation.
@@ -473,7 +473,7 @@ configureSubagentRegistrySteerRuntime({
       !entry ||
       entry.collect !== true ||
       entry.collectorCompletion ||
-      typeof entry.endedAt === "number"
+      typeof entry.execution.endedAt === "number"
     ) {
       return false;
     }

@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createTestRegistry,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -43,6 +43,10 @@ afterEach(() => {
 type IMessageOutbound = NonNullable<ReturnType<typeof createIMessageTestPlugin>["outbound"]>;
 type IMessageMessageAdapter = NonNullable<typeof imessagePlugin.message>;
 type IMessageMessageSender = NonNullable<IMessageMessageAdapter["send"]>;
+const IMESSAGE_WORKSPACE_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+  "base64",
+);
 
 function requireOutbound(): IMessageOutbound {
   const outbound = createIMessageTestPlugin().outbound;
@@ -375,6 +379,154 @@ describe("createIMessageTestPlugin", () => {
     });
   });
 
+  it.each(["message", "outbound"] as const)(
+    "preserves trusted host media access through the real %s adapter",
+    async (adapterKind) => {
+      const trustedReader = vi.fn(async () => Buffer.from("trusted"));
+      const legacyReader = vi.fn(async () => Buffer.from("legacy"));
+      const mediaAccess = {
+        localRoots: ["/trusted/workspace"],
+        workspaceDir: "/trusted/workspace",
+        readFile: trustedReader,
+      };
+      const sendIMessage = vi.fn(
+        async (
+          _to: string,
+          _text: string,
+          options: { mediaAccess?: typeof mediaAccess; mediaReadFile?: typeof legacyReader },
+        ) => ({
+          messageId: "p:0/trusted-media",
+          options,
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [{ channel: "imessage", messageId: "p:0/trusted-media" }],
+            kind: "media",
+          }),
+        }),
+      );
+      const context = {
+        cfg: {} as never,
+        to: "+15551234567",
+        text: "caption",
+        mediaUrl: "workspace-image.png",
+        mediaAccess,
+        mediaLocalRoots: ["/untrusted/legacy"],
+        mediaReadFile: legacyReader,
+        deps: { imessage: sendIMessage },
+      };
+
+      if (adapterKind === "message") {
+        const sendMedia = requireMessageSendMedia(requireMessageAdapter());
+        await sendMedia(
+          context as Parameters<typeof sendMedia>[0] & {
+            deps: { imessage: typeof sendIMessage };
+          },
+        );
+      } else {
+        const sendMedia = imessagePlugin.outbound?.sendMedia;
+        if (!sendMedia) {
+          throw new Error("Expected the actual iMessage outbound adapter");
+        }
+        await sendMedia(context);
+      }
+
+      const forwarded = sendIMessage.mock.calls[0]?.[2];
+      expect(forwarded?.mediaAccess).toBe(mediaAccess);
+      expect(forwarded?.mediaReadFile).toBe(legacyReader);
+      expect(forwarded).toEqual(
+        expect.objectContaining({ mediaLocalRoots: ["/untrusted/legacy"] }),
+      );
+    },
+  );
+
+  it("rejects a host media reader without explicit approved roots", async () => {
+    const readFile = vi.fn(async () => IMESSAGE_WORKSPACE_PNG);
+    const sendMedia = requireMessageSendMedia(requireMessageAdapter());
+    const nativeSend = vi.fn(sendMessageIMessage);
+
+    await expect(
+      sendMedia({
+        cfg: {} as never,
+        to: "+15551234567",
+        text: "",
+        mediaUrl: "workspace-image.png",
+        mediaAccess: { workspaceDir: "/trusted/workspace", readFile },
+        deps: { imessage: nativeSend },
+      } as Parameters<typeof sendMedia>[0] & {
+        deps: { imessage: typeof nativeSend };
+      }),
+    ).rejects.toThrow("Host media read requires explicit localRoots");
+
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "workspace traversal despite wider conflicting legacy roots",
+      filename: "../outside.png",
+      contents: IMESSAGE_WORKSPACE_PNG,
+      readerCalls: 0,
+    },
+    {
+      name: "private log document",
+      filename: "debug.log",
+      contents: Buffer.from("private operator logs"),
+      readerCalls: 1,
+    },
+    {
+      name: "untrusted HTML before the host reader",
+      filename: "report.html",
+      contents: Buffer.from("<!doctype html><h1>untrusted</h1>"),
+      readerCalls: 0,
+    },
+    {
+      name: "plain text disguised as a PDF",
+      filename: "report.pdf",
+      contents: Buffer.from("private text without a PDF signature"),
+      readerCalls: 1,
+    },
+    {
+      name: "binary data disguised as plain text",
+      filename: "report.txt",
+      contents: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      readerCalls: 1,
+    },
+  ])(
+    "rejects $name before native iMessage delivery",
+    async ({ filename, contents, readerCalls }) => {
+      await withStateDirEnv("openclaw-imessage-media-policy-", async ({ stateDir }) => {
+        const stateRoot = fs.realpathSync(stateDir);
+        const workspaceDir = path.join(stateRoot, "workspace");
+        fs.mkdirSync(workspaceDir);
+        fs.writeFileSync(path.resolve(workspaceDir, filename), contents);
+        const readFile = vi.fn(async (filePath: string) => await fs.promises.readFile(filePath));
+        const conflictingReader = vi.fn(async () => Buffer.from("conflicting reader"));
+        const runCliJson = vi.fn(async () => ({ messageId: "must-not-send" }));
+        const nativeSend: typeof sendMessageIMessage = async (to, text, options) =>
+          await sendMessageIMessage(to, text, { ...options, runCliJson });
+        const sendMedia = requireMessageSendMedia(requireMessageAdapter());
+
+        await expect(
+          sendMedia({
+            cfg: {} as never,
+            to: "+15551234567",
+            text: "",
+            mediaUrl: filename,
+            mediaAccess: { localRoots: [workspaceDir], workspaceDir, readFile },
+            mediaLocalRoots: [stateRoot],
+            mediaReadFile: conflictingReader,
+            deps: { imessage: nativeSend },
+          } as Parameters<typeof sendMedia>[0] & {
+            deps: { imessage: typeof nativeSend };
+          }),
+        ).rejects.toMatchObject({ code: "path-not-allowed" });
+
+        expect(readFile).toHaveBeenCalledTimes(readerCalls);
+        expect(conflictingReader).not.toHaveBeenCalled();
+        expect(runCliJson).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("carries the stable iMessage GUID beside the broad adapter delivery identity", async () => {
     const sendText = requireMessageSendText(requireMessageAdapter());
     const receipt = createMessageReceiptFromOutboundResults({
@@ -416,19 +568,20 @@ describe("createIMessageTestPlugin", () => {
       }),
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
-    const attachmentBytes = Buffer.from("%PDF-1.4\n% actual durable native attachment\n");
+    const attachmentBytes = IMESSAGE_WORKSPACE_PNG;
     const runCliJson = vi.fn(async (args: readonly string[]) => {
       const attachmentPath = args[args.indexOf("--file") + 1];
       expect(attachmentPath).toBeDefined();
       expect(fs.readFileSync(attachmentPath!)).toEqual(attachmentBytes);
       return { messageId: "p:0/durable-accepted-attachment" };
     });
-    const nativeSend: typeof sendMessageIMessage = async (to, text, options) =>
-      await sendMessageIMessage(to, text, {
+    const nativeSend = vi.fn<typeof sendMessageIMessage>(async (to, text, options) =>
+      sendMessageIMessage(to, text, {
         ...options,
         client: captionClient,
         runCliJson,
-      });
+      }),
+    );
     const onDeliveryResult = vi.fn();
 
     setActivePluginRegistry(
@@ -436,18 +589,21 @@ describe("createIMessageTestPlugin", () => {
     );
     try {
       await withStateDirEnv("openclaw-imessage-durable-attachment-", async ({ stateDir }) => {
-        const sourcePath = path.join(stateDir, "quarterly-report.pdf");
+        const workspaceDir = fs.realpathSync(stateDir);
+        const sourcePath = path.join(workspaceDir, "workspace-image.png");
         fs.writeFileSync(sourcePath, attachmentBytes);
+        const readFile = vi.fn(async (filePath: string) => await fs.promises.readFile(filePath));
+        const mediaAccess = { localRoots: [workspaceDir], workspaceDir, readFile };
 
         const result = await sendDurableMessageBatch({
           cfg,
           channel: "imessage",
           to: "imessage:+15550004567",
           durability: "required",
-          mediaAccess: { localRoots: [stateDir] },
+          mediaAccess,
           deps: { imessage: nativeSend },
           onDeliveryResult,
-          payloads: [{ text: "undelivered caption", mediaUrl: sourcePath }],
+          payloads: [{ text: "undelivered caption", mediaUrl: path.basename(sourcePath) }],
         });
 
         if (result.status === "failed") {
@@ -471,6 +627,10 @@ describe("createIMessageTestPlugin", () => {
             messageId: "p:0/durable-accepted-attachment",
           }),
         );
+        expect(readFile.mock.calls).toEqual([[sourcePath], [sourcePath]]);
+        const forwardedMediaAccess = nativeSend.mock.calls[0]?.[2]?.mediaAccess;
+        expect(forwardedMediaAccess).toEqual(mediaAccess);
+        expect(forwardedMediaAccess?.readFile).toBe(readFile);
 
         await drainPendingDeliveries({
           drainKey: "imessage:default",
@@ -483,7 +643,7 @@ describe("createIMessageTestPlugin", () => {
         expect(runCliJson).toHaveBeenCalledTimes(1);
       });
     } finally {
-      releasePinnedPluginChannelRegistry();
+      resetPluginRuntimeStateForTest();
     }
   });
 
@@ -510,15 +670,17 @@ describe("createIMessageTestPlugin", () => {
     );
     try {
       await withStateDirEnv("openclaw-imessage-durable-custody-", async ({ stateDir }) => {
-        const sourcePath = path.join(stateDir, "custody-report.pdf");
+        const workspaceDir = fs.realpathSync(stateDir);
+        const sourcePath = path.join(workspaceDir, "custody-report.pdf");
         fs.writeFileSync(sourcePath, attachmentBytes);
+        const readFile = vi.fn(async (filePath: string) => await fs.promises.readFile(filePath));
 
         const result = await sendDurableMessageBatch({
           cfg,
           channel: "imessage",
           to: "imessage:+15550004567",
           durability: "required",
-          mediaAccess: { localRoots: [stateDir] },
+          mediaAccess: { localRoots: [workspaceDir], workspaceDir, readFile },
           deps: { imessage: nativeSend },
           onDeliveryResult,
           payloads: [{ text: "caption must not send", mediaUrl: sourcePath }],
@@ -536,10 +698,11 @@ describe("createIMessageTestPlugin", () => {
         });
         expect(onDeliveryResult).toHaveBeenCalledOnce();
         expect(runCliJson).toHaveBeenCalledOnce();
+        expect(readFile.mock.calls).toEqual([[sourcePath], [sourcePath]]);
         expect(captionRequest).not.toHaveBeenCalled();
       });
     } finally {
-      releasePinnedPluginChannelRegistry();
+      resetPluginRuntimeStateForTest();
     }
   });
 

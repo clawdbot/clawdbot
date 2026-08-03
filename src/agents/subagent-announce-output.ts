@@ -392,12 +392,14 @@ function truncateChildCompletionField(value: string): string {
     : value;
 }
 
+type ChildCompletionExecution = { endedAt?: number; outcome?: SubagentRunOutcome };
+
 type ChildCompletionRow = {
   childSessionKey: string;
   task: string;
   label?: string;
   createdAt: number;
-  endedAt?: number;
+  execution: ChildCompletionExecution;
   frozenResultText?: string | null;
   completion?: {
     resultText?: string | null;
@@ -409,7 +411,6 @@ type ChildCompletionRow = {
       fallbackFrozenResultText?: string | null;
     };
   };
-  outcome?: SubagentRunOutcome;
 };
 
 type ChildCompletionSection = {
@@ -424,7 +425,7 @@ function selectChildCompletionResultText(child: ChildCompletionRow): string | un
     child.completion?.fallbackResultText ??
     child.delivery?.payload?.fallbackFrozenResultText ??
     child.frozenResultText;
-  if (child.outcome?.status === "ok") {
+  if (child.execution.outcome?.status === "ok") {
     return selectDeliverableSessionsReply(primary, fallback);
   }
   return (primary ?? fallback)?.trim() || undefined;
@@ -447,8 +448,10 @@ export function buildChildCompletionFindings(
     if (a.createdAt !== b.createdAt) {
       return a.createdAt - b.createdAt;
     }
-    const aEnded = typeof a.endedAt === "number" ? a.endedAt : Number.MAX_SAFE_INTEGER;
-    const bEnded = typeof b.endedAt === "number" ? b.endedAt : Number.MAX_SAFE_INTEGER;
+    const aEnded =
+      typeof a.execution.endedAt === "number" ? a.execution.endedAt : Number.MAX_SAFE_INTEGER;
+    const bEnded =
+      typeof b.execution.endedAt === "number" ? b.execution.endedAt : Number.MAX_SAFE_INTEGER;
     if (aEnded !== bEnded) {
       return aEnded - bEnded;
     }
@@ -464,8 +467,12 @@ export function buildChildCompletionFindings(
   const sections: ChildCompletionSection[] = [];
   for (const [index, child] of sorted.entries()) {
     const resultText = selectChildCompletionResultText(child);
-    const outcome = describeSubagentOutcome(child.outcome);
-    if (child.outcome?.status === "ok" && !resultText && hasCapturedChildCompletionReply(child)) {
+    const outcome = describeSubagentOutcome(child.execution.outcome);
+    if (
+      child.execution.outcome?.status === "ok" &&
+      !resultText &&
+      hasCapturedChildCompletionReply(child)
+    ) {
       continue;
     }
     const title =
@@ -476,7 +483,7 @@ export function buildChildCompletionFindings(
     const displayIndex = sections.length + 1;
     sections.push({
       index: displayIndex,
-      actionable: child.outcome?.status !== "ok",
+      actionable: child.execution.outcome?.status !== "ok",
       text: [
         `${displayIndex}. ${truncateChildCompletionField(title)}`,
         `status: ${truncateChildCompletionField(outcome)}`,
@@ -539,7 +546,7 @@ export function dedupeLatestChildCompletionRows(
     label?: string;
     generation?: number;
     createdAt: number;
-    endedAt?: number;
+    execution: ChildCompletionExecution;
     frozenResultText?: string | null;
     completion?: {
       resultText?: string | null;
@@ -551,7 +558,6 @@ export function dedupeLatestChildCompletionRows(
         fallbackFrozenResultText?: string | null;
       };
     };
-    outcome?: SubagentRunOutcome;
   }>,
 ) {
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
@@ -572,7 +578,7 @@ export function filterCurrentDirectChildCompletionRows(
     task: string;
     label?: string;
     createdAt: number;
-    endedAt?: number;
+    execution: ChildCompletionExecution;
     frozenResultText?: string | null;
     completion?: {
       resultText?: string | null;
@@ -584,7 +590,6 @@ export function filterCurrentDirectChildCompletionRows(
         fallbackFrozenResultText?: string | null;
       };
     };
-    outcome?: SubagentRunOutcome;
   }>,
   params: {
     requesterSessionKey: string;

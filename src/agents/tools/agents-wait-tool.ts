@@ -136,7 +136,8 @@ function readResolvedWaitState(targets: readonly WaitTarget[], errors: readonly 
     if (result) {
       completed.push({
         result,
-        completedAt: entry.completion?.capturedAt ?? entry.endedAt ?? Number.MAX_SAFE_INTEGER,
+        completedAt:
+          entry.completion?.capturedAt ?? entry.execution.endedAt ?? Number.MAX_SAFE_INTEGER,
         inputIndex,
       });
     } else {

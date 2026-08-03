@@ -21,8 +21,8 @@ const { loadPluginRegistrySnapshotWithMetadata, loadPluginManifestRegistryForIns
     };
   });
 
-vi.mock("./plugin-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-registry.js")>();
+vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-registry-snapshot.js")>();
   return {
     ...actual,
     loadPluginRegistrySnapshotWithMetadata: (params: unknown) =>
@@ -61,7 +61,6 @@ function makeIndex(pluginId = "demo"): InstalledPluginIndex {
         startup: {
           sidecar: false,
           memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
           agentHarnesses: [],
         },
         compat: [],

@@ -298,76 +298,24 @@ describe("gateway-cli coverage", () => {
     );
   });
 
-  it("waits for refreshing all-agent usage caches before printing totals", async () => {
-    const settleSleep = vi.fn(async (_ms: number) => {});
-    gatewayProgram = createGatewayProgram({
-      usageCostSettle: {
-        now: () => 0,
-        sleep: settleSleep,
-      },
-    });
-    callGateway
-      .mockResolvedValueOnce({
-        cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 2 },
-      })
-      .mockResolvedValueOnce({
-        totals: { totalTokens: 100, totalCost: 0.1 },
-        cacheStatus: { status: "fresh", cachedFiles: 2, pendingFiles: 0 },
-      });
-
-    await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7", "--json"]);
-
-    expect(callGateway).toHaveBeenCalledTimes(2);
-    expect(settleSleep).toHaveBeenCalledOnce();
-    expect(settleSleep).toHaveBeenCalledWith(250);
-    const costCalls = callGateway.mock.calls.map(
-      ([raw]) => raw as { method?: string; timeoutMs?: number },
-    );
-    expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
-    expect(costCalls.every((call) => call.timeoutMs === 10_000)).toBe(true);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        totals: expect.objectContaining({ totalTokens: 100, totalCost: 0.1 }),
-        cacheStatus: expect.objectContaining({ status: "fresh" }),
-      }),
-    );
-  });
-
   it.each(["refreshing", "partial", "stale"] as const)(
-    "uses --timeout as the command-wide usage-cost settle budget for %s caches",
+    "returns the first usage-cost RPC result when the cache is %s",
     async (status) => {
-      let now = 0;
-      gatewayProgram = createGatewayProgram({
-        usageCostSettle: {
-          now: () => now,
-          sleep: async (ms) => {
-            now += ms;
-          },
-        },
-      });
-      callGateway.mockResolvedValue({
-        cacheStatus: { status, cachedFiles: 0, pendingFiles: 1 },
-      });
+      const summary = {
+        totals: { totalTokens: 100, totalCost: 0.1 },
+        cacheStatus: { status, cachedFiles: 0, pendingFiles: 2 },
+      };
+      callGateway.mockResolvedValue(summary);
 
-      await expectGatewayExit([
-        "gateway",
-        "usage-cost",
-        "--all-agents",
-        "--timeout",
-        "50",
-        "--json",
-      ]);
+      await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7", "--json"]);
 
-      // A fast host can fit a second poll inside the 50ms budget; the contract
-      // is the budget bound on every call, not the poll count.
-      expect(callGateway.mock.calls.length).toBeGreaterThanOrEqual(1);
-      const costCalls = callGateway.mock.calls.map(
-        ([raw]) => raw as { method?: string; timeoutMs?: number },
-      );
-      expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
-      expect(costCalls.every((call) => (call.timeoutMs ?? 0) > 0)).toBe(true);
-      expect(costCalls.every((call) => (call.timeoutMs ?? 0) <= 50)).toBe(true);
-      expect(runtimeErrors.join("\n")).toContain("Timed out waiting for usage cost cache refresh");
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(firstMockArg(callGateway)).toMatchObject({
+        method: "usage.cost",
+        params: { days: 7, agentScope: "all" },
+        timeoutMs: 10_000,
+      });
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(summary);
     },
   );
 

@@ -483,6 +483,7 @@ const testConfig: OpenClawConfig = {
 
 vi.mock("../runtime.js", () => ({
   getMattermostRuntime: () => mockState.runtimeCore,
+  getOptionalMattermostRuntime: () => mockState.runtimeCore,
 }));
 
 const testRuntime = (): RuntimeEnv =>
@@ -565,6 +566,29 @@ describe("mattermost inbound user posts", () => {
     mockState.dispatchInboundMessage.mockImplementation(async () => {
       mockState.abortController?.abort();
     });
+  });
+
+  it("publishes recovering while API authentication retries, including 401", async () => {
+    const abortController = new AbortController();
+    const statusSink = vi.fn();
+    mockState.fetchMattermostMe.mockRejectedValue(new Error("HTTP 401 Unauthorized"));
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      statusSink,
+    });
+
+    await vi.waitFor(() => {
+      expect(statusSink).toHaveBeenCalledWith({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: "Error: HTTP 401 Unauthorized",
+      });
+    });
+    abortController.abort();
+    await monitor;
   });
 
   it("does not enqueue regular user posts as system events", async () => {

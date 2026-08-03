@@ -1,3 +1,4 @@
+import { generateSecureToken } from "../infra/secure-random.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
@@ -134,6 +135,7 @@ function restoreToolSearchCatalog(params: {
 }): void {
   const next = {
     entries: params.entries,
+    counterScope: generateSecureToken(12),
     searchCount: 0,
     describeCount: 0,
     callCount: 0,
@@ -287,6 +289,9 @@ function registerToolSearchCatalog(params: {
   }
   const next = {
     entries: Array.from(byId.values()).toSorted((a, b) => a.id.localeCompare(b.id)),
+    // Appended client tools extend the same counter lifetime. A replacement
+    // gets a new scope so telemetry consumers never infer resets from values.
+    counterScope: prior?.counterScope ?? generateSecureToken(12),
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,

@@ -47,6 +47,7 @@ import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
 import type { SessionManager } from "../../sessions/index.js";
+import type { TrustedSubagentCompletionHandoff } from "../../subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -252,8 +253,8 @@ export type RunEmbeddedAgentParams = {
   toolsAllow?: string[];
   /** Owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
-  /** Trusted in-process subagent-completion handoff; never derived from public input. */
-  trustedInternalHandoff?: boolean;
+  /** Consumed in-process subagent-completion capability; never derived from public input. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */

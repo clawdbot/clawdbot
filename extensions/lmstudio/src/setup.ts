@@ -45,7 +45,7 @@ import { discoverLmstudioModels, fetchLmstudioModels } from "./models.fetch.js";
 import {
   mapLmstudioWireModelsToConfig,
   type LmstudioModelWire,
-  resolveLmstudioEffectiveContextWindow,
+  resolveLoadedContextWindow,
   resolveLmstudioInferenceBase,
 } from "./models.js";
 import {
@@ -73,6 +73,7 @@ const LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
 type LmstudioSetupDiscovery = {
   discovery: LmstudioDiscoveryResult;
   models: ModelDefinitionConfig[];
+  loadedModelIds: Set<string>;
   defaultModel: string | undefined;
   defaultModelId: string | undefined;
 };
@@ -206,6 +207,15 @@ function applyRequestedContextWindowToAllModels(params: {
   );
 }
 
+function collectLoadedLmstudioModelIds(discovery: LmstudioDiscoveryResult): Set<string> {
+  return new Set(
+    discovery.models.flatMap((entry) => {
+      const id = entry.key?.trim();
+      return entry.type === "llm" && id && resolveLoadedContextWindow(entry) !== null ? [id] : [];
+    }),
+  );
+}
+
 function resolveLmstudioDiscoveryFailure(params: {
   baseUrl: string;
   discovery: LmstudioDiscoveryResult;
@@ -238,17 +248,14 @@ function resolveLmstudioDiscoveryFailure(params: {
       reason: `LM Studio discovery failed (${discovery.status})`,
     };
   }
-  const hasUsableModel = discovery.models.some(
-    (model) => model.type === "llm" && Boolean(model.key?.trim()),
-  );
-  if (!hasUsableModel) {
+  if (collectLoadedLmstudioModelIds(discovery).size === 0) {
     return {
       noteLines: [
-        `No LM Studio LLM models were found at ${baseUrl}.`,
-        "Load at least one model in LM Studio (or run lms load), then re-run setup.",
+        `No loaded LM Studio LLM models were found at ${baseUrl}.`,
+        "Load a model in LM Studio (or run lms load <model>), then re-run setup.",
       ],
-      retryLine: "Load at least one model in LM Studio (or run lms load), then continue to retry.",
-      reason: "No LM Studio models found",
+      retryLine: "Load a model in LM Studio (or run lms load <model>), then continue to retry.",
+      reason: "No loaded LM Studio models found",
     };
   }
   return null;
@@ -367,9 +374,9 @@ function collectAppGuidedLmstudioModelIds(discovery: LmstudioDiscoveryResult): S
       if (entry.type !== "llm" || entry.capabilities?.trained_for_tool_use !== true || !id) {
         return [];
       }
-      const effectiveContextWindow = resolveLmstudioEffectiveContextWindow(entry);
-      return effectiveContextWindow !== null &&
-        effectiveContextWindow >= LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS
+      const loadedContextWindow = resolveLoadedContextWindow(entry);
+      return loadedContextWindow !== null &&
+        loadedContextWindow >= LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS
         ? [id]
         : [];
     }),
@@ -399,11 +406,15 @@ async function discoverLmstudioSetupModels(params: {
     return { failure };
   }
   const models = mapLmstudioWireModelsToConfig(discovery.models);
-  const defaultModelId = selectDefaultLmstudioModelId(models);
+  const loadedModelIds = collectLoadedLmstudioModelIds(discovery);
+  const defaultModelId = selectDefaultLmstudioModelId(
+    models.filter((model) => loadedModelIds.has(model.id)),
+  );
   return {
     value: {
       discovery,
       models,
+      loadedModelIds,
       defaultModel: defaultModelId ? `${PROVIDER_ID}/${defaultModelId}` : undefined,
       defaultModelId,
     },
@@ -787,18 +798,25 @@ export async function configureLmstudioNonInteractive(
   const selectedModel = selectedModelId
     ? discoveredModels.find((model) => model.id === selectedModelId)
     : undefined;
-  if (!selectedModelId || !selectedModel) {
+  const selectedModelLoaded =
+    selectedModelId !== undefined && setupDiscovery.value.loadedModelIds.has(selectedModelId);
+  if (!selectedModelId || !selectedModel || !selectedModelLoaded) {
     const availableModels = discoveredModels.map((model) => model.id).join(", ");
     normalizedCtx.runtime.error(
-      requestedModelId
+      requestedModelId && selectedModel && !selectedModelLoaded
         ? [
-            `LM Studio model ${requestedModelId} was not found at ${baseUrl}.`,
-            `Available models: ${availableModels}`,
+            `LM Studio model ${requestedModelId} is installed but not loaded at ${baseUrl}.`,
+            "Load that model in LM Studio, then re-run setup.",
           ].join("\n")
-        : [
-            `LM Studio did not expose a usable default model at ${baseUrl}.`,
-            `Available models: ${availableModels || "(none)"}`,
-          ].join("\n"),
+        : requestedModelId
+          ? [
+              `LM Studio model ${requestedModelId} was not found at ${baseUrl}.`,
+              `Available models: ${availableModels}`,
+            ].join("\n")
+          : [
+              `LM Studio did not expose a usable default model at ${baseUrl}.`,
+              `Available models: ${availableModels || "(none)"}`,
+            ].join("\n"),
     );
     normalizedCtx.runtime.exit(1);
     return null;

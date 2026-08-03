@@ -10,11 +10,14 @@ import {
   isAbortRequestText,
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
+import { hasTelegramApprovalCallbackPrefix } from "./approval-callback-data.js";
 import {
+  resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumThreadId,
   resolveTelegramMessageForumFlagHint,
+  shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
-import { parseTelegramQuestionCallbackData } from "./question-callback-data.js";
+import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
 
 const TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS = new Set([
   "commands",
@@ -180,13 +183,16 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return "telegram:btw";
   }
   const callbackData = ctx.update?.callback_query?.data;
-  if (parseTelegramQuestionCallbackData(callbackData)) {
+  if (hasTelegramQuestionCallbackPrefix(callbackData)) {
     if (typeof chatId === "number") {
       return `telegram:${chatId}:question`;
     }
     return "telegram:question";
   }
-  if (callbackData && parseExecApprovalCommandText(callbackData) !== null) {
+  if (
+    hasTelegramApprovalCallbackPrefix(callbackData) ||
+    (callbackData && parseExecApprovalCommandText(callbackData) !== null)
+  ) {
     if (typeof chatId === "number") {
       return `telegram:${chatId}:approval`;
     }
@@ -201,7 +207,12 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   });
   const threadId = isGroup
     ? resolveTelegramForumThreadId({ isForum, messageThreadId })
-    : messageThreadId;
+    : shouldUseTelegramDmThreadSession({
+          dmThreadId: messageThreadId,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+        })
+      ? messageThreadId
+      : undefined;
   if (typeof chatId === "number") {
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }

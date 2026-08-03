@@ -154,6 +154,60 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
 }
 
 describe("renderUsage", () => {
+  it("keeps pending sessions on their selected local or UTC activity day", () => {
+    const localOffsetMs = -7 * 60 * 60 * 1000;
+    const localYear = vi
+      .spyOn(Date.prototype, "getFullYear")
+      .mockImplementation(function (this: Date) {
+        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+      });
+    const localMonth = vi
+      .spyOn(Date.prototype, "getMonth")
+      .mockImplementation(function (this: Date) {
+        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+      });
+    const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
+      return new Date(this.getTime() + localOffsetMs).getUTCDate();
+    });
+
+    try {
+      const pendingSession = {
+        key: "agent:main:pending-cache",
+        label: "Pending cache",
+        agentId: "main",
+        updatedAt: Date.parse("2026-05-14T00:30:00.000Z"),
+        usage: null,
+      } satisfies UsageSessionEntry;
+
+      for (const { timeZone, selectedDay, visible } of [
+        { timeZone: "utc", selectedDay: "2026-05-14", visible: true },
+        { timeZone: "local", selectedDay: "2026-05-13", visible: true },
+        { timeZone: "local", selectedDay: "2026-05-14", visible: false },
+      ] as const) {
+        const container = document.createElement("div");
+        render(
+          renderUsage(
+            createUsageProps({
+              data: { ...createUsageProps().data, sessions: [pendingSession] },
+              filters: {
+                ...createUsageProps().filters,
+                selectedDays: [selectedDay],
+                timeZone,
+              },
+            }),
+          ),
+          container,
+        );
+
+        expect(container.querySelector(".session-bar-row") !== null).toBe(visible);
+      }
+    } finally {
+      localYear.mockRestore();
+      localMonth.mockRestore();
+      localDay.mockRestore();
+    }
+  });
+
   it("keeps insight aggregates scoped to the selected agent", () => {
     const container = document.createElement("div");
     const sessions = [

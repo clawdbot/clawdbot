@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SessionWriteLockStaleError } from "../../agents/session-write-lock-error.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -24,6 +25,7 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -881,7 +883,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const sessionStore = {
       main: {
         sessionId: "pre-compact-session",
-        sessionFile: "/tmp/pre-compact.jsonl",
+        sessionFile: "main",
         updatedAt: Date.now(),
       },
     };
@@ -907,7 +909,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     active.updateSessionId("post-compact-session");
     sessionStore.main = {
       sessionId: "post-compact-session",
-      sessionFile: "/tmp/post-compact.jsonl",
+      sessionFile: "main",
       updatedAt: Date.now(),
     };
     active.complete();
@@ -916,7 +918,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
     expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
-    expect((call as AgentRunParams).sessionFile).toBe("/tmp/post-compact.jsonl");
+    expect((call as AgentRunParams).sessionFile).toBe("main");
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
@@ -1977,7 +1979,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "visible final",
+      context: { channel: "webchat" },
+      intentId: expect.any(String),
+      createdAt: expect.any(Number),
+    });
     expect(stored.restartRecoverySourceIngress).toBe("control-ui");
     expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
   });
@@ -2240,6 +2248,77 @@ describe("runReplyAgent pending final delivery capture", () => {
       expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
       expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
       expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
+  it("preserves an adopted restart claim when the replacement takes the SQLite lease", async () => {
+    const sessionEntry: SessionEntry = {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      sessionId: "session",
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const replyOperation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("running");
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const current = await readStoredMainSession(storePath);
+      expect(current.restartRecoveryDeliveryRunId).toBe("msg");
+      await replaceSessionEntry(
+        { storePath, sessionKey: "main" },
+        {
+          ...current,
+          abortedLastRun: true,
+          status: "killed",
+          updatedAt: Date.now(),
+        },
+      );
+      throw new SessionWriteLockStaleError({
+        lockPath: "sqlite:session-write:agent:main:main",
+        owner: "replacement gateway",
+        staleReasons: ["lease-lost"],
+      });
+    });
+
+    try {
+      const { run } = createMinimalRun({
+        replyOperation,
+        sessionCtx: {
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+        },
+        runOverrides: { agentId: "main", messageProvider: "webchat" },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+
+      await expect(run()).resolves.toEqual({ text: SILENT_REPLY_TOKEN });
+
+      expect(replyOperation.result).toEqual({
+        kind: "aborted",
+        code: "aborted_for_restart",
+      });
+      expect(await readStoredMainSession(storePath)).toMatchObject({
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "msg",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+        status: "killed",
+      });
+      expect(
+        (await readStoredMainSession(storePath)).restartRecoveryTerminalRunIds,
+      ).toBeUndefined();
     } finally {
       replyOperation.complete();
     }
@@ -2567,7 +2646,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(await readStoredMainSession(storePath)).toMatchObject({
-      pendingFinalDelivery: { kind: "transport-only" },
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "model reply",
+        context: { channel: "discord" },
+        intentId: expect.any(String),
+        createdAt: expect.any(Number),
+      },
       restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoverySourceIngress: "channel",
     });

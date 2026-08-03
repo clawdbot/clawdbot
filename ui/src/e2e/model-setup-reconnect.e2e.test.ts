@@ -67,7 +67,7 @@ describeControlUiE2e("Control UI model setup same-client reconnect", () => {
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup`);
       expect(response?.status()).toBe(200);
-      await page.getByText("provider/original-model").waitFor();
+      await page.getByText("original-model", { exact: true }).waitFor();
       const initialDetections = (await gateway.getRequests("openclaw.setup.detect")).length;
       const initialConnections = (await gateway.getRequests("connect")).length;
       await gateway.setMethodResponse(
@@ -76,7 +76,9 @@ describeControlUiE2e("Control UI model setup same-client reconnect", () => {
       );
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "model setup reconnect proof");
-      await expect.poll(async () => page.getByText("provider/original-model").count()).toBe(0);
+      await expect
+        .poll(async () => page.getByText("original-model", { exact: true }).count())
+        .toBe(0);
       await expect
         .poll(async () => (await gateway.getRequests("connect")).length)
         .toBeGreaterThan(initialConnections);
@@ -84,7 +86,7 @@ describeControlUiE2e("Control UI model setup same-client reconnect", () => {
       await expect
         .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
         .toBe(initialDetections + 1);
-      await page.getByText("provider/reconnected-model").waitFor();
+      await page.getByText("reconnected-model", { exact: true }).waitFor();
       expect(pageErrors).toEqual([]);
 
       if (captureUiProofEnabled) {

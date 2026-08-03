@@ -123,6 +123,8 @@ const config = {
   // This fixture deliberately mixes used, aliased, and unused exports so the
   // topology analyzer can prove each classification.
   ignoreIssues: {
+    // The memory-state compatibility facade must retain its pre-registry-bundle type export.
+    "src/plugins/memory-state.ts": ["types"],
     // Cache-busting dynamic imports are real consumers, but Knip cannot map
     // their query-suffixed module ids back to these named test-support exports.
     "test/helpers/config/bundled-channel-config-runtime.ts": ["exports"],

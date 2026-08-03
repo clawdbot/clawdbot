@@ -577,6 +577,7 @@ export async function runReplyAgent(
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
+    confirmRestartRecoveryArmedAfterLeaseLoss,
     isArmed: isRestartRecoveryArmed,
   } = createReplyAgentRestartRecoveryController({
     activeSessionStore,
@@ -645,6 +646,7 @@ export async function runReplyAgent(
       blockStreamingEnabled,
       cfg,
       checkpointBeforeAgentReply,
+      confirmRestartRecoveryArmedAfterLeaseLoss,
       commandBody,
       defaultModel,
       followupRun,

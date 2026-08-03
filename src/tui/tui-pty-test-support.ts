@@ -115,11 +115,17 @@ export function startPty(
   let visibleOutput = "";
   let exitEvent: PtyExitEvent | null = null;
   const ansiStripper = new AnsiSequenceStripper();
-  const ptyEnv = {
+  const mergedEnv = {
     ...process.env,
     ...opts.env,
     TERM: "xterm-256color",
   };
+  const ptyEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(mergedEnv)) {
+    if (value !== undefined) {
+      ptyEnv[key] = value;
+    }
+  }
   const pty = nodePty.spawn(command, args, {
     name: "xterm-256color",
     cols: readPtyDimensionEnv("OPENCLAW_TUI_PTY_COLS", 100, ptyEnv),
@@ -151,6 +157,28 @@ export function startPty(
 
   let forceKillPromise: Promise<void> | undefined;
   let disposePromise: Promise<void> | undefined;
+  let subscriptionsDisposed = false;
+
+  const disposeSubscriptions = () => {
+    if (subscriptionsDisposed) {
+      return;
+    }
+    subscriptionsDisposed = true;
+    dataSubscription.dispose();
+    exitSubscription.dispose();
+  };
+
+  const forceKillPty = async () => {
+    if (!exitEvent) {
+      // The PTY owns a process group; killing only its shell can leave the TUI child alive.
+      await new Promise<void>((resolve) => {
+        signalProcessTree(pty.pid, "SIGKILL", { onComplete: resolve });
+      });
+      // Native PTY backends do not consistently emit onExit after a forced tree kill.
+      await sleep(PTY_EXIT_SETTLE_MS);
+      exitEvent ??= { exitCode: 137, signal: 9 };
+    }
+  };
 
   const run: PtyRun = {
     output: () => output,
@@ -176,18 +204,9 @@ export function startPty(
     forceKill: () => {
       forceKillPromise ??= (async () => {
         try {
-          if (!exitEvent) {
-            // The PTY owns a process group; killing only its shell can leave the TUI child alive.
-            await new Promise<void>((resolve) => {
-              signalProcessTree(pty.pid, "SIGKILL", { onComplete: resolve });
-            });
-            // Native PTY backends do not consistently emit onExit after a forced tree kill.
-            await sleep(PTY_EXIT_SETTLE_MS);
-            exitEvent ??= { exitCode: 137, signal: 9 };
-          }
+          await forceKillPty();
         } finally {
-          dataSubscription.dispose();
-          exitSubscription.dispose();
+          disposeSubscriptions();
         }
       })();
       return forceKillPromise;
@@ -197,17 +216,21 @@ export function startPty(
         return forceKillPromise;
       }
       disposePromise ??= (async () => {
-        dataSubscription.dispose();
         try {
           if (!exitEvent) {
-            pty.kill("SIGTERM");
+            try {
+              pty.kill("SIGTERM");
+              await waitForExit();
+            } catch {
+              // Failure cleanup must not strand the PTY tree or replace the primary test error.
+              await forceKillPty();
+            }
           }
-          await waitForExit();
           // node-pty releases its native exit callback after onExit returns.
           // Give that release a turn before Vitest tears down the worker.
           await sleep(PTY_EXIT_SETTLE_MS);
         } finally {
-          exitSubscription.dispose();
+          disposeSubscriptions();
         }
       })();
       return disposePromise;

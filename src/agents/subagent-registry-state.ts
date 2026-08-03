@@ -70,17 +70,19 @@ function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRun
     ...(entry.model ? { model: entry.model } : {}),
     ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
     createdAt: entry.createdAt,
-    ...(entry.startedAt !== undefined ? { startedAt: entry.startedAt } : {}),
+    execution: {
+      ...(entry.execution.startedAt !== undefined ? { startedAt: entry.execution.startedAt } : {}),
+      ...(entry.execution.endedAt !== undefined ? { endedAt: entry.execution.endedAt } : {}),
+      ...(entry.execution.outcome ? { outcome: { status: entry.execution.outcome.status } } : {}),
+    },
     ...(entry.sessionStartedAt !== undefined ? { sessionStartedAt: entry.sessionStartedAt } : {}),
     ...(entry.accumulatedRuntimeMs !== undefined
       ? { accumulatedRuntimeMs: entry.accumulatedRuntimeMs }
       : {}),
-    ...(entry.endedAt !== undefined ? { endedAt: entry.endedAt } : {}),
     ...(entry.runTimeoutSeconds !== undefined
       ? { runTimeoutSeconds: entry.runTimeoutSeconds }
       : {}),
     ...(entry.endedReason ? { endedReason: entry.endedReason } : {}),
-    ...(entry.outcome ? { outcome: { status: entry.outcome.status } } : {}),
     ...(entry.cleanupCompletedAt !== undefined
       ? { cleanupCompletedAt: entry.cleanupCompletedAt }
       : {}),

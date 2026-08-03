@@ -244,15 +244,18 @@ export async function finalizeCodexAttempt(
     turnWatchTimeoutKind: state.turnWatchTimeoutKind,
   });
   const failureDiagnostics =
-    codexAppServerFailureKind === "turn_completion_idle_timeout" &&
-    state.turnWatchTimeoutKind === "completion"
-      ? buildCodexAppServerTimeoutDiagnostics({
-          idleMs: state.turnWatchTimeoutIdleMs,
-          timeoutMs: state.turnWatchTimeoutMs,
-          lastActivityReason: state.turnWatchTimeoutLastActivityReason,
-          details: state.turnWatchTimeoutDetails,
-        })
-      : undefined;
+    codexAppServerFailureKind === "client_closed_before_turn_completed" &&
+    state.clientClosedDiagnostic
+      ? { transportError: state.clientClosedDiagnostic }
+      : codexAppServerFailureKind === "turn_completion_idle_timeout" &&
+          state.turnWatchTimeoutKind === "completion"
+        ? buildCodexAppServerTimeoutDiagnostics({
+            idleMs: state.turnWatchTimeoutIdleMs,
+            timeoutMs: state.turnWatchTimeoutMs,
+            lastActivityReason: state.turnWatchTimeoutLastActivityReason,
+            details: state.turnWatchTimeoutDetails,
+          })
+        : undefined;
   const codexAppServerFailure = codexAppServerFailureKind
     ? ({
         kind: codexAppServerFailureKind,

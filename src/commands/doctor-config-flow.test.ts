@@ -1953,6 +1953,28 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("keeps the Codex session auth migration plan outside persisted config", async () => {
+    const openAICodexAuthProfileIdMap = new Map([
+      ["openai-codex:default", "openai:chatgpt-default"],
+    ]);
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: [],
+      warningNotes: [],
+      authProfilesRepaired: false,
+      openAICodexAuthProfileIdMap,
+    }));
+
+    const result = await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.openAICodexAuthProfileIdMap).toBe(openAICodexAuthProfileIdMap);
+    expect(result.cfg).not.toHaveProperty("openAICodexAuthProfileIdMap");
+  });
+
   it("does not refresh gateway before writing a config-only auth repair", async () => {
     runDoctorRepairSequenceMock.mockImplementation(
       async (params: {

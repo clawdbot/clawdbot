@@ -5,9 +5,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
-  mockedEnsureRuntimePluginsLoaded,
+  mockedAcquireAgentRunPreparedModelRuntime,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
+  resetRunOverflowCompactionHarnessMocks,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -49,11 +50,20 @@ describe("runEmbeddedAgent usage reporting", () => {
   });
 
   beforeEach(() => {
-    mockedEnsureRuntimePluginsLoaded.mockReset();
-    mockedRunEmbeddedAttempt.mockReset();
+    resetRunOverflowCompactionHarnessMocks();
   });
 
   it("bootstraps runtime plugins with the resolved workspace before running", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/test-model",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+        },
+      },
+    };
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Response 1"],
@@ -68,12 +78,99 @@ describe("runEmbeddedAgent usage reporting", () => {
       prompt: "hello",
       timeoutMs: 30000,
       runId: "run-plugin-bootstrap",
+      config,
     });
 
-    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: {},
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        workspaceDir: "/tmp/workspace",
+        runtimePluginSelections: expect.arrayContaining([
+          expect.objectContaining({ provider: "openai", modelId: "gpt-5.5" }),
+        ]),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("includes named-agent fallback owners in the runtime plugin plan", async () => {
+    const config = {
+      agents: {
+        defaults: { model: { primary: "anthropic/test-model" } },
+        list: [
+          {
+            id: "support",
+            model: { fallbacks: ["openai/gpt-5.5"] },
+          },
+        ],
+      },
+    };
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["Response 1"] }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "test-session",
+      sessionKey: "agent:support:test-key",
+      sessionFile: "agent:support:test-key",
+      agentId: "support",
       workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-agent-fallback-plugin-bootstrap",
+      config,
     });
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "support",
+        runtimePluginSelections: expect.arrayContaining([
+          expect.objectContaining({ provider: "openai", modelId: "gpt-5.5" }),
+        ]),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("preserves an explicitly pinned harness across fallback plugin planning", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex/test-model",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+        },
+      },
+    };
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["Response 1"] }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "test-key",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-pinned-fallback-plugin-bootstrap",
+      agentHarnessId: "codex",
+      config,
+    });
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: expect.arrayContaining([
+          expect.objectContaining({
+            provider: "openai",
+            modelId: "gpt-5.5",
+            runtime: "codex",
+          }),
+        ]),
+      }),
+      expect.anything(),
+    );
   });
 
   it("forwards gateway subagent binding opt-in to runtime plugin bootstrap", async () => {
@@ -94,11 +191,14 @@ describe("runEmbeddedAgent usage reporting", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: {},
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        workspaceDir: "/tmp/workspace",
+        allowGatewaySubagentBinding: true,
+      }),
+      expect.anything(),
+    );
     expect(firstAttemptInput().allowGatewaySubagentBinding).toBe(true);
   });
 
@@ -175,24 +275,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     expect(attemptInput.memoryFlushWritePath).toBe("memory/2026-03-10.md");
   });
 
-  it("reports total usage from the last turn instead of accumulated total", async () => {
-    // Billing metadata uses accumulated input/output but the reported total
-    // remains the final provider call total, matching last-turn usage contracts.
-    // Simulate a multi-turn run result.
-    // Turn 1: Input 100, Output 50. Total 150.
-    // Turn 2: Input 150, Output 50. Total 200.
-
-    // The accumulated usage (attemptUsage) will be the sum:
-    // Input: 100 + 150 = 250 (Note: runEmbeddedAttempt actually returns accumulated usage)
-    // Output: 50 + 50 = 100
-    // Total: 150 + 200 = 350
-
-    // The last assistant usage (lastAssistant.usage) will be Turn 2:
-    // Input: 150, Output 50, Total 200.
-
-    // We expect result.meta.agentMeta.usage.total to be 200 (last turn total).
-    // The bug causes it to be 350 (accumulated total).
-
+  it("reports cumulative usage separately from the last call", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Response 1", "Response 2"],
@@ -213,15 +296,16 @@ describe("runEmbeddedAgent usage reporting", () => {
       runId: "run-1",
     });
 
-    // Check usage in meta
-    const usage = result.meta.agentMeta?.usage;
-    expect(usage?.input).toBe(250);
-    expect(usage?.output).toBe(100);
-    expect(usage?.total).toBe(200);
-
-    // Check if total matches the last turn's total (200)
-    // If the bug exists, it will likely be 350
-    expect(usage?.total).toBe(200);
+    expect(result.meta.agentMeta?.usage).toMatchObject({
+      input: 250,
+      output: 100,
+      total: 350,
+    });
+    expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
+      input: 150,
+      output: 50,
+      total: 200,
+    });
   });
 
   it("uses current-attempt usage when the persisted assistant snapshot is zeroed", async () => {
@@ -257,7 +341,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     expect(result.meta.agentMeta?.usage).toMatchObject({
       input: 250,
       output: 100,
-      total: 200,
+      total: 350,
     });
     expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
       input: 150,

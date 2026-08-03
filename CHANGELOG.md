@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Browser extension relay CDP compat:** answer `Target.getBrowserContexts` so Puppeteer-based clients (chrome-devtools-mcp) can drive the paired Chrome without the remote-debugging permission prompt, serve DevTools-style `/json/list` target descriptors, and add `openclaw browser extension cdp` to print the relay endpoint plus auth header for external CDP clients.
 - **Local model setup:** advertise provider-owned Ollama, llama.cpp, and LM Studio setup choices to Control UI and macOS, retry unavailable LM Studio services in place, and verify the exact prepared model before showing success.
 - **Control UI first-run setup:** continue verified model setup into Custodian, explain that the web app is ready without a channel, and offer an optional dismissible path to Channels.
 - **Fish Audio speech:** add hosted S2.1 synthesis with streaming, voice notes, voice discovery, and telephony, plus local Fish S2 Pro reference-voice streaming in native macOS Talk. Thanks @Conan-Scott for the earlier community-plugin implementation.
@@ -22,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - **Buzz message fidelity:** preserve Markdown output and accept Buzz normal, rich-content, and structured-diff room messages through the existing authorized inbound path. Thanks @shakkernerd.
 - **Buzz typing indicators:** show room- and thread-scoped typing during agent replies and heartbeat deliveries, refresh through the active authenticated connection without waiting for relay acknowledgement, and drop ephemeral updates safely during disconnects or shutdown. Thanks @shakkernerd.
 - **Buzz sender directory:** expose current bot, member, room, and room-member directory entries from bounded relay state; use current Buzz profile and room names in inbound context while preserving public keys and UUIDs as stable authorization and routing identities. Thanks @shakkernerd.
+- **Buzz native mentions:** resolve unique current room-member names and explicit NIP-27 identities into native `p` tags for replies, proactive sends, and bounded standalone delivery; reject out-of-room identities and unresolved labels without an explicit identity, and preserve Buzz reply-thread session parsing during maintenance and heartbeat runs. Thanks @shakkernerd.
 - **ClickClack guided setup:** configure ClickClack from `openclaw onboard` or `openclaw channels add clickclack` with URL, token, and workspace prompts, default-account env fallback, nonfatal live connection validation, and gateway-aware next steps that connect automatically when OpenClaw is already running. Thanks @shakkernerd.
 - **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd.
 - **Skill Workshop approvals:** run agent-initiated apply, reject, and quarantine actions without an additional approval prompt by default while preserving `skills.workshop.approvalPolicy: "pending"` as an opt-in approval gate. Thanks @shakkernerd.
@@ -58,6 +60,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI operator session permissions:** honor Gateway-advertised operator scopes for new-thread creation, thread management, checkpoints, and sharing controls while preserving read-only navigation and legacy Gateway compatibility. Fixes #117786. Thanks @shakkernerd.
+- **Control UI archived session deletion:** send archive-gated delete requests from Sessions-page row and mixed-selection actions so write-scoped operators can remove archived threads while active-session deletion remains admin-only. Thanks @shakkernerd.
+- **Control UI command recovery:** keep delayed detached and immediate command failures scoped to their submitting session, preserving failed drafts and attachments for that pane without overwriting the active session. Fixes #116846. Thanks @shakkernerd.
+- **Microsoft Teams message-tool replies:** keep automatic live previews from duplicating a message already delivered to the current Teams conversation, while preserving distinct follow-up text and cross-conversation sends. Fixes #116397. (#116398) Thanks @a-tokyo.
 - **Buzz plugin packaging:** keep the live QA runner on the shipped QA runner SDK surface and remove the obsolete package shrinkwrap so standalone npm and ClawHub package builds use current host exports and dependency resolutions. Thanks @shakkernerd.
 - **Control UI sharing connection isolation:** discard stale visibility and membership mutation results after switching gateways or accounts so previous-connection refreshes and errors cannot update the replacement connection. Fixes #116800. Thanks @shakkernerd.
 - **Control UI session refreshes:** preserve explicitly queued list filters and background hydration across later Gateway event invalidation, while keeping append pagination followed by a canonical refresh. Fixes #116697. Thanks @shakkernerd.
@@ -67,9 +73,11 @@ Docs: https://docs.openclaw.ai
 - **macOS remote tunnel lifecycle:** prevent cancelled or superseded restart backoffs from recreating SSH tunnels, and join a tunnel create that another caller started while the actor was suspended.
 - **macOS location permission requests:** coalesce concurrent prompts so every caller resumes, and stop cancelled timeouts from opening Settings or completing a newer request.
 - **macOS Voice Wake cancellation:** stop superseded silence, capture, and recognizer-restart timers immediately so cancelled work cannot restart the microphone pipeline or keep stale monitor loops alive.
+- **Meeting node audio retention:** bound captured audio and terminal retention for Google Meet, Teams, and Zoom node-host sessions, make close idempotent, and force stalled bridge processes down after the graceful shutdown window.
 - **Control UI update reconciliation:** preserve an unresolved managed-update request across disconnects, accept the replacement Gateway version when it proves success, and otherwise show explicit recovery guidance instead of trusting an unrelated cached update result or failing silently. Fixes #116075. Thanks @shakkernerd.
 - **Control UI model readiness:** put AI setup first when no model is selectable, distinguish signed-in credentials from ready providers, and route accounts with no exposed models directly to provider recovery instead of leading with disabled default controls.
 - **Control UI Talk session isolation:** stop active realtime Talk media and retire its callbacks before chat session changes, Gateway disconnects, or pane disposal so previous-session audio, transcript, camera, and status updates cannot leak into the next view. Thanks @shakkernerd.
+- **Control UI Realtime tool calls:** execute OpenAI WebRTC tools only from completed responses, bound retained call identities and UTF-8 arguments, and ignore provisional or late duplicate events so long Talk sessions cannot grow tool state without limit.
 - **Gateway reconnect event ordering:** reset the shared TypeScript client's outer event-sequence baseline for each replacement WebSocket, preventing gap recovery from comparing unrelated connection generations across Control UI, TUI, SDK, and browser extension clients. Thanks @shakkernerd.
 - **Skill Workshop offline apply:** preserve configless local proposal apply after upgrades under exclusive Gateway startup ownership, while keeping running Gateway snapshot invalidation fail-closed when CLI credentials are unavailable.
 - **macOS and Control UI keyboard navigation:** let Tab traverse links and controls inside embedded Dashboard, browser, and Canvas web views, and keep shortcuts working on non-Latin keyboard layouts without firing during IME composition.
@@ -362,6 +370,7 @@ Docs: https://docs.openclaw.ai
 - **Signal native quote replies:** preserve the active inbound message as a native quote across agent, explicit, durable, and chunked sends while keeping reply-mode policy inside the Signal plugin. (#105347) Thanks @jesse-merhi.
 - **Media-store remote downloads:** bound response-header waits and stalled bodies, close abandoned redirect and error responses, and remove partial temp files so hung sources cannot pin callers. (#104624) Thanks @hugenshen.
 - **Cron llama.cpp tool schemas:** keep the model-facing cron declaration schema compatible with llama.cpp while retaining gateway and runtime nonblank validation. Fixes #107449. (#108360) Thanks @lee-xydt.
+- **System-agent recovery guidance:** direct browser and app users to Settings or the OpenClaw host instead of terminal-only exit guidance while preserving the required stop, onboard, and restart lifecycle. (#114633) Thanks @jesse-merhi.
 
 ## 2026.7.1
 

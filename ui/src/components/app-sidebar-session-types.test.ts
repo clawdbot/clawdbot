@@ -2,7 +2,9 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionStatusFilter,
+  storeHiddenSessionCatalogIds,
   storeSidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 
@@ -53,4 +55,19 @@ describe("sidebar session status preference", () => {
     storeSidebarSessionStatusFilter("all");
     expect(loadStoredSidebarSessionStatusFilter()).toBe("all");
   });
+});
+
+describe("hidden session catalog preference", () => {
+  it("round-trips catalog ids", () => {
+    storeHiddenSessionCatalogIds(new Set(["codex", "claude"]));
+    expect([...loadStoredHiddenSessionCatalogIds()]).toEqual(["codex", "claude"]);
+  });
+
+  it.each(["not-json", JSON.stringify({ catalog: "codex" })])(
+    "treats malformed storage as empty: %s",
+    (stored) => {
+      localStorage.setItem("openclaw:sidebar:sessions:hidden-catalogs", stored);
+      expect(loadStoredHiddenSessionCatalogIds().size).toBe(0);
+    },
+  );
 });
