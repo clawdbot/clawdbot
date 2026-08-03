@@ -120,6 +120,152 @@ function recordAlternative(frame: ParseFrame): void {
 
 const ASCII_ATOM_SAMPLES = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code));
 
+// ECMAScript general-category aliases form a small closed hierarchy. Keeping
+// that hierarchy lets the overlap check prove common Unicode properties
+// disjoint without enumerating every code point during config validation.
+const GENERAL_CATEGORY_GROUPS = [
+  [
+    ["L", "Letter"],
+    [
+      ["Lu", "Uppercase_Letter"],
+      ["Ll", "Lowercase_Letter"],
+      ["Lt", "Titlecase_Letter"],
+      ["Lm", "Modifier_Letter"],
+      ["Lo", "Other_Letter"],
+    ],
+  ],
+  [
+    ["M", "Mark"],
+    [
+      ["Mn", "Nonspacing_Mark"],
+      ["Mc", "Spacing_Mark"],
+      ["Me", "Enclosing_Mark"],
+    ],
+  ],
+  [
+    ["N", "Number"],
+    [
+      ["Nd", "Decimal_Number"],
+      ["Nl", "Letter_Number"],
+      ["No", "Other_Number"],
+    ],
+  ],
+  [
+    ["P", "Punctuation"],
+    [
+      ["Pc", "Connector_Punctuation"],
+      ["Pd", "Dash_Punctuation"],
+      ["Ps", "Open_Punctuation"],
+      ["Pe", "Close_Punctuation"],
+      ["Pi", "Initial_Punctuation"],
+      ["Pf", "Final_Punctuation"],
+      ["Po", "Other_Punctuation"],
+    ],
+  ],
+  [
+    ["S", "Symbol"],
+    [
+      ["Sm", "Math_Symbol"],
+      ["Sc", "Currency_Symbol"],
+      ["Sk", "Modifier_Symbol"],
+      ["So", "Other_Symbol"],
+    ],
+  ],
+  [
+    ["Z", "Separator"],
+    [
+      ["Zs", "Space_Separator"],
+      ["Zl", "Line_Separator"],
+      ["Zp", "Paragraph_Separator"],
+    ],
+  ],
+  [
+    ["C", "Other"],
+    [
+      ["Cc", "Control"],
+      ["Cf", "Format"],
+      ["Cs", "Surrogate"],
+      ["Co", "Private_Use"],
+      ["Cn", "Unassigned"],
+    ],
+  ],
+] as const;
+
+function normalizeUnicodePropertyName(value: string): string {
+  return value.replace(/[_\s-]/g, "").toLowerCase();
+}
+
+const GENERAL_CATEGORY_MASKS = (() => {
+  const masks = new Map<string, number>();
+  let bitIndex = 0;
+  for (const [groupAliases, members] of GENERAL_CATEGORY_GROUPS) {
+    let groupMask = 0;
+    for (const aliases of members) {
+      const bit = 2 ** bitIndex;
+      bitIndex += 1;
+      groupMask |= bit;
+      for (const alias of aliases) {
+        masks.set(normalizeUnicodePropertyName(alias), bit);
+      }
+    }
+    for (const alias of groupAliases) {
+      masks.set(normalizeUnicodePropertyName(alias), groupMask);
+    }
+  }
+  return masks;
+})();
+
+const ALL_GENERAL_CATEGORIES_MASK = 2 ** 30 - 1;
+
+function parseUnicodePropertyAtom(
+  source: string,
+): { kind: "category"; mask: number } | { kind: "binary"; name: string; negated: boolean } | null {
+  const match = source.match(/^\\([pP])\{([^}]+)\}$/);
+  if (!match) {
+    return null;
+  }
+  const negated = match[1] === "P";
+  const rawProperty = match[2] ?? "";
+  const separator = rawProperty.indexOf("=");
+  const propertyName =
+    separator < 0 ? "" : normalizeUnicodePropertyName(rawProperty.slice(0, separator));
+  const value = normalizeUnicodePropertyName(
+    separator < 0 ? rawProperty : rawProperty.slice(separator + 1),
+  );
+  const categoryMask =
+    separator < 0 || propertyName === "gc" || propertyName === "generalcategory"
+      ? GENERAL_CATEGORY_MASKS.get(value)
+      : undefined;
+  if (categoryMask !== undefined) {
+    return {
+      kind: "category",
+      mask: negated ? ALL_GENERAL_CATEGORIES_MASK ^ categoryMask : categoryMask,
+    };
+  }
+  return separator < 0 ? { kind: "binary", name: value, negated } : null;
+}
+
+function unicodePropertiesAreProvablyDisjoint(left: string, right: string, flags: string): boolean {
+  if (flags.includes("i")) {
+    // Case folding can make distinct categories overlap (for example Lu and Ll).
+    return false;
+  }
+  const leftProperty = parseUnicodePropertyAtom(left);
+  const rightProperty = parseUnicodePropertyAtom(right);
+  if (!leftProperty || !rightProperty) {
+    return false;
+  }
+  if (leftProperty.kind === "category" && rightProperty.kind === "category") {
+    return (leftProperty.mask & rightProperty.mask) === 0;
+  }
+  return (
+    leftProperty.kind === "binary" &&
+    rightProperty.kind === "binary" &&
+    leftProperty.name === rightProperty.name &&
+    leftProperty.negated !== rightProperty.negated
+  );
+}
+
 function readLegacyOctalEscape(
   source: string,
   index: number,
@@ -289,6 +435,9 @@ function atomsMayOverlap(left: string, right: string, flags: string): boolean {
     // Backreferences only have meaning in the complete pattern's capture context.
     // A standalone atom probe cannot prove them disjoint from another branch.
     return true;
+  }
+  if (unicodePropertiesAreProvablyDisjoint(left, right, flags)) {
+    return false;
   }
   try {
     const safeFlags = flags.replace(/[gy]/g, "");
