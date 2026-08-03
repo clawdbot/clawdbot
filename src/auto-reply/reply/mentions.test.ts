@@ -265,6 +265,17 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("clawd status", regexes)).toBe(true);
   });
 
+  it("binds a mark to the character before it, not the token after it", () => {
+    // The selector in "❤️" modifies the heart, so it is part of the decoration
+    // and stays omissible; absorbed into the following token it would be
+    // required, and nobody types it.
+    const regexes = buildMentionRegexes(configForName("❤️小蝶"), "decorated-agent");
+
+    expect(matchesMentionPatterns("小蝶 你好", regexes)).toBe(true);
+    expect(matchesMentionPatterns("❤️小蝶 你好", regexes)).toBe(true);
+    expect(matchesMentionPatterns("前小蝶 你好", regexes)).toBe(false);
+  });
+
   it("derives no pattern from an identity that normalization empties", () => {
     // Joiners do not survive normalization, so an identity made only of them
     // has nothing left to require: an optional-joiner pattern on its own would

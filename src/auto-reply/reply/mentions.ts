@@ -34,15 +34,13 @@ const NAME_TOKEN_CHARS = String.raw`${NAME_IDENTITY_CHARS}\p{M}`;
 const JOINER_CHARS = String.raw`\u200C\u200D`;
 const UNICODE_WORD_CHAR = String.raw`[${NAME_TOKEN_CHARS}${JOINER_CHARS}]`;
 const JOINER_RUN = new RegExp(`[${JOINER_CHARS}]+`, "u");
-// A token has to carry an identity character: marks attach to one, they never
-// stand for one. A run of bare marks is presentation -- the variation selector
-// U+FE0F an emoji identity name carries, the enclosing keycap U+20E3 -- and
-// requiring it as the token would match every unrelated emoji carrying the
-// same mark.
-const NAME_TOKEN_SPLIT = new RegExp(
-  `([${NAME_TOKEN_CHARS}]*[${NAME_IDENTITY_CHARS}][${NAME_TOKEN_CHARS}]*)`,
-  "gu",
-);
+// A token starts at an identity character: marks attach to the character
+// before them, they never stand for one. So a mark run that trails decoration
+// is decoration too -- the variation selector U+FE0F an emoji carries, the
+// enclosing keycap U+20E3 -- while a mark on a letter stays part of its token.
+// Deriving a bare mark run as the token would both require decoration nobody
+// types and match every unrelated emoji carrying the same mark.
+const NAME_TOKEN_SPLIT = new RegExp(`([${NAME_IDENTITY_CHARS}][${NAME_TOKEN_CHARS}]*)`, "gu");
 
 type DerivedNameParts = {
   leading: string;
