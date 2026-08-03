@@ -351,6 +351,10 @@ describe("memory-core plugin runtime registration", () => {
       sandboxed: false,
       hits,
     });
+    expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
+      acquireLocalService: hostRuntime.llm.acquireLocalService,
+      withLease: expect.any(Function),
+    });
   });
 
   it("binds the host SQLite lease hook to tools and CLI runtime", async () => {
