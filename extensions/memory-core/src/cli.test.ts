@@ -1644,6 +1644,19 @@ describe("memory cli", () => {
     expect(log).toHaveBeenCalledWith("Memory search disabled.");
   });
 
+  it("fails cli commands when memory manager acquisition reports an error", async () => {
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: null,
+      error: "qmd binary unavailable (qmd): spawn qmd ENOENT",
+    });
+
+    const error = spyRuntimeErrors(defaultRuntime);
+    await runMemoryCli(["index"]);
+
+    expect(error).toHaveBeenCalledWith("qmd binary unavailable (qmd): spawn qmd ENOENT");
+    expect(process.exitCode).toBe(1);
+  });
+
   it("logs backend unsupported message when index has no sync", async () => {
     const close = vi.fn(async () => {});
     mockManager({

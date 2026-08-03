@@ -886,7 +886,12 @@ class FallbackMemoryManager implements MemorySearchManager {
       }
     }
     const fallback = await this.ensureFallback();
-    return (await fallback?.listCuratedProjectCandidates?.(opts)) ?? [];
+    if (!fallback) {
+      // Fail-closed QMD errors must stay observable; an empty list would look like
+      // a successful recall and hide that project discovery did not run.
+      throw new Error(this.lastError ?? "memory project listing unavailable");
+    }
+    return (await fallback.listCuratedProjectCandidates?.(opts)) ?? [];
   }
 
   status() {

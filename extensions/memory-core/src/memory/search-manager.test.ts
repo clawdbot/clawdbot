@@ -1301,6 +1301,9 @@ describe("getMemorySearchManager caching", () => {
 
     await expect(manager.search("hello")).rejects.toThrow("qmd query failed");
     await expect(manager.readFile({ relPath: "MEMORY.md" })).rejects.toThrow("qmd query failed");
+    await expect(
+      manager.listCuratedProjectCandidates?.({ activeProjectKeys: ["openclaw"], limit: 3 }),
+    ).rejects.toThrow("qmd query failed");
     expect(manager.status().backend).toBe("qmd");
     expect(mockMemoryIndexGet).not.toHaveBeenCalled();
   });
