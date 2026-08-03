@@ -23,6 +23,7 @@ type BedrockEmbeddingClient = {
   region: string;
   model: string;
   dimensions?: number;
+  endpoint?: string;
 };
 
 /** Default Bedrock embedding model used when no explicit model is configured. */
@@ -306,8 +307,8 @@ if (process.env.VITEST === "true") {
 export async function createBedrockEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: BedrockEmbeddingClient }> {
-  const client = resolveBedrockEmbeddingClient(options);
   const { BedrockRuntimeClient, InvokeModelCommand } = await loadSdk();
+  const client = resolveBedrockEmbeddingClient(options, BedrockRuntimeClient);
   const spec = resolveSpec(client.model);
   const family = spec?.family ?? inferFamily(client.model);
 
@@ -320,7 +321,7 @@ export async function createBedrockEmbeddingProvider(
 
   const invoke = async (body: string, signal?: AbortSignal): Promise<string> => {
     await refreshAwsSharedConfigCacheForBedrock();
-    const sdk = new BedrockRuntimeClient({ region: client.region });
+    const sdk = new BedrockRuntimeClient({ region: client.region, endpoint: client.endpoint });
     try {
       const res = await sdk.send(
         new InvokeModelCommand({
@@ -399,10 +400,14 @@ export async function createBedrockEmbeddingProvider(
 
 function resolveBedrockEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
+  BedrockRuntimeClient: AwsSdk["BedrockRuntimeClient"],
 ): BedrockEmbeddingClient {
   const model = normalizeBedrockEmbeddingModel(options.model);
   const spec = resolveSpec(model);
   const providerConfig = options.config.models?.providers?.["amazon-bedrock"];
+  let endpoint =
+    normalizeOptionalString(options.remote?.baseUrl) ??
+    normalizeOptionalString(providerConfig?.baseUrl);
 
   const region =
     regionFromUrl(options.remote?.baseUrl) ??
@@ -410,6 +415,18 @@ function resolveBedrockEmbeddingClient(
     normalizeOptionalString(process.env.AWS_REGION) ??
     normalizeOptionalString(process.env.AWS_DEFAULT_REGION) ??
     "us-east-1";
+
+  if (endpoint) {
+    const sdk = new BedrockRuntimeClient({ region });
+    try {
+      const endpointModes = { Region: region, UseFIPS: false, UseDualStack: false };
+      const regionalEndpoint = sdk.config.endpointProvider(endpointModes).url.href;
+      // Pinning regional metadata would defeat SDK-owned FIPS and private endpoint overrides.
+      endpoint = new URL(endpoint).href === regionalEndpoint ? undefined : endpoint;
+    } finally {
+      sdk.destroy();
+    }
+  }
 
   let dimensions: number | undefined;
   if (options.outputDimensionality != null) {
@@ -423,7 +440,7 @@ function resolveBedrockEmbeddingClient(
     dimensions = spec?.dims;
   }
 
-  return { region, model, dimensions };
+  return { region, model, dimensions, ...(endpoint ? { endpoint } : {}) };
 }
 
 // ---------------------------------------------------------------------------
