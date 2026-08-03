@@ -121,6 +121,8 @@ export type TranscriptImportRequest = {
 export type TranscriptSourceProvider = {
   id: string;
   aliases?: readonly string[];
+  /** Ingress channel ids whose trusted account owns this provider's account namespace. */
+  accountBindingChannels?: readonly string[];
   name: string;
   sourceKinds: readonly TranscriptSourceKind[];
   start?: (request: TranscriptStartRequest) => Promise<TranscriptsStartResult>;

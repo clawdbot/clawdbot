@@ -74,6 +74,7 @@ async function waitForManager(
 export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
   id: "discord-voice",
   aliases: ["discord"],
+  accountBindingChannels: ["discord"],
   name: "Discord Voice",
   sourceKinds: ["live-audio"],
   async start(request) {

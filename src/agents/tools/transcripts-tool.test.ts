@@ -118,6 +118,7 @@ describe("transcripts tool", () => {
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       aliases: ["discord"],
+      accountBindingChannels: ["discord"],
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
@@ -127,7 +128,7 @@ describe("transcripts tool", () => {
       accountId: "account-a",
     });
 
-    await tool.execute(
+    const result = await tool.execute(
       "call-account-bound",
       {
         action: "start",
@@ -151,6 +152,7 @@ describe("transcripts tool", () => {
     await expect(storeFor(stateDir).readSession("account-bound")).resolves.toMatchObject({
       source: { accountId: "account-a" },
     });
+    expect(result.details).toMatchObject({ accountId: "account-a" });
   });
 
   it("preserves an explicit account for a different provider channel", async () => {
@@ -188,6 +190,44 @@ describe("transcripts tool", () => {
         }),
       }),
     );
+  });
+
+  it("does not treat provider lookup aliases as account binding channels", async () => {
+    const stateDir = await makeStateDir();
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "teams",
+      aliases: ["msteams"],
+      name: "Teams Meetings",
+      sourceKinds: ["live-caption"],
+      start,
+    });
+    const { tool } = await createHarness(stateDir, {}, "main", {
+      channel: "msteams",
+      accountId: "chat-account",
+    });
+
+    const result = await tool.execute(
+      "call-alias-collision",
+      {
+        action: "start",
+        providerId: "teams",
+        accountId: "meeting-account",
+        meetingUrl: "https://teams.microsoft.com/l/meetup-join/example",
+        sessionId: "alias-collision",
+      },
+      undefined,
+      vi.fn(),
+    );
+
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          source: expect.objectContaining({ accountId: "meeting-account" }),
+        }),
+      }),
+    );
+    expect(result.details).toMatchObject({ accountId: "meeting-account" });
   });
 
   it("keeps ownerless shipped sessions visible only to the main agent", async () => {

@@ -122,7 +122,7 @@ function bindSourceToTurnAccount(params: {
   if (!channel || !accountId) {
     return params.source;
   }
-  const providerChannels = [params.provider.id, ...(params.provider.aliases ?? [])].map((entry) =>
+  const providerChannels = (params.provider.accountBindingChannels ?? []).map((entry) =>
     entry.trim().toLowerCase(),
   );
   if (!providerChannels.includes(channel)) {
@@ -247,6 +247,7 @@ export async function startTranscripts(params: {
     return toolText(`Transcripts started: ${session.sessionId}`, {
       sessionId: session.sessionId,
       providerId: provider.id,
+      ...(session.source.accountId ? { accountId: session.source.accountId } : {}),
     });
   } finally {
     startingSessionIds.delete(session.sessionId);
