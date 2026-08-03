@@ -278,7 +278,8 @@ async function startIsolatedSshd(root: string): Promise<IsolatedSshd> {
       "KbdInteractiveAuthentication no",
       "PermitEmptyPasswords no",
       "PermitRootLogin prohibit-password",
-      "UsePAM no",
+      // Testbox runner accounts are password-locked; PAM still permits generated-key auth.
+      "UsePAM yes",
       "StrictModes no",
       "AllowTcpForwarding yes",
       "GatewayPorts no",
