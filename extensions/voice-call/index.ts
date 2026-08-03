@@ -327,7 +327,7 @@ export default definePluginEntry({
     const commands = createVoiceCallCommandService(ensureRuntime);
     const registerGatewayCommand = (
       method: string,
-      handler: (options: GatewayRequestHandlerOptions) => unknown | Promise<unknown>,
+      handler: (options: GatewayRequestHandlerOptions) => unknown,
       scope: typeof VOICE_CALL_WRITE_METHOD_SCOPE | typeof VOICE_CALL_READ_METHOD_SCOPE,
     ) => {
       api.registerGatewayMethod(

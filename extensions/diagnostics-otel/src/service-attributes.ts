@@ -1,8 +1,5 @@
 import type { LogRecord } from "@opentelemetry/api-logs";
-import {
-  normalizeDiagnosticValue,
-  normalizeDiagnosticLane,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { DiagnosticEventPayload, DiagnosticTraceContext } from "../api.js";
 import { redactSensitiveText } from "../api.js";
 import {
