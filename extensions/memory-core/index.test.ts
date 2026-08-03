@@ -87,6 +87,16 @@ describe("buildPromptSection", () => {
     expect(result[1]).not.toContain("then use memory_get");
   });
 
+  it("routes unavailable semantic recall through native session search", () => {
+    const result = buildPromptSection({
+      availableTools: new Set(["memory_search", "sessions_search"]),
+    });
+
+    expect(result).toContain(
+      "If memory_search reports unavailable or disabled, immediately search canonical conversation history with sessions_search using the same query. Do not guess or ask the user to repeat known context merely because semantic retrieval failed.",
+    );
+  });
+
   it("limits the guidance to memory_get when only get is available", () => {
     const result = buildPromptSection({ availableTools: new Set(["memory_get"]) });
     expect(result[0]).toBe("## Memory Recall");

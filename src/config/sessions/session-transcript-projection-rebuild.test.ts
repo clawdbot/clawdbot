@@ -150,4 +150,40 @@ describe("canonical session transcript projection", () => {
     ]);
     expect(result.sourceIndexedSeq).toBe(2);
   });
+
+  it("keeps transcript-only assistant artifacts out of search", () => {
+    const result = projection([
+      row(0, { id: SESSION_ID, type: "session", version: 3 }),
+      row(1, {
+        id: "answer",
+        message: { content: "canonical answer", role: "assistant" },
+        parentId: null,
+        type: "message",
+      }),
+      row(2, {
+        id: "delivery-mirror",
+        message: {
+          content: "canonical answer",
+          model: "delivery-mirror",
+          provider: "openclaw",
+          role: "assistant",
+        },
+        parentId: "answer",
+        type: "message",
+      }),
+      row(3, {
+        id: "historical-mirror",
+        message: {
+          content: "historical duplicate",
+          openclawDeliveryMirror: { kind: "channel-final" },
+          role: "assistant",
+        },
+        parentId: "delivery-mirror",
+        type: "message",
+      }),
+    ]);
+
+    expect(result.activeRows).toHaveLength(3);
+    expect(result.ftsRows.map((entry) => entry.messageId)).toEqual(["answer"]);
+  });
 });

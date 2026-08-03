@@ -7,6 +7,7 @@ export const buildPromptSection: MemoryPromptSectionBuilder = ({
 }) => {
   const hasMemorySearch = availableTools.has("memory_search");
   const hasMemoryGet = availableTools.has("memory_get");
+  const hasSessionsSearch = availableTools.has("sessions_search");
 
   if (!hasMemorySearch && !hasMemoryGet) {
     return [];
@@ -25,6 +26,11 @@ export const buildPromptSection: MemoryPromptSectionBuilder = ({
   }
 
   const lines = ["## Memory Recall", toolGuidance];
+  if (hasMemorySearch && hasSessionsSearch) {
+    lines.push(
+      "If memory_search reports unavailable or disabled, immediately search canonical conversation history with sessions_search using the same query. Do not guess or ask the user to repeat known context merely because semantic retrieval failed.",
+    );
+  }
   if (citationsMode === "off") {
     lines.push(
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",

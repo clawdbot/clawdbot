@@ -780,12 +780,14 @@ describe("openclaw.chat", () => {
       resolveAllowedDecisions: (request) => request.allowedDecisions,
     });
     const broadcast = vi.fn();
+    const publishRequested = vi.fn(() => 1);
     const context = {
       ...makeContext(sessions),
       systemAgentApprovalManager: manager,
       broadcast,
       broadcastToConnIds: vi.fn(),
       hasExecApprovalClients: () => true,
+      approvalEvents: { publishRequested },
     } as unknown as GatewayRequestContext;
 
     const first = await callChat(context, {
@@ -810,6 +812,7 @@ describe("openclaw.chat", () => {
       expect.objectContaining({ id: proposalId }),
       { dropIfSlow: true },
     );
+    expect(publishRequested).not.toHaveBeenCalled();
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
 
     await callChat(context, {

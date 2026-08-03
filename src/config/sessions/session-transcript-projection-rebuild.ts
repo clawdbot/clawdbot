@@ -6,6 +6,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   isCanonicalSessionTranscriptEntry,
@@ -113,6 +114,11 @@ export function extractTranscriptIndexEntry(
   const message = record.message as { role?: unknown } | undefined;
   const role = message?.role;
   if (role !== "user" && role !== "assistant") {
+    return undefined;
+  }
+  // Transcript artifacts preserve delivery bookkeeping, not conversation truth.
+  // Indexing them makes recall return duplicate or gateway-authored answers.
+  if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
     return undefined;
   }
   const text = readMessageText(message);

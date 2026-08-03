@@ -441,6 +441,37 @@ export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): s
   return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
 }
 
+/** Marks legacy FTS rows for transcript-only assistant artifacts for one rebuild. */
+export function markTranscriptArtifactIndexesDirtyInTransaction(db: DatabaseSync): number {
+  // JSON extraction and the FTS join have no Kysely representation. Matching
+  // the indexed message id makes this self-retiring after the first rebuild.
+  const result = db
+    .prepare(/* sqlite-allow-raw: JSON1 plus FTS5 join */ `
+    UPDATE session_transcript_index_state
+    SET needs_rebuild = 1, updated_at = ?
+    WHERE session_id IN (
+      SELECT events.session_id
+      FROM transcript_events AS events
+      JOIN session_transcript_fts AS search
+        ON search.session_id = events.session_id
+       AND search.message_id = json_extract(events.event_json, '$.id')
+      WHERE json_extract(events.event_json, '$.message.role') = 'assistant'
+        AND (
+          (
+            json_extract(events.event_json, '$.message.provider') = 'openclaw'
+            AND json_extract(events.event_json, '$.message.model')
+              IN ('delivery-mirror', 'gateway-injected')
+          )
+          OR json_extract(events.event_json, '$.message.openclawDeliveryMirror.kind')
+            IN ('channel-final', 'channel-final-suppressed', 'message-tool-source-reply')
+        )
+    )
+      AND needs_rebuild = 0
+  `)
+    .run(Date.now());
+  return Number(result.changes);
+}
+
 /** Drops index rows for sessions whose transcript rows are gone. */
 export function deleteOrphanedTranscriptIndexRowsInTransaction(db: DatabaseSync): void {
   const kysely = getIndexKysely(db);

@@ -16,7 +16,10 @@ import {
   appendSqliteTranscriptMessage,
   replaceSqliteTranscriptEvents,
 } from "./session-accessor.sqlite.js";
-import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import {
+  listSessionsNeedingTranscriptIndexReconcile,
+  markTranscriptArtifactIndexesDirtyInTransaction,
+} from "./session-transcript-index.js";
 import { searchSessionTranscripts } from "./session-transcript-search.js";
 
 vi.mock("../config.js", async () => ({
@@ -246,6 +249,49 @@ describe("searchSessionTranscripts", () => {
     const result = search("historic");
     expect(result.indexing).toBe(false);
     expect(result.hits).toHaveLength(1);
+  });
+
+  it("rebuilds legacy indexes that contain delivery mirrors", async () => {
+    const scope = transcriptScope("session-1", "agent:main:main");
+    await appendSqliteTranscriptMessage(scope, {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "duplicated delivery text" }],
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+    });
+    const { db, kysely } = agentKysely();
+    const eventRows = executeSqliteQuerySync(
+      db,
+      kysely
+        .selectFrom("transcript_events")
+        .select("event_json")
+        .where("session_id", "=", "session-1"),
+    ).rows;
+    const indexedMessage = eventRows
+      .map((row) => JSON.parse(row.event_json) as { id?: unknown; message?: { role?: unknown } })
+      .find((event) => typeof event.id === "string" && event.message?.role === "assistant");
+    if (typeof indexedMessage?.id !== "string") {
+      throw new Error("expected appended delivery mirror id");
+    }
+    executeSqliteQuerySync(
+      db,
+      kysely.insertInto("session_transcript_fts").values({
+        text: "duplicated delivery text",
+        session_id: "session-1",
+        message_id: indexedMessage.id,
+        role: "assistant",
+        timestamp: "1",
+      }),
+    );
+
+    expect(search("duplicated").hits).toHaveLength(1);
+    expect(markTranscriptArtifactIndexesDirtyInTransaction(db)).toBe(1);
+    expect(search("duplicated")).toMatchObject({ hits: [], indexing: true });
+    await waitForSearchReconcile("duplicated");
+    expect(search("duplicated").hits).toHaveLength(0);
+    expect(markTranscriptArtifactIndexesDirtyInTransaction(db)).toBe(0);
   });
 
   it("detects missing, dirty, and lagging transcript index watermarks", async () => {

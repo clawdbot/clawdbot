@@ -17,7 +17,10 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { deleteOrphanedTranscriptIndexRowsInTransaction } from "./session-transcript-index.js";
+import {
+  deleteOrphanedTranscriptIndexRowsInTransaction,
+  markTranscriptArtifactIndexesDirtyInTransaction,
+} from "./session-transcript-index.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
   claimPreparedSessionTranscriptProjectionInTransaction,
@@ -198,7 +201,7 @@ async function finalizePreparedProjection(
 }
 
 /** Prepares full trees off-thread, then commits bounded chunks through the runtime writer owner. */
-export function reconcileSessionTranscriptIndexes(
+export async function reconcileSessionTranscriptIndexes(
   params: SessionTranscriptReconcileParams,
 ): Promise<SessionTranscriptReconcileResult> {
   const databasePath = resolveOpenClawAgentSqlitePath(params);
@@ -207,6 +210,11 @@ export function reconcileSessionTranscriptIndexes(
     ...(params.env ? { env: params.env } : {}),
     path: databasePath,
   };
+  await runProjectionWrite(
+    databaseOptions,
+    "sessions.transcript-index.artifact-repair",
+    (database) => markTranscriptArtifactIndexesDirtyInTransaction(database.db),
+  );
   const workerUrl = resolveSessionTranscriptReconcileWorkerUrl();
   const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const input: SessionTranscriptReconcileWorkerInput = {
@@ -221,7 +229,7 @@ export function reconcileSessionTranscriptIndexes(
     return Promise.reject(normalizeReconcileError(error));
   }
 
-  return new Promise<SessionTranscriptReconcileResult>((resolve, reject) => {
+  return await new Promise<SessionTranscriptReconcileResult>((resolve, reject) => {
     let active: ActivePreparedProjection | undefined;
     let doneReceived = false;
     let reconciledSessions = 0;

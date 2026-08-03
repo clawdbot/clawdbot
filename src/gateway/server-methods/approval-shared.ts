@@ -425,7 +425,7 @@ export async function handlePendingApprovalRequest<
   requestEventName: string;
   requestEvent: RequestedApprovalEvent<TPayload>;
   twoPhase: boolean;
-  approvalKind?: "exec" | "plugin";
+  approvalKind?: "exec" | "plugin" | "system-agent";
   deliverRequest: () => boolean | Promise<boolean>;
   afterDecision?: (
     decision: ExecApprovalDecision | null,
@@ -465,12 +465,17 @@ export async function handlePendingApprovalRequest<
         });
       }
     }
-    const internalApprovalSubscriberCount = suppressDelivery
-      ? 0
-      : (params.context.approvalEvents?.publishRequested(
-          params.approvalKind ?? "exec",
-          params.requestEvent,
-        ) ?? 0);
+    const nativeApprovalKind =
+      params.approvalKind === "system-agent" ? undefined : (params.approvalKind ?? "exec");
+    // Native channel subscribers own exec/plugin payloads only. System-agent
+    // approvals have their own gateway event and must not be misclassified.
+    const internalApprovalSubscriberCount =
+      suppressDelivery || !nativeApprovalKind
+        ? 0
+        : (params.context.approvalEvents?.publishRequested(
+            nativeApprovalKind,
+            params.requestEvent,
+          ) ?? 0);
 
     const hasApprovalClients = suppressDelivery
       ? false
