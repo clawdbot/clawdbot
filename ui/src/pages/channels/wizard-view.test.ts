@@ -189,7 +189,68 @@ describe("renderChannelWizard", () => {
     copy?.click();
 
     await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+    await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe("Copied!"));
+    expect(copy?.getAttribute("aria-label")).toBe("Copied!");
     expect(copiedText).toBe("openclaw channels add");
     expect(document.querySelector("textarea")).toBeNull();
   });
+
+  it.each([true, false])(
+    "keeps channel-copy success %s accessible across locale rerenders",
+    async (copied) => {
+      const writeText = vi.fn().mockImplementation(async () => {
+        if (!copied) {
+          throw new DOMException("Clipboard access denied");
+        }
+      });
+      const execCommand = vi.fn(() => false);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
+      const container = document.createElement("div");
+      document.body.append(container);
+      const props = {
+        wizard: {
+          phase: "step",
+          channel: null,
+          step: { id: "copy-command", type: "note", message: "openclaw channels add" },
+          stepIndex: 1,
+          busy: false,
+          validationError: null,
+        },
+        channelLabel: (channelId) => channelId,
+        multiselectValues: [],
+        onToggleMultiselect: vi.fn(),
+        textValue: "",
+        secretVisible: false,
+        onTextInput: vi.fn(),
+        onToggleSecretVisibility: vi.fn(),
+        onAnswer: vi.fn(),
+        onClose: vi.fn(),
+        whatsappQrDataUrl: null,
+        whatsappMessage: null,
+        whatsappConnected: null,
+        whatsappBusy: false,
+        onWhatsAppStart: vi.fn(),
+        onWhatsAppWait: vi.fn(),
+      } satisfies Parameters<typeof renderChannelWizard>[0];
+      render(renderChannelWizard(props), container);
+      const button = container.querySelector<HTMLButtonElement>(".channels-wizard__links button");
+
+      button?.click();
+
+      const feedback = copied ? "Copied!" : "Copy failed";
+      await vi.waitFor(() => expect(button?.textContent?.trim()).toBe(feedback));
+      expect(button?.getAttribute("aria-label")).toBe(feedback);
+      expect(writeText).toHaveBeenCalledWith("openclaw channels add");
+      expect(execCommand).toHaveBeenCalledTimes(copied ? 0 : 1);
+
+      await i18n.setLocale("de");
+      try {
+        expect(() => render(renderChannelWizard(props), container)).not.toThrow();
+        expect(button?.textContent?.trim()).toBe("Kopieren");
+      } finally {
+        await i18n.setLocale("en");
+      }
+    },
+  );
 });

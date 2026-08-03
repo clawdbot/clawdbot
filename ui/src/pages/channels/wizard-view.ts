@@ -3,10 +3,10 @@
 import "@awesome.me/webawesome/dist/components/radio/radio.js";
 import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { channelDocsUrl, channelHubMeta, renderChannelArt } from "./hub-meta.ts";
 import type { ChannelWizardState, ChannelWizardStep } from "./wizard-controller.ts";
 
@@ -51,6 +51,8 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     `;
   }
   const looksLikeCode = message.includes("{") || message.includes("  ");
+  const copyLabel = t("channels.setup.copyText");
+  const onCopy = (event: Event) => void handleCopyButton(event, message, copyLabel);
   return html`
     ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
     ${message
@@ -63,8 +65,8 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     ${message
       ? html`
           <div class="channels-wizard__links">
-            <button type="button" class="btn btn--sm" @click=${() => void copyToClipboard(message)}>
-              ${t("channels.setup.copyText")}
+            <button type="button" class="btn btn--sm" @click=${onCopy}>
+              <span data-copy-label>${copyLabel}</span>
             </button>
           </div>
         `
