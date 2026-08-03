@@ -8,7 +8,7 @@ const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-config-channel|assert-status-kind> [...]",
+    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-config-channel|assert-status-kind|assert-installed-version> [...]",
   );
   process.exit(2);
 }
@@ -163,8 +163,8 @@ function assertUpdate(channel) {
   if (channel === "dev" && payload.mode !== "git") {
     throw new Error(`expected dev update mode git, got ${payload.mode}`);
   }
-  if (channel === "stable" && !["npm", "pnpm", "bun"].includes(payload.mode)) {
-    throw new Error(`expected package-manager mode after stable switch, got ${payload.mode}`);
+  if (["stable", "beta"].includes(channel) && !["npm", "pnpm", "bun"].includes(payload.mode)) {
+    throw new Error(`expected package-manager mode after ${channel} switch, got ${payload.mode}`);
   }
   if (payload.postUpdate?.plugins && payload.postUpdate.plugins.status !== "ok") {
     throw new Error(
@@ -196,6 +196,15 @@ function assertStatusKind(kind) {
   }
 }
 
+function assertInstalledVersion(root, expectedVersion) {
+  const manifest = readJson(path.join(root, "package.json"));
+  if (manifest.version !== expectedVersion) {
+    throw new Error(
+      `expected installed openclaw ${expectedVersion}, got ${String(manifest.version)}`,
+    );
+  }
+}
+
 switch (command) {
   case "prepare-git-fixture":
     prepareGitFixture(args[0] ?? "/tmp/openclaw-git");
@@ -211,6 +220,9 @@ switch (command) {
     break;
   case "assert-status-kind":
     assertStatusKind(args[0]);
+    break;
+  case "assert-installed-version":
+    assertInstalledVersion(args[0], args[1]);
     break;
   default:
     usage();
