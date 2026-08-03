@@ -650,6 +650,65 @@ describe("message-normalizer", () => {
       expect(result.content).toEqual([{ type: "text", text: "MEDIA:chart.png" }]);
     });
 
+    it.each([
+      ["bare image", "Generated image\nMEDIA:image.png", "Generated image\nMEDIA:image.png"],
+      ["bare audio", "Generated audio\nMEDIA:voice.ogg", "Generated audio\nMEDIA:voice.ogg"],
+      [
+        "bare document",
+        "Generated document\nMEDIA:report.pdf",
+        "Generated document\nMEDIA:report.pdf",
+      ],
+      [
+        "caption after bare filename",
+        "MEDIA:image.png\nGenerated image",
+        "MEDIA:image.png\nGenerated image",
+      ],
+      [
+        "quoted bare filename",
+        'Generated image\nMEDIA:"image.png"',
+        "Generated image\nMEDIA:image.png",
+      ],
+      [
+        "quoted bare filename with spaces",
+        'Generated image\nMEDIA:"render final.png"',
+        "Generated image\nMEDIA:render final.png",
+      ],
+      [
+        "explicit relative sibling",
+        "Generated image\nMEDIA:./image.png",
+        "Generated image\nMEDIA:./image.png",
+      ],
+    ] as const)(
+      "preserves relative assistant media beside its caption: %s",
+      (_name, input, text) => {
+        expect(normalizeMessage({ role: "assistant", content: input }).content).toEqual([
+          { type: "text", text },
+        ]);
+      },
+    );
+
+    it("preserves bare assistant media references around a renderable attachment", () => {
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content:
+            "Generated artifacts\nMEDIA:image.png\nMEDIA:https://example.com/remote.png\nMEDIA:voice.ogg",
+        }).content,
+      ).toEqual([
+        { type: "text", text: "Generated artifacts\nMEDIA:image.png" },
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/remote.png",
+            kind: "image",
+            label: "remote.png",
+            mimeType: "image/png",
+          },
+        },
+        { type: "text", text: "MEDIA:voice.ogg" },
+      ]);
+    });
+
     it("strips reply_to_current without rendering a quoted preview", () => {
       const result = normalizeMessage({
         role: "assistant",

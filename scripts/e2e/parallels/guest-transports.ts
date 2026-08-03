@@ -443,7 +443,9 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
   try {
     let launched = false;
     let lastLaunchStatus = 0;
-    for (let attempt = 1; attempt <= 5 && Date.now() < deadline; attempt++) {
+    // Setup can consume the active budget before the first launch; still observe
+    // its real result before using the deadline to suppress later attempts.
+    for (let attempt = 1; attempt <= 5 && (attempt === 1 || Date.now() < deadline); attempt++) {
       options.beforeLaunchAttempt?.();
       const launch = runCommand(
         "prlctl",
@@ -505,8 +507,12 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
 
     let completedLogDrainDeadline = 0;
     let doneFileSeen = false;
+    let completionProbeAttempted = false;
     const activeDeadline = () => (doneFileSeen ? completedLogDrainDeadline : deadline);
-    while (Date.now() < activeDeadline()) {
+    // A process can finish while setup exhausts the active budget; inspect its
+    // completion marker once before deciding whether cleanup must stop it.
+    while (!completionProbeAttempted || Date.now() < activeDeadline()) {
+      completionProbeAttempted = true;
       const doneProbe = runCommand(
         "prlctl",
         [
