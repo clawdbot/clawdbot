@@ -86,10 +86,9 @@ function captureEnvironment() {
 }
 
 async function writeDiscoveryProbePlugin(
-  bundledPluginsDir: string,
+  pluginDir: string,
   advertisementPath: string,
 ): Promise<void> {
-  const pluginDir = path.join(bundledPluginsDir, DISCOVERY_PLUGIN_ID);
   await fs.mkdir(pluginDir, { recursive: true });
   await Promise.all([
     fs.writeFile(
@@ -299,7 +298,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
   const configPath = path.join(stateDir, "openclaw.json");
   const certPath = path.join(runtimeRoot, "tls", "gateway-cert.pem");
   const keyPath = path.join(runtimeRoot, "tls", "gateway-key.pem");
-  const bundledPluginsDir = path.join(runtimeRoot, "bundled-plugins");
+  const pluginDir = path.join(runtimeRoot, "discovery-plugin");
   const advertisementPath = path.join(runtimeRoot, "gateway-discovery-advertisement.json");
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 
@@ -307,8 +306,9 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
     process.env.HOME = runtimeRoot;
     process.env.OPENCLAW_CONFIG_PATH = configPath;
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
     delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
     process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
     process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
@@ -318,9 +318,8 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
     process.env.OPENCLAW_SKIP_PROVIDERS = "1";
     delete process.env.NODE_ENV;
     delete process.env.OPENCLAW_DISABLE_BONJOUR;
-    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     delete process.env.VITEST;
-    await writeDiscoveryProbePlugin(bundledPluginsDir, advertisementPath);
+    await writeDiscoveryProbePlugin(pluginDir, advertisementPath);
 
     const preparedTls = await loadGatewayTlsRuntime({
       enabled: true,
@@ -345,6 +344,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
           plugins: {
             enabled: true,
             allow: [DISCOVERY_PLUGIN_ID],
+            load: { paths: [pluginDir] },
             entries: {
               [DISCOVERY_PLUGIN_ID]: { enabled: true },
             },
