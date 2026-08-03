@@ -3,6 +3,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 const MAX_ALTERNATIVES = 64;
 const MAX_OVERLAP_PROBES = 4096;
 const ASCII_ATOM_SAMPLES = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code));
+const AUDITED_UNICODE_CASE_FOLD_VERSIONS = new Set(["15.1", "16.0", "17.0"]);
+// Complete simple/common case-fold endpoints that cross Script boundaries in
+// the Unicode data shipped by supported Node runtimes. Unknown Unicode versions
+// fail closed until this set is re-audited.
+const CROSS_SCRIPT_CASE_FOLD_SAMPLES = ["\u00b5", "\u0345", "\u03b9", "\u03bc"];
 
 // ECMAScript general-category aliases form a small closed hierarchy. Keeping
 // that hierarchy lets the overlap check prove common Unicode properties
@@ -106,7 +111,7 @@ function parseUnicodePropertyAtom(
 ):
   | { kind: "category"; mask: number }
   | { kind: "binary"; name: string; negated: boolean }
-  | { kind: "script"; name: string; negated: boolean }
+  | { kind: "script"; name: string; negated: boolean; source: string }
   | null {
   const match = source.match(/^\\([pP])\{([^}]+)\}$/);
   if (!match) {
@@ -136,9 +141,30 @@ function parseUnicodePropertyAtom(
     // canonical long names so equivalent aliases still fail closed.
     value.length > 4
   ) {
-    return { kind: "script", name: value, negated };
+    return { kind: "script", name: value, negated, source };
   }
   return separator < 0 ? { kind: "binary", name: value, negated } : null;
+}
+
+function scriptPropertiesAreDisjointUnderCaseFold(
+  left: string,
+  right: string,
+  flags: string,
+): boolean {
+  const unicodeVersion = process.versions.unicode;
+  if (!unicodeVersion || !AUDITED_UNICODE_CASE_FOLD_VERSIONS.has(unicodeVersion)) {
+    return false;
+  }
+  try {
+    const safeFlags = flags.replace(/[gy]/g, "");
+    const leftRegex = new RegExp(`^(?:${left})$`, safeFlags);
+    const rightRegex = new RegExp(`^(?:${right})$`, safeFlags);
+    return !CROSS_SCRIPT_CASE_FOLD_SAMPLES.some(
+      (sample) => leftRegex.test(sample) && rightRegex.test(sample),
+    );
+  } catch {
+    return false;
+  }
 }
 
 function unicodePropertiesAreProvablyDisjoint(left: string, right: string, flags: string): boolean {
@@ -164,11 +190,17 @@ function unicodePropertiesAreProvablyDisjoint(left: string, right: string, flags
     }
     return (leftMask & rightMask) === 0;
   }
-  if (!flags.includes("i") && leftProperty.kind === "script" && rightProperty.kind === "script") {
+  if (leftProperty.kind === "script" && rightProperty.kind === "script") {
     if (leftProperty.name === rightProperty.name) {
-      return leftProperty.negated !== rightProperty.negated;
+      return !flags.includes("i") && leftProperty.negated !== rightProperty.negated;
     }
-    return !leftProperty.negated && !rightProperty.negated;
+    if (leftProperty.negated || rightProperty.negated) {
+      return false;
+    }
+    return (
+      !flags.includes("i") ||
+      scriptPropertiesAreDisjointUnderCaseFold(leftProperty.source, rightProperty.source, flags)
+    );
   }
   return (
     !flags.includes("i") &&
