@@ -43,6 +43,11 @@ const mocks = vi.hoisted(() => ({
   })),
   withBundledPluginEnablementCompat: vi.fn(({ config }) => config),
   withBundledPluginVitestCompat: vi.fn(({ config }) => config),
+  readBundledDiscoveryMode: vi.fn<() => "compat" | "allowlist" | undefined>(() => "allowlist"),
+}));
+
+vi.mock("./bundled-discovery-state.js", () => ({
+  readBundledDiscoveryMode: mocks.readBundledDiscoveryMode,
 }));
 
 vi.mock("./loader.js", () => ({
@@ -294,6 +299,7 @@ function expectBundledCompatLoadPath(params: {
 }
 
 function createCompatChainConfig() {
+  mocks.readBundledDiscoveryMode.mockReturnValue("compat");
   const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
   const enablementCompat = {
     plugins: {
@@ -386,6 +392,8 @@ describe("resolvePluginCapabilityProviders", () => {
     mocks.withBundledPluginEnablementCompat.mockImplementation(({ config }) => config);
     mocks.withBundledPluginVitestCompat.mockReset();
     mocks.withBundledPluginVitestCompat.mockImplementation(({ config }) => config);
+    mocks.readBundledDiscoveryMode.mockReset();
+    mocks.readBundledDiscoveryMode.mockReturnValue("allowlist");
   });
 
   afterEach(() => {
@@ -500,6 +508,163 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "explicitly disabled",
+      plugins: { entries: { blocked: { enabled: false } } },
+    },
+    { name: "denylisted", plugins: { deny: ["blocked"] } },
+    { name: "outside the restrictive allowlist", plugins: { allow: ["allowed"] } },
+  ])("never prepares or executes a $name bundled capability provider", ({ plugins }) => {
+    const generateImage = vi.fn();
+    const registry = createEmptyPluginRegistry();
+    addCapabilityProvider(registry, "imageGenerationProviders", {
+      id: "blocked",
+      provider: { generateImage },
+    });
+    const prepared = prepareMediaCapabilityProviders({
+      cfg: { plugins } as OpenClawConfig,
+      registry,
+      pluginMetadataSnapshot: {
+        index: { plugins: [{ pluginId: "blocked", origin: "bundled", enabled: false }] },
+        plugins: [
+          {
+            id: "blocked",
+            origin: "bundled",
+            contracts: { imageGenerationProviders: ["blocked"] },
+          },
+        ],
+      } as never,
+    });
+
+    for (const provider of prepared.imageGenerationProviders ?? []) {
+      (provider as unknown as { generateImage: () => void }).generateImage();
+    }
+
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(prepared.imageGenerationProviders).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "explicitly disabled",
+      plugins: { entries: { blocked: { enabled: false } } },
+    },
+    { name: "denylisted", plugins: { deny: ["blocked"] } },
+    { name: "outside the restrictive allowlist", plugins: { allow: ["allowed"] } },
+  ])("never selects an already-active $name bundled provider", ({ plugins }) => {
+    const active = createEmptyPluginRegistry();
+    addCapabilityProvider(active, "imageGenerationProviders", { id: "blocked" });
+    addSpeechProvider(active, "blocked");
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : createEmptyPluginRegistry(),
+    );
+    setCapabilityManifestPlugins([
+      {
+        id: "blocked",
+        contracts: {
+          imageGenerationProviders: ["blocked"],
+          speechProviders: ["blocked"],
+        },
+      },
+    ]);
+    const cfg = { plugins } as OpenClawConfig;
+
+    expect(
+      resolvePluginCapabilityProvider({
+        key: "imageGenerationProviders",
+        providerId: "blocked",
+        cfg,
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginCapabilityProviders({ key: "imageGenerationProviders", cfg })).toEqual([]);
+    expect(
+      resolvePluginCapabilityProvider({ key: "speechProviders", providerId: "blocked", cfg }),
+    ).toBeUndefined();
+    expect(resolvePluginCapabilityProviders({ key: "speechProviders", cfg })).toEqual([]);
+    expect(mocks.loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+  });
+
+  it("preserves restrictive-allowlist compatibility only for known bundled active owners", () => {
+    mocks.readBundledDiscoveryMode.mockReturnValue("compat");
+    const active = createEmptyPluginRegistry();
+    active.plugins.push({ id: "bundled-owner", origin: "bundled" } as never);
+    addSpeechProvider(active, "bundled-provider", { pluginId: "bundled-owner" });
+    addSpeechProvider(active, "unknown-provider", { pluginId: "unknown-owner" });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : createEmptyPluginRegistry(),
+    );
+    const cfg = { plugins: { allow: ["allowed-plugin"] } } as OpenClawConfig;
+
+    expect(
+      resolvePluginCapabilityProvider({
+        key: "speechProviders",
+        providerId: "bundled-provider",
+        cfg,
+      })?.id,
+    ).toBe("bundled-provider");
+    expect(
+      resolvePluginCapabilityProvider({
+        key: "speechProviders",
+        providerId: "unknown-provider",
+        cfg,
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginCapabilityProviders({ key: "speechProviders", cfg })).toEqual([
+      expect.objectContaining({ id: "bundled-provider" }),
+    ]);
+    expect(mocks.readBundledDiscoveryMode).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([{ entries: { blocked: { enabled: false } } }, { deny: ["blocked"] }])(
+    "never lets global-disable speech compatibility override owner prohibition",
+    (plugins) => {
+      const active = createEmptyPluginRegistry();
+      addSpeechProvider(active, "blocked");
+      mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+        params === undefined ? active : createEmptyPluginRegistry(),
+      );
+      setCapabilityManifestPlugins([
+        { id: "blocked", contracts: { speechProviders: ["blocked"] } },
+      ]);
+      const cfg = { plugins: { enabled: false, ...plugins } } as OpenClawConfig;
+
+      expect(
+        resolvePluginCapabilityProvider({ key: "speechProviders", providerId: "blocked", cfg }),
+      ).toBeUndefined();
+      expect(resolvePluginCapabilityProviders({ key: "speechProviders", cfg })).toEqual([]);
+      expect(mocks.loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "explicitly disabled",
+      plugins: { entries: { blocked: { enabled: false } } },
+    },
+    { name: "denylisted", plugins: { deny: ["blocked"] } },
+    { name: "outside the restrictive allowlist", plugins: { allow: ["allowed"] } },
+  ])(
+    "never re-imports a $name bundled provider through cold compatibility capture",
+    ({ plugins }) => {
+      const captured = createEmptyPluginRegistry();
+      addCapabilityProvider(captured, "imageGenerationProviders", { id: "blocked" });
+      mocks.resolveRuntimePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+      mocks.loadBundledCapabilityRuntimeRegistry.mockReturnValue(captured);
+      setCapabilityManifestPlugins([
+        { id: "blocked", contracts: { imageGenerationProviders: ["blocked"] } },
+      ]);
+
+      expect(
+        resolvePluginCapabilityProviders({
+          key: "imageGenerationProviders",
+          cfg: { plugins } as OpenClawConfig,
+        }),
+      ).toEqual([]);
+      expect(mocks.loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+    },
+  );
+
   it("leaves a media family unresolved for loaded providers without contracts", () => {
     const loaded = createEmptyPluginRegistry();
     loaded.imageGenerationProviders.push({
@@ -532,7 +697,7 @@ describe("resolvePluginCapabilityProviders", () => {
     );
 
     const prepared = prepareMediaCapabilityProviders({
-      cfg: { plugins: { allow: ["loaded-image"] } },
+      cfg: { plugins: { allow: ["loaded-image", "lazy-image"] } },
       registry: loaded,
       pluginMetadataSnapshot: {
         index: { plugins: [] },
@@ -1211,6 +1376,7 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledWith({
       pluginIds: ["google"],
       env: process.env,
+      config: { tts: { provider: "google" } },
       pluginSdkResolution: undefined,
     });
   });
@@ -1242,6 +1408,7 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledWith({
       pluginIds: ["google"],
       env: process.env,
+      config: { tts: { provider: "google" } },
       pluginSdkResolution: undefined,
     });
   });
@@ -1492,6 +1659,7 @@ describe("resolvePluginCapabilityProviders", () => {
   });
 
   it("loads fallback snapshots without startup dependency repair", () => {
+    mocks.readBundledDiscoveryMode.mockReturnValue("compat");
     const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
     const enablementCompat = {
       plugins: {
@@ -1658,6 +1826,7 @@ describe("resolvePluginCapabilityProviders", () => {
   });
 
   it("loads only the bundled owner plugin for a targeted provider lookup", () => {
+    mocks.readBundledDiscoveryMode.mockReturnValue("compat");
     const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
     const enablementCompat = {
       plugins: {
