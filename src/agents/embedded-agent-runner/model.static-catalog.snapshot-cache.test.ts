@@ -247,7 +247,7 @@ describe("bundled static model catalog snapshot cache", () => {
     expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
   });
 
-  it("requires the default discovery context for unconfigured snapshot lookups", () => {
+  it("requires the process full context for unconfigured snapshot lookups", () => {
     setCurrentManifestPlugins([createMistralManifestPlugin()]);
 
     expect(
@@ -258,7 +258,7 @@ describe("bundled static model catalog snapshot cache", () => {
       env: process.env,
       workspaceDir: undefined,
       allowWorkspaceScopedSnapshot: true,
-      requireDefaultDiscoveryContext: true,
+      requireProcessFullContext: true,
     });
     expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
   });

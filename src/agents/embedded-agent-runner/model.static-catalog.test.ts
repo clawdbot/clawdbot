@@ -264,7 +264,7 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
     expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenLastCalledWith({
       config: undefined,
       env: process.env,
-      requireDefaultDiscoveryContext: true,
+      requireProcessFullContext: true,
       workspaceDir: undefined,
     });
   });

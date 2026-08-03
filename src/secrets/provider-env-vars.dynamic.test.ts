@@ -351,8 +351,12 @@ describe("provider env vars dynamic manifest metadata", () => {
       ],
     };
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
-      (params: { config?: unknown; requireProcessFullContext?: boolean }) => {
-        if (params.config) {
+      (params: {
+        config?: unknown;
+        requireDefaultDiscoveryContext?: boolean;
+        requireProcessFullContext?: boolean;
+      }) => {
+        if (params.config || params.requireDefaultDiscoveryContext) {
           return undefined;
         }
         // Load-path plugins are origin:"config" — operator-declared-trusted.
@@ -787,8 +791,12 @@ describe("provider env vars dynamic manifest metadata", () => {
       ],
     };
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
-      (params: { config?: unknown; requireProcessFullContext?: boolean }) => {
-        if (params.config) {
+      (params: {
+        config?: unknown;
+        requireDefaultDiscoveryContext?: boolean;
+        requireProcessFullContext?: boolean;
+      }) => {
+        if (params.config || params.requireDefaultDiscoveryContext) {
           return undefined;
         }
         // Load-path plugins are origin:"config" — operator-declared-trusted.
