@@ -180,7 +180,10 @@ describe("chat transcript row measurement", () => {
       ...threadProps("pane-effective-reasoning", "main", [
         {
           role: "assistant",
-          content: "<thinking>Inherited reasoning is visible.</thinking>Visible answer.",
+          content: [
+            { type: "thinking", thinking: "Inherited reasoning is visible." },
+            { type: "text", text: "Visible answer." },
+          ],
           timestamp: 1,
         },
       ]),
