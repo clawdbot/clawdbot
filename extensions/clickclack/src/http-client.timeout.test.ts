@@ -35,6 +35,77 @@ describe("ClickClack HTTP client timeouts", () => {
     }
   });
 
+  it.each([
+    {
+      operation: "command-menu replacement",
+      method: "PUT",
+      path: "/api/bots/self/commands",
+      invoke: (client: ReturnType<typeof createClickClackClient>) => client.setBotCommands([]),
+    },
+    {
+      operation: "managed-channel creation",
+      method: "POST",
+      path: "/api/workspaces/workspace-1/channels",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.createChannel("workspace-1", {
+          name: "discussion",
+          kind: "public",
+          external_managed: true,
+          external_ref: "external-ref-1",
+          sidebar_section: "Sessions",
+        }),
+    },
+    {
+      operation: "managed-channel update",
+      method: "PATCH",
+      path: "/api/channels/channel-1",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.updateChannel("channel-1", { archived: true }),
+    },
+    {
+      operation: "attachment association",
+      method: "POST",
+      path: "/api/messages/message-1/attachments",
+      invoke: (client: ReturnType<typeof createClickClackClient>) =>
+        client.attachUpload("message-1", "upload-1"),
+    },
+  ])("aborts audited $operation when response headers stall", async ({ invoke, method, path }) => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, init?: RequestInit) =>
+          await new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) {
+              reject(new Error("expected audited ClickClack write signal"));
+              return;
+            }
+            signal.addEventListener("abort", () => reject(signal.reason as Error), {
+              once: true,
+            });
+          }),
+      );
+      const client = createClickClackClient({
+        baseUrl: "https://clickclack.example",
+        token: "fake",
+        fetch: fetchMock as unknown as typeof fetch,
+      });
+
+      const rejection = expect(invoke(client)).rejects.toMatchObject({
+        name: "TimeoutError",
+        message: "request timed out",
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await rejection;
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(`https://clickclack.example${path}`);
+      expect(fetchMock.mock.calls[0]?.[1]?.method).toBe(method);
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not impose the response-header deadline on JSON writes", async () => {
     vi.useFakeTimers();
     try {

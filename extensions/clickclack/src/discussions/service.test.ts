@@ -649,7 +649,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.generationStore.lookup(sessionKey)).toEqual(pendingBeforeRotation);
   });
 
-  it("adopts a created channel when the create response is lost", async () => {
+  it("adopts a created channel when its response-header timeout hides success", async () => {
     const harness = createHarness({ label: "Lost response" });
     const sessionKey = "agent:main:lost-response";
     const general = await harness.channels().then((channels) => channels[0]!);
@@ -674,7 +674,9 @@ describe("ClickClack discussion service", () => {
           },
         ];
       });
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
+    vi.mocked(harness.createChannel).mockRejectedValueOnce(
+      Object.assign(new Error("request timed out"), { name: "TimeoutError" }),
+    );
     vi.mocked(harness.updateChannel).mockImplementationOnce(async (_channelId, patch) => ({
       id: "chn_lost_response",
       route_id: "lost-response-route",

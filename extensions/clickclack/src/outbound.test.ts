@@ -337,8 +337,10 @@ describe("sendClickClackMedia", () => {
     expect(attachUpload).toHaveBeenNthCalledWith(2, "msg_out", "upl_1");
   });
 
-  it("accepts a persisted attachment when the success response was lost", async () => {
-    attachUpload.mockRejectedValueOnce(new Error("attachment response lost"));
+  it("reconciles a persisted attachment after its response-header timeout", async () => {
+    attachUpload.mockRejectedValueOnce(
+      Object.assign(new Error("request timed out"), { name: "TimeoutError" }),
+    );
     message.mockResolvedValueOnce({ id: "msg_out", attachments: [{ id: "upl_1" }] });
 
     await expect(

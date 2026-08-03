@@ -59,13 +59,16 @@ type ClientOptions = {
   fetch?: typeof fetch;
 };
 
+type RequestPolicy = {
+  responseHeaderTimeoutSafe?: true;
+};
+
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CLICKCLACK_CORRELATION_ID_MAX_LENGTH = 128;
 const CLICKCLACK_CORRELATION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
 const CLICKCLACK_CORRELATION_ID_HEADER = "X-Correlation-ID";
-// Bound retry-safe read waits before response headers. Writes may still be
-// uploading or already committed when headers are withheld, so their existing
-// transport/proxy timeout behavior must remain unchanged.
+// Bound retry-safe reads and audited small control-plane writes before response
+// headers. Ambiguous or potentially large writes retain transport/proxy policy.
 const CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS = 30_000;
 // Keep REST and websocket JSON under the same bounded response budget. ClickClack
 // accepts 1 MiB request bodies, then wraps and re-encodes them as events, so a
@@ -144,7 +147,11 @@ export function createClickClackClient(options: ClientOptions) {
     Accept: "application/json",
   };
 
-  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  async function request<T>(
+    path: string,
+    init: RequestInit = {},
+    policy: RequestPolicy = {},
+  ): Promise<T> {
     const url = `${baseUrl}${path}`;
     const requestHeaders = new Headers(init.headers);
     for (const [key, value] of Object.entries(headers)) {
@@ -160,12 +167,15 @@ export function createClickClackClient(options: ClientOptions) {
     const requestInit = { ...init, headers: requestHeaders };
     const method = init.method?.toUpperCase() ?? "GET";
     // A write can time out after the server commits it, and Fetch cannot tell
-    // whether its request body is still making progress. Only retry-safe reads
-    // use the fixed pre-header deadline.
-    const response =
-      method === "GET" || method === "HEAD"
-        ? await fetchWithTimeout(url, requestInit, CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS, fetcher)
-        : await fetcher(url, requestInit);
+    // whether its request body is still making progress. Reads and explicitly
+    // audited retry-safe writes use the fixed pre-header deadline; multipart
+    // uploads retain the existing transport/proxy policy.
+    const useResponseHeaderDeadline =
+      !isUpload &&
+      (method === "GET" || method === "HEAD" || policy.responseHeaderTimeoutSafe === true);
+    const response = useResponseHeaderDeadline
+      ? await fetchWithTimeout(url, requestInit, CLICKCLACK_RESPONSE_HEADERS_TIMEOUT_MS, fetcher)
+      : await fetcher(url, requestInit);
     if (!response.ok) {
       const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
       // Remote error bodies are untrusted output; redact them even when the
@@ -222,6 +232,7 @@ export function createClickClackClient(options: ClientOptions) {
           method: "PUT",
           body: JSON.stringify({ commands }),
         },
+        { responseHeaderTimeoutSafe: true },
       );
       return data.bot_commands;
     },
@@ -250,6 +261,7 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ channel: ClickClackChannel }>(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/channels`,
         { method: "POST", body: JSON.stringify(channel) },
+        { responseHeaderTimeoutSafe: true },
       );
       return data.channel;
     },
@@ -268,6 +280,7 @@ export function createClickClackClient(options: ClientOptions) {
       const data = await request<{ channel: ClickClackChannel }>(
         `/api/channels/${encodeURIComponent(channelId)}`,
         { method: "PATCH", body: JSON.stringify(patch) },
+        { responseHeaderTimeoutSafe: true },
       );
       return data.channel;
     },
@@ -499,10 +512,14 @@ export function createClickClackClient(options: ClientOptions) {
       }
     },
     attachUpload: async (messageId: string, uploadId: string): Promise<void> => {
-      await request<{ ok: true }>(`/api/messages/${encodeURIComponent(messageId)}/attachments`, {
-        method: "POST",
-        body: JSON.stringify({ upload_id: uploadId }),
-      });
+      await request<{ ok: true }>(
+        `/api/messages/${encodeURIComponent(messageId)}/attachments`,
+        {
+          method: "POST",
+          body: JSON.stringify({ upload_id: uploadId }),
+        },
+        { responseHeaderTimeoutSafe: true },
+      );
     },
     /**
      * POSTs a durable agent activity row (agent_commentary / agent_tool)

@@ -264,6 +264,12 @@ describe("ClickClack gateway", () => {
       level: "warn" as const,
       message: "ClickClack command menu sync failed: network unavailable",
     },
+    {
+      label: "command-menu response-header timeout",
+      error: Object.assign(new Error("request timed out"), { name: "TimeoutError" }),
+      level: "warn" as const,
+      message: "ClickClack command menu sync failed: request timed out",
+    },
   ])("continues startup after $label", async ({ error, level, message }) => {
     mocks.client.setBotCommands.mockRejectedValueOnce(error);
     const socket = new FakeSocket();
