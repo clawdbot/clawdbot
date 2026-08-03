@@ -1,17 +1,14 @@
 // Synology Chat plugin module implements channel mocks behavior.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
+import type { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 
-type RegisteredRoute = {
-  path: string;
-  accountId: string;
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-};
-
-export const registerPluginHttpRouteMock: Mock<(params: RegisteredRoute) => () => void> = vi.fn(
-  () => vi.fn(),
+export const registerPluginHttpRouteMock: Mock<typeof registerPluginHttpRoute> = vi.fn(() =>
+  vi.fn(),
 );
+export const synologyIngressStartMock = vi.fn();
+export const synologyIngressStopMock = vi.fn(async () => undefined);
 
 export const dispatchReplyWithBufferedBlockDispatcher: Mock<
   (_params: unknown) => Promise<{ counts: Record<string, number> }>
@@ -162,8 +159,8 @@ vi.mock("./webhook-ingress.js", async () => {
     ...actual,
     createSynologyIngressMonitor: vi.fn(
       (options: Parameters<typeof actual.createSynologyIngressMonitor>[0]) => ({
-        start: vi.fn(),
-        stop: vi.fn(async () => undefined),
+        start: synologyIngressStartMock,
+        stop: synologyIngressStopMock,
         waitForIdle: vi.fn(async () => undefined),
         receive: vi.fn(async (rawEvent: import("./webhook-ingress.js").SynologyWebhookRawEvent) => {
           const lifecycle: import("./webhook-ingress.js").SynologyIngressLifecycle = {
