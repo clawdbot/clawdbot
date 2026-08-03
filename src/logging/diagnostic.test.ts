@@ -1042,6 +1042,16 @@ describe("stuck session diagnostics threshold", () => {
     markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
     markDiagnosticEmbeddedRunEnded({ sessionId: "s1", sessionKey: "main" });
 
+    // Precondition: the row survives with no active work left on it. That is the
+    // state the activeWorkKind guard has to recognise.
+    expectRecordFields(
+      getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" }),
+      {
+        activeWorkKind: undefined,
+        lastProgressReason: "embedded_run:ended",
+      },
+    );
+
     startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
 
     // ACP turn in progress: dispatch-acp.ts:447 refreshes only state.lastActivity.
