@@ -6,11 +6,7 @@ import {
   toInboundMediaFactsWithMetadata,
   type InboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  collectErrorGraphCandidates,
-  extractErrorCode,
-  readErrorName,
-} from "openclaw/plugin-sdk/error-runtime";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { MediaFetchError, unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
@@ -22,7 +18,7 @@ import {
   type OutboundMediaLoadOptions,
 } from "openclaw/plugin-sdk/outbound-media";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
+import { isTransientNetworkError } from "openclaw/plugin-sdk/retry-runtime";
 import { safeEqualSecret, SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { getSmsRuntime } from "./runtime.js";
 import { TWILIO_MMS_MAX_BYTES } from "./twilio.js";
@@ -346,6 +342,22 @@ function createInboundMediaCleanup(paths: string[]): () => Promise<void> {
   };
 }
 
+// Keep the SSRF veto on the same wrapper graph as the transient classifier;
+// otherwise a transient sibling could make a blocked fetch retry.
+function nestedSmsMediaErrorCandidates(candidate: Record<string, unknown>): unknown[] {
+  const nested = [
+    candidate.cause,
+    candidate.reason,
+    candidate.original,
+    candidate.error,
+    candidate.data,
+  ];
+  if (Array.isArray(candidate.errors)) {
+    nested.push(...candidate.errors);
+  }
+  return nested;
+}
+
 function isRetryableSmsInboundMediaError(error: unknown): boolean {
   if (!(error instanceof MediaFetchError)) {
     return false;
@@ -360,18 +372,11 @@ function isRetryableSmsInboundMediaError(error: unknown): boolean {
   if (error.code !== "fetch_failed") {
     return false;
   }
-  const causes = collectErrorGraphCandidates(error.cause, (candidate) => [candidate.cause]);
-  if (causes.some((candidate) => candidate instanceof SsrFBlockedError)) {
+  const candidates = collectErrorGraphCandidates(error.cause, nestedSmsMediaErrorCandidates);
+  if (candidates.some((candidate) => candidate instanceof SsrFBlockedError)) {
     return false;
   }
-  return causes.some((candidate) => {
-    const name = readErrorName(candidate);
-    return (
-      classifyTransientNetworkErrorCode(extractErrorCode(candidate)) !== undefined ||
-      name === "AbortError" ||
-      name.endsWith("TimeoutError")
-    );
-  });
+  return isTransientNetworkError(error.cause);
 }
 
 export async function materializeSmsInboundMedia(params: {

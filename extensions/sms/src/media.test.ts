@@ -657,8 +657,30 @@ describe("SMS inbound MMS materialization", () => {
       retryable: true,
     },
     {
+      name: "nested host unreachable",
+      cause: new Error("fetch failed", {
+        cause: Object.assign(new Error("host unreachable"), { code: "EHOSTUNREACH" }),
+      }),
+      retryable: true,
+    },
+    {
+      name: "Undici DNS resolve failure",
+      cause: Object.assign(new Error("DNS resolve failed"), {
+        code: "UND_ERR_DNS_RESOLVE_FAILED",
+      }),
+      retryable: true,
+    },
+    {
       name: "media request deadline",
       cause: new DOMException("timed out", "TimeoutError"),
+      retryable: true,
+    },
+    {
+      name: "aggregate network failure",
+      cause: new AggregateError(
+        [Object.assign(new Error("timed out"), { code: "ETIMEDOUT" })],
+        "all addresses failed",
+      ),
       retryable: true,
     },
     {
@@ -666,6 +688,17 @@ describe("SMS inbound MMS materialization", () => {
       cause: Object.assign(new SsrFBlockedError("blocked private address"), {
         cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }),
       }),
+      retryable: false,
+    },
+    {
+      name: "aggregate containing blocked SSRF and transient failure",
+      cause: new AggregateError(
+        [
+          Object.assign(new Error("reset"), { code: "ECONNRESET" }),
+          new SsrFBlockedError("blocked private address"),
+        ],
+        "mixed failures",
+      ),
       retryable: false,
     },
     {
@@ -679,6 +712,23 @@ describe("SMS inbound MMS materialization", () => {
       retryable,
     );
   });
+
+  it.each(["reason", "original", "error", "data"] as const)(
+    "does not retry when .$field contains an SSRF denial",
+    async (field) => {
+      const cause = Object.assign(
+        new Error("fetch failed", {
+          cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }),
+        }),
+        { [field]: new SsrFBlockedError("blocked private address") },
+      );
+
+      await expectInboundMediaFailure(
+        new MediaFetchError("fetch_failed", "download failed", { cause }),
+        false,
+      );
+    },
+  );
 
   it("keeps oversized MMS visible without retrying its sender lane", async () => {
     await expectInboundMediaFailure(new MediaFetchError("max_bytes", "too large"), false);
