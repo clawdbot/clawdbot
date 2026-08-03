@@ -19,9 +19,16 @@ const sendSmsViaTwilio = vi.hoisted(() =>
     return { sid: `SM-${to}`, to };
   }),
 );
-const prepareHostedSmsMediaUrl = vi.hoisted(() =>
-  vi.fn(async () => "https://gateway.example.com/webhooks/sms/media/abc?token=token"),
-);
+const hostedMediaMocks = vi.hoisted(() => {
+  const cleanup = vi.fn(async () => undefined);
+  return {
+    cleanup,
+    prepare: vi.fn(async () => ({
+      url: "https://gateway.example.com/webhooks/sms/media/abc?token=token",
+      cleanup,
+    })),
+  };
+});
 
 beforeEach(async () => {
   vi.resetModules();
@@ -30,16 +37,19 @@ beforeEach(async () => {
     await onPlatformSendDispatch?.();
     return { sid: `SM-${to}`, to };
   });
-  prepareHostedSmsMediaUrl.mockReset();
-  prepareHostedSmsMediaUrl.mockResolvedValue(
-    "https://gateway.example.com/webhooks/sms/media/abc?token=token",
-  );
+  hostedMediaMocks.cleanup.mockReset();
+  hostedMediaMocks.cleanup.mockResolvedValue(undefined);
+  hostedMediaMocks.prepare.mockReset();
+  hostedMediaMocks.prepare.mockResolvedValue({
+    url: "https://gateway.example.com/webhooks/sms/media/abc?token=token",
+    cleanup: hostedMediaMocks.cleanup,
+  });
   vi.doMock("./twilio.js", () => ({
     sendSmsViaTwilio,
     TWILIO_MESSAGE_BODY_MAX_LENGTH: 1600,
   }));
   vi.doMock("./media.js", () => ({
-    prepareHostedSmsMediaUrl,
+    prepareHostedSmsMedia: hostedMediaMocks.prepare,
   }));
   ({ prepareSmsMediaAttempt, sendPreparedSmsMediaAttempt, sendSmsTextChunks, toSmsPlainText } =
     await import("./send.js"));
@@ -265,7 +275,7 @@ describe("sendSmsMedia", () => {
       cause: new Error("unsupported content type"),
       retryable: false,
     });
-    prepareHostedSmsMediaUrl.mockRejectedValueOnce(rejection);
+    hostedMediaMocks.prepare.mockRejectedValueOnce(rejection);
 
     await expect(
       sendSmsMedia({

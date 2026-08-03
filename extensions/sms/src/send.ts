@@ -29,6 +29,7 @@ type SmsDeliveryProgress = (result: SmsDeliveryProgressResult) => Promise<void> 
 
 export type PreparedSmsMediaAttempt = {
   hostedMediaUrl: string;
+  cleanupHostedMedia: () => Promise<void>;
   caption?: string;
   remainingChunks: readonly string[];
 };
@@ -205,10 +206,10 @@ export async function prepareSmsMediaAttempt(params: {
     configuredLimit: params.account.textChunkLimit,
   });
   const [caption, ...remainingChunks] = chunks;
-  let hostedMediaUrl: string;
+  let hostedMedia: Pick<PreparedSmsMediaAttempt, "hostedMediaUrl" | "cleanupHostedMedia">;
   try {
-    const { prepareHostedSmsMediaUrl } = await import("./media.js");
-    hostedMediaUrl = await prepareHostedSmsMediaUrl({
+    const { prepareHostedSmsMedia } = await import("./media.js");
+    const prepared = await prepareHostedSmsMedia({
       account: params.account,
       mediaUrl: params.mediaUrl,
       mediaAccess: params.mediaAccess,
@@ -216,6 +217,10 @@ export async function prepareSmsMediaAttempt(params: {
       mediaReadFile: params.mediaReadFile,
       captionByteLength: Buffer.byteLength(caption ?? "", "utf8"),
     });
+    hostedMedia = {
+      hostedMediaUrl: prepared.url,
+      cleanupHostedMedia: prepared.cleanup,
+    };
   } catch (error) {
     if (error instanceof PlatformMessageNotDispatchedError) {
       throw error;
@@ -228,7 +233,7 @@ export async function prepareSmsMediaAttempt(params: {
     );
   }
   return {
-    hostedMediaUrl,
+    ...hostedMedia,
     ...(caption ? { caption } : {}),
     remainingChunks,
   };

@@ -100,6 +100,20 @@ const SMS_OUTBOUND_MEDIA_MAX_CHUNK_ROWS =
 const hostedSmsMediaStores = new Map<string, HostedOutboundMediaStore>();
 let hostedSmsMediaRuntime: ReturnType<typeof getSmsRuntime> | undefined;
 
+type PrepareHostedSmsMediaParams = {
+  account: ResolvedSmsAccount;
+  mediaUrl: string;
+  mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  captionByteLength?: number;
+};
+
+type PreparedHostedSmsMedia = {
+  url: string;
+  cleanup: () => Promise<void>;
+};
+
 function normalizeBasePath(path: string): string {
   const withLeadingSlash = path.trim().startsWith("/") ? path.trim() : `/${path.trim()}`;
   return withLeadingSlash === "/" ? "" : withLeadingSlash.replace(/\/+$/u, "");
@@ -180,14 +194,20 @@ function getHostedSmsMediaStore(accountId: string): HostedOutboundMediaStore {
   return created;
 }
 
-export async function prepareHostedSmsMediaUrl(params: {
-  account: ResolvedSmsAccount;
-  mediaUrl: string;
-  mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  captionByteLength?: number;
-}): Promise<string> {
+function createHostedSmsMediaCleanup(
+  store: HostedOutboundMediaStore,
+  id: string,
+): () => Promise<void> {
+  let cleanup: Promise<void> | undefined;
+  return async () => {
+    cleanup ??= store.delete(id);
+    await cleanup;
+  };
+}
+
+export async function prepareHostedSmsMedia(
+  params: PrepareHostedSmsMediaParams,
+): Promise<PreparedHostedSmsMedia> {
   const route = resolveSmsHostedMediaRoute({
     webhookPath: params.account.webhookPath,
     publicWebhookUrl: params.account.publicWebhookUrl,
@@ -228,26 +248,27 @@ export async function prepareHostedSmsMediaUrl(params: {
   if (!SMS_OUTBOUND_MEDIA_ID_RE.test(id) || !token) {
     throw new Error("Hosted MMS media URL could not be prepared.");
   }
+  const cleanup = createHostedSmsMediaCleanup(store, id);
   const entry = await store.read(id);
   if (!entry) {
     throw new Error("Hosted MMS media expired before it could be sent.");
   }
   const contentType = entry.metadata.contentType?.split(";", 1)[0]?.trim().toLowerCase();
   if (!contentType || !TWILIO_MMS_EXTENSION_BY_TYPE[contentType]) {
-    await store.delete(id);
+    await cleanup();
     throw new Error(
       `Twilio MMS does not support media type ${contentType || "unknown content type"}.`,
     );
   }
   if (captionByteLength > 0 && TWILIO_MMS_MEDIA_ONLY_TYPES.has(contentType)) {
-    await store.delete(id);
+    await cleanup();
     throw new Error(`Twilio MMS media type ${contentType} must be sent without a caption.`);
   }
   const maxBytes = TWILIO_MMS_LARGE_MEDIA_TYPES.has(contentType)
     ? TWILIO_MMS_IMAGE_MAX_BYTES
     : TWILIO_MMS_OTHER_MAX_BYTES;
   if (entry.metadata.byteLength > maxBytes) {
-    await store.delete(id);
+    await cleanup();
     throw new Error(
       `Twilio MMS media exceeds the ${maxBytes.toLocaleString("en-US")} byte limit for ${
         contentType || "unknown content type"
@@ -255,7 +276,7 @@ export async function prepareHostedSmsMediaUrl(params: {
     );
   }
   if (entry.metadata.byteLength + captionByteLength >= TWILIO_MMS_IMAGE_MAX_BYTES) {
-    await store.delete(id);
+    await cleanup();
     throw new Error("Twilio MMS attachment and caption must total less than 5,000,000 bytes.");
   }
 
@@ -263,7 +284,10 @@ export async function prepareHostedSmsMediaUrl(params: {
   // parameters survive without being overwritten or becoming the auth value.
   const tokenParam = `${SMS_OUTBOUND_MEDIA_TOKEN_PARAM_PREFIX}_${id}`;
   const querySeparator = route.publicSearch ? "&" : "?";
-  return `${route.publicBaseUrl}${route.publicRoutePath}${route.publicSearch}${querySeparator}${tokenParam}=${encodeURIComponent(token)}`;
+  return {
+    url: `${route.publicBaseUrl}${route.publicRoutePath}${route.publicSearch}${querySeparator}${tokenParam}=${encodeURIComponent(token)}`,
+    cleanup,
+  };
 }
 
 function requireTwilioMediaUrl(

@@ -10,7 +10,7 @@ import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-m
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   materializeSmsInboundMedia,
-  prepareHostedSmsMediaUrl,
+  prepareHostedSmsMedia,
   tryHandleHostedSmsMediaRequest,
 } from "./media.js";
 import { setSmsRuntime } from "./runtime.js";
@@ -109,6 +109,12 @@ function createAccount(): ResolvedSmsAccount {
   };
 }
 
+async function prepareHostedSmsMediaUrl(
+  params: Parameters<typeof prepareHostedSmsMedia>[0],
+): Promise<string> {
+  return (await prepareHostedSmsMedia(params)).url;
+}
+
 function twilioMediaUrl(
   params: {
     accountSid?: string;
@@ -176,6 +182,43 @@ describe("SMS outbound hosted media", () => {
       2,
       expect.objectContaining({ overflowPolicy: "reject-new" }),
     );
+  });
+
+  it("releases reject-new capacity after a failed staged MMS is discarded", async () => {
+    const account = { ...createAccount(), accountId: "capacity-cleanup" };
+    const staged = [];
+    for (let index = 0; index < 64; index += 1) {
+      staged.push(
+        await prepareHostedSmsMedia({
+          account,
+          mediaUrl: `https://example.com/photo-${index}.png`,
+        }),
+      );
+    }
+
+    await expect(
+      prepareHostedSmsMedia({
+        account,
+        mediaUrl: "https://example.com/full.png",
+      }),
+    ).rejects.toThrow("hosted outbound media capacity is full");
+
+    const first = staged[0];
+    if (!first) {
+      throw new Error("expected a staged MMS entry");
+    }
+    await first.cleanup();
+    await first.cleanup();
+
+    await expect(
+      prepareHostedSmsMedia({
+        account,
+        mediaUrl: "https://example.com/replacement.png",
+      }),
+    ).resolves.toMatchObject({
+      url: expect.stringMatching(/^https:\/\/gateway\.example\.com\//u),
+      cleanup: expect.any(Function),
+    });
   });
 
   it("hosts media on the exact webhook path and supports repeat GET/HEAD fetches", async () => {

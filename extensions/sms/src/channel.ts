@@ -21,6 +21,7 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -271,6 +272,18 @@ type PreparedSmsAttachmentAttempt = {
 // Object identity keeps hosted bearer URLs scoped to exactly one MMS attempt.
 const preparedSmsAttachmentAttempts = new WeakMap<object, Promise<PreparedSmsAttachmentAttempt>>();
 
+function resolveSmsHostedMediaCleanup(attemptToken: unknown): (() => Promise<void>) | undefined {
+  if (typeof attemptToken !== "object" || attemptToken === null || !("attempt" in attemptToken)) {
+    return undefined;
+  }
+  const attempt = attemptToken.attempt;
+  if (typeof attempt !== "object" || attempt === null || !("cleanupHostedMedia" in attempt)) {
+    return undefined;
+  }
+  const cleanup = attempt.cleanupHostedMedia;
+  return typeof cleanup === "function" ? async () => await cleanup() : undefined;
+}
+
 async function prepareSmsAttachmentAttempt(
   ctx: SmsAttachmentContext,
 ): Promise<PreparedSmsAttachmentAttempt> {
@@ -330,9 +343,18 @@ const smsMessageAdapter = defineChannelMessageAdapter({
     lifecycle: {
       beforeSendAttempt: async (ctx) => {
         if (ctx.kind !== "media") {
+          return undefined;
+        }
+        return await getOrPrepareSmsAttachmentAttempt(ctx);
+      },
+      afterSendFailure: async (ctx) => {
+        // Only direct pre-dispatch proof is safe to discard. Ambiguous and
+        // partial outcomes keep the bearer URL available for Twilio retries.
+        if (ctx.kind !== "media" || !(ctx.error instanceof PlatformMessageNotDispatchedError)) {
           return;
         }
-        await getOrPrepareSmsAttachmentAttempt(ctx);
+        const cleanup = resolveSmsHostedMediaCleanup(ctx.attemptToken);
+        await cleanup?.();
       },
     },
     text: async (ctx) => await sendSmsText(ctx),

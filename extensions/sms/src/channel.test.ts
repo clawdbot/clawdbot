@@ -4,8 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
 
 type ChannelModule = typeof import("./channel.js");
+type PlatformMessageNotDispatchedErrorConstructor =
+  (typeof import("openclaw/plugin-sdk/error-runtime"))["PlatformMessageNotDispatchedError"];
 
 let smsPlugin: ChannelModule["smsPlugin"];
+let PlatformMessageNotDispatchedError: PlatformMessageNotDispatchedErrorConstructor;
 
 const sendSmsViaTwilio = vi.hoisted(() =>
   vi.fn<typeof sendSmsViaTwilioType>(async ({ to, onPlatformSendDispatch }) => {
@@ -18,9 +21,16 @@ const sendSmsViaTwilio = vi.hoisted(() =>
     };
   }),
 );
-const prepareHostedSmsMediaUrl = vi.hoisted(() =>
-  vi.fn(async () => "https://gateway.example.com/webhooks/sms/media/abc?token=token"),
-);
+const hostedMediaMocks = vi.hoisted(() => {
+  const cleanup = vi.fn(async () => undefined);
+  return {
+    cleanup,
+    prepare: vi.fn(async () => ({
+      url: "https://gateway.example.com/webhooks/sms/media/abc?token=token",
+      cleanup,
+    })),
+  };
+});
 
 beforeEach(async () => {
   vi.resetModules();
@@ -34,17 +44,21 @@ beforeEach(async () => {
       status: "queued",
     };
   });
-  prepareHostedSmsMediaUrl.mockReset();
-  prepareHostedSmsMediaUrl.mockResolvedValue(
-    "https://gateway.example.com/webhooks/sms/media/abc?token=token",
-  );
+  hostedMediaMocks.cleanup.mockReset();
+  hostedMediaMocks.cleanup.mockResolvedValue(undefined);
+  hostedMediaMocks.prepare.mockReset();
+  hostedMediaMocks.prepare.mockResolvedValue({
+    url: "https://gateway.example.com/webhooks/sms/media/abc?token=token",
+    cleanup: hostedMediaMocks.cleanup,
+  });
   vi.doMock("./twilio.js", () => ({
     sendSmsViaTwilio,
     TWILIO_MESSAGE_BODY_MAX_LENGTH: 1600,
   }));
   vi.doMock("./media.js", () => ({
-    prepareHostedSmsMediaUrl,
+    prepareHostedSmsMedia: hostedMediaMocks.prepare,
   }));
+  ({ PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime"));
   ({ smsPlugin } = await import("./channel.js"));
 });
 
@@ -239,7 +253,7 @@ describe("smsPlugin outbound", () => {
     await smsPlugin.message?.send?.lifecycle?.beforeSendAttempt?.(ctx);
     const result = await smsPlugin.message?.send?.media?.(ctx);
 
-    expect(prepareHostedSmsMediaUrl).toHaveBeenCalledWith(
+    expect(hostedMediaMocks.prepare).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaUrl: "/tmp/photo.jpg",
         mediaLocalRoots: ["/tmp"],
@@ -268,9 +282,12 @@ describe("smsPlugin outbound", () => {
 
   it("hosts durable MMS media in the lifecycle before platform send starts", async () => {
     const events: string[] = [];
-    prepareHostedSmsMediaUrl.mockImplementationOnce(async () => {
+    hostedMediaMocks.prepare.mockImplementationOnce(async () => {
       events.push("prepare");
-      return "https://gateway.example.com/webhooks/sms/media/abc?token=token";
+      return {
+        url: "https://gateway.example.com/webhooks/sms/media/abc?token=token",
+        cleanup: hostedMediaMocks.cleanup,
+      };
     });
     sendSmsViaTwilio.mockImplementationOnce(async ({ to, onPlatformSendDispatch }) => {
       await onPlatformSendDispatch?.();
@@ -302,11 +319,92 @@ describe("smsPlugin outbound", () => {
     events.push("platform-start");
     await smsPlugin.message?.send?.media?.(ctx);
 
-    expect(prepareHostedSmsMediaUrl).toHaveBeenCalledOnce();
+    expect(hostedMediaMocks.prepare).toHaveBeenCalledOnce();
     expect(events).toEqual(["prepare", "platform-start", "dispatch", "send"]);
     await expect(smsPlugin.message?.send?.media?.(ctx)).rejects.toThrow(
       "SMS message lifecycle did not prepare the MMS attachment.",
     );
+  });
+
+  it("discards staged MMS media when the durable dispatch marker fails", async () => {
+    const ctx = {
+      cfg: {
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+          },
+        },
+      },
+      to: "+15551234567",
+      text: "caption",
+      kind: "media" as const,
+      mediaUrl: "/tmp/photo.jpg",
+      onPlatformSendDispatch: async () => {
+        throw new Error("delivery marker failed");
+      },
+    };
+    const lifecycle = smsPlugin.message?.send?.lifecycle;
+    const attemptToken = await lifecycle?.beforeSendAttempt?.(ctx);
+    let observed: unknown;
+    try {
+      await smsPlugin.message?.send?.media?.(ctx);
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    await lifecycle?.afterSendFailure?.({
+      ...ctx,
+      error: observed,
+      attemptToken,
+    });
+
+    expect(hostedMediaMocks.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("retains staged MMS media after an ambiguous Twilio failure", async () => {
+    const failure = new Error("Twilio response was lost");
+    sendSmsViaTwilio.mockImplementationOnce(async ({ onPlatformSendDispatch }) => {
+      await onPlatformSendDispatch?.();
+      throw failure;
+    });
+    const ctx = {
+      cfg: {
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+          },
+        },
+      },
+      to: "+15551234567",
+      text: "caption",
+      kind: "media" as const,
+      mediaUrl: "/tmp/photo.jpg",
+      onPlatformSendDispatch: async () => undefined,
+    };
+    const lifecycle = smsPlugin.message?.send?.lifecycle;
+    const attemptToken = await lifecycle?.beforeSendAttempt?.(ctx);
+    let observed: unknown;
+    try {
+      await smsPlugin.message?.send?.media?.(ctx);
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(observed).toBe(failure);
+    await lifecycle?.afterSendFailure?.({
+      ...ctx,
+      error: observed,
+      attemptToken,
+    });
+
+    expect(hostedMediaMocks.cleanup).not.toHaveBeenCalled();
   });
 
   it("reports an accepted text chunk before a later durable send fails", async () => {
