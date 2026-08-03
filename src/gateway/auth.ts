@@ -80,6 +80,8 @@ type AuthorizeGatewayConnectParams = {
   clientIp?: string;
   /** Optional limiter scope; defaults to shared-secret auth scope. */
   rateLimitScope?: string;
+  /** Let an owner with credential fallbacks record the shared-secret failure after all fallbacks fail. */
+  deferRateLimitFailure?: boolean;
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
   /** Optional browser-origin policy for HTTP requests that require Origin checks. */
@@ -395,6 +397,7 @@ async function authorizeTokenAuth(params: {
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
+  deferRateLimitFailure?: boolean;
 }): Promise<GatewayAuthResult> {
   if (!params.authToken) {
     return { ok: false, reason: "token_missing_config" };
@@ -406,7 +409,9 @@ async function authorizeTokenAuth(params: {
     return { ok: false, reason: "token_missing" };
   }
   if (!safeEqualSecret(params.connectToken, params.authToken)) {
-    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    if (!params.deferRateLimitFailure) {
+      await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    }
     return { ok: false, reason: "token_mismatch" };
   }
   params.limiter?.reset(params.ip, params.rateLimitScope);
@@ -419,6 +424,7 @@ async function authorizePasswordAuth(params: {
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
+  deferRateLimitFailure?: boolean;
 }): Promise<GatewayAuthResult> {
   if (!params.authPassword) {
     return { ok: false, reason: "password_missing_config" };
@@ -428,7 +434,9 @@ async function authorizePasswordAuth(params: {
     return { ok: false, reason: "password_missing" };
   }
   if (!safeEqualSecret(params.connectPassword, params.authPassword)) {
-    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    if (!params.deferRateLimitFailure) {
+      await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    }
     return { ok: false, reason: "password_mismatch" };
   }
   params.limiter?.reset(params.ip, params.rateLimitScope);
@@ -528,6 +536,7 @@ async function authorizeGatewayConnectCore(
         limiter,
         ip,
         rateLimitScope,
+        deferRateLimitFailure: params.deferRateLimitFailure,
       });
     }
     return { ok: false, reason: result.reason };
@@ -594,6 +603,7 @@ async function authorizeGatewayConnectCore(
       limiter,
       ip,
       rateLimitScope,
+      deferRateLimitFailure: params.deferRateLimitFailure,
     });
   }
 
@@ -604,6 +614,7 @@ async function authorizeGatewayConnectCore(
       limiter,
       ip,
       rateLimitScope,
+      deferRateLimitFailure: params.deferRateLimitFailure,
     });
   }
 

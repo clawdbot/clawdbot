@@ -325,6 +325,8 @@ async function authorizeControlUiReadRequest(
       opts.allowRealIpFallback === true,
     ),
   });
+  const canUseDeviceTokenFallback =
+    Boolean(token) && opts.auth.mode !== "trusted-proxy" && opts.auth.mode !== "none";
   const authResult = await authorizeHttpGatewayConnect({
     auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
@@ -335,6 +337,7 @@ async function authorizeControlUiReadRequest(
     rateLimiter: token ? opts.rateLimiter : undefined,
     clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    deferRateLimitFailure: canUseDeviceTokenFallback,
   });
   const sharedAuthGeneration = resolveSharedGatewaySessionGeneration(
     opts.auth,
@@ -342,14 +345,18 @@ async function authorizeControlUiReadRequest(
   );
   let resolvedAuthResult = authResult;
   let verifiedDeviceScopes: string[] | undefined;
-  if (
-    !resolvedAuthResult.ok &&
-    token &&
-    opts.auth.mode !== "trusted-proxy" &&
-    opts.auth.mode !== "none"
-  ) {
+  if (!resolvedAuthResult.ok && canUseDeviceTokenFallback && token) {
+    const recordDeferredSharedSecretFailure = async () => {
+      if (authResult.reason === "token_mismatch" || authResult.reason === "password_mismatch") {
+        await opts.rateLimiter?.recordFailureAndDelay(
+          clientIp,
+          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        );
+      }
+    };
     const deviceRateCheck = opts.rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
     if (deviceRateCheck && !deviceRateCheck.allowed) {
+      await recordDeferredSharedSecretFailure();
       resolvedAuthResult = {
         ok: false,
         reason: "rate_limited",
@@ -367,6 +374,7 @@ async function authorizeControlUiReadRequest(
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         resolvedAuthResult = { ok: true, method: "device-token" };
       } else {
+        await recordDeferredSharedSecretFailure();
         await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
       }
     }
