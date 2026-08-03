@@ -222,6 +222,7 @@ async function dispatchSlackModalPluginInteractiveHandler(params: {
   interactionType: SlackModalInteractionKind;
   data: string | undefined;
   auth: { isAuthorizedSender: boolean };
+  channelType?: Parameters<typeof dispatchSlackPluginInteractiveHandler>[0]["channelType"];
   payload: SlackModalEventBase["payload"];
   stateValues?: unknown;
   sessionRouting: SlackModalEventBase["sessionRouting"];
@@ -248,6 +249,7 @@ async function dispatchSlackModalPluginInteractiveHandler(params: {
   const result = await dispatchSlackPluginInteractiveHandler({
     data: params.data,
     interactionId,
+    channelType: params.channelType,
     ctx: {
       accountId: params.ctx.accountId,
       interactionId,
@@ -377,6 +379,7 @@ async function emitSlackModalLifecycleEvent(params: {
       interactionType: params.interactionType,
       data: pluginInteractiveData,
       auth: { isAuthorizedSender: auth.allowed },
+      channelType: auth.channelType,
       payload,
       stateValues,
       sessionRouting,
