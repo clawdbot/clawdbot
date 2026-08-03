@@ -443,7 +443,9 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
   try {
     let launched = false;
     let lastLaunchStatus = 0;
-    for (let attempt = 1; attempt <= 5 && Date.now() < deadline; attempt++) {
+    // Setup can consume the active budget before the first launch; still observe
+    // its real result before using the deadline to suppress later attempts.
+    for (let attempt = 1; attempt <= 5 && (attempt === 1 || Date.now() < deadline); attempt++) {
       options.beforeLaunchAttempt?.();
       const launch = runCommand(
         "prlctl",
@@ -499,7 +501,9 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
     }
     if (!launched) {
       throw new Error(
-        `${options.label} background launch failed with exit code ${lastLaunchStatus}`,
+        Date.now() >= deadline
+          ? `${options.label} timed out`
+          : `${options.label} background launch failed with exit code ${lastLaunchStatus}`,
       );
     }
 

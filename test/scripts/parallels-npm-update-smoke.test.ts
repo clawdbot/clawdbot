@@ -839,6 +839,59 @@ exit 1
     expect(commands).not.toContain("ReadAllBytes");
   });
 
+  it.each([
+    {
+      scenario: "a successfully launched job",
+      launchStatus: 0,
+      launchOutput: "started\n",
+      expectedError: "windows setup deadline timed out",
+    },
+    {
+      scenario: "a launch that never materializes",
+      launchStatus: 0,
+      launchOutput: "",
+      expectedError: "windows setup deadline timed out",
+    },
+    {
+      scenario: "a genuine launch failure",
+      launchStatus: 17,
+      launchOutput: "",
+      expectedError: "windows setup deadline background launch failed with exit code 17",
+    },
+  ])("preserves $scenario when Windows setup exhausts its active budget", async (testCase) => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let launchAttempts = 0;
+    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
+      if (options?.input) {
+        now += 2;
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      const decoded = decodePowerShellFromArgs(args);
+      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
+        launchAttempts++;
+        return { status: testCase.launchStatus, stderr: "", stdout: testCase.launchOutput };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    };
+
+    try {
+      await expect(
+        runWindowsBackgroundPowerShell({
+          label: "windows setup deadline",
+          pollIntervalMs: 1,
+          runCommand: fakeRun,
+          script: "Write-Output test",
+          timeoutMs: 5,
+          vmName: "Windows Test",
+        }),
+      ).rejects.toThrow(testCase.expectedError);
+      expect(launchAttempts).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("does not treat Windows background log text as completion control", async () => {
     const decodedCommands: string[] = [];
     const fakeRun: typeof hostCommandRun = (_command, args) => {
