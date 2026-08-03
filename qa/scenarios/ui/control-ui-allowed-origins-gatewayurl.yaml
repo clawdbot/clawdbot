@@ -16,7 +16,7 @@ scenario:
     - A browser served from the configured allowed origin reaches the connected shell through the real proxy and Gateway.
     - A browser served from a distinct unlisted origin is rejected by Gateway origin enforcement and renders origin-specific recovery without mounting the shell.
     - Captured browser Origin headers and Gateway responses or handshake status distinguish UI behavior from server-side enforcement.
-    - The run writes screenshots, video, redacted transport evidence, and process-cleanup evidence under the configured artifact directory.
+    - The run writes video, redacted transport evidence, and process-cleanup evidence under the configured artifact directory.
   docsRefs:
     - docs/web/control-ui.md
     - docs/web/urls.md

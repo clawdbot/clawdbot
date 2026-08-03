@@ -16,7 +16,7 @@ scenario:
     - Real Chromium reaches the connected Control UI shell through the proxy path that injects the configured identity and required header.
     - The proxy path that omits proxy-owned auth headers receives a Gateway unauthorized rejection with the exact required-header reason captured from the protocol frame.
     - Captured browser connect frames and Gateway responses distinguish UI behavior from server-side enforcement.
-    - The run writes screenshots, video, redacted transport evidence, and process-cleanup evidence under the configured artifact directory.
+    - The run writes video, redacted transport evidence, and process-cleanup evidence under the configured artifact directory.
   docsRefs:
     - docs/gateway/trusted-proxy-auth.md
     - docs/web/control-ui.md

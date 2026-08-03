@@ -559,11 +559,6 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     });
     expect(trustedEvidence.identityInjected).toBe(true);
     expect(trustedEvidence.requiredHeaderInjected).toBe(true);
-    await connected.page.screenshot({
-      fullPage: true,
-      path: path.join(artifactDir, "01-trusted-proxy-connected.png"),
-      timeout: controlUiSettleTimeoutMs,
-    });
     expect(connectedErrors).toEqual([]);
     await closeContext(connected.context);
 
@@ -579,11 +574,6 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     expect(untrustedEvidence.gatewayResult?.errorReason).toBe(expectedReason);
     expect(untrustedEvidence.identityInjected).toBe(false);
     expect(untrustedEvidence.requiredHeaderInjected).toBe(false);
-    await rejected.page.screenshot({
-      fullPage: true,
-      path: path.join(artifactDir, "02-untrusted-proxy-rejected.png"),
-      timeout: controlUiSettleTimeoutMs,
-    });
     expect(rejectedErrors).toEqual([]);
 
     await writeFile(
@@ -616,11 +606,6 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
         entry.browserOrigin === allowedOrigin &&
         entry.gatewayResult?.ok === true,
     );
-    await allowed.page.screenshot({
-      fullPage: true,
-      path: path.join(artifactDir, "03-allowed-origin-connected.png"),
-      timeout: controlUiSettleTimeoutMs,
-    });
     expect(allowedErrors).toEqual([]);
     await closeContext(allowed.context);
 
@@ -636,11 +621,6 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
         (entry.gatewayResult?.errorCode === ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED ||
           entry.upstreamHandshakeStatus === 403),
     );
-    await rejected.page.screenshot({
-      fullPage: true,
-      path: path.join(artifactDir, "04-rejected-origin-recovery.png"),
-      timeout: controlUiSettleTimeoutMs,
-    });
     expect(rejectedErrors).toEqual([]);
 
     await writeFile(
