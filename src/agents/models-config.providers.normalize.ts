@@ -58,7 +58,7 @@ function normalizeModelCostForCatalog(model: ProviderModelConfig): ProviderModel
   ) {
     return model;
   }
-  return { ...model, cost: { input, output, cacheRead, cacheWrite } };
+  return { ...model, cost: { ...model.cost, input, output, cacheRead, cacheWrite } };
 }
 
 function mergeNormalizedProviderModel(

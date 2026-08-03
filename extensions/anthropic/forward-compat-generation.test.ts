@@ -1,7 +1,6 @@
 // Anthropic tests cover forward-compat resolution for unreleased Claude ids.
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { supportsClaudeAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildAnthropicProvider } from "./register.runtime.js";
 
 function resolveModel(modelId: string, provider = "anthropic") {
@@ -14,22 +13,6 @@ function resolveModel(modelId: string, provider = "anthropic") {
     modelRegistry: { find: () => undefined },
   } as unknown as Parameters<
     NonNullable<ReturnType<typeof buildAnthropicProvider>["resolveDynamicModel"]>
-  >[0]);
-}
-
-function normalizeResolvedModel(
-  model: Omit<ProviderRuntimeModel, "cost" | "id" | "provider"> & {
-    id: string;
-    provider: string;
-  },
-) {
-  return buildAnthropicProvider().normalizeResolvedModel?.({
-    provider: model.provider,
-    modelId: model.id,
-    config: {},
-    model: model as unknown as ProviderRuntimeModel,
-  } as unknown as Parameters<
-    NonNullable<ReturnType<typeof buildAnthropicProvider>["normalizeResolvedModel"]>
   >[0]);
 }
 
@@ -94,48 +77,5 @@ describe("unreleased Claude generations", () => {
     // Third-party models reach the Anthropic-compatible transport too.
     expect(resolveModel("mimo-v2-flash")).toBeUndefined();
     expect(resolveModel("kimi-k2.6")).toBeUndefined();
-  });
-});
-
-describe("normalizeResolvedModel no-cost handling", () => {
-  it("injects canonical Sonnet 5 pricing when cost is missing", () => {
-    vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 7, 15));
-    const normalized = normalizeResolvedModel({
-      provider: "anthropic",
-      id: "claude-sonnet-5",
-      name: "Claude Sonnet 5",
-      api: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com",
-      reasoning: true,
-      input: ["text"],
-      contextWindow: 200_000,
-      maxTokens: 64_000,
-    });
-    expect(normalized?.cost).toEqual({
-      input: 2,
-      output: 10,
-      cacheRead: 0.2,
-      cacheWrite: 2.5,
-    });
-  });
-
-  it("injects canonical Opus 5 pricing when cost is missing", () => {
-    const normalized = normalizeResolvedModel({
-      provider: "anthropic",
-      id: "claude-opus-5",
-      name: "Claude Opus 5",
-      api: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com",
-      reasoning: true,
-      input: ["text"],
-      contextWindow: 200_000,
-      maxTokens: 64_000,
-    });
-    expect(normalized?.cost).toEqual({
-      input: 5,
-      output: 25,
-      cacheRead: 0.5,
-      cacheWrite: 6.25,
-    });
   });
 });

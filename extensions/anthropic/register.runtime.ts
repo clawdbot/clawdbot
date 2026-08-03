@@ -800,11 +800,6 @@ function applyAnthropicOpus5Cost(params: {
   if (!isAnthropicOpus5Model(params.modelId)) {
     return undefined;
   }
-  // Config overlays may omit cost entirely; inject canonical Opus 5 pricing
-  // instead of letting downstream code dereference an undefined cost object.
-  if (!params.model.cost) {
-    return { ...params.model, cost: ANTHROPIC_OPUS_5_COST };
-  }
   if (modelCostsEqual(params.model.cost, ANTHROPIC_OPUS_5_COST)) {
     return undefined;
   }
@@ -819,11 +814,6 @@ function applyAnthropicSonnet5Cost(params: {
     return undefined;
   }
   const cost = resolveAnthropicSonnet5Cost();
-  // Config overlays may omit cost entirely; inject canonical Sonnet 5 pricing
-  // instead of letting downstream code dereference an undefined cost object.
-  if (!params.model.cost) {
-    return { ...params.model, cost };
-  }
   if (modelCostsEqual(params.model.cost, cost)) {
     return undefined;
   }

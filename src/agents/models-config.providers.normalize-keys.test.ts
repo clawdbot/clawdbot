@@ -459,6 +459,46 @@ describe("normalizeProviders", () => {
     }
   });
 
+  it("preserves tieredPricing while defaulting missing flat cost fields", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      type ConfigModel = NonNullable<
+        NonNullable<OpenClawConfig["models"]>["providers"]
+      >[string]["models"][number];
+      const tieredCostModel = {
+        ...createModel({ id: "claude-sonnet-5" }),
+        cost: {
+          input: 10,
+          output: 50,
+          tieredPricing: [
+            { input: 8, output: 40, cacheRead: 0.1, cacheWrite: 1, range: [0, 1_000_000] },
+          ],
+        },
+      } as ConfigModel;
+      const providers = {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          models: [tieredCostModel],
+        },
+      } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      const models = normalized?.anthropic?.models;
+      expect(models).toHaveLength(1);
+      expect(models?.[0]?.cost).toEqual({
+        input: 10,
+        output: 50,
+        cacheRead: 0,
+        cacheWrite: 0,
+        tieredPricing: [
+          { input: 8, output: 40, cacheRead: 0.1, cacheWrite: 1, range: [0, 1_000_000] },
+        ],
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {
