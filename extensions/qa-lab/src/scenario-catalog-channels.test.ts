@@ -25,17 +25,17 @@ describe("qa scenario catalog channel contracts", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as
       | {
+          requiredChannelDriver?: string;
           requiredProviderMode?: string;
-          sessionKey?: string;
         }
       | undefined;
 
     expect(scenario.execution.channel).toBe("telegram");
     expect(config?.requiredProviderMode).toBe("mock-openai");
-    expect(config?.sessionKey).toBe("agent:main:telegram:direct:qa-native-operator");
-    expect(JSON.stringify(requireFlowScenario(scenario).execution.flow)).toContain(
-      "session.key === config.sessionKey && session.hasActiveRun === true",
-    );
+    expect(config?.requiredChannelDriver).toBe("crabline");
+    const flow = JSON.stringify(requireFlowScenario(scenario).execution.flow);
+    expect(flow).toContain("transport.buildAgentDelivery");
+    expect(flow).toContain("peer: { kind: 'group', id: delivery.replyTo }");
   });
 
   it("keeps channel-owned scenarios independent from the driver implementation", () => {
@@ -151,21 +151,21 @@ describe("qa scenario catalog channel contracts", () => {
     expect(scenario.coverage?.primary).toEqual(["channels.streaming-final-reply"]);
     expect(scenario.coverage?.secondary).toEqual([`${agentRuntime}.streaming-replies-delivery`]);
     expect(scenario.gatewayConfigPatch).toMatchObject({
-      channels: {
-        telegram: {
-          groups: { "*": { requireMention: false } },
-          streaming: { mode: "partial" },
-        },
-      },
+      channels: { telegram: { streaming: { mode: "partial" } } },
     });
+    expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
   });
 
-  it("disables Telegram mention gating for deterministic group delivery proofs", () => {
+  it("keeps transcript-role delivery on the Crabline driver", () => {
     const scenario = readQaScenarioById("telegram-assistant-transcript-role-boundary");
+    const config = readQaScenarioExecutionConfig("telegram-assistant-transcript-role-boundary") as
+      | {
+          requiredChannelDriver?: string;
+        }
+      | undefined;
 
-    expect(scenario.gatewayConfigPatch).toMatchObject({
-      channels: { telegram: { groups: { "*": { requireMention: false } } } },
-    });
+    expect(scenario.gatewayConfigPatch).toBeUndefined();
+    expect(config?.requiredChannelDriver).toBe("crabline");
   });
 
   it("rejects malformed string matcher lists before running a flow", () => {
