@@ -30,6 +30,7 @@ import {
   shouldRegisterPrimaryCommandOnly,
   shouldSkipPluginCommandRegistration,
 } from "./command-registration-policy.js";
+import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { isUnconfiguredConfigSource } from "./fresh-install-config.js";
 import {
@@ -1148,7 +1149,9 @@ async function runCliWithPreparedOutputMode(
     }
     return;
   }
-  const normalizedArgv = normalizeRootHelpTargetArgv(normalizeRootNoColorArgv(parsedProfile.argv));
+  const normalizedArgv = rewriteUpdateFlagArgv(
+    normalizeRootHelpTargetArgv(normalizeRootNoColorArgv(parsedProfile.argv)),
+  );
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   const isGatewayRunInvocation = isGatewayRunInvocationArgv(normalizedArgv);
@@ -1198,11 +1201,18 @@ async function runCliWithPreparedOutputMode(
   let unregisterProxySignalExitBarrier: (() => void) | null = null;
   let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
   const isolateProxyConfigEnv = isGatewayRunInvocation;
+  const skipBestEffortConfigObservation = resolveCliStartupPolicyForArgv({
+    argv: normalizedArgv,
+    commandPath: normalizedInvocation.commandPath,
+    jsonOutputMode: options.builtInMachineOutput || hasJsonOutputFlag(normalizedArgv),
+    env: process.env,
+  }).skipConfigGuard;
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(({ readBestEffortConfig }) =>
         readBestEffortConfig({
           ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
+          ...(skipBestEffortConfigObservation ? { observe: false } : {}),
           skipPluginValidation: true,
         }),
       );
@@ -1460,7 +1470,7 @@ async function runCliWithPreparedOutputMode(
       return;
     }
 
-    let parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
+    let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
     const suppressStartupProgress = hasJsonOutputFlag(parseArgv);
     const { createCliProgress } = await loadProgressModule();
     const startupProgress = createCliProgress({
