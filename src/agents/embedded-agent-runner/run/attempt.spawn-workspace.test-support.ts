@@ -466,6 +466,8 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
 
 vi.mock("../../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: () => undefined,
+  resolveModelOverridePolicy: () => undefined,
+  setTtsMachinePrefsPathResolver: () => undefined,
 }));
 
 vi.mock("../../bootstrap-files.js", async () => {
