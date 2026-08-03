@@ -182,7 +182,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   return timer;
 }
 
-const RECOVERY_SHUTDOWN_HANDOFF_TIMEOUT_MS = 5_000;
+const RECOVERY_SHUTDOWN_STILL_PENDING_WARN_MS = 5_000;
 
 function startPendingOutboundDeliveryRecovery(params: {
   cfg: OpenClawConfig;
@@ -251,24 +251,16 @@ function startPendingOutboundDeliveryRecovery(params: {
       stopPromise = Promise.resolve();
       return stopPromise;
     }
-    stopPromise = new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeout);
-        resolve();
-      };
-      const timeout = setTimeout(() => {
-        (logRecovery ??= params.log.child("delivery-recovery")).warn(
-          `delivery recovery shutdown handoff exceeded ${RECOVERY_SHUTDOWN_HANDOFF_TIMEOUT_MS}ms; continuing shutdown`,
-        );
-        finish();
-      }, RECOVERY_SHUTDOWN_HANDOFF_TIMEOUT_MS);
-      timeout.unref?.();
-      void recovery.then(finish);
+    const stillPendingTimer = setTimeout(() => {
+      (logRecovery ??= params.log.child("delivery-recovery")).warn(
+        `delivery recovery is still pending after ${RECOVERY_SHUTDOWN_STILL_PENDING_WARN_MS}ms; waiting before runtime teardown`,
+      );
+    }, RECOVERY_SHUTDOWN_STILL_PENDING_WARN_MS);
+    stillPendingTimer.unref?.();
+    // Provider dispatch is not generically cancellable. Keep its runtime alive
+    // until the admitted recovery settles; the process watchdog owns forced exit.
+    stopPromise = recovery.finally(() => {
+      clearTimeout(stillPendingTimer);
     });
     return stopPromise;
   };

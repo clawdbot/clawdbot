@@ -387,7 +387,45 @@ describe("server-runtime-services", () => {
     expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledTimes(1);
   });
 
-  it("waits for an active outbound recovery before its stop handle settles", async () => {
+  it("waits for active startup recovery before its stop handle settles", async () => {
+    vi.useFakeTimers();
+    let resolveRecovery: (() => void) | undefined;
+    hoisted.recoverPendingDeliveries.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        resolveRecovery = resolve;
+      });
+      return {
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+      };
+    });
+
+    const { services } = activateScheduledServicesForTest();
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
+
+    let stopped = false;
+    const stopPromise = services.stopOutboundDeliveryRecovery().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    if (!resolveRecovery) {
+      throw new Error("Expected outbound startup recovery resolver to be initialized");
+    }
+    resolveRecovery();
+    await stopPromise;
+    expect(stopped).toBe(true);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    services.heartbeatRunner.stop();
+  });
+
+  it("warns but holds shutdown until outbound recovery settles", async () => {
     vi.useFakeTimers();
     let resolveDrain: (() => void) | undefined;
     hoisted.drainPendingDeliveries.mockImplementationOnce(
@@ -396,31 +434,6 @@ describe("server-runtime-services", () => {
           resolveDrain = resolve;
         }),
     );
-
-    const { services } = activateScheduledServicesForTest();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
-    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
-
-    let stopped = false;
-    const stopPromise = services.stopOutboundDeliveryRecovery().then(() => {
-      stopped = true;
-    });
-    await Promise.resolve();
-    expect(stopped).toBe(false);
-
-    if (!resolveDrain) {
-      throw new Error("Expected outbound retry drain resolver to be initialized");
-    }
-    resolveDrain();
-    await stopPromise;
-    expect(stopped).toBe(true);
-    services.heartbeatRunner.stop();
-  });
-
-  it("bounds outbound recovery shutdown handoff without rearming", async () => {
-    vi.useFakeTimers();
-    hoisted.drainPendingDeliveries.mockImplementationOnce(() => new Promise(() => {}));
     const log = createLog();
     const { services } = activateScheduledServicesForTest({ log });
     await vi.advanceTimersByTimeAsync(5_000);
@@ -436,21 +449,30 @@ describe("server-runtime-services", () => {
       secondStopped = true;
     });
 
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(firstStopped).toBe(false);
     expect(secondStopped).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await Promise.all([firstStop, secondStop]);
-    expect(firstStopped).toBe(true);
-    expect(secondStopped).toBe(true);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
     expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
     expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledWith(
-      "delivery recovery shutdown handoff exceeded 5000ms; continuing shutdown",
+      "delivery recovery is still pending after 5000ms; waiting before runtime teardown",
     );
 
     await vi.advanceTimersByTimeAsync(15_000);
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    expect(firstStopped).toBe(false);
+    expect(secondStopped).toBe(false);
+    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
+
+    if (!resolveDrain) {
+      throw new Error("Expected outbound retry drain resolver to be initialized");
+    }
+    resolveDrain();
+    await Promise.all([firstStop, secondStop]);
+    expect(firstStopped).toBe(true);
+    expect(secondStopped).toBe(true);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
     services.heartbeatRunner.stop();
   });
 
