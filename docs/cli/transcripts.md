@@ -113,9 +113,11 @@ or run the `transcripts` tool's `summarize` action to regenerate the Markdown
 summary.
 
 Sessions created before account ownership was recorded retain their stored
-agent ownership. A row with no stored account cannot be safely claimed from a
-channel: recover an agent-owned row with a local turn for that agent. Older rows
-with no agent attribution require a local main-agent turn:
+agent ownership. For an account-bound source, a row with no stored account
+cannot be safely claimed from a channel: recover an agent-owned row with a local
+turn for that agent. An account-bound row with no agent attribution requires a
+local main-agent turn. Sources without account binding retain main-agent access
+across their normal surfaces.
 
 ```bash
 openclaw agent --agent <owning-agent-or-main> --local --message \
