@@ -305,7 +305,11 @@ describe("subagent registry sqlite store", () => {
       expect(stored.frozen_result_text).toBe("NO_REPLY");
       expect(stored.fallback_frozen_result_text).toBe("legacy retained result");
       const storedPayload = JSON.parse(stored.payload_json) as SubagentRunRecord;
-      expect(storedPayload.completion).toMatchObject(restored?.completion ?? {});
+      expect(storedPayload.completion).toMatchObject({
+        required: true,
+        resultText: "NO_REPLY",
+        fallbackResultText: "legacy retained result",
+      });
       expect(storedPayload.delivery?.payload).not.toHaveProperty("frozenResultText");
       expect(storedPayload.delivery?.payload).not.toHaveProperty("fallbackFrozenResultText");
 

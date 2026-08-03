@@ -204,7 +204,7 @@ describe("repairLegacySubagentRetainedResults", () => {
       ) STRICT;
     `);
     const legacyPayload = {
-      frozenResultText: "NO_REPLY",
+      frozenResultText: "(no_reply)",
       fallbackFrozenResultText: "findings captured before wake",
       requesterSessionKey: "agent:main:main",
     };
@@ -218,16 +218,16 @@ describe("repairLegacySubagentRetainedResults", () => {
       JSON.stringify({
         runId: "completion-run",
         taskRunId: "task-run",
-        completion: { required: true, resultText: "NO_REPLY" },
+        completion: { required: true, resultText: "(no_reply)" },
         delivery: { status: "suspended", payload: legacyPayload },
       }),
       JSON.stringify(legacyPayload),
-      "NO_REPLY",
+      "(no_reply)",
       null,
     );
     db.prepare(
       "INSERT INTO task_runs (task_id, runtime, run_id, progress_summary) VALUES (?, ?, ?, ?)",
-    ).run("task-id", "subagent", "task-run", "NO_REPLY");
+    ).run("task-id", "subagent", "task-run", "(no_reply)");
 
     repairLegacySubagentRetainedResults(db);
     const firstPass = db
@@ -255,14 +255,14 @@ describe("repairLegacySubagentRetainedResults", () => {
     const payload = JSON.parse(firstPass.payload_json);
     expect(payload.completion).toEqual({
       required: true,
-      resultText: "NO_REPLY",
+      resultText: "(no_reply)",
       fallbackResultText: "findings captured before wake",
     });
     expect(payload.delivery.payload).toEqual({ requesterSessionKey: "agent:main:main" });
     expect(JSON.parse(firstPass.pending_final_delivery_payload_json)).toEqual({
       requesterSessionKey: "agent:main:main",
     });
-    expect(firstPass.frozen_result_text).toBe("NO_REPLY");
+    expect(firstPass.frozen_result_text).toBe("(no_reply)");
     expect(firstPass.fallback_frozen_result_text).toBe("findings captured before wake");
     expect(
       db.prepare("SELECT progress_summary FROM task_runs WHERE task_id = ?").get("task-id"),
@@ -327,5 +327,66 @@ describe("repairLegacySubagentRetainedResults", () => {
     expect(JSON.parse(row.pending_final_delivery_payload_json)).toEqual({});
     expect(row.frozen_result_text).toBe("canonical result");
     expect(row.fallback_frozen_result_text).toBe("canonical fallback");
+  });
+
+  it("preserves authoritative terminal silence while promoting legacy results", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      CREATE TABLE subagent_runs (
+        run_id TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        pending_final_delivery_payload_json TEXT,
+        frozen_result_text TEXT,
+        fallback_frozen_result_text TEXT
+      ) STRICT;
+      CREATE TABLE task_runs (
+        task_id TEXT PRIMARY KEY,
+        runtime TEXT NOT NULL,
+        run_id TEXT,
+        progress_summary TEXT
+      ) STRICT;
+    `);
+    const legacyPayload = {
+      frozenResultText: "NO_REPLY",
+      fallbackFrozenResultText: "older visible fallback",
+    };
+    db.prepare(
+      `INSERT INTO subagent_runs (
+        run_id, payload_json, pending_final_delivery_payload_json,
+        frozen_result_text, fallback_frozen_result_text
+      ) VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      "silent-run",
+      JSON.stringify({
+        taskRunId: "silent-task-run",
+        completion: {
+          required: true,
+          resultText: "NO_REPLY",
+          terminalReply: { disposition: "silent" },
+        },
+        delivery: { status: "suspended", payload: legacyPayload },
+      }),
+      JSON.stringify(legacyPayload),
+      "NO_REPLY",
+      "older visible fallback",
+    );
+    db.prepare(
+      "INSERT INTO task_runs (task_id, runtime, run_id, progress_summary) VALUES (?, ?, ?, ?)",
+    ).run("silent-task", "subagent", "silent-task-run", "NO_REPLY");
+
+    repairLegacySubagentRetainedResults(db);
+
+    const stored = db
+      .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+      .get("silent-run") as { payload_json: string };
+    expect(JSON.parse(stored.payload_json).completion).toEqual({
+      required: true,
+      resultText: "NO_REPLY",
+      fallbackResultText: "older visible fallback",
+      terminalReply: { disposition: "silent" },
+    });
+    expect(
+      db.prepare("SELECT progress_summary FROM task_runs WHERE task_id = ?").get("silent-task"),
+    ).toEqual({ progress_summary: null });
   });
 });

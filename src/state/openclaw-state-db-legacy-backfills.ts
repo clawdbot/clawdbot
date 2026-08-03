@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
@@ -137,20 +139,15 @@ function nullableTextValue(record: Record<string, unknown> | null, key: string) 
 }
 
 function selectLegacyRetainedTaskResult(
+  completion: Record<string, unknown>,
   primary: string | null | undefined,
   fallback: string | null | undefined,
 ): string | null {
-  const primaryText = primary?.trim();
-  if (primaryText && primaryText !== "NO_REPLY") {
-    return ["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"].includes(primaryText)
-      ? null
-      : primaryText;
+  const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
+  if (terminalReply) {
+    return terminalReply.disposition === "visible" ? terminalReply.text : null;
   }
-  const fallbackText = fallback?.trim();
-  return fallbackText &&
-    !["ANNOUNCE_SKIP", "REPLY_SKIP", "NO_REPLY", "HEARTBEAT_OK"].includes(fallbackText)
-    ? fallbackText
-    : null;
+  return selectDeliverableSessionsReply(primary, fallback) ?? null;
 }
 
 /** Promote shipped retained results before runtime hydrates canonical subagent/task state. */
@@ -189,7 +186,7 @@ export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
               AND run_id = ?
               AND (progress_summary IS NULL
                 OR trim(progress_summary) = ''
-                OR (? = 1 AND trim(progress_summary) = 'NO_REPLY'))`,
+                OR (? IS NOT NULL AND trim(progress_summary) = ?))`,
         )
       : undefined;
 
@@ -244,9 +241,11 @@ export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
         row.run_id,
       );
       const taskRunId = textField(payload, "taskRunId") ?? row.run_id;
-      const taskResult = selectLegacyRetainedTaskResult(primary, fallback);
-      if (updateTask && taskResult) {
-        updateTask.run(taskResult, taskRunId, primary?.trim() === "NO_REPLY" ? 1 : 0);
+      const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
+      const taskResult = selectLegacyRetainedTaskResult(completion, primary, fallback);
+      if (updateTask && (taskResult || terminalReply)) {
+        const retainedPrimary = primary?.trim() || null;
+        updateTask.run(taskResult, taskRunId, retainedPrimary, retainedPrimary);
       }
     }
   };
