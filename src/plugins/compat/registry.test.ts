@@ -57,9 +57,11 @@ function expectNonEmptyStringList(values: readonly string[], label: string) {
 }
 
 function listTrackedSourceFiles(): string[] {
-  return (listGitTrackedFiles({ pathspecs: sourceRootsForDeprecatedCallGuard }) ?? []).filter(
-    (file) => /\.(?:ts|tsx|mts|cts)$/u.test(file),
-  );
+  const files = listGitTrackedFiles({ pathspecs: sourceRootsForDeprecatedCallGuard });
+  if (!files) {
+    throw new Error("unable to list tracked source files for the deprecated-call guard");
+  }
+  return files.filter((file) => /\.(?:ts|tsx|mts|cts)$/u.test(file));
 }
 
 describe("plugin compatibility registry", () => {
