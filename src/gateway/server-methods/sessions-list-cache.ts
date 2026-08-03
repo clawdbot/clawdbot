@@ -91,7 +91,10 @@ export async function respondWithCachedSessionList(params: {
   // Every input that can change a projected row must fence reuse. Store mutations and
   // live-run transitions have separate owners, so their monotonic counters stay separate.
   const fence = readSessionListFence(params.context);
-  const completed = state.completed.get(workKey);
+  // Activity windows and child retention expire without mutations; hidden paginated rows
+  // prevent deriving a safe deadline, so only concurrent temporal requests share work.
+  const cacheCompleted = params.request.activeMinutes === undefined && !params.request.spawnedBy;
+  const completed = cacheCompleted ? state.completed.get(workKey) : undefined;
   if (completed && matchesSessionListFence(completed, fence)) {
     params.respond(true, completed.result, undefined);
     return;
@@ -107,7 +110,7 @@ export async function respondWithCachedSessionList(params: {
   const promise = Promise.resolve()
     .then(params.run)
     .then((result) => {
-      if (matchesSessionListFence(readSessionListFence(params.context), fence)) {
+      if (cacheCompleted && matchesSessionListFence(readSessionListFence(params.context), fence)) {
         rememberCompletedSessionList(state, workKey, { ...fence, result });
       }
       return result;
