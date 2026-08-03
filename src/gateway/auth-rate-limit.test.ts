@@ -449,6 +449,17 @@ describe("auth rate limiter", () => {
     expect(limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN).allowed).toBe(false);
   });
 
+  it("does not reset the shared forwarded-loopback failure history", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 60_000, lockoutMs: 60_000 });
+    const key = buildRateLimitIdentityKey("forwarded-loopback", "127.0.0.1");
+
+    limiter.recordFailure(key, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+    limiter.reset(key, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+    limiter.recordFailure(key, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+
+    expect(limiter.check(key, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed).toBe(false);
+  });
+
   // ---------- prune ----------
 
   it("prune removes stale entries", () => {

@@ -775,6 +775,41 @@ describe("gateway auth", () => {
     });
   });
 
+  it("keeps forwarded-loopback failures across a successful authentication", async () => {
+    const limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
+    const params = {
+      auth: { mode: "password" as const, password: "secret", allowTailscale: false },
+      connectAuth: { password: "wrong" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      } as never,
+      trustedProxies: [],
+      rateLimiter: limiter,
+    };
+
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
+      ok: false,
+      reason: "password_mismatch",
+    });
+    params.connectAuth.password = "secret";
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({ ok: true });
+    params.connectAuth.password = "wrong";
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
+      ok: false,
+      reason: "password_mismatch",
+    });
+    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
+      ok: false,
+      reason: "rate_limited",
+      rateLimited: true,
+    });
+  });
+
   it("keeps genuinely direct loopback requests exempt from lockout", async () => {
     const limiter = createAuthRateLimiter({
       maxAttempts: 1,

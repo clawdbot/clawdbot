@@ -62,6 +62,7 @@ export const AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE = "watch-challenge";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 const IDENTITY_RATE_LIMIT_KEY_PREFIX = "identity:";
+const FORWARDED_LOOPBACK_RATE_LIMIT_KEY_PREFIX = `${IDENTITY_RATE_LIMIT_KEY_PREFIX}forwarded-loopback:`;
 
 interface RateLimitEntry {
   /** Timestamps (epoch ms) of recent failed attempts inside the window. */
@@ -367,7 +368,12 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   }
 
   function reset(rawIp: string | undefined, rawScope?: string): void {
-    const { key } = resolveKey(rawIp, rawScope);
+    const { key, ip } = resolveKey(rawIp, rawScope);
+    // This identity combines untrusted clients when proxy trust cannot resolve them.
+    // One client's successful auth must not erase the aggregate's failure history.
+    if (ip.startsWith(FORWARDED_LOOPBACK_RATE_LIMIT_KEY_PREFIX)) {
+      return;
+    }
     entries.delete(key);
     loopbackPenaltyUntil.delete(key);
   }
