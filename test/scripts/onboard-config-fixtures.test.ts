@@ -177,6 +177,63 @@ describe("onboard config fixture helpers", () => {
     expect(remoteResult.stderr).toBe("");
   });
 
+  it("accepts provider and gateway environment references from non-interactive onboarding", () => {
+    const root = makeTempDir(tempDirs, "openclaw-onboard-config-auth-refs-");
+    const configPath = path.join(root, "openclaw.json");
+    writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        {
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_GATEWAY_TOKEN",
+              },
+            },
+          },
+          wizard: { lastRunMode: "local" },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = runScript(ASSERT_CONFIG_SCRIPT, ["local-auth-refs", configPath]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("accepts password Gateway fixtures", () => {
+    const root = makeTempDir(tempDirs, "openclaw-onboard-config-password-");
+    const passwordConfigPath = path.join(root, "password.json");
+    writeFileSync(
+      passwordConfigPath,
+      `${JSON.stringify(
+        {
+          gateway: {
+            mode: "local",
+            auth: { mode: "password", password: "openclaw-onboard-password-e2e" },
+          },
+          wizard: { lastRunMode: "local" },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const passwordResult = runScript(ASSERT_CONFIG_SCRIPT, ["local-password", passwordConfigPath]);
+
+    expect(passwordResult.status).toBe(0);
+    expect(passwordResult.stderr).toBe("");
+  });
+
   it("accepts channel configuration assertions for scrubbed channel secrets", () => {
     const root = makeTempDir(tempDirs, "openclaw-onboard-config-channels-");
     const configPath = path.join(root, "channels.json");
