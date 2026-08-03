@@ -45,6 +45,15 @@ describe("resolveWorkerToolAuthority", () => {
     expect(authority({ toolsAllow: ["web_search"] })).toEqual([]);
   });
 
+  it("does not load exec state when the projected authority has no shell tools", () => {
+    vi.mocked(execApprovals.loadExecApprovals).mockImplementation(() => {
+      throw new Error("legacy exec state requires doctor migration");
+    });
+
+    expect(authority({ toolsAllow: ["read"] })).toEqual(["read"]);
+    expect(execApprovals.loadExecApprovals).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["deny", { mode: "deny" as const }],
     ["allowlist", { mode: "allowlist" as const }],

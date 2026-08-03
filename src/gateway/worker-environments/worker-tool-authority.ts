@@ -90,6 +90,9 @@ export function resolveWorkerToolAuthority(params: {
     toolNames: runtimeCappedTools.map((tool) => tool.name),
     warn: logWarn,
   });
+  if (!projected.includes("exec") && !projected.includes("process")) {
+    return { allowedToolNames: projected };
+  }
   const { effectiveHost, security, ask } = resolveExecDefaults({
     cfg: turn.config,
     agentId: turn.agentId,
