@@ -97,6 +97,11 @@ export type EmbeddedAgentQueueMessageOutcome =
       errorMessage?: string;
     };
 
+type EmbeddedAgentQueueMessageRejection = Extract<
+  EmbeddedAgentQueueMessageOutcome,
+  { queued: false }
+>;
+
 type PreparedEmbeddedAgentQueueMessage =
   | {
       kind: "complete";
@@ -111,7 +116,7 @@ function createQueueFailureOutcome(
   sessionId: string,
   reason: EmbeddedAgentQueueFailureReason,
   errorMessage?: string,
-): EmbeddedAgentQueueMessageOutcome {
+): EmbeddedAgentQueueMessageRejection {
   return {
     queued: false,
     sessionId,
@@ -382,6 +387,75 @@ function isEmbeddedQueueHandleMessageInjectable(
   }
 }
 
+function resolveEmbeddedAgentQueueTerminalRejectionForHandle(
+  sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
+): EmbeddedAgentQueueMessageRejection | undefined {
+  if (!isEmbeddedQueueHandleMessageInjectable(sessionId, handle)) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
+    return createQueueFailureOutcome(sessionId, "not_streaming");
+  }
+  const activity = getDiagnosticSessionActivitySnapshot({ sessionId });
+  if (
+    typeof activity.lastProgressAgeMs === "number" &&
+    activity.lastProgressAgeMs > resolveRunStaleThresholdMs(activity)
+  ) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
+    return createQueueFailureOutcome(sessionId, "stale_run");
+  }
+  return undefined;
+}
+
+function resolveEmbeddedAgentQueueHandleRejection(
+  sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
+  options?: EmbeddedAgentQueueMessageOptions,
+): EmbeddedAgentQueueMessageOutcome | undefined {
+  const terminalRejection = resolveEmbeddedAgentQueueTerminalRejectionForHandle(sessionId, handle);
+  if (terminalRejection) {
+    return terminalRejection;
+  }
+  if (handle.isCompacting()) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
+    return createQueueFailureOutcome(sessionId, "compacting");
+  }
+  if (options?.waitForTranscriptCommit === true && handle.supportsTranscriptCommitWait !== true) {
+    diag.debug(
+      `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
+    );
+    return createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported");
+  }
+  const deliveryModeMismatch = resolveReplyBackendQueueMessageMismatch(handle, options);
+  if (deliveryModeMismatch) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=${deliveryModeMismatch}`);
+    return createQueueFailureOutcome(sessionId, deliveryModeMismatch);
+  }
+  return undefined;
+}
+
+/** Classifies whether a run-scoped target is terminal without delivering a message. */
+export function resolveEmbeddedAgentQueueTerminalRejection(
+  sessionId: string,
+): EmbeddedAgentQueueMessageRejection | undefined {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle) {
+    if (isReplyRunEvidenceStaleBySessionId(sessionId)) {
+      diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
+      return createQueueFailureOutcome(sessionId, "stale_run");
+    }
+    if (isReplyRunActiveForSessionId(sessionId)) {
+      if (isReplyRunStreamingForSessionId(sessionId)) {
+        return undefined;
+      }
+      diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
+      return createQueueFailureOutcome(sessionId, "not_streaming");
+    }
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
+    return createQueueFailureOutcome(sessionId, "no_active_run");
+  }
+  return resolveEmbeddedAgentQueueTerminalRejectionForHandle(sessionId, handle);
+}
+
 function isEmbeddedRunHandleAbortable(
   sessionId: string,
   handle: EmbeddedAgentQueueHandle,
@@ -506,38 +580,9 @@ function prepareEmbeddedAgentQueueMessage(
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "no_active_run") };
   }
-  if (!isEmbeddedQueueHandleMessageInjectable(sessionId, handle)) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
-    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "not_streaming") };
-  }
-  const activity = getDiagnosticSessionActivitySnapshot({ sessionId });
-  if (
-    typeof activity.lastProgressAgeMs === "number" &&
-    activity.lastProgressAgeMs > resolveRunStaleThresholdMs(activity)
-  ) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
-    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
-  }
-  if (handle.isCompacting()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
-    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "compacting") };
-  }
-  if (options?.waitForTranscriptCommit === true && handle.supportsTranscriptCommitWait !== true) {
-    diag.debug(
-      `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
-    );
-    return {
-      kind: "complete",
-      outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
-    };
-  }
-  const deliveryModeMismatch = resolveReplyBackendQueueMessageMismatch(handle, options);
-  if (deliveryModeMismatch) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=${deliveryModeMismatch}`);
-    return {
-      kind: "complete",
-      outcome: createQueueFailureOutcome(sessionId, deliveryModeMismatch),
-    };
+  const rejection = resolveEmbeddedAgentQueueHandleRejection(sessionId, handle, options);
+  if (rejection) {
+    return { kind: "complete", outcome: rejection };
   }
   return { kind: "embedded_run", handle };
 }

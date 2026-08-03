@@ -50,6 +50,7 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
+  resolveEmbeddedAgentQueueTerminalRejection,
 } from "../embedded-agent-runner/runs.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
@@ -360,9 +361,7 @@ async function startAgentRun(params: {
 > {
   try {
     const activeRunSessionId =
-      params.allowActiveRunQueueDelivery &&
-      !params.restrictiveHandoff &&
-      isRunScopedAgentSessionKey(params.sessionKey)
+      params.allowActiveRunQueueDelivery && isRunScopedAgentSessionKey(params.sessionKey)
         ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
         : undefined;
     const messageText =
@@ -380,11 +379,25 @@ async function startAgentRun(params: {
         waitForTranscriptCommit: true,
         ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       };
-      let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-        activeRunSessionId,
-        messageText,
-        queueOptions,
-      );
+      let queueOutcome = params.restrictiveHandoff
+        ? resolveEmbeddedAgentQueueTerminalRejection(activeRunSessionId)
+        : await queueEmbeddedAgentMessageWithOutcomeAsync(
+            activeRunSessionId,
+            messageText,
+            queueOptions,
+          );
+      if (!queueOutcome) {
+        const response = await params.callAgent<{ runId: string }>({
+          method: "agent",
+          params: params.sendParams,
+          timeoutMs: 10_000,
+        });
+        return {
+          ok: true,
+          runId:
+            typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+        };
+      }
       if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
         const bestEffortQueueOptions = { ...queueOptions };
         delete bestEffortQueueOptions.waitForTranscriptCommit;

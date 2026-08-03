@@ -345,7 +345,7 @@ describe("resolveConversationCapabilityProfile", () => {
       config: {
         tools: {
           allow: ["read", "sessions_send"],
-          bySender: { "*": { allow: ["sessions_send"] } },
+          toolsBySender: { "*": { allow: ["sessions_send"] } },
         },
       },
       runtimeToolAllowlist: ["read", "sessions_send"],

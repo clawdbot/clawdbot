@@ -144,11 +144,15 @@ function installMessagingTestRegistry() {
   );
 }
 
+type SessionsSendToolOptions = NonNullable<Parameters<typeof createSessionsSendTool>[0]>;
+
 function createOpenClawTools(options?: {
   agentSessionKey?: string;
   agentChannel?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  toolPolicy?: SessionsSendToolOptions["toolPolicy"];
+  callAgentWithHandoff?: SessionsSendToolOptions["callAgentWithHandoff"];
 }) {
   // Sessions tests exercise the related tools as a small local bundle.
   const config = options?.config ?? TEST_CONFIG;
@@ -178,6 +182,8 @@ function createOpenClawTools(options?: {
       sandboxed: options?.sandboxed,
       config,
       callGateway: gatewayCall,
+      toolPolicy: options?.toolPolicy,
+      callAgentWithHandoff: options?.callAgentWithHandoff,
     }),
   ];
 }
@@ -1856,6 +1862,109 @@ describe("sessions tools", () => {
     expect(details.error).toContain("queue_message_failed reason=not_streaming");
     expect(queueMessage).not.toHaveBeenCalled();
     expect(calls.some((call) => call.method === "agent")).toBe(false);
+  });
+
+  it("sessions_send preserves restrictive policy when a cron run falls back", async () => {
+    const runScopedKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
+    const durableKey = "agent:leasing-ops:cron:monthly-utility";
+    const queueMessage = vi.fn(async () => {});
+    const callAgentWithHandoff = vi.fn(async () => ({ runId: "restrictive-fallback-run" }));
+    setActiveEmbeddedRun(
+      "caller-active-session",
+      {
+        queueMessage,
+        isStreaming: () => false,
+        isCompacting: () => false,
+        supportsTranscriptCommitWait: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        abort: () => {},
+      },
+      runScopedKey,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        throw new Error("raw gateway agent call should not run");
+      }
+      return {};
+    });
+
+    const tool = getSessionTool("sessions_send", {
+      agentSessionKey: "agent:main:cron:source-job:run:source-run",
+      agentChannel: "telegram",
+      config: cloneTestConfig(),
+      toolPolicy: { version: 1, allow: ["sessions_send"], deny: ["message"] },
+      callAgentWithHandoff,
+    });
+    const result = await tool.execute("call-restrictive-cron-run", {
+      sessionKey: runScopedKey,
+      message: "handoff",
+      timeoutSeconds: 0,
+    });
+
+    expect(sessionsSendDetails(result.details)).toMatchObject({
+      status: "accepted",
+      runId: "restrictive-fallback-run",
+      sessionKey: runScopedKey,
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(callAgentWithHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({ sessionKey: durableKey }),
+      }),
+      {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["sessions_send"],
+          deny: ["message"],
+        },
+      },
+    );
+  });
+
+  it("sessions_send fails closed for a restrictive non-cron stranded run", async () => {
+    const runScopedKey = "agent:leasing-ops:slack:channel:c-room:run:run-fast";
+    const queueMessage = vi.fn(async () => {});
+    const callAgentWithHandoff = vi.fn(async () => ({ runId: "unexpected-run" }));
+    setActiveEmbeddedRun(
+      "caller-active-session",
+      {
+        queueMessage,
+        isStreaming: () => false,
+        isCompacting: () => false,
+        supportsTranscriptCommitWait: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        abort: () => {},
+      },
+      runScopedKey,
+    );
+
+    const tool = getSessionTool("sessions_send", {
+      agentSessionKey: "agent:re-portal:main",
+      agentChannel: "telegram",
+      config: cloneTestConfig(),
+      toolPolicy: { version: 1, allow: ["sessions_send"], deny: ["message"] },
+      callAgentWithHandoff,
+    });
+    const result = await tool.execute("call-restrictive-non-cron-run", {
+      sessionKey: runScopedKey,
+      message: "handoff",
+      timeoutSeconds: 0,
+    });
+
+    expect(sessionsSendDetails(result.details)).toMatchObject({
+      status: "error",
+      sessionKey: runScopedKey,
+    });
+    expect(sessionsSendDetails(result.details).error).toContain(
+      "queue_message_failed reason=not_streaming",
+    );
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(callAgentWithHandoff).not.toHaveBeenCalled();
   });
 
   it("sessions_send preserves active delivery when transcript commit wait is unsupported", async () => {
