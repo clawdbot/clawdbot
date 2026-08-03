@@ -317,11 +317,11 @@ export default definePluginEntry({
   kind: "memory",
   register(api) {
     const acquireLocalService = api.runtime.llm?.acquireLocalService;
+    const openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      api.runtime.state.openKeyedStore<T>(options);
     const withLease = api.runtime.state.withLease.bind(api.runtime.state);
-    const host = { acquireLocalService, withLease } satisfies MemoryCoreRuntimeHost;
-    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-      api.runtime.state.openKeyedStore<T>(options),
-    );
+    const host = { acquireLocalService, openKeyedStore, withLease } satisfies MemoryCoreRuntimeHost;
+    configureMemoryCoreDreamingState(openKeyedStore);
     const memoryRuntime = createLazyMemoryRuntime(host);
     registerShortTermPromotionDreaming(api);
     registerSessionBackfillGatewayMethods(api);
