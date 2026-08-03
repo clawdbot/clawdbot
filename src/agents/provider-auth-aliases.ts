@@ -5,7 +5,6 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
@@ -157,24 +156,16 @@ export function resolveProviderAuthAliasMap(
           env,
           allowWorkspaceScopedSnapshot: true,
         })
-      : getCurrentPluginMetadataSnapshot({
-          ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-          env,
-          allowWorkspaceScopedSnapshot: true,
-          requireProcessFullContext: true,
-        })) ??
-    (() => {
-      if (!config || normalizePluginsConfig(config.plugins).loadPaths.length !== 0) {
-        return undefined;
-      }
-      const currentSnapshot = getCurrentPluginMetadataSnapshot({
-        ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-        env,
-        allowWorkspaceScopedSnapshot: true,
-        requireProcessFullContext: true,
-      });
-      return currentSnapshot;
-    })() ??
+      : undefined) ??
+    // Load-path plugins are origin:"config" (operator-declared-trusted); the
+    // origin field, not this gate, is the alias trust boundary. Any caller
+    // whose config fingerprint missed falls back to the process snapshot.
+    getCurrentPluginMetadataSnapshot({
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      env,
+      allowWorkspaceScopedSnapshot: true,
+      requireProcessFullContext: true,
+    }) ??
     loadPluginMetadataSnapshot({
       config: config ?? {},
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),

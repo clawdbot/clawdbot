@@ -3,7 +3,6 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -152,9 +151,12 @@ function resolveProviderMetadataSnapshot(
   if (current) {
     return current;
   }
-  if (config && normalizePluginsConfig(config.plugins).loadPaths.length === 0) {
-    // Configs without explicit load paths can reuse the process-scoped snapshot; plugin-scoped
-    // configs need fresh metadata so workspace allow/deny decisions are not bypassed.
+  if (config) {
+    // Any config whose fingerprint missed can reuse the process snapshot:
+    // load-path plugins are origin:"config" (operator-declared-trusted), and
+    // workspace-plugin trust is enforced at consumption via origin, not here.
+    // Rejecting the snapshot only forced a rescan that MISSED load-path
+    // plugins — under-blocking the dotenv workspace blocklist.
     const unscopedCurrent = getCurrentPluginMetadataSnapshot({
       env,
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),

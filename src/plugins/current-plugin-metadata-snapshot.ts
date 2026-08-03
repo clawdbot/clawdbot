@@ -201,7 +201,11 @@ export function getCurrentPluginMetadataSnapshot(
   const canReuseCachedConfig = Boolean(
     params.config && currentPluginMetadataConfigIdentityCache.has(params.config),
   );
-  if (canReuseCachedConfig && params.requireDefaultDiscoveryContext !== true) {
+  if (
+    canReuseCachedConfig &&
+    params.requireDefaultDiscoveryContext !== true &&
+    params.requireProcessFullContext !== true
+  ) {
     return snapshot;
   }
   const requestedPolicyHash =
