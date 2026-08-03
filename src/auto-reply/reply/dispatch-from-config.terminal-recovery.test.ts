@@ -97,4 +97,44 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
+
+  it("records a failed reply operation when recovering a visible partial", async () => {
+    const resolverError = new Error("provider failed after partial");
+    let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
+    const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
+      _ctx,
+      options,
+    ) => {
+      if (!options) {
+        throw new Error("reply options required for partial recovery");
+      }
+      replyOperation = options.replyOperation;
+      await options.onPartialReply?.({ text: "partial telegram reply" });
+      throw resolverError;
+    };
+    const dispatchParams = {
+      ...createVisibleDispatchParams(replyResolver),
+      replyOptions: {
+        onPartialReply: vi.fn(async () => undefined),
+      },
+    };
+
+    const result = await dispatchReplyFromConfig(dispatchParams);
+
+    expect(replyOperation?.result).toEqual({
+      kind: "failed",
+      code: "run_failed",
+      cause: resolverError,
+    });
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(dispatchParams.replyOptions.onPartialReply).toHaveBeenCalledWith({
+      text: "partial telegram reply",
+    });
+    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("Something went wrong") }),
+    );
+  });
 });

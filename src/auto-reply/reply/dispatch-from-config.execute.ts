@@ -32,6 +32,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     ctx,
     deliveryChannel,
     dispatcher,
+    failDispatchReplyOperation,
     flushPendingCommentaryProgress,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
@@ -507,6 +508,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     ) {
       throw error;
     }
+    failDispatchReplyOperation(error);
     return buildTerminalAgentRunFailureReplyPayload({
       visibleReplyDelivered: true,
       sessionCtx: ctx,
