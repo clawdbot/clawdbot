@@ -422,4 +422,25 @@ describe("TasksPage cancellation lifecycle", () => {
       terminalOutcome: "succeeded",
     });
   });
+
+  it("keeps a dismissed completion result copyable without offering another recovery", async () => {
+    const dismissed = createTask("task-dismissed", "completed", {
+      deliveryStatus: "not_applicable",
+      terminalOutcome: "blocked",
+      terminalSummary: "Task completed; result delivery was dismissed by the operator.",
+    });
+    const request = vi.fn(() => Promise.resolve({ tasks: [dismissed] }));
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+    await vi.waitFor(() => expect(page.tasks).toHaveLength(1));
+
+    const text = page.textContent ?? "";
+    expect(text).toContain("Completed; result delivery was dismissed.");
+    expect(text).toContain("Copy result");
+    expect(text).not.toContain("Retry delivery");
+    expect(text).not.toContain("Dismiss delivery");
+    expect(text).not.toContain("Retrying may duplicate a result");
+  });
 });

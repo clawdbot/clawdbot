@@ -2924,6 +2924,7 @@ export const en: TranslationMap = {
     dismissDelivery: "Dismiss delivery",
     copyResult: "Copy result",
     deliveryBlocked: "Completed, but result delivery is blocked.",
+    deliveryDismissed: "Completed; result delivery was dismissed.",
     duplicateRisk: "Retrying may duplicate a result after an ambiguous acknowledgement.",
     status: {
       queued: "Queued",
