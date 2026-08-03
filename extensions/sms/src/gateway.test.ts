@@ -96,6 +96,72 @@ describe("startSmsGatewayAccount", () => {
     });
   }
 
+  it("publishes ready and stopped around an active webhook route", async () => {
+    const statusSink = vi.fn();
+    await startRoute({
+      cfg: {},
+      account: createAccount("default"),
+      channelRuntime: {} as SmsChannelRuntime,
+      statusSink,
+    });
+
+    expect(statusSink).toHaveBeenNthCalledWith(1, { lifecycle: "starting" });
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: "ready", connected: true }),
+    );
+    expect(statusSink).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lifecycle: "stopped", running: false }),
+    );
+  });
+
+  it("publishes stopped for disabled accounts and blocked for missing required config", async () => {
+    const disabledSink = vi.fn();
+    await startRoute({
+      cfg: {},
+      account: { ...createAccount("disabled"), enabled: false },
+      channelRuntime: {} as SmsChannelRuntime,
+      statusSink: disabledSink,
+    });
+    expect(disabledSink).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lifecycle: "stopped", running: false }),
+    );
+
+    const blockedSink = vi.fn();
+    await startRoute({
+      cfg: {},
+      account: { ...createAccount("missing"), authToken: "" },
+      channelRuntime: {} as SmsChannelRuntime,
+      statusSink: blockedSink,
+    });
+    expect(blockedSink).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lifecycle: "blocked", terminalDisconnect: true }),
+    );
+    expect(registerPluginHttpRoute).not.toHaveBeenCalled();
+  });
+
+  it("stops ingress and rejects startup when the webhook route cannot bind", async () => {
+    const statusSink = vi.fn();
+    registerPluginHttpRoute.mockImplementationOnce(() => {
+      throw new Error("SMS route conflict");
+    });
+
+    await expect(
+      startRoute({
+        cfg: {},
+        account: createAccount("default"),
+        channelRuntime: {} as SmsChannelRuntime,
+        statusSink,
+      }),
+    ).rejects.toThrow("SMS route conflict");
+
+    expect(registerPluginHttpRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ throwOnFailure: true }),
+    );
+    expect(stopSmsIngress).toHaveBeenCalledOnce();
+    expect(startSmsIngress).not.toHaveBeenCalled();
+    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
+  });
+
   it("rejects duplicate webhook paths across SMS accounts", async () => {
     const channelRuntime = {} as SmsChannelRuntime;
     await startRoute({

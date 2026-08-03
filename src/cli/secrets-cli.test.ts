@@ -553,6 +553,15 @@ describe("secrets CLI", () => {
     expect(runSecretsApply).not.toHaveBeenCalled();
   });
 
+  it("treats --help as the required --from value", async () => {
+    await expect(
+      createProgram().parseAsync(["secrets", "apply", "--from", "--help"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.join("\n")).toContain("Secrets plan file not found: --help");
+    expect(runSecretsApply).not.toHaveBeenCalled();
+  });
+
   it("preserves causes for unrelated apply errors with a similar message", async () => {
     await withPlanFile(async (planPath) => {
       runSecretsApply.mockRejectedValueOnce(

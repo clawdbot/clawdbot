@@ -1,8 +1,9 @@
 // Control UI controller manages skill workshop gateway state.
-import { formatByteSize, formatErrorMessage } from "@openclaw/normalization-core";
+import { formatErrorMessage } from "@openclaw/normalization-core";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { formatBytes } from "../../lib/agents/display.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
 import {
   normalizeAgentId,
@@ -187,18 +188,6 @@ function proposedVersionNumber(value: string | undefined): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "0 B";
-  }
-  return formatByteSize(bytes, {
-    style: "legacy-binary",
-    maxUnit: "kilo",
-    separator: " ",
-    fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
-  });
-}
-
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).length;
 }
@@ -215,7 +204,11 @@ function supportFilesFromInspect(
   );
   return (result.supportFiles ?? []).map((file) => ({
     path: file.path,
-    size: formatBytes(sizes.get(file.path) ?? byteLength(file.content)),
+    size: formatBytes(Math.max(0, sizes.get(file.path) ?? byteLength(file.content)), {
+      fallback: "0 B",
+      maxUnit: "kilo",
+      fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
+    }),
     contents: file.content,
   }));
 }

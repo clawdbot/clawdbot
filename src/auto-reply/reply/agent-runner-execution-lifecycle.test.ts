@@ -586,8 +586,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   });
 
   it("registers run ownership before asynchronous image preflight", async () => {
-    const agentEvents = await import("../../infra/agent-events.js");
-    const registerAgentRunContext = vi.mocked(agentEvents.registerAgentRunContext);
+    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
+    const registerAgentRunContext = vi.mocked(agentRunRegistry.registerAgentRunContext);
     let resolveImages: (() => void) | undefined;
     state.resolveCurrentTurnImagesMock.mockImplementationOnce(
       () =>
@@ -617,8 +617,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   });
 
   it("clears run ownership when image preflight fails", async () => {
-    const agentEvents = await import("../../infra/agent-events.js");
-    const clearAgentRunContext = vi.mocked(agentEvents.clearAgentRunContext);
+    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
+    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
     state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();

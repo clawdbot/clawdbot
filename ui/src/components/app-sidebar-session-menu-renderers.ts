@@ -111,6 +111,7 @@ export function renderSidebarCatalogViewMenu(params: {
   creatorFilterId: string | null;
   onGroupingChange: (grouping: CatalogProjectGrouping) => void;
   onCreatorFilterChange: (creatorId: string | null) => void;
+  onHide: () => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
   const position = params.position;
@@ -139,6 +140,8 @@ export function renderSidebarCatalogViewMenu(params: {
               params.onGroupingChange(value.slice("grouping:".length) as CatalogProjectGrouping);
             } else if (value?.startsWith("creator:")) {
               params.onCreatorFilterChange(value.slice("creator:".length) || null);
+            } else if (value === "hide-catalog") {
+              params.onHide();
             }
           }}
           @keydown=${(event: KeyboardEvent) =>
@@ -212,6 +215,10 @@ export function renderSidebarCatalogViewMenu(params: {
                 )}
               `
             : nothing}
+          <div class="session-menu__separator" role="separator"></div>
+          <wa-dropdown-item class="sidebar-session-sort-menu__item" value="hide-catalog">
+            <span class="session-menu__text">${t("chat.sidebar.hideFromSidebar")}</span>
+          </wa-dropdown-item>
         </wa-dropdown>
       </openclaw-menu-surface>
     `,

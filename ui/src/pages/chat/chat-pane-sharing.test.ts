@@ -388,6 +388,8 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
       expect(replacement.request).not.toHaveBeenCalled();
       expect(replacement.sessions.refreshReplacement).not.toHaveBeenCalled();
       expect(pane.sessionSharingStates.get(replacement.cacheKey)).toBe(replacement.sharingState);
+      expect(state.lastError).toBeNull();
+      expect(state.chatError).toBeNull();
     },
   );
 
@@ -435,8 +437,52 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
       expect(request).toHaveBeenCalledTimes(1);
       expect(sessions.refreshReplacement).not.toHaveBeenCalled();
       expect(pane.sessionSharingStates.get(cacheKey)).toBe(replacementState);
+      expect(state.lastError).toBeNull();
+      expect(state.chatError).toBeNull();
     },
   );
+
+  it("keeps a previous-session failure out of the newly selected session", async () => {
+    const response = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method !== mutation.method) {
+        throw new Error(`unexpected request: ${method}`);
+      }
+      return response.promise;
+    });
+    const sessions = {
+      refreshReplacement: vi.fn(),
+    } as unknown as SessionCapability;
+    const { pane: testPane, state } = createSharingTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions,
+    });
+    const pane = testPane as SharingPane;
+    const previous = sessionRow();
+    const selected = {
+      ...sessionRow(),
+      key: "agent:main:selected",
+      sessionId: "session-selected",
+    };
+    state.sessionsResult = {
+      ...sharingSessionsResult(previous),
+      count: 2,
+      sessions: [previous, selected],
+    };
+    const pending = mutation.invoke(pane, previous);
+    state.sessionKey = selected.key;
+
+    response.reject(new Error(`${mutation.name} failed after session switch`));
+    await pending;
+
+    expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(previous.key))).toMatchObject({
+      loading: false,
+      error: `Error: ${mutation.name} failed after session switch`,
+    });
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
+    expect(sessions.refreshReplacement).not.toHaveBeenCalled();
+  });
 
   it("preserves the current connection failure in the sharing cache", async () => {
     const request = vi.fn(async (method: string) => {
@@ -448,7 +494,7 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
     const sessions = {
       refreshReplacement: vi.fn(),
     } as unknown as SessionCapability;
-    const { pane: testPane } = createSharingTestChatPane({
+    const { pane: testPane, state } = createSharingTestChatPane({
       client: { request } as unknown as GatewayBrowserClient,
       sessions,
     });
@@ -461,6 +507,8 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
       loading: false,
       error: `Error: ${mutation.name} failed`,
     });
+    expect(state.lastError).toBe(`${mutation.name} failed`);
+    expect(state.chatError).toBe(state.lastError);
     expect(sessions.refreshReplacement).not.toHaveBeenCalled();
   });
 });

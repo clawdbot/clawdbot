@@ -31,12 +31,13 @@ function createUiE2eVitestConfig(
       // failure latency, not coverage.
       expect: { poll: { interval: 100, timeout: 15_000 } },
       fileParallelism: false,
+      globalSetup: ["test/vitest/vitest.ui-e2e.global-setup.ts"],
       include,
       isolate: true,
       name: "ui-e2e",
       pool: "forks",
       runner: undefined,
-      setupFiles: [],
+      setupFiles: ["test/vitest/vitest.ui-e2e.setup.ts"],
     },
   });
 }

@@ -5,7 +5,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-outcome.js";
+import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
 import {
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,

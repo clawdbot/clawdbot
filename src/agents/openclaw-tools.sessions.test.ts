@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -11,6 +11,13 @@ import {
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
+import {
+  GatewayDrainingError,
+  getActiveGatewayRootWorkCount,
+  isGatewaySubordinateWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
@@ -259,6 +266,7 @@ function sessionsSendDetails(details: unknown): SessionsSendDetails {
 
 describe("sessions tools", () => {
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     loadSessionEntryByKeyMock.mockReset();
@@ -278,6 +286,7 @@ describe("sessions tools", () => {
       callGateway: (opts: unknown) => callGatewayMock(opts),
     });
   });
+  afterEach(resetGatewayWorkAdmission);
 
   it("uses integer schemas for session count and window parameters", () => {
     const tools = createOpenClawTools();
@@ -1420,11 +1429,19 @@ describe("sessions tools", () => {
     expect(sendParams.message).toBe("announce now");
   });
 
-  it("sessions_send keeps delayed requester replies alive after a wait timeout", async () => {
+  it("sessions_send admits delayed ping-pong and final announce after the parent root releases", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const requesterKey = "agent:main:main";
     const targetKey = "agent:director1:main";
     let targetWaitCount = 0;
+    let releaseDelayedWait = () => {};
+    const delayedWaitGate = new Promise<void>((resolve) => {
+      releaseDelayedWait = resolve;
+    });
+    let requesterProviderStarts = 0;
+    let requesterAdmissionClosed: boolean | undefined;
+    let finalAnnounceProviderStarts = 0;
+    let finalAnnounceAdmissionClosed: boolean | undefined;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
@@ -1434,6 +1451,11 @@ describe("sessions tools", () => {
           return { runId: "run-target", status: "accepted", acceptedAt: 2000 };
         }
         if (params?.sessionKey === requesterKey) {
+          requesterAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+          if (requesterAdmissionClosed) {
+            throw new GatewayDrainingError();
+          }
+          requesterProviderStarts += 1;
           return { runId: "run-requester", status: "accepted", acceptedAt: 2001 };
         }
       }
@@ -1441,9 +1463,11 @@ describe("sessions tools", () => {
         const params = request.params as { runId?: string } | undefined;
         if (params?.runId === "run-target") {
           targetWaitCount += 1;
-          return targetWaitCount === 1
-            ? { runId: "run-target", status: "timeout" }
-            : { runId: "run-target", status: "ok" };
+          if (targetWaitCount === 1) {
+            return { runId: "run-target", status: "timeout" };
+          }
+          await delayedWaitGate;
+          return { runId: "run-target", status: "ok" };
         }
         if (params?.runId === "run-requester") {
           return { runId: "run-requester", status: "ok" };
@@ -1477,6 +1501,20 @@ describe("sessions tools", () => {
       }
       return {};
     });
+    agentStepTesting.setDepsForTest({
+      agentCommandFromIngress: async () => {
+        finalAnnounceAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+        if (finalAnnounceAdmissionClosed) {
+          throw new GatewayDrainingError();
+        }
+        finalAnnounceProviderStarts += 1;
+        return {
+          payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
+          meta: { durationMs: 1 },
+        };
+      },
+      callGateway: (opts: unknown) => callGatewayMock(opts),
+    });
 
     const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
@@ -1484,30 +1522,28 @@ describe("sessions tools", () => {
       config: cloneTestConfig(),
     });
 
-    const result = await tool.execute("call-delayed", {
-      sessionKey: targetKey,
-      message: "ping",
-      timeoutSeconds: 1,
-    });
+    const result = await runWithGatewayRootWorkAdmissionForTest(() =>
+      tool.execute("call-delayed", {
+        sessionKey: targetKey,
+        message: "ping",
+        timeoutSeconds: 1,
+      }),
+    );
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("accepted");
     expect(details.sessionKey).toBe(targetKey);
     expect(details.delivery?.status).toBe("pending");
     expect(details.delivery?.mode).toBe("announce");
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    releaseDelayedWait();
 
     await vi.waitFor(
       () => {
-        const requesterReplyCall = calls.find(
-          (call) =>
-            call.method === "agent" &&
-            (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
-        );
-        if (!requesterReplyCall) {
-          throw new Error("expected requester reply call");
-        }
+        expect(requesterAdmissionClosed).toBe(false);
       },
       { timeout: 2_000, interval: 5 },
     );
+    expect(requesterProviderStarts).toBe(3);
 
     const requesterReplyCall = calls.find(
       (call) =>
@@ -1528,6 +1564,11 @@ describe("sessions tools", () => {
     expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
     expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
     expect(calls.find((call) => call.method === "send")).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(finalAnnounceAdmissionClosed).toBe(false);
+      expect(finalAnnounceProviderStarts).toBe(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
   });
 
   it("sessions_send reports active-run queue rejection without durable-session fallback", async () => {

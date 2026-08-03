@@ -1,5 +1,6 @@
 // Slack provider module implements model/runtime integration.
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
@@ -193,11 +194,26 @@ export function publishSlackConnectedStatus(
   if (!setStatus) {
     return;
   }
-  setStatus({
-    connected: true,
-    lastConnectedAt: Date.now(),
-    ...identityHealth,
-  });
+  const lastConnectedAt = Date.now();
+  setStatus(
+    identityHealth.lifecycle === "blocked"
+      ? channelBlockedPatch(identityHealth.lastError, { connected: true, lastConnectedAt })
+      : channelReadyPatch({ lastConnectedAt }),
+  );
+}
+
+export function publishSlackBlockedStatus(
+  setStatus: ((next: Record<string, unknown>) => void) | undefined,
+  error: unknown,
+) {
+  if (!setStatus) {
+    return;
+  }
+  setStatus(
+    channelBlockedPatch(formatUnknownError(error), {
+      connected: false,
+    }),
+  );
 }
 
 export function publishSlackDisconnectedStatus(

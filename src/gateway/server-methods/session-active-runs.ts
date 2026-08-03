@@ -2,7 +2,7 @@ import { isEmbeddedAgentRunInProgress } from "../../agents/embedded-agent-runner
 import {
   hasProjectedAgentRunForSession,
   type ProjectedAgentRunIndex,
-} from "../../infra/agent-events.js";
+} from "../../infra/agent-run-registry.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestContext } from "./types.js";
 

@@ -443,18 +443,14 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     branch: string | null,
     copy: (value: string) => Promise<boolean> = copyToClipboard,
   ): void {
-    if (action === "copy-path" && workspaceRoot) {
-      void copy(workspaceRoot).then((copied) => {
+    const copiedValue =
+      action === "copy-path" ? workspaceRoot : action === "copy-branch" ? branch : null;
+    if (copiedValue) {
+      void copy(copiedValue).then((copied) => {
         if (copied) {
           this.showHeaderCopied(action);
-        }
-      });
-      return;
-    }
-    if (action === "copy-branch" && branch) {
-      void copy(branch).then((copied) => {
-        if (copied) {
-          this.showHeaderCopied(action);
+        } else {
+          this.publishHeaderError(t("common.copyFailed"));
         }
       });
       return;
@@ -468,7 +464,8 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     if (!this.state) {
       return;
     }
-    this.state.chatError = error instanceof Error ? error.message : String(error);
+    this.state.lastError = error instanceof Error ? error.message : String(error);
+    this.state.chatError = this.state.lastError;
     this.state.requestUpdate?.();
   }
 

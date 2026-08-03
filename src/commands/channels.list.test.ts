@@ -411,6 +411,8 @@ describe("channels list", () => {
       },
       channelId: "discord",
       workspaceDir: "/tmp/workspace",
+      // Prepared once for the invocation; the row loop must not rediscover.
+      manifestRecords: expect.any(Array),
     });
     const output = stripAnsi(loggedText(runtime));
     expect(output).toContain("Discord");

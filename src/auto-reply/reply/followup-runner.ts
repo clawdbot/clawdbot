@@ -1,6 +1,6 @@
 /** Composes queued admission, canonical execution, accounting, and delivery. */
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { clearAgentRunContext } from "../../infra/agent-events.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";

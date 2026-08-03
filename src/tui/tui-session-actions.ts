@@ -9,6 +9,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import type { ChatLog } from "./components/chat-log.js";
 import { refreshTuiAgentList } from "./tui-agent-list-refresh.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
@@ -78,8 +79,6 @@ export function createSessionActions(context: SessionActionContext) {
     clearLocalRunIds,
     rememberSessionKey,
   } = context;
-  let refreshSessionInfoInFlight: Promise<void> | null = null;
-  let refreshSessionInfoQueued = false;
   let historyLoadGeneration = 0;
   let lastSessionDefaults: SessionInfoDefaults | null = null;
 
@@ -343,26 +342,12 @@ export function createSessionActions(context: SessionActionContext) {
     }
   };
 
-  const drainRefreshSessionInfo = async () => {
-    do {
-      // Many TUI paths ask for the same session snapshot at once; keep one in-flight
-      // lookup and at most one follow-up so bursts do not queue stale backend calls.
-      refreshSessionInfoQueued = false;
-      await runRefreshSessionInfo();
-    } while (refreshSessionInfoQueued);
-  };
-
-  const refreshSessionInfo = async () => {
-    if (refreshSessionInfoInFlight) {
-      refreshSessionInfoQueued = true;
-      await refreshSessionInfoInFlight;
-      return;
-    }
-    refreshSessionInfoInFlight = drainRefreshSessionInfo().finally(() => {
-      refreshSessionInfoInFlight = null;
-    });
-    await refreshSessionInfoInFlight;
-  };
+  // Many TUI paths ask for the same session snapshot at once; bursts need only
+  // one active lookup and one follow-up with the latest selection.
+  const refreshSessionInfoRunner = createTuiRefreshCoalescer(async () => {
+    await runRefreshSessionInfo();
+  });
+  const refreshSessionInfo = () => refreshSessionInfoRunner.run();
 
   const applySessionInfoFromPatch = (
     result?: SessionsPatchResult | TuiSessionMutationResult | null,

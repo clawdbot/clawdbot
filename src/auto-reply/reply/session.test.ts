@@ -72,102 +72,10 @@ type ForkSessionParamsForTest = {
   sessionKey: string;
 };
 
-vi.mock("./session-fork.js", () => ({
-  forkSessionEntryFromParent: async (params: {
-    fallbackEntry?: SessionEntry;
-    parentSessionKey: string;
-    storePath: string;
-    patch?: (patchParams: {
-      entry: SessionEntry;
-      parentEntry: SessionEntry;
-      fork: { sessionId: string; sessionFile: string };
-      decision: { status: "fork"; maxTokens: number; parentTokens?: number };
-    }) => Partial<SessionEntry>;
-    decisionSkipPatch?: (patchParams: {
-      decision: {
-        status: "skip";
-        reason: "parent-too-large";
-        maxTokens: number;
-        parentTokens: number;
-        message: string;
-      };
-      entry: SessionEntry;
-      parentEntry: SessionEntry;
-    }) => Partial<SessionEntry>;
-    sessionKey?: string;
-  }) => {
-    const parentEntry = loadSessionEntry({
-      sessionKey: params.parentSessionKey,
-      storePath: params.storePath,
-      readConsistency: "latest",
-    });
-    if (!parentEntry?.sessionId) {
-      return { status: "missing-parent" };
-    }
-    const maxTokens = 100_000;
-    const parentTokens = await sessionForkMocks.resolveParentForkTokenCount({
-      parentEntry,
-      storePath: params.storePath,
-    });
-    if (typeof parentTokens === "number" && parentTokens > maxTokens) {
-      const entry = params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() };
-      const decision = {
-        status: "skip" as const,
-        reason: "parent-too-large" as const,
-        maxTokens,
-        parentTokens,
-        message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
-      };
-      return {
-        status: "skipped",
-        reason: "decision-skip",
-        parentEntry,
-        sessionEntry: {
-          ...entry,
-          ...params.decisionSkipPatch?.({ decision, entry, parentEntry }),
-        },
-        decision,
-      };
-    }
-    const fork = await sessionForkMocks.forkSessionFromParent({
-      parentEntry,
-      storePath: params.storePath,
-    });
-    if (!fork) {
-      return { status: "failed" };
-    }
-    const entry = params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() };
-    return {
-      status: "forked",
-      fork,
-      parentEntry,
-      sessionEntry: {
-        ...entry,
-        ...params.patch?.({
-          entry,
-          parentEntry,
-          fork,
-          decision: {
-            status: "fork",
-            maxTokens,
-            ...(typeof parentTokens === "number" ? { parentTokens } : {}),
-          },
-        }),
-        sessionId: fork.sessionId,
-        sessionFile: fork.sessionFile,
-        forkedFromParent: true,
-      },
-      decision: {
-        status: "fork",
-        maxTokens,
-        ...(typeof parentTokens === "number" ? { parentTokens } : {}),
-      },
-    };
-  },
+vi.mock("./session-fork.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-fork.js")>()),
   forkSessionFromParent: (...args: [ForkSessionParamsForTest]) =>
     sessionForkMocks.forkSessionFromParent(...args),
-  resolveParentForkTokenCount: (...args: [{ parentEntry: SessionEntry; storePath: string }]) =>
-    sessionForkMocks.resolveParentForkTokenCount(...args),
   resolveParentForkDecision: async (params: { parentEntry: SessionEntry; storePath: string }) => {
     const maxTokens = 100_000;
     const parentTokens = await sessionForkMocks.resolveParentForkTokenCount({
@@ -559,7 +467,6 @@ describe("initSessionState guarded initialization", () => {
           SessionKey: sessionKey,
         },
         cfg: { session: { store: storePath } } as OpenClawConfig,
-        commandAuthorized: true,
       }),
     ).rejects.toThrow(
       'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
@@ -597,7 +504,6 @@ describe("initSessionState guarded initialization", () => {
           SessionKey: sessionKey,
         },
         cfg,
-        commandAuthorized: true,
       }),
     );
 
@@ -612,37 +518,8 @@ describe("initSessionState thread forking", () => {
   it("forks a new SQLite session from the parent session", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-");
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-
     const parentSessionId = "parent-session";
-    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
-    const header = {
-      type: "session",
-      version: 3,
-      id: parentSessionId,
-      timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
-    };
-    const message = {
-      type: "message",
-      id: "m1",
-      parentId: null,
-      timestamp: new Date().toISOString(),
-      message: { role: "user", content: "Parent prompt" },
-    };
-    const assistantMessage = {
-      type: "message",
-      id: "m2",
-      parentId: "m1",
-      timestamp: new Date().toISOString(),
-      message: { role: "assistant", content: "Parent reply" },
-    };
-    await fs.writeFile(
-      parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
-      "utf-8",
-    );
+    const parentSessionFile = path.join(root, "parent.jsonl");
 
     const storePath = path.join(root, "sessions.json");
     const parentSessionKey = "agent:main:slack:channel:c1";
@@ -668,7 +545,6 @@ describe("initSessionState thread forking", () => {
         ThreadLabel: threadLabel,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.sessionKey).toBe(threadSessionKey);
@@ -738,7 +614,6 @@ describe("initSessionState thread forking", () => {
         ParentSessionKey: parentSessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(first.sessionEntry.sessionId).not.toBe("preseed-thread-session");
@@ -760,7 +635,6 @@ describe("initSessionState thread forking", () => {
         ParentSessionKey: parentSessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(second.sessionEntry.sessionId).toBe(first.sessionEntry.sessionId);
@@ -774,37 +648,8 @@ describe("initSessionState thread forking", () => {
 
   it("skips fork and creates fresh session when parent tokens exceed threshold", async () => {
     const root = await makeCaseDir("openclaw-thread-session-overflow-");
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-
     const parentSessionId = "parent-overflow";
-    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
-    const header = {
-      type: "session",
-      version: 3,
-      id: parentSessionId,
-      timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
-    };
-    const message = {
-      type: "message",
-      id: "m1",
-      parentId: null,
-      timestamp: new Date().toISOString(),
-      message: { role: "user", content: "Parent prompt" },
-    };
-    const assistantMessage = {
-      type: "message",
-      id: "m2",
-      parentId: "m1",
-      timestamp: new Date().toISOString(),
-      message: { role: "assistant", content: "Parent reply" },
-    };
-    await fs.writeFile(
-      parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
-      "utf-8",
-    );
+    const parentSessionFile = path.join(root, "parent.jsonl");
 
     const storePath = path.join(root, "sessions.json");
     const parentSessionKey = "agent:main:slack:channel:c1";
@@ -830,7 +675,6 @@ describe("initSessionState thread forking", () => {
         ParentSessionKey: parentSessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     // Should be marked as forked (to prevent re-attempts) but NOT actually forked from parent
@@ -846,22 +690,8 @@ describe("initSessionState thread forking", () => {
 
   it("skips fork when resolved parent token estimate exceeds threshold", async () => {
     const root = await makeCaseDir("openclaw-thread-session-overflow-estimated-");
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-
     const parentSessionId = "parent-overflow-estimated";
-    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
-    await fs.writeFile(
-      parentSessionFile,
-      `${JSON.stringify({
-        type: "session",
-        version: 3,
-        id: parentSessionId,
-        timestamp: new Date().toISOString(),
-        cwd: process.cwd(),
-      })}\n`,
-      "utf-8",
-    );
+    const parentSessionFile = path.join(root, "parent.jsonl");
 
     const storePath = path.join(root, "sessions.json");
     const parentSessionKey = "agent:main:slack:channel:c1";
@@ -888,7 +718,6 @@ describe("initSessionState thread forking", () => {
         ParentSessionKey: parentSessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     const tokenCountCall = requireMockCallArg(
@@ -920,7 +749,6 @@ describe("initSessionState thread forking", () => {
         MessageThreadId: 456,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.sessionEntry.lastThreadId).toBe(456);
@@ -943,7 +771,6 @@ describe("initSessionState thread forking", () => {
           SessionKey: "agent:main:telegram:group:123:topic:456",
         },
         cfg,
-        commandAuthorized: true,
       });
 
       expect(result.sessionKey).toBe("agent:main:telegram:group:123:topic:456");
@@ -968,7 +795,6 @@ describe("initSessionState RawBody", () => {
         SessionKey: "agent:main:whatsapp:group:g1",
       },
       cfg,
-      commandAuthorized: true,
     });
     expect(statusResult.triggerBodyNormalized).toBe("/status");
 
@@ -980,7 +806,6 @@ describe("initSessionState RawBody", () => {
         SessionKey: "agent:main:whatsapp:group:g1",
       },
       cfg,
-      commandAuthorized: true,
     });
     expect(resetResult.isNewSession).toBe(true);
     expect(resetResult.bodyStripped).toBe("");
@@ -1006,7 +831,6 @@ describe("initSessionState RawBody", () => {
     const result = await initSessionState({
       ctx,
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -1051,7 +875,6 @@ describe("initSessionState RawBody", () => {
           resetTriggers: ["/new"],
         },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -1082,7 +905,6 @@ describe("initSessionState RawBody", () => {
             },
           },
         } as OpenClawConfig,
-        commandAuthorized: true,
       });
 
       expect(result.isNewSession).toBe(true);
@@ -1141,7 +963,6 @@ describe("initSessionState RawBody", () => {
             },
           },
         } as OpenClawConfig,
-        commandAuthorized: true,
       });
 
       expect(result.isNewSession).toBe(true);
@@ -1167,7 +988,6 @@ describe("initSessionState RawBody", () => {
           resetTriggers: ["/new"],
         },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -1191,7 +1011,6 @@ describe("initSessionState RawBody", () => {
           resetTriggers: ["/new"],
         },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -1233,7 +1052,6 @@ describe("initSessionState RawBody", () => {
       cfg: {
         session: { store: storePath, resetTriggers: ["/new"] },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(ctx).toMatchObject({
@@ -1259,7 +1077,6 @@ describe("initSessionState RawBody", () => {
         SessionKey: "agent:main:telegram:dm:legacy",
       },
       cfg,
-      commandAuthorized: true,
     });
     expect(legacy.resetTriggered).toBe(true);
     expect(legacy.bodyStripped).toBe("keep [Q3]\nline 2");
@@ -1277,7 +1094,6 @@ describe("initSessionState RawBody", () => {
         SessionKey: "agent:main:telegram:dm:flat-history",
       },
       cfg,
-      commandAuthorized: true,
     });
     expect(flatHistory.resetTriggered).toBe(false);
     expect(flatHistory.bodyStripped).toBeUndefined();
@@ -1297,7 +1113,6 @@ describe("initSessionState RawBody", () => {
         SessionKey: "agent:main:whatsapp:dm:audio-transcript",
       },
       cfg,
-      commandAuthorized: true,
     });
     expect(transcriptOnly.resetTriggered).toBe(false);
 
@@ -1310,7 +1125,6 @@ describe("initSessionState RawBody", () => {
         SessionKey: "agent:main:whatsapp:dm:audio-empty-raw",
       },
       cfg,
-      commandAuthorized: true,
     });
     expect(explicitEmptyRaw.triggerBodyNormalized).toBe("");
     expect(explicitEmptyRaw.resetTriggered).toBe(false);
@@ -1324,7 +1138,6 @@ describe("initSessionState RawBody", () => {
         SessionKey: "agent:main:whatsapp:dm:command-empty-raw",
       },
       cfg,
-      commandAuthorized: true,
     });
     expect(explicitCommandWithEmptyRaw.triggerBodyNormalized).toBe("/new spoken payload");
     expect(explicitCommandWithEmptyRaw.resetTriggered).toBe(false);
@@ -1406,7 +1219,6 @@ describe("initSessionState RawBody", () => {
         SessionKey: sessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -1471,7 +1283,6 @@ describe("initSessionState RawBody", () => {
         SessionKey: sessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -1528,7 +1339,6 @@ describe("initSessionState RawBody", () => {
         SessionKey: sessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     // The session rolled over implicitly (stale), not via /new.
@@ -1567,7 +1377,6 @@ describe("initSessionState RawBody", () => {
             },
           },
           cfg: { session: { store: storePath } } as OpenClawConfig,
-          commandAuthorized: true,
         });
         expect(listSessionStateEventsSince(sessionKey, "main", 0, 20).events).toContainEqual(
           expect.objectContaining({
@@ -1629,7 +1438,6 @@ describe("initSessionState RawBody", () => {
       cfg: {
         session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -1731,7 +1539,6 @@ describe("initSessionState RawBody", () => {
       cfg: {
         session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -1822,7 +1629,6 @@ describe("initSessionState RawBody", () => {
         ...(bindings ? { bindings } : {}),
         channels: { discord: { allowFrom: ["*"] } },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.resetTriggered).toBe(true);
@@ -1904,7 +1710,6 @@ describe("initSessionState RawBody", () => {
           SessionKey: sessionKey,
         },
         cfg,
-        commandAuthorized: true,
       });
 
       expect(result.resetTriggered).toBe(true);
@@ -1964,7 +1769,6 @@ describe("initSessionState RawBody", () => {
         SessionKey: fallbackSessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.resetTriggered).toBe(true);
@@ -2012,7 +1816,6 @@ describe("initSessionState RawBody", () => {
         CommandTargetSessionKey: targetSessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.sessionKey).toBe(targetSessionKey);
@@ -2048,7 +1851,6 @@ describe("initSessionState RawBody", () => {
           SessionKey: sessionKey,
         },
         cfg,
-        commandAuthorized: true,
       });
 
       expect(result.sessionEntry.sessionId).toBe(sessionId);
@@ -2133,7 +1935,6 @@ describe("initSessionState RawBody", () => {
       cfg: {
         session: { store: storePath },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.sessionKey).toBe(boundSessionKey);
@@ -2177,7 +1978,6 @@ describe("initSessionState RawBody", () => {
         ChatType: "direct",
       },
       cfg: { session: { store: storePath } } as OpenClawConfig,
-      commandAuthorized: true,
       expectedExistingSessionId: sourceSessionId,
       pinExpectedExistingSession: true,
     });
@@ -2283,7 +2083,6 @@ describe("initSessionState reset policy", () => {
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
       cfg: { session: { store: storePath, ...scenario.session } } as OpenClawConfig,
-      commandAuthorized: true,
       requestedSessionId:
         "requestedSessionId" in scenario && scenario.requestedSessionId === "existing"
           ? existingSessionId
@@ -2334,7 +2133,6 @@ describe("initSessionState reset policy", () => {
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -2372,7 +2170,6 @@ describe("initSessionState reset policy", () => {
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(false);
@@ -2462,7 +2259,6 @@ describe("initSessionState reset policy", () => {
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: scenario.sessionKey },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(scenario.expectNewSession);
@@ -2521,7 +2317,6 @@ describe("initSessionState reset policy", () => {
         BotUsername: "openclaw",
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(false);
@@ -2582,7 +2377,6 @@ describe("initSessionState reset policy", () => {
         SessionKey: sessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.resetTriggered).toBe(false);
@@ -2616,7 +2410,6 @@ describe("initSessionState reset policy", () => {
         SessionKey: sessionKey,
       },
       cfg: { session: { store: storePath } } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.resetTriggered).toBe(false);
@@ -2721,7 +2514,6 @@ describe("initSessionState reset policy", () => {
     const result = await initSessionState({
       ctx: { SessionKey: scenario.sessionKey, ...scenario.ctx },
       cfg: { session: { store: storePath, ...scenario.session } } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(false);
@@ -2758,7 +2550,6 @@ describe("initSessionState browser tab cleanup", () => {
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -2802,7 +2593,6 @@ describe("initSessionState browser tab cleanup", () => {
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -2832,7 +2622,6 @@ describe("initSessionState browser tab cleanup", () => {
         SessionKey: sessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -2856,7 +2645,6 @@ describe("initSessionState browser tab cleanup", () => {
         SessionKey: sessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -2885,7 +2673,6 @@ describe("initSessionState browser tab cleanup", () => {
         ChatType: "direct",
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -2932,7 +2719,6 @@ describe("initSessionState channel reset overrides", () => {
         Provider: "discord",
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(false);
@@ -2965,6 +2751,63 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
       },
     } as OpenClawConfig;
   }
+
+  it("requires canonical command authorization before rotating durable session state", async () => {
+    const sessionKey = "agent:main:whatsapp:group:owner-only-reset";
+    const storePath = await createStorePath("openclaw-group-reset-owner-only-");
+    const existingSessionId = "existing-owner-session";
+    await seedSessionStore({ storePath, sessionKey, sessionId: existingSessionId });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "whatsapp", label: "WhatsApp" }),
+            commands: { enforceOwnerForCommands: true },
+          },
+        },
+      ]),
+    );
+
+    try {
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        commands: { ownerAllowFrom: ["owner"] },
+      } as OpenClawConfig;
+      const baseContext = {
+        Body: "/new /model openai/gpt-5",
+        RawBody: "/new /model openai/gpt-5",
+        CommandBody: "/new /model openai/gpt-5",
+        From: "120363406150318674@g.us",
+        To: "bot",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+      };
+
+      const denied = await initSessionState({
+        ctx: { ...baseContext, SenderId: "non-owner" },
+        cfg,
+        // Ingress admission alone must not bypass the channel's owner-only command policy.
+        commandAuthorized: true,
+      });
+      expect(denied.resetTriggered).toBe(false);
+      expect(denied.sessionId).toBe(existingSessionId);
+
+      const owner = await initSessionState({
+        ctx: { ...baseContext, SenderId: "owner" },
+        cfg,
+        commandAuthorized: true,
+      });
+      expect(owner.resetTriggered).toBe(true);
+      expect(owner.isNewSession).toBe(true);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  });
 
   it("applies WhatsApp group reset authorization across sender variants", async () => {
     const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
@@ -3018,7 +2861,6 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
           SenderId: testCase.senderId,
         },
         cfg,
-        commandAuthorized: true,
       });
 
       expect(result.triggerBodyNormalized, testCase.name).toBe("/new");
@@ -3121,7 +2963,6 @@ describe("initSessionState reset triggers in Slack channels", () => {
         WasMentioned: true,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -3182,7 +3023,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           cfg: {
             session: { store: storePath, idleMinutes: 999 },
           } as OpenClawConfig,
-          commandAuthorized: true,
         }),
       ).rejects.toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
 
@@ -3228,7 +3068,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       cfg: {
         session: { store: storePath, idleMinutes: 1 },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(false);
@@ -3463,7 +3302,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           },
         },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -3600,7 +3438,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           Surface: "telegram",
         },
         cfg,
-        commandAuthorized: true,
       });
 
       expect(result.isNewSession, testCase.name).toBe(true);
@@ -3639,7 +3476,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         SessionKey: sessionKey,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.resetTriggered).toBe(false);
@@ -3687,7 +3523,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         SessionKey: sessionKey,
       },
       cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expect(result.resetTriggered).toBe(false);
@@ -3730,7 +3565,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         Surface: "telegram",
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -3785,7 +3619,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         Surface: "telegram",
       },
       cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     try {
@@ -3837,7 +3670,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
               Surface: "telegram",
             },
             cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
-            commandAuthorized: true,
           }),
       );
       expect(result.sessionId).toBe(existingSessionId);
@@ -3885,7 +3717,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
                 Surface: "telegram",
               },
               cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
-              commandAuthorized: true,
               signal: controller.signal,
             }),
         );
@@ -4037,7 +3868,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       cfg: {
         session: { store: storePath, reset: { mode: "idle", idleMinutes: 1 } },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
     const replaceSession = runExclusiveSessionStoreWrite(storePath, async () => {
       await writeSessionStoreFast(storePath, {
@@ -4113,7 +3943,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           Surface: "telegram",
         },
         cfg,
-        commandAuthorized: true,
       });
 
       expect(result.isNewSession).toBe(true);
@@ -4171,7 +4000,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           Surface: "telegram",
         },
         cfg,
-        commandAuthorized: true,
       });
 
       expect(result.isNewSession).toBe(false);
@@ -4229,7 +4057,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           Surface: "telegram",
         },
         cfg,
-        commandAuthorized: true,
       });
 
       expect(operation.phase).toBe("queued");
@@ -4288,7 +4115,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           Surface: "telegram",
         },
         cfg,
-        commandAuthorized: true,
       });
 
       expect(result.isNewSession).toBe(true);
@@ -4351,7 +4177,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           Surface: "telegram",
         },
         cfg,
-        commandAuthorized: true,
       });
 
       expect(result.isNewSession).toBe(false);
@@ -4407,7 +4232,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         Surface: "telegram",
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -4455,7 +4279,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         Surface: "telegram",
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(sessionMcpTesting.getCachedSessionIds()).not.toContain(existingSessionId);
@@ -4482,7 +4305,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         Surface: "telegram",
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.isNewSession).toBe(true);
@@ -5253,7 +5075,6 @@ describe("initSessionState stale threadId fallback", () => {
         MessageThreadId: 42,
       },
       cfg,
-      commandAuthorized: true,
     });
     expect(threadResult.sessionEntry.lastThreadId).toBe(42);
 
@@ -5265,7 +5086,6 @@ describe("initSessionState stale threadId fallback", () => {
         SessionKey: "agent:main:main",
       },
       cfg,
-      commandAuthorized: true,
     });
     expect(mainResult.sessionEntry.lastThreadId).toBeUndefined();
     expect(mainResult.sessionEntry.deliveryContext?.threadId).toBeUndefined();
@@ -5285,7 +5105,6 @@ describe("initSessionState stale threadId fallback", () => {
         TransportThreadId: "650.000",
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.sessionEntry.lastThreadId).toBe("650.000");
@@ -5304,7 +5123,6 @@ describe("initSessionState stale threadId fallback", () => {
         MessageThreadId: 99,
       },
       cfg,
-      commandAuthorized: true,
     });
 
     // Second message in same thread (MessageThreadId still present)
@@ -5315,7 +5133,6 @@ describe("initSessionState stale threadId fallback", () => {
         MessageThreadId: 99,
       },
       cfg,
-      commandAuthorized: true,
     });
     expect(result.sessionEntry.lastThreadId).toBe(99);
   });
@@ -5356,7 +5173,6 @@ describe("initSessionState dmScope delivery migration", () => {
       cfg: {
         session: { store: storePath, dmScope: "per-channel-peer" },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     const persisted = readSessionStoreFast(storePath);
@@ -5422,7 +5238,6 @@ describe("initSessionState internal channel routing preservation", () => {
         To: "heartbeat",
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.sessionEntry.lastChannel).toBe("mattermost");
@@ -5483,7 +5298,6 @@ describe("initSessionState internal channel routing preservation", () => {
         To: "heartbeat",
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.sessionEntry.lastChannel).toBeUndefined();
@@ -5528,7 +5342,6 @@ describe("initSessionState internal channel routing preservation", () => {
         AccountId: "default",
       },
       cfg,
-      commandAuthorized: true,
     });
 
     expect(result.sessionEntry.lastChannel).toBe("feishu");
@@ -5679,7 +5492,6 @@ describe("initSessionState internal channel routing preservation", () => {
         ...("config" in scenario ? scenario.config : {}),
         session: { store: storePath, ...("session" in scenario ? scenario.session : {}) },
       } as OpenClawConfig,
-      commandAuthorized: true,
     });
 
     expectEntryFields(result.sessionEntry, scenario.expected, scenario.name);

@@ -19,11 +19,14 @@ import {
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
+import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   currentThreadTs?: string;
@@ -134,6 +137,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       }
     : undefined;
   const existingToolNames = new Set(params.existingToolNames ?? []);
+  const preparedModelRuntime = params.options?.preparedModelRuntime;
   const pluginTools = resolvePluginTools({
     ...pluginToolInputs,
     context: {
@@ -147,6 +151,15 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     toolDenylist: params.options?.pluginToolDenylist,
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
     ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
+    ...(preparedModelRuntime
+      ? {
+          preparedRuntime: {
+            loadContext: getPreparedPluginRuntimeLoadContext(preparedModelRuntime.pluginRegistry),
+            metadataSnapshot: preparedModelRuntime.metadataSnapshot,
+            registry: preparedModelRuntime.pluginRegistry,
+          },
+        }
+      : {}),
   });
   for (const tool of pluginTools) {
     existingToolNames.add(tool.name);

@@ -21,7 +21,7 @@ describe("QA Docker E2E lane fixture", () => {
         "update-restart-auth",
       ]),
     );
-    expect(listQaDockerE2eLaneNames()).toEqual([...listQaDockerE2eLaneNames()].sort());
+    expect(listQaDockerE2eLaneNames()).toEqual([...listQaDockerE2eLaneNames()].toSorted());
   });
 
   it("parses help, list, and lane arguments", () => {

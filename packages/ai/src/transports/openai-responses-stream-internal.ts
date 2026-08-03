@@ -39,7 +39,7 @@ import {
 } from "./openai-responses-stream-slots-internal.js";
 import {
   createResponsesTerminalController,
-  resolveCompletedToolCallName,
+  resolveCompletedResponsesToolCall,
   resolveResponsesToolCallId,
   type ResponsesEventSink,
   type ResponsesThinkingBlock,
@@ -618,7 +618,6 @@ export async function processResponsesStream<TApi extends Api>(
           if (!streamingToolCall && streamingToolCalls.hasActive()) {
             continue;
           }
-          const completedName = resolveCompletedToolCallName(streamingToolCall, item.name);
           const streamedArguments = streamingToolCall?.block.partialJson ?? "";
           const completedArguments =
             typeof item.arguments === "string" ? item.arguments : undefined;
@@ -633,8 +632,11 @@ export async function processResponsesStream<TApi extends Api>(
             completedArguments !== undefined &&
             (completedArguments.length > 0 || !streamedArguments)
               ? completedArguments
-              : streamedArguments || "{}";
-          const args = parseStreamingJson(finalArguments);
+              : streamedArguments;
+          const validated = resolveCompletedResponsesToolCall(item, {
+            name: streamingToolCall?.block.name,
+            arguments: finalArguments,
+          });
 
           let toolCall: ToolCall;
           let contentIndex: number;
@@ -644,10 +646,10 @@ export async function processResponsesStream<TApi extends Api>(
             // the canonical id on completion. Upgrade the same public block so
             // replay and its function_call_output retain both identities.
             block.id = resolveResponsesToolCallId(item, block.id);
-            block.name = completedName;
+            block.name = validated.name;
             // Finalize in-place and strip the scratch buffer so replay only
             // carries parsed arguments.
-            block.arguments = args;
+            block.arguments = validated.arguments;
             delete (block as { partialJson?: string }).partialJson;
             toolCall = block;
             contentIndex = streamingToolCall.contentIndex;
@@ -655,8 +657,8 @@ export async function processResponsesStream<TApi extends Api>(
             toolCall = {
               type: "toolCall",
               id: resolveResponsesToolCallId(item),
-              name: completedName,
-              arguments: args,
+              name: validated.name,
+              arguments: validated.arguments,
             };
             // Some compatible streams only send the completed item. Preserve
             // the normal balanced lifecycle and persist the call for replay.

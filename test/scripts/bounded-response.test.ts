@@ -1,15 +1,38 @@
 // Bounded Response tests cover bounded response script behavior.
 import { describe, expect, it } from "vitest";
-import { readBoundedResponseText as readBoundedResponseTextMjs } from "../../scripts/lib/bounded-response.mjs";
-import { readBoundedResponseText as readBoundedResponseTextTs } from "../../scripts/lib/bounded-response.ts";
-
-const helpers = [
-  ["ts", readBoundedResponseTextTs],
-  ["mjs", readBoundedResponseTextMjs],
-] as const;
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseBytes,
+  readBoundedResponseText,
+} from "../../scripts/lib/bounded-response.mjs";
 
 describe("scripts bounded response reader", () => {
-  it.each(helpers)("cancels response bodies when %s read timeout wins", async (_name, read) => {
+  it("preserves binary response bytes", async () => {
+    const body = Buffer.from([0x00, 0xff, 0x80, 0x7f]);
+
+    await expect(
+      readBoundedResponseBytes(new Response(body), "fixture", body.length),
+    ).resolves.toEqual(body);
+  });
+
+  it("decodes multibyte text split across chunks", async () => {
+    const encoded = new TextEncoder().encode("a😀b");
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoded.subarray(0, 3));
+          controller.enqueue(encoded.subarray(3));
+          controller.close();
+        },
+      }),
+    );
+
+    await expect(readBoundedResponseText(response, "fixture", encoded.length)).resolves.toBe(
+      "a😀b",
+    );
+  });
+
+  it("cancels response bodies when a read timeout wins", async () => {
     let canceled = false;
     const response = {
       headers: new Headers(),
@@ -22,115 +45,110 @@ describe("scripts bounded response reader", () => {
             async cancel() {
               canceled = true;
             },
-            releaseLock() {},
+            releaseLock() {
+              throw new Error("releaseLock should not run while a read is pending");
+            },
           };
         },
       },
     } as unknown as Response;
 
     await expect(
-      read(response, "probe", 1024, {
-        timeoutPromise: new Promise<never>((_resolve, reject) => {
-          setTimeout(() => reject(new Error("timeout")), 0);
-        }),
+      readBoundedResponseText(response, "probe", 1024, {
+        timeoutPromise: Promise.reject(new Error("timeout")),
       }),
     ).rejects.toThrow("timeout");
-
     expect(canceled).toBe(true);
   });
 
-  it.each(helpers)(
-    "rejects when %s timeout cancellation unblocks a real stream read",
-    async (_name, read) => {
-      let canceled = false;
-      const response = {
-        headers: new Headers(),
-        body: new ReadableStream({
-          pull() {
-            return new Promise(() => {});
-          },
-          cancel() {
-            canceled = true;
-          },
-        }),
-      } as unknown as Response;
-
-      await expect(
-        read(response, "probe", 1024, {
-          timeoutPromise: new Promise<never>((_resolve, reject) => {
-            setTimeout(() => reject(new Error("timeout")), 0);
-          }),
-        }),
-      ).rejects.toThrow("timeout");
-
-      expect(canceled).toBe(true);
-    },
-  );
-
-  it.each(helpers)(
-    "streams %s responses with non-decimal content-length values",
-    async (_name, read) => {
-      let readStarted = false;
-      let canceled = false;
-      const response = {
-        headers: new Headers({ "content-length": "1e3" }),
-        body: {
-          getReader() {
-            return {
-              async read() {
-                readStarted = true;
-                return { done: false, value: new Uint8Array(17) };
-              },
-              async cancel() {
-                canceled = true;
-              },
-              releaseLock() {},
-            };
-          },
+  it("keeps timeout rejection ahead of cancel-unblocked stream reads", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream({
+        pull() {
+          return new Promise(() => {});
         },
-      } as unknown as Response;
-
-      await expect(read(response, "probe", 16)).rejects.toThrow(
-        "probe response body exceeded 16 bytes",
-      );
-
-      expect(readStarted).toBe(true);
-      expect(canceled).toBe(true);
-    },
-  );
-
-  it.each(helpers)(
-    "rejects unsafe decimal %s content-length values before reading",
-    async (_name, read) => {
-      let readStarted = false;
-      let canceled = false;
-      const response = {
-        headers: new Headers({ "content-length": "9007199254740993" }),
-        body: {
-          async cancel() {
-            canceled = true;
-          },
-          getReader() {
-            return {
-              async read() {
-                readStarted = true;
-                return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
-              },
-              async cancel() {
-                canceled = true;
-              },
-              releaseLock() {},
-            };
-          },
+        cancel() {
+          canceled = true;
         },
-      } as unknown as Response;
+      }),
+    );
 
-      await expect(read(response, "probe", 16)).rejects.toThrow(
-        "probe response body exceeded 16 bytes",
-      );
+    await expect(
+      readBoundedResponseText(response, "probe", 1024, {
+        timeoutPromise: Promise.reject(new Error("timeout")),
+      }),
+    ).rejects.toThrow("timeout");
+    expect(canceled).toBe(true);
+  });
 
-      expect(readStarted).toBe(false);
-      expect(canceled).toBe(true);
-    },
-  );
+  it("preserves opt-in ETOOBIG errors for E2E callers", async () => {
+    await expect(
+      readBoundedResponseText(new Response(new Uint8Array(17)), "probe", 16, {
+        createTooLargeError: createBoundedResponseTooLargeError,
+      }),
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "probe response body exceeded 16 bytes",
+    });
+  });
+
+  it("streams responses with non-decimal content-length values", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const response = {
+      headers: new Headers({ "content-length": "1e3" }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              readStarted = true;
+              return { done: false, value: new Uint8Array(17) };
+            },
+            async cancel() {
+              canceled = true;
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    } as unknown as Response;
+
+    await expect(readBoundedResponseText(response, "probe", 16)).rejects.toMatchObject({
+      message: "probe response body exceeded 16 bytes",
+    });
+    expect(readStarted).toBe(true);
+    expect(canceled).toBe(true);
+  });
+
+  it("rejects unsafe decimal content-length values before reading", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const response = {
+      headers: new Headers({ "content-length": "9007199254740993" }),
+      body: {
+        async cancel() {
+          canceled = true;
+        },
+        getReader() {
+          return {
+            async read() {
+              readStarted = true;
+              return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
+            },
+            async cancel() {
+              canceled = true;
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    } as unknown as Response;
+
+    await expect(readBoundedResponseText(response, "probe", 16)).rejects.toThrow(
+      "probe response body exceeded 16 bytes",
+    );
+    expect(readStarted).toBe(false);
+    expect(canceled).toBe(true);
+  });
 });

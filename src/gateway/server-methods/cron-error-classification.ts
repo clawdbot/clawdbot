@@ -8,6 +8,11 @@ export function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("cron job id must not be blank") ||
     message.includes("cron declarationKey") ||
     message.includes("cron displayName") ||
+    message.includes("cron announce delivery requires an explicit channel") ||
+    message.includes("cron script payload has a syntax error") ||
+    message.includes("cron script payload must not be empty") ||
+    message.includes("cron script payloads cannot be combined") ||
+    message.includes("cron script payloads are disabled") ||
     message.includes("cron triggers are disabled") ||
     message.includes("cron triggers require") ||
     message.includes("cron trigger every interval") ||

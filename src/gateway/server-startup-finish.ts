@@ -82,6 +82,7 @@ export async function finishGatewayStartup(params: {
     startupTrace,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
+    readPreparedGatewayModelCatalog,
     refreshGatewayHealthSnapshotWithRuntime,
     getRuntimeSnapshot,
     broadcast,
@@ -164,6 +165,7 @@ export async function finishGatewayStartup(params: {
     tailscaleMode,
     tailscaleConfig,
     controlUiBasePath,
+    controlUiRootLifecycle,
     sidecarStartup,
     workerLiveEvents,
     earlyRuntime,
@@ -211,6 +213,7 @@ export async function finishGatewayStartup(params: {
       listSessionPendingApprovals: approvalSessionEvents.replay,
       loadGatewayModelCatalog,
       loadGatewayModelCatalogSnapshot,
+      readPreparedGatewayModelCatalog,
       getHealthCache,
       refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
       logHealth,
@@ -286,6 +289,14 @@ export async function finishGatewayStartup(params: {
       broadcastVoiceWakeRoutingChanged,
     });
   });
+  const sessionChangeSidecar = {
+    stop: async () => {
+      const { flushPendingSessionsChangedEvents } =
+        await import("./server-methods/session-change-event.js");
+      flushPendingSessionsChangedEvents(gatewayRequestContext);
+    },
+  };
+  runtimeState.gatewayLifetimeSidecars.push(sessionChangeSidecar);
   pluginGatewayContext.current = gatewayRequestContext;
   const { createGatewayInstanceRuntime } = await import("./server-instance-runtime.js");
   const gatewayInstanceRuntimeLocal = createGatewayInstanceRuntime({
@@ -388,6 +399,7 @@ export async function finishGatewayStartup(params: {
         log,
       });
       runtimeState.heartbeatRunner = activated.heartbeatRunner;
+      runtimeState.stopOutboundDeliveryRecovery = activated.stopOutboundDeliveryRecovery;
     });
   };
   ({
@@ -400,6 +412,7 @@ export async function finishGatewayStartup(params: {
         startGatewayPostAttachRuntime({
           minimalTestGateway,
           cfgAtStart,
+          getConfig: getRuntimeConfig,
           bindHost,
           bindHosts: httpBindHosts,
           port,
@@ -414,6 +427,7 @@ export async function finishGatewayStartup(params: {
           serviceName: tailscaleConfig.serviceName,
           preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
           controlUiBasePath,
+          controlUiRootLifecycle,
           logTailscale,
           gatewayPluginConfigAtStart,
           activationSourceConfig: startupActivationSourceConfig,
@@ -470,9 +484,10 @@ export async function finishGatewayStartup(params: {
             }
           },
           onGatewayLifetimeSidecars: (gatewayLifetimeSidecars) => {
-            runtimeState.gatewayLifetimeSidecars = gatewayLifetimeSidecars;
+            const lifetimeSidecars = [sessionChangeSidecar, ...gatewayLifetimeSidecars];
+            runtimeState.gatewayLifetimeSidecars = lifetimeSidecars;
             stopPostReadySidecarsAfterCloseStarted({
-              postReadySidecars: gatewayLifetimeSidecars,
+              postReadySidecars: lifetimeSidecars,
               closeStarted: lifecycle.closePreludeStarted,
             });
             if (lifecycle.closePreludeStarted) {

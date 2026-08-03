@@ -61,7 +61,7 @@ describe("gateway compaction hot reload", () => {
   afterEach(resetGatewayState);
 
   it(
-    "applies a hot-reloaded compaction model to automatic chat preflight without restarting",
+    "applies hot-reloaded tool policy, context budgets, and compaction models without restarting",
     { timeout: 90_000 },
     async () => {
       const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
@@ -96,6 +96,7 @@ describe("gateway compaction hot reload", () => {
       deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
 
       const providerRequests: string[] = [];
+      const providerRequestToolNames: string[][] = [];
       const summaryByModel = new Map<string, string>();
       const providerServer = createServer((request, response) => {
         void (async () => {
@@ -107,9 +108,15 @@ describe("gateway compaction hot reload", () => {
             response.writeHead(404).end();
             return;
           }
-          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { model?: string };
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+            model?: string;
+            tools?: Array<{ name?: string; function?: { name?: string } }>;
+          };
           const model = body.model ?? "";
           providerRequests.push(model);
+          providerRequestToolNames.push(
+            body.tools?.map((tool) => tool.name ?? tool.function?.name ?? "") ?? [],
+          );
           const text = summaryByModel.get(model) ?? "Primary assistant answer.";
           const message = {
             type: "message",
@@ -269,14 +276,39 @@ describe("gateway compaction hot reload", () => {
 
         await sendChatAndWait("Warm the existing prepared model runtime.");
         expect(providerRequests).toContain(primaryModel.modelId);
+        expect(providerRequestToolNames.at(-1)).toContain("exec");
         expect(loadSessionEntry(scope)?.compactionCount ?? 0).toBe(0);
+
+        const reloadedTools = { deny: ["exec"] };
+        await writeConfigFile({ ...initialConfig, tools: reloadedTools });
+        await expect
+          .poll(() => getRuntimeConfig().tools?.deny, { timeout: 5_000, interval: 50 })
+          .toEqual(["exec"]);
+        await sendChatAndWait("Apply the hot-reloaded tool deny policy to the existing runtime.");
+        expect(providerRequestToolNames.at(-1)).not.toContain("exec");
+
+        const contextTokens = 48_000;
+        const reloadedAgentDefaults = { ...initialConfig.agents.defaults, contextTokens };
+        await writeConfigFile({
+          ...initialConfig,
+          agents: { ...initialConfig.agents, defaults: reloadedAgentDefaults },
+          tools: reloadedTools,
+        });
+        await expect
+          .poll(() => getRuntimeConfig().agents?.defaults?.contextTokens, {
+            timeout: 5_000,
+            interval: 50,
+          })
+          .toBe(contextTokens);
+        await sendChatAndWait("Apply the hot-reloaded context budget to the existing runtime.");
+        expect(loadSessionEntry(scope)?.contextTokens).toBe(contextTokens);
 
         await writeConfigFile({
           ...initialConfig,
           agents: {
             ...initialConfig.agents,
             defaults: {
-              ...initialConfig.agents.defaults,
+              ...reloadedAgentDefaults,
               compaction: {
                 ...initialConfig.agents.defaults.compaction,
                 model: newCompactionModel.modelRef,
@@ -284,6 +316,7 @@ describe("gateway compaction hot reload", () => {
               },
             },
           },
+          tools: reloadedTools,
         });
         await expect
           .poll(() => getRuntimeConfig().agents?.defaults?.compaction, {

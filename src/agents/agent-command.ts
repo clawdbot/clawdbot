@@ -11,9 +11,10 @@ import { withLocalGatewayRequestScope } from "../gateway/local-request-context.j
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
-  clearAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -31,6 +32,7 @@ import {
 } from "./agent-command-restart-recovery.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
+import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import {
   emitIngressModelUsageDiagnostic,
   ingressDiagnosticChannel,
@@ -221,6 +223,30 @@ async function agentCommandInternal(
       },
     });
     return await sessionWorkAdmission.run(async () => {
+      if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
+        try {
+          await repairPendingAssistantTranscriptTurns({
+            context: {
+              sessionKey,
+              sessionEntry,
+              sessionStore,
+              storePath,
+              sessionAgentId,
+              config: cfg,
+            },
+          });
+          sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
+        } catch (error) {
+          if (!isNewSession) {
+            throw error;
+          }
+          // A reset starts a fresh transcript. Do not let predecessor repair
+          // state leak into it when the old transcript remains unavailable.
+          log.warn(
+            `Could not repair predecessor transcript before session reset for ${sessionKey}: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
       if (opts.deliver === true) {
         const sendPolicy = resolveSendPolicy({
           cfg,

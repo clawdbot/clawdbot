@@ -62,14 +62,26 @@ function telegramSpooledLaneKey(update: unknown, botInfo?: TelegramBotInfo): str
   });
 }
 
-function inspectTelegramSpooledUpdate(update: unknown, botInfo?: TelegramBotInfo) {
+function inspectTelegramSpooledUpdate(
+  update: unknown,
+  botInfo?: TelegramBotInfo,
+  claimedLaneKey?: string,
+) {
   const updateId = resolveTelegramUpdateId(update);
   if (updateId === null) {
     throw new TelegramIngressPayloadError("Telegram spooled update is missing numeric update_id.");
   }
+  const derivedLaneKey = telegramSpooledLaneKey(update, botInfo);
+  const preservePreIdentityControlLane =
+    botInfo !== undefined &&
+    claimedLaneKey?.endsWith(":control") === true &&
+    claimedLaneKey !== derivedLaneKey &&
+    claimedLaneKey === telegramSpooledLaneKey(update);
   return {
     eventId: telegramQueueEventId(updateId),
-    laneKey: telegramSpooledLaneKey(update, botInfo),
+    // Admission can precede getMe(). Preserve only the exact control lane that
+    // the same payload derived before identity became available.
+    laneKey: preservePreIdentityControlLane ? claimedLaneKey : derivedLaneKey,
   };
 }
 
@@ -256,7 +268,12 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
     TelegramSpooledUpdatePayload
   >({
     queue: params.queue,
-    inspect: (update) => inspectTelegramSpooledUpdate(update, params.botInfo),
+    inspect: (update, context) =>
+      inspectTelegramSpooledUpdate(
+        update,
+        params.botInfo,
+        context.phase === "claim" ? context.claimedLaneKey : undefined,
+      ),
     payload: {
       version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
       serialize: (update, { receivedAt }) => {

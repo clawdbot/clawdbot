@@ -41,6 +41,7 @@ import {
 
 export type ToolHandlerContext = {
   partialUserTranscript?: string;
+  abortSignal?: AbortSignal;
 };
 type ToolHandlerFn = (
   args: unknown,
@@ -723,6 +724,16 @@ export class RealtimeCallHandler {
       }
       callEndEmitted = true;
       this.endCallInManager(callSid, callId, reason);
+      if (reason !== "error") {
+        return;
+      }
+      void Promise.resolve(
+        this.provider.hangupCall({ callId, providerCallId: callSid, reason }),
+      ).catch((error: unknown) => {
+        console.warn(
+          `[voice-call] Failed to hang up realtime call ${callSid}: ${formatErrorMessage(error)}`,
+        );
+      });
     };
 
     const sendString = (message: string): boolean => {
@@ -1024,15 +1035,6 @@ export class RealtimeCallHandler {
           return;
         }
         emitCallEnd("error");
-        void this.provider
-          .hangupCall({ callId, providerCallId: callSid, reason: "error" })
-          .catch((error: unknown) => {
-            console.warn(
-              `[voice-call] Failed to hang up realtime call ${callSid}: ${formatErrorMessage(
-                error,
-              )}`,
-            );
-          });
       },
     };
     let session: ActiveRealtimeVoiceBridge;
@@ -1040,7 +1042,17 @@ export class RealtimeCallHandler {
       session = harness.createBridge(bridgeParams);
     } catch (error) {
       this.rollbackUserTranscriptOwnerAdoption(callId, userTranscriptAdoption);
-      throw error;
+      harness.close();
+      audioPacer.close();
+      // A failed provisional replacement must not terminate its active predecessor.
+      if (!hadPredecessorOnAdmission || !this.activeBridgesByCallId.has(callId)) {
+        emitCallEnd("error");
+      }
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close(1011, "Failed to create realtime bridge");
+      }
+      console.error("[voice-call] Failed to create realtime bridge:", error);
+      return null;
     }
     this.commitUserTranscriptOwnerAdoption(callId, userTranscriptAdoption);
     nativeConsultOwner.current = session;
@@ -1104,11 +1116,18 @@ export class RealtimeCallHandler {
     session.connect().catch((error: unknown) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
       const ownsCallState = this.isActiveBridgeOwner(callId, session);
-      session.close();
-      if (ownsCallState) {
-        emitCallEnd("error");
+      try {
+        session.close();
+      } catch (closeError) {
+        console.warn(
+          `[voice-call] Failed to close realtime bridge ${callSid}: ${formatErrorMessage(closeError)}`,
+        );
+      } finally {
+        if (ownsCallState) {
+          emitCallEnd("error");
+        }
+        ws.close(1011, "Failed to connect");
       }
-      ws.close(1011, "Failed to connect");
     });
 
     return session;
@@ -1465,20 +1484,27 @@ export class RealtimeCallHandler {
       `[voice-call] realtime forced agent consult starting callId=${params.callId} providerCallId=${params.callSid} chars=${params.handle.question.length}`,
     );
     params.clearAudio();
+    const abortController = new AbortController();
     const state: ForcedConsultState = {
       owner: params.session,
       sendSpeechPrompt: true,
       cancelled: false,
-      cancel: () => coordinator.markCancelled(params.handle),
-      promise: Promise.resolve().then(() =>
-        params.handler(
+      // Forced consult delivery and generation share one owner. Teardown must abort
+      // the agent run as well as retire provider delivery, or superseded work leaks.
+      cancel: () => {
+        abortController.abort(new Error("Realtime forced consult owner was cancelled."));
+        coordinator.markCancelled(params.handle);
+      },
+      promise: Promise.resolve().then(() => {
+        abortController.signal.throwIfAborted();
+        return params.handler(
           {
             question: params.handle.question,
           },
           params.callId,
-          {},
-        ),
-      ),
+          { abortSignal: abortController.signal },
+        );
+      }),
     };
     this.forcedConsultsByCallId.set(params.callId, state);
     try {
@@ -1511,9 +1537,11 @@ export class RealtimeCallHandler {
         params.handle.question,
       );
     } catch (error) {
-      console.warn(
-        `[voice-call] realtime forced agent consult failed callId=${params.callId} providerCallId=${params.callSid} error=${formatErrorMessage(error)}`,
-      );
+      if (!state.cancelled) {
+        console.warn(
+          `[voice-call] realtime forced agent consult failed callId=${params.callId} providerCallId=${params.callSid} error=${formatErrorMessage(error)}`,
+        );
+      }
     } finally {
       if (!state.cancelled) {
         if (this.forcedConsultsByCallId.get(params.callId) !== state) {
@@ -1729,9 +1757,10 @@ export class RealtimeCallHandler {
         return;
       }
 
-      let cancel = () => {};
+      const abortController = new AbortController();
+      let releaseCancellation = () => {};
       const cancellation = new Promise<void>((resolve) => {
-        cancel = resolve;
+        releaseCancellation = resolve;
       });
       let completeConsult = (_result: unknown) => {};
       const consult = new Promise<unknown>((resolve) => {
@@ -1743,7 +1772,11 @@ export class RealtimeCallHandler {
         promise: consult,
         cancellation,
         cancelled: false,
-        cancel,
+        // Provider continuity owns the consult lifetime, not only its eventual result.
+        cancel: () => {
+          abortController.abort(new Error("Realtime native consult owner was cancelled."));
+          releaseCancellation();
+        },
       };
       this.nativeConsultsInFlightByCallId.set(callId, state);
       void (async () => {
@@ -1761,6 +1794,7 @@ export class RealtimeCallHandler {
           }
           const context = {
             partialUserTranscript: this.resolveUserTranscriptContext(callId, userTranscriptOwner),
+            abortSignal: abortController.signal,
           };
           state.partialUserTranscript = context.partialUserTranscript;
           const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);

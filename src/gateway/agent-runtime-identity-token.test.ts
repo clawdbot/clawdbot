@@ -84,6 +84,37 @@ describe("agent runtime identity token", () => {
     });
   });
 
+  it("round-trips a signed visible-session spawn policy", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionSpawnContext: {
+        completionOwnerSessionKey: " agent:main:discord:direct:alice ",
+        inheritedToolPolicy: {
+          version: 1,
+          allow: [" read ", "sessions_spawn"],
+          deny: ["exec"],
+        },
+      },
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionSpawnContext: {
+        completionOwnerSessionKey: "agent:main:discord:direct:alice",
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "sessions_spawn"],
+          deny: ["exec"],
+        },
+      },
+    });
+  });
+
   it("round-trips a short-lived cron self-management capability", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

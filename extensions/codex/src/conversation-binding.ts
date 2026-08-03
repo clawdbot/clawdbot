@@ -1,6 +1,5 @@
 // Codex plugin module implements conversation binding behavior.
 import {
-  embeddedAgentLog,
   formatErrorMessage,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -19,11 +18,15 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
+  retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./app-server/attempt-client-cleanup.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
-import type { CodexAppServerClient } from "./app-server/client.js";
+import {
+  isCodexAppServerIndeterminateRequestCancellationError,
+  type CodexAppServerClient,
+} from "./app-server/client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexSandboxPolicyForTurn,
@@ -883,19 +886,21 @@ async function runBoundTurn(params: {
       },
     };
   } catch (error) {
-    const timedOut = error instanceof CodexConversationTurnTimeoutError;
-    if (timedOut && activeTurnId) {
-      // Keep the exact turn, notification handlers, and lease alive until
-      // Codex confirms the terminal notification; otherwise inference survives.
+    if (
+      (error instanceof CodexConversationTurnTimeoutError && activeTurnId) ||
+      (turnRoute && isCodexAppServerIndeterminateRequestCancellationError(error))
+    ) {
+      // Per-thread serialization makes an empty startup interrupt follow an
+      // accepted turn whose id was lost to local request cancellation.
       const completed = await interruptCodexTurnAndWaitBestEffort(client, {
         threadId,
-        turnId: activeTurnId,
+        turnId: activeTurnId ?? "",
       });
       if (!completed) {
         // Retirement detaches the physical client while sibling leases finish;
         // never send another cleanup request or retire that detached client twice.
         retiredUnsafeClient = client;
-        await retireUnsafeCodexConversationClientBestEffort(client, "turn interrupt");
+        await retireUnsafeCodexTurnClientBestEffort(client, "turn interrupt");
       }
     }
     if (isIncognitoSessionKey(params.sessionKey)) {
@@ -909,7 +914,7 @@ async function runBoundTurn(params: {
           timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
         });
         if (!unsubscribed) {
-          await retireUnsafeCodexConversationClientBestEffort(client, "thread unsubscribe");
+          await retireUnsafeCodexTurnClientBestEffort(client, "thread unsubscribe");
         }
       }
     }
@@ -918,21 +923,6 @@ async function runBoundTurn(params: {
     activeTurnCleanup();
     turnRoute?.release();
     releaseCodexAppServerClientLease(clientLease);
-  }
-}
-
-async function retireUnsafeCodexConversationClientBestEffort(
-  client: CodexAppServerClient,
-  operation: "turn interrupt" | "thread unsubscribe",
-): Promise<void> {
-  try {
-    await closeCodexStartupClientBestEffort(client);
-  } catch (error) {
-    // Cleanup must not replace the original turn or timeout failure.
-    embeddedAgentLog.debug("codex conversation client retirement failed during cleanup", {
-      operation,
-      error,
-    });
   }
 }
 

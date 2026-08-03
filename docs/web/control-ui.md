@@ -47,7 +47,7 @@ Onboarding usually configures a gateway token for shared-secret auth. If the Gat
 
 ## Device pairing (first connection)
 
-After gateway auth succeeds, connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`.
+After gateway auth succeeds, connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`. On the Gateway host, `openclaw dashboard` is the preferred recovery path: it opens a short-lived, single-use pairing link and leaves the browser with a durable per-device credential.
 
 <Warning>
 When upgrading directly from a release that used the retired

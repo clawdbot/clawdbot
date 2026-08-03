@@ -14,6 +14,7 @@ import {
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { getPluginRegistryRuntime } from "../../plugins/registry-runtime-binding.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -462,13 +463,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     // out-of-phase clients but expires before the UI's 5s fast follow, so changed rows surface there.
     // Expired and rejected work is removed; retaining it would mask provider recovery or new sessions.
     cache.set(listKey, entry);
-    while (cache.size > SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES) {
-      const oldest = cache.keys().next();
-      if (oldest.done) {
-        break;
-      }
-      cache.delete(oldest.value);
-    }
+    pruneMapToMaxSize(cache, SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES);
     try {
       const result = await operation;
       if (cache.get(listKey) === entry) {

@@ -705,6 +705,7 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
 }
 
 function renderJobRow(job: CronJob, props: CronProps) {
+  const description = job.description?.trim();
   const nextRunAtMs = job.state?.nextRunAtMs;
   const hasNextRun = typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs);
   const dotVariant = isCronJobActiveFailure(job)
@@ -729,6 +730,16 @@ function renderJobRow(job: CronJob, props: CronProps) {
       <span class="cron-table__name">
         <span class="cron-table__dot ${dotVariant}" aria-hidden="true"></span>
         <span class="cron-table__name-text">${job.name}</span>
+        ${description
+          ? html`
+              <span
+                class="cron-table__description"
+                data-test-id=${`cron-row-description-${job.id}`}
+                title=${`${t("cron.form.description")}: ${description}`}
+                >· ${description}</span
+              >
+            `
+          : nothing}
         ${job.enabled
           ? nothing
           : html`<span class="muted cron-table__paused-note">${t("cron.list.paused")}</span>`}
@@ -918,6 +929,7 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
 
 function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?: CronJob) {
   const title = mode === "job" ? (selectedJob?.name ?? props.form.name) : t("cron.detail.newTitle");
+  const description = mode === "job" ? selectedJob?.description?.trim() : undefined;
   // Header describes the SAVED job (schedule + next run); the form's live
   // summary describes unsaved edits, so the two never contradict each other.
   const nextRunAtMs = selectedJob?.state?.nextRunAtMs;
@@ -933,6 +945,12 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
     <div class="cron-detail-header">
       <div class="cron-detail-header__copy">
         <div class="cron-detail-title">${title}</div>
+        ${description
+          ? html`<div class="cron-detail-description" data-test-id="cron-detail-description">
+              <span class="cron-detail-description__label">${t("cron.form.description")}:</span>
+              ${description}
+            </div>`
+          : nothing}
         <div class="cron-detail-meta">
           ${mode === "job" && selectedJob && props.canManage
             ? renderEnabledSwitch(props, selectedJob)

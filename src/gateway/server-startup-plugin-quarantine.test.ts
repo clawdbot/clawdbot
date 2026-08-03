@@ -33,14 +33,16 @@ describe("Gateway startup plugin quarantine", () => {
     }
   });
 
-  it("reaches readiness without importing a configured plugin with a broken host peer", async () => {
-    const pluginId = "broken-payload";
-    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-quarantined-plugin-"));
-    tempDirs.push(pluginRoot);
+  it("reaches readiness with a quarantined plugin beside a valid declared extension", async () => {
+    const brokenPluginId = "broken-payload";
+    const validPluginId = "valid-declared-extension";
+    const brokenRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-quarantined-plugin-"));
+    const validRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-valid-stale-main-"));
+    tempDirs.push(brokenRoot, validRoot);
     fs.writeFileSync(
-      path.join(pluginRoot, "package.json"),
+      path.join(brokenRoot, "package.json"),
       JSON.stringify({
-        name: pluginId,
+        name: brokenPluginId,
         type: "commonjs",
         main: "./missing-main.cjs",
         openclaw: { extensions: ["./index.cjs"] },
@@ -49,9 +51,9 @@ describe("Gateway startup plugin quarantine", () => {
       "utf8",
     );
     fs.writeFileSync(
-      path.join(pluginRoot, "openclaw.plugin.json"),
+      path.join(brokenRoot, "openclaw.plugin.json"),
       JSON.stringify({
-        id: pluginId,
+        id: brokenPluginId,
         configSchema: {
           type: "object",
           additionalProperties: false,
@@ -61,80 +63,14 @@ describe("Gateway startup plugin quarantine", () => {
       "utf8",
     );
     fs.writeFileSync(
-      path.join(pluginRoot, "index.cjs"),
+      path.join(brokenRoot, "index.cjs"),
       "globalThis.brokenPluginImported = true; module.exports = { id: 'broken-payload', register() {} };",
       "utf8",
     );
-
-    const smoke = await runPluginPayloadSmokeCheck({
-      records: {
-        [pluginId]: {
-          source: "npm",
-          spec: pluginId,
-          installPath: pluginRoot,
-        },
-      },
-      env: process.env,
-    });
-    expect(smoke.failures).toMatchObject([
-      { pluginId, reason: "missing-openclaw-peer-link", installPath: pluginRoot },
-    ]);
-    setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
-
-    const { loadOpenClawPlugins } =
-      await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
-    const pluginConfig = {
-      enabled: true,
-      load: { paths: [pluginRoot] },
-      allow: [pluginId],
-      entries: { [pluginId]: { enabled: true } },
-    };
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: { plugins: pluginConfig },
-      onlyPluginIds: [pluginId],
-    });
-    expect(registry.plugins.find((plugin) => plugin.id === pluginId)).toMatchObject({
-      status: "error",
-      activated: false,
-      failurePhase: "validation",
-      activationReason: "configured-unavailable: missing-openclaw-peer-link",
-    });
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        pluginId,
-        code: "plugin-verification",
-      }),
-    );
-    expect(
-      registry.diagnostics.find((diagnostic) => diagnostic.pluginId === pluginId)?.message,
-    ).not.toContain(pluginRoot);
-    expect((globalThis as Record<string, unknown>).brokenPluginImported).toBeUndefined();
-
-    setTestPluginRegistry(registry);
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
-      plugins: pluginConfig,
-    });
-
-    const port = await getFreePort();
-    server = await startGatewayServer(port, { auth: { mode: "none" } });
-    const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
-
-    expect(ready.status).toBe(200);
-    await expect(ready.json()).resolves.toMatchObject({ ready: true });
-    expect((globalThis as Record<string, unknown>).brokenPluginImported).toBeUndefined();
-  });
-
-  it("reaches readiness and loads a valid declared extension when npm main is stale", async () => {
-    const pluginId = "valid-declared-extension";
-    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-valid-stale-main-"));
-    tempDirs.push(pluginRoot);
     fs.writeFileSync(
-      path.join(pluginRoot, "package.json"),
+      path.join(validRoot, "package.json"),
       JSON.stringify({
-        name: pluginId,
+        name: validPluginId,
         type: "commonjs",
         main: "./missing-main.cjs",
         openclaw: { extensions: ["./index.cjs"] },
@@ -142,43 +78,76 @@ describe("Gateway startup plugin quarantine", () => {
       "utf8",
     );
     fs.writeFileSync(
-      path.join(pluginRoot, "openclaw.plugin.json"),
+      path.join(validRoot, "openclaw.plugin.json"),
       JSON.stringify({
-        id: pluginId,
+        id: validPluginId,
         configSchema: { type: "object", additionalProperties: false, properties: {} },
       }),
       "utf8",
     );
     fs.writeFileSync(
-      path.join(pluginRoot, "index.cjs"),
-      `globalThis.selectedPluginImported = true; module.exports = { id: '${pluginId}', register() {} };`,
+      path.join(validRoot, "index.cjs"),
+      `globalThis.selectedPluginImported = true; module.exports = { id: '${validPluginId}', register() {} };`,
       "utf8",
     );
 
     const smoke = await runPluginPayloadSmokeCheck({
-      records: { [pluginId]: { source: "npm", spec: pluginId, installPath: pluginRoot } },
+      records: {
+        [brokenPluginId]: {
+          source: "npm",
+          spec: brokenPluginId,
+          installPath: brokenRoot,
+        },
+        [validPluginId]: { source: "npm", spec: validPluginId, installPath: validRoot },
+      },
       env: process.env,
     });
-    expect(smoke).toEqual({ checked: [pluginId], failures: [] });
+    expect(smoke.checked).toEqual([brokenPluginId, validPluginId]);
+    expect(smoke.failures).toMatchObject([
+      {
+        pluginId: brokenPluginId,
+        reason: "missing-openclaw-peer-link",
+        installPath: brokenRoot,
+      },
+    ]);
     setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
 
     const { loadOpenClawPlugins } =
       await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
     const pluginConfig = {
       enabled: true,
-      load: { paths: [pluginRoot] },
-      allow: [pluginId],
-      entries: { [pluginId]: { enabled: true } },
+      load: { paths: [brokenRoot, validRoot] },
+      allow: [brokenPluginId, validPluginId],
+      entries: {
+        [brokenPluginId]: { enabled: true },
+        [validPluginId]: { enabled: true },
+      },
     };
     const registry = loadOpenClawPlugins({
       cache: false,
       config: { plugins: pluginConfig },
-      onlyPluginIds: [pluginId],
+      onlyPluginIds: [brokenPluginId, validPluginId],
     });
-    expect(registry.plugins.find((plugin) => plugin.id === pluginId)).toMatchObject({
+    expect(registry.plugins.find((plugin) => plugin.id === brokenPluginId)).toMatchObject({
+      status: "error",
+      activated: false,
+      failurePhase: "validation",
+      activationReason: "configured-unavailable: missing-openclaw-peer-link",
+    });
+    expect(registry.plugins.find((plugin) => plugin.id === validPluginId)).toMatchObject({
       status: "loaded",
       activated: true,
     });
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: brokenPluginId,
+        code: "plugin-verification",
+      }),
+    );
+    expect(
+      registry.diagnostics.find((diagnostic) => diagnostic.pluginId === brokenPluginId)?.message,
+    ).not.toContain(brokenRoot);
+    expect((globalThis as Record<string, unknown>).brokenPluginImported).toBeUndefined();
     expect((globalThis as Record<string, unknown>).selectedPluginImported).toBe(true);
 
     setTestPluginRegistry(registry);
@@ -194,6 +163,7 @@ describe("Gateway startup plugin quarantine", () => {
 
     expect(ready.status).toBe(200);
     await expect(ready.json()).resolves.toMatchObject({ ready: true });
+    expect((globalThis as Record<string, unknown>).brokenPluginImported).toBeUndefined();
     expect((globalThis as Record<string, unknown>).selectedPluginImported).toBe(true);
   });
 

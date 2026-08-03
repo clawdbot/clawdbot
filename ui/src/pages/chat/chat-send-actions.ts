@@ -86,6 +86,7 @@ const resetRetryState = (
   ...entry,
   sendAttempts: 0,
   sendError: undefined,
+  sendRequestStartedAtMs: undefined,
   sendRunId: entry.sendState === "failed" ? generateUUID() : entry.sendRunId,
   sendState,
 });

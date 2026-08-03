@@ -273,6 +273,7 @@ vi.mock("ws", () => ({
       setTimeout(() => {
         if (wsMockState.behavior === "open") {
           this.emit("open");
+          this.emit("close", 1000, Buffer.from("done"));
         } else if (wsMockState.behavior === "error") {
           this.emit("error", new Error("WebSocket failed"));
         } else if (wsMockState.behavior === "unexpected-response") {
@@ -1587,14 +1588,18 @@ describe("streamContainerEvents", () => {
 
   it("redacts the account and bounds the opening handshake wait", async () => {
     const log = vi.fn();
+    const onStreamOpen = vi.fn();
+    wsMockState.behavior = "open";
 
     await streamContainerEvents({
       baseUrl: "http://localhost:8080",
       account: "+14259798283",
       onEvent: vi.fn(),
+      onStreamOpen,
       logger: { log },
     });
 
+    expect(onStreamOpen).toHaveBeenCalledOnce();
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );

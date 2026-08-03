@@ -12,7 +12,8 @@ import {
   mergeLegacyObjectPropertyValues,
   mergeLegacyPathBranchAssignments,
 } from "./lib/legacy-store-path-domain.mjs";
-import { resolveRepoRoot, runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
 const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packages"];
 const databaseFirstNativeSourceRoots = ["apps/macos/Sources/OpenClaw"];
@@ -176,59 +177,25 @@ const allowedRuntimeMigrationPaths = [
 
 const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
 
-const allowedCurrentLegacyWriteViolations = [];
-
 const sourceFileExtensions = new Set([".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".tsx"]);
 
+const sourceTestExtensions = ["js", "mjs", "ts"];
+const sourceTestHelperStems = [
+  "test-fixtures",
+  "test-helper",
+  "test-helpers",
+  "test-harness",
+  "test-mocks",
+  "test-support",
+  "test-utils",
+];
 const sourceTestSuffixes = [
-  ".e2e-harness.js",
-  ".e2e-harness.mjs",
-  ".e2e-harness.ts",
-  ".test-fixtures.js",
-  ".test-fixtures.mjs",
-  ".test-fixtures.ts",
-  ".test-helper.js",
-  ".test-helper.mjs",
-  ".test-helper.ts",
-  ".test-helpers.js",
-  ".test-helpers.mjs",
-  ".test-helpers.ts",
-  ".test-harness.js",
-  ".test-harness.mjs",
-  ".test-harness.ts",
-  ".test-mocks.js",
-  ".test-mocks.mjs",
-  ".test-mocks.ts",
-  ".test-support.js",
-  ".test-support.mjs",
-  ".test-support.ts",
-  ".test-utils.js",
-  ".test-utils.mjs",
-  ".test-utils.ts",
-  ".test.js",
-  ".test.mjs",
-  ".test.ts",
-  "test-fixtures.js",
-  "test-fixtures.mjs",
-  "test-fixtures.ts",
-  "test-helper.js",
-  "test-helper.mjs",
-  "test-helper.ts",
-  "test-helpers.js",
-  "test-helpers.mjs",
-  "test-helpers.ts",
-  "test-harness.js",
-  "test-harness.mjs",
-  "test-harness.ts",
-  "test-mocks.js",
-  "test-mocks.mjs",
-  "test-mocks.ts",
-  "test-support.js",
-  "test-support.mjs",
-  "test-support.ts",
-  "test-utils.js",
-  "test-utils.mjs",
-  "test-utils.ts",
+  ...["e2e-harness", ...sourceTestHelperStems, "test"].flatMap((stem) =>
+    sourceTestExtensions.map((extension) => `.${stem}.${extension}`),
+  ),
+  ...sourceTestHelperStems.flatMap((stem) =>
+    sourceTestExtensions.map((extension) => `${stem}.${extension}`),
+  ),
 ];
 
 function isAllowedLegacyOwnerPath(relativePath) {
@@ -241,10 +208,6 @@ function isAllowedLegacyOwnerPath(relativePath) {
   );
 }
 
-function normalizedSourceText(sourceFile, node) {
-  return node.getText(sourceFile).replace(/\s+/gu, " ");
-}
-
 function lastScope(scopes) {
   return scopes[scopes.length - 1];
 }
@@ -255,44 +218,6 @@ function scopeForRead(scopes, name) {
 
 function scopeForWrite(scopes, name) {
   return scopeForRead(scopes, name) ?? lastScope(scopes);
-}
-
-function currentLegacyWriteViolationAllowances(relativePath = null) {
-  const allowances = new Map();
-  const relativePrefix = typeof relativePath === "string" ? relativePath.concat(":") : null;
-  for (const fingerprint of allowedCurrentLegacyWriteViolations) {
-    if (relativePrefix !== null && !fingerprint.startsWith(relativePrefix)) {
-      continue;
-    }
-    allowances.set(fingerprint, (allowances.get(fingerprint) ?? 0) + 1);
-  }
-  return allowances;
-}
-
-function currentLegacyWriteViolationPath(fingerprint) {
-  const marker = ":legacy store filesystem write:";
-  const markerIndex = fingerprint.indexOf(marker);
-  return markerIndex === -1 ? null : fingerprint.slice(0, markerIndex);
-}
-
-function consumeAllowedCurrentLegacyViolation(
-  allowances,
-  relativePath,
-  sourceFile,
-  fingerprintNode,
-  kind,
-) {
-  const fingerprint = `${relativePath}:${kind}:${normalizedSourceText(sourceFile, fingerprintNode)}`;
-  const remaining = allowances.get(fingerprint) ?? 0;
-  if (remaining === 0) {
-    return false;
-  }
-  if (remaining === 1) {
-    allowances.delete(fingerprint);
-  } else {
-    allowances.set(fingerprint, remaining - 1);
-  }
-  return true;
 }
 
 function isSourceFile(filePath) {
@@ -319,7 +244,7 @@ function isTestLikeSourceFile(filePath) {
   return sourceTestSuffixes.some((suffix) => filePath.endsWith(suffix));
 }
 
-async function collectSourceFiles(targetPath) {
+async function collectFiles(targetPath, includeFile, skipEntry = () => false) {
   let stat;
   try {
     stat = await fs.stat(targetPath);
@@ -331,67 +256,44 @@ async function collectSourceFiles(targetPath) {
   }
 
   if (stat.isFile()) {
-    return isSourceFile(targetPath) &&
-      !isTestLikeSourceFile(targetPath) &&
-      !isGeneratedAssetSourceFile(targetPath)
-      ? [targetPath]
-      : [];
+    return includeFile(targetPath) ? [targetPath] : [];
   }
 
   const entries = await fs.readdir(targetPath, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (entry.name === "node_modules") {
-      continue;
-    }
     const entryPath = path.join(targetPath, entry.name);
-    if (isGeneratedAssetSourcePath(entryPath)) {
+    if (skipEntry(entryPath, entry)) {
       continue;
     }
     if (entry.isDirectory()) {
-      files.push(...(await collectSourceFiles(entryPath)));
+      files.push(...(await collectFiles(entryPath, includeFile, skipEntry)));
       continue;
     }
-    if (
-      entry.isFile() &&
-      isSourceFile(entryPath) &&
-      !isTestLikeSourceFile(entryPath) &&
-      !isGeneratedAssetSourceFile(entryPath)
-    ) {
+    if (entry.isFile() && includeFile(entryPath)) {
       files.push(entryPath);
     }
   }
   return files;
+}
+
+function collectSourceFiles(targetPath) {
+  return collectFiles(
+    targetPath,
+    (filePath) =>
+      isSourceFile(filePath) &&
+      !isTestLikeSourceFile(filePath) &&
+      !isGeneratedAssetSourceFile(filePath),
+    (entryPath, entry) => entry.name === "node_modules" || isGeneratedAssetSourcePath(entryPath),
+  );
 }
 
 export async function collectDatabaseFirstLegacyStoreSourceFiles(sourceRoots) {
   return (await Promise.all(sourceRoots.map((root) => collectSourceFiles(root)))).flat();
 }
 
-async function collectNativeSourceFiles(targetPath) {
-  let stat;
-  try {
-    stat = await fs.stat(targetPath);
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-  if (stat.isFile()) {
-    return path.extname(targetPath) === ".swift" ? [targetPath] : [];
-  }
-  const entries = await fs.readdir(targetPath, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    const entryPath = path.join(targetPath, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await collectNativeSourceFiles(entryPath)));
-    } else if (entry.isFile() && path.extname(entryPath) === ".swift") {
-      files.push(entryPath);
-    }
-  }
-  return files;
+function collectNativeSourceFiles(targetPath) {
+  return collectFiles(targetPath, (filePath) => path.extname(filePath) === ".swift");
 }
 
 export function collectDatabaseFirstNativeLegacyStoreViolations(content, relativePath) {
@@ -725,7 +627,6 @@ function legacyCandidateTexts(sourceFile, node) {
 export function collectDatabaseFirstLegacyStoreViolations(
   content,
   inputRelativePath = "source.ts",
-  scanOptions = {},
 ) {
   const relativePath = inputRelativePath.replaceAll("\\", "/");
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
@@ -737,8 +638,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return boundaryViolations;
   }
 
-  const currentLegacyWriteAllowances =
-    scanOptions.currentLegacyWriteAllowances ?? currentLegacyWriteViolationAllowances(relativePath);
   const createRequireBindings = collectCreateRequireBindings(sourceFile);
   const { fsModuleBindings, fsWriteAliases, fsSafeStoreFactoryAliases } =
     collectFsBindings(sourceFile);
@@ -801,21 +700,10 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
   }
 
-  function addViolation(node, kind, fingerprintNode = node) {
+  function addViolation(node, kind) {
     const callSite = kind === "legacy store filesystem write" ? wrapperCallSites[0] : null;
     const reportedNode = callSite ?? node;
     const line = toLine(sourceFile, reportedNode);
-    if (
-      consumeAllowedCurrentLegacyViolation(
-        currentLegacyWriteAllowances,
-        relativePath,
-        sourceFile,
-        callSite ?? fingerprintNode,
-        kind,
-      )
-    ) {
-      return;
-    }
     const key = `${line}:${kind}`;
     if (seenViolations.has(key)) {
       return;
@@ -1178,25 +1066,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
           objectValue: legacyPathScopes[index].get(objectName) === true,
         };
       }
-    }
-    return { found: false, objectKnown: false, objectValue: false };
-  }
-
-  function lookupScopedLegacyObjectPropertyEntry(
-    objectName,
-    propertyPath,
-    propertyScope,
-    knownObjectLiteralScope,
-  ) {
-    const propertyName = propertyPath.join(".");
-    const key = objectPropertyKey(objectName, propertyName);
-    if (propertyScope.has(key)) {
-      return { found: true, value: propertyScope.get(key) };
-    }
-    const parentPath = propertyPath.slice(0, -1).join(".");
-    const parentKey = parentPath ? objectPropertyKey(objectName, parentPath) : objectName;
-    if (knownObjectLiteralScope.get(parentKey) === true) {
-      return { found: false, objectKnown: true, objectValue: false };
     }
     return { found: false, objectKnown: false, objectValue: false };
   }
@@ -2695,37 +2564,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
   }
 
-  function copyScopedLegacyObjectProperties(targetName, sourceName, sourceScope) {
-    const sourcePrefix = `${sourceName}.`;
-    const copiedEntries = [];
-    for (const [key, value] of sourceScope) {
-      if (key.startsWith(sourcePrefix)) {
-        copiedEntries.push([`${targetName}.${key.slice(sourcePrefix.length)}`, value]);
-      }
-    }
-    copiedEntries.sort((left, right) => left[0].length - right[0].length);
-    for (const [key, value] of copiedEntries) {
-      clearLegacyObjectProperties(lastScope(legacyObjectPropertyScopes), key);
-      lastScope(legacyObjectPropertyScopes).set(key, value);
-    }
-  }
-
-  function copyScopedKnownLegacyObjectLiterals(targetName, sourceName, sourceScope) {
-    lastScope(legacyKnownObjectLiteralScopes).set(targetName, sourceScope.get(sourceName) === true);
-    const sourcePrefix = `${sourceName}.`;
-    const copiedEntries = [];
-    for (const [key, value] of sourceScope) {
-      if (key.startsWith(sourcePrefix)) {
-        copiedEntries.push([`${targetName}.${key.slice(sourcePrefix.length)}`, value]);
-      }
-    }
-    copiedEntries.sort((left, right) => left[0].length - right[0].length);
-    for (const [key, value] of copiedEntries) {
-      clearKnownLegacyObjectLiterals(lastScope(legacyKnownObjectLiteralScopes), key);
-      lastScope(legacyKnownObjectLiteralScopes).set(key, value);
-    }
-  }
-
   function bindingPatternNames(name) {
     const names = [];
     function visitName(current) {
@@ -2743,156 +2581,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
     visitName(name);
     return names;
-  }
-
-  function markLegacyPathsFromObjectBinding(bindingPattern, sourceName, propertyPath = []) {
-    for (const element of bindingPattern.elements) {
-      const propertyName = element.propertyName
-        ? propertyNameText(element.propertyName)
-        : ts.isIdentifier(element.name)
-          ? element.name.text
-          : null;
-      if (!propertyName) {
-        continue;
-      }
-      const nextPath = [...propertyPath, propertyName];
-      if (ts.isIdentifier(element.name)) {
-        const trackedPropertyEntry = lookupLegacyObjectPropertyEntry(
-          sourceName,
-          nextPath.join("."),
-        );
-        const usesDefaultInitializer = trackedPropertyEntry.found
-          ? trackedPropertyEntry.value === explicitUndefinedLegacyObjectPropertyValue
-          : trackedPropertyEntry.objectKnown;
-        const trackedPropertyValue = trackedPropertyEntry.found
-          ? trackedPropertyEntry.value === explicitUndefinedLegacyObjectPropertyValue
-            ? null
-            : trackedPropertyEntry.value === true
-          : null;
-        const propertyValue =
-          trackedPropertyValue === null
-            ? element.initializer
-              ? expressionContainsLegacyStore(element.initializer)
-              : false
-            : trackedPropertyValue;
-        lastScope(legacyPathScopes).set(element.name.text, propertyValue);
-        lastScope(knownUndefinedScopes).set(
-          element.name.text,
-          usesDefaultInitializer
-            ? element.initializer
-              ? isKnownUndefinedExpression(element.initializer)
-              : true
-            : false,
-        );
-        const sourcePropertyName = `${sourceName}.${nextPath.join(".")}`;
-        copyLegacyObjectProperties(element.name.text, sourcePropertyName);
-        copyKnownLegacyObjectLiterals(element.name.text, sourcePropertyName);
-        lastScope(wrapperFunctionScopes).set(
-          element.name.text,
-          cloneWrapperFunctionValue(resolveWrapperFunction(sourcePropertyName)),
-        );
-        continue;
-      }
-      if (ts.isObjectBindingPattern(element.name)) {
-        markLegacyPathsFromObjectBinding(element.name, sourceName, nextPath);
-      }
-    }
-  }
-
-  function markLegacyPathsFromInlineObjectBinding(bindingPattern, initializer, propertyPath = []) {
-    const sourceName = "<inline-object-binding>";
-    const propertyScope = new Map();
-    const knownObjectLiteralScope = new Map();
-    markLegacyObjectProperties(sourceName, initializer, propertyScope, knownObjectLiteralScope);
-    function visitBinding(currentBindingPattern, currentPath) {
-      for (const element of currentBindingPattern.elements) {
-        const propertyName = element.propertyName
-          ? propertyNameText(element.propertyName)
-          : ts.isIdentifier(element.name)
-            ? element.name.text
-            : null;
-        if (!propertyName) {
-          continue;
-        }
-        const nextPath = [...currentPath, propertyName];
-        if (ts.isIdentifier(element.name)) {
-          const trackedPropertyEntry = lookupScopedLegacyObjectPropertyEntry(
-            sourceName,
-            nextPath,
-            propertyScope,
-            knownObjectLiteralScope,
-          );
-          const usesDefaultInitializer = trackedPropertyEntry.found
-            ? trackedPropertyEntry.value === explicitUndefinedLegacyObjectPropertyValue
-            : trackedPropertyEntry.objectKnown;
-          const propertyValue = trackedPropertyEntry.found
-            ? trackedPropertyEntry.value === explicitUndefinedLegacyObjectPropertyValue
-              ? element.initializer
-                ? expressionContainsLegacyStore(element.initializer)
-                : false
-              : trackedPropertyEntry.value === true
-            : trackedPropertyEntry.objectKnown && element.initializer
-              ? expressionContainsLegacyStore(element.initializer)
-              : false;
-          lastScope(legacyPathScopes).set(element.name.text, propertyValue);
-          lastScope(knownUndefinedScopes).set(
-            element.name.text,
-            usesDefaultInitializer
-              ? element.initializer
-                ? isKnownUndefinedExpression(element.initializer)
-                : true
-              : false,
-          );
-          const sourcePropertyName = objectPropertyKey(sourceName, nextPath.join("."));
-          copyScopedLegacyObjectProperties(element.name.text, sourcePropertyName, propertyScope);
-          copyScopedKnownLegacyObjectLiterals(
-            element.name.text,
-            sourcePropertyName,
-            knownObjectLiteralScope,
-          );
-          continue;
-        }
-        if (ts.isObjectBindingPattern(element.name)) {
-          visitBinding(element.name, nextPath);
-        }
-      }
-    }
-    visitBinding(bindingPattern, propertyPath);
-  }
-
-  function markFsSafeStoresFromObjectBinding(bindingPattern, sourceName, propertyPath = []) {
-    for (const element of bindingPattern.elements) {
-      const propertyName = element.propertyName
-        ? propertyNameText(element.propertyName)
-        : ts.isIdentifier(element.name)
-          ? element.name.text
-          : null;
-      if (!propertyName) {
-        continue;
-      }
-      const nextPath = [...propertyPath, propertyName];
-      if (ts.isIdentifier(element.name)) {
-        const key = `${sourceName}.${nextPath.join(".")}`;
-        const trackedStore = lookupFsSafeStore(key);
-        const trackedJsonStore = lookupFsSafeJsonStore(key);
-        lastScope(fsSafeStoreScopes).set(
-          element.name.text,
-          trackedStore ??
-            (element.initializer ? isFsSafeStoreExpression(element.initializer) : false),
-        );
-        lastScope(fsSafeJsonStoreScopes).set(
-          element.name.text,
-          trackedJsonStore ??
-            (element.initializer
-              ? expressionContainsFsSafeJsonStoreLegacyPath(element.initializer)
-              : false),
-        );
-        continue;
-      }
-      if (ts.isObjectBindingPattern(element.name)) {
-        markFsSafeStoresFromObjectBinding(element.name, sourceName, nextPath);
-      }
-    }
   }
 
   function markFsSafeFactoryAliasesFromObjectBinding(bindingPattern, sourceName) {
@@ -3486,10 +3174,15 @@ export function collectDatabaseFirstLegacyStoreViolations(
     registerFsSafeStoreObjectAliases(root, expression, stores, jsonStores);
     registerFsModuleObjectProperties(root, expression, fsModules);
     const unwrapped = unwrapExpression(expression);
-    const wrapperSource = callExpressionName(unwrapped);
+    const sourceName = callExpressionName(unwrapped);
+    if (sourceName) {
+      copyLegacyObjectProperties(root, sourceName, properties);
+      copyKnownLegacyObjectLiterals(root, sourceName, knownObjects);
+      copyFsSafeStoreObjectAliases(root, sourceName, stores, jsonStores);
+    }
     registerWrapperObjectMethods(root, expression, wrappers);
-    if (wrapperSource) {
-      copyWrapperObjectMethods(root, wrapperSource, wrappers);
+    if (sourceName) {
+      copyWrapperObjectMethods(root, sourceName, wrappers);
     }
     return {
       root,
@@ -3608,31 +3301,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
         bindIdentifierFact(element.name.text, nextFact);
       } else if (ts.isObjectBindingPattern(element.name)) {
         bindObjectPatternFact(element.name, nextFact);
-      }
-    }
-  }
-
-  function bindObjectPatternWrappers(pattern, sourceFact) {
-    for (const element of pattern.elements) {
-      const propertyName = element.propertyName
-        ? propertyNameText(element.propertyName)
-        : ts.isIdentifier(element.name)
-          ? element.name.text
-          : null;
-      if (!propertyName) {
-        continue;
-      }
-      let nextFact = propertyFact(sourceFact, propertyName);
-      if (nextFact.knownUndefined && element.initializer) {
-        nextFact = factFromExpression(element.initializer);
-      }
-      if (ts.isIdentifier(element.name)) {
-        lastScope(wrapperFunctionScopes).set(
-          element.name.text,
-          cloneWrapperFunctionValue(nextFact.wrapper),
-        );
-      } else if (ts.isObjectBindingPattern(element.name)) {
-        bindObjectPatternWrappers(element.name, nextFact);
       }
     }
   }
@@ -4008,8 +3676,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
         node.initializer &&
         ts.isIdentifier(node.initializer)
       ) {
-        markLegacyPathsFromObjectBinding(node.name, node.initializer.text);
-        markFsSafeStoresFromObjectBinding(node.name, node.initializer.text);
         markFsSafeFactoryAliasesFromObjectBinding(node.name, node.initializer.text);
       } else if (
         ts.isObjectBindingPattern(node.name) &&
@@ -4021,18 +3687,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
           propertyAccess.rootName,
           propertyAccess.properties.join("."),
         );
-        markLegacyPathsFromObjectBinding(node.name, sourceName);
-        markFsSafeStoresFromObjectBinding(node.name, sourceName);
         markFsSafeFactoryAliasesFromObjectBinding(node.name, sourceName);
-      } else if (
-        ts.isObjectBindingPattern(node.name) &&
-        node.initializer &&
-        ts.isObjectLiteralExpression(unwrapExpression(node.initializer))
-      ) {
-        markLegacyPathsFromInlineObjectBinding(node.name, node.initializer);
-      }
-      if (ts.isObjectBindingPattern(node.name) && node.initializer) {
-        bindObjectPatternWrappers(node.name, factFromExpression(node.initializer));
       }
     }
     if (ts.isVariableDeclaration(node) && isVarVariableDeclaration(node)) {
@@ -4415,17 +4070,17 @@ export function collectDatabaseFirstLegacyStoreViolations(
               pathArgumentContainsLegacyStore(argument),
             ))
       ) {
-        addViolation(node.expression, "legacy store filesystem write", node);
+        addViolation(node.expression, "legacy store filesystem write");
       }
       if (
         fsSafeStoreWritePathArguments(node).some((argument) =>
           pathArgumentContainsLegacyStore(argument),
         )
       ) {
-        addViolation(node.expression, "legacy store filesystem write", node);
+        addViolation(node.expression, "legacy store filesystem write");
       }
       if (fsSafeJsonStoreWriteContainsLegacyStore(node)) {
-        addViolation(node.expression, "legacy store filesystem write", node);
+        addViolation(node.expression, "legacy store filesystem write");
       }
       const wrapperName = callExpressionName(node.expression);
       const wrapperRecord = wrapperName ? resolveWrapperFunction(wrapperName) : null;
@@ -4451,13 +4106,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   visit(sourceFile);
-  if (
-    scanOptions.enforceCurrentLegacyAllowlist &&
-    !scanOptions.currentLegacyWriteAllowances &&
-    currentLegacyWriteAllowances.size > 0
-  ) {
-    violations.push({ kind: "stale current legacy write allowlist", line: 1 });
-  }
   return violations;
 }
 
@@ -4471,20 +4119,12 @@ export async function main() {
   const nativeSourceRoots = databaseFirstNativeSourceRoots.map((root) => path.join(repoRoot, root));
   const nativeFiles = (await Promise.all(nativeSourceRoots.map(collectNativeSourceFiles))).flat();
   const violations = [];
-  const currentLegacyWriteAllowances = currentLegacyWriteViolationAllowances();
-
   for (const filePath of files) {
     const relativePath = path.relative(repoRoot, filePath).replaceAll(path.sep, "/");
     const content = await fs.readFile(filePath, "utf8");
-    for (const violation of collectDatabaseFirstLegacyStoreViolations(content, relativePath, {
-      currentLegacyWriteAllowances,
-    })) {
+    for (const violation of collectDatabaseFirstLegacyStoreViolations(content, relativePath)) {
       violations.push(`${relativePath}:${violation.line} ${violation.kind}`);
     }
-  }
-  for (const fingerprint of currentLegacyWriteAllowances.keys()) {
-    const relativePath = currentLegacyWriteViolationPath(fingerprint) ?? "<unknown>";
-    violations.push(`${relativePath}:1 stale current legacy write allowlist`);
   }
   for (const filePath of nativeFiles) {
     const relativePath = path.relative(repoRoot, filePath).replaceAll(path.sep, "/");

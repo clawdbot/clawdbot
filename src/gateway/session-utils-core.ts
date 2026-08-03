@@ -11,6 +11,7 @@ import {
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { truncateUtf16Safe } from "../utils.js";
 import {
@@ -289,13 +290,7 @@ function rememberSingleRowChildSessionCandidateCacheEntry(
     singleRowChildSessionCandidateCache.delete(storePath);
   }
   singleRowChildSessionCandidateCache.set(storePath, entry);
-  if (singleRowChildSessionCandidateCache.size <= SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES) {
-    return;
-  }
-  const oldestKey = singleRowChildSessionCandidateCache.keys().next().value;
-  if (oldestKey) {
-    singleRowChildSessionCandidateCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(singleRowChildSessionCandidateCache, SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES);
 }
 
 function buildStoreChildSessionCandidateIndex(

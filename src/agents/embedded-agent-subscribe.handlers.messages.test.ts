@@ -24,6 +24,7 @@ import {
   createOpenAiResponsesTextBlock,
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { createThinkingTagStreamState } from "./embedded-agent-utils.js";
 
 function updateMessage(
   context: EmbeddedAgentSubscribeContext,
@@ -55,6 +56,7 @@ function createMessageUpdateContext(
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     consumePartialReplyDirectives?: ReturnType<typeof vi.fn>;
     stripBlockTags?: ReturnType<typeof vi.fn>;
+    emitReasoningStream?: ReturnType<typeof vi.fn>;
     state?: Record<string, unknown>;
   } = {},
 ) {
@@ -81,6 +83,7 @@ function createMessageUpdateContext(
       reasoningStreamOpen: false,
       streamReasoning: false,
       deltaBuffer: "",
+      thinkingTagStream: createThinkingTagStreamState(),
       blockBuffer: "",
       partialBlockState: {
         thinking: false,
@@ -107,7 +110,7 @@ function createMessageUpdateContext(
       vi.fn((text: string, options?: { final?: boolean }) =>
         partialReplyDirectiveAccumulator.consume(text, options),
       ),
-    emitReasoningStream: vi.fn(),
+    emitReasoningStream: params.emitReasoningStream ?? vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
     resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
     recordAssistantUsage: vi.fn(),
@@ -483,6 +486,24 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
 });
 
 describe("handleMessageUpdate text signatures", () => {
+  it("emits the full incrementally extracted reasoning value on every delta", () => {
+    const emitReasoningStream = vi.fn();
+    const context = createMessageUpdateContext({ emitReasoningStream });
+
+    for (const chunk of ["<thi", "nk>reason", "ing</think>"]) {
+      updateMessage(
+        context,
+        createTextUpdateEvent({ type: "text_delta", text: chunk, delta: chunk }),
+      );
+    }
+
+    expect(emitReasoningStream.mock.calls.map(([text]) => text)).toEqual([
+      "",
+      "reason",
+      "reasoning",
+    ]);
+  });
+
   it("uses incremental text deltas for unphased OpenAI Responses streams", () => {
     const onAgentEvent = vi.fn();
     const stripBlockTags = vi.fn((text: string) => text);

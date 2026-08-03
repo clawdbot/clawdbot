@@ -6,6 +6,7 @@ import { hashRuntimeConfigValue } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.types.js";
 import { listAgentsForGateway } from "../session-utils.js";
@@ -81,13 +82,7 @@ function setChatStartupMetadataMemo(
 ): void {
   memo.metadataByKey.delete(key);
   memo.metadataByKey.set(key, value);
-  if (memo.metadataByKey.size <= CHAT_STARTUP_METADATA_CACHE_MAX_ENTRIES) {
-    return;
-  }
-  const oldestKey = memo.metadataByKey.keys().next().value;
-  if (oldestKey) {
-    memo.metadataByKey.delete(oldestKey);
-  }
+  pruneMapToMaxSize(memo.metadataByKey, CHAT_STARTUP_METADATA_CACHE_MAX_ENTRIES);
 }
 
 function resolveChatStartupMetadataMemoKey(params: {

@@ -93,7 +93,7 @@ function requireBuzzPrivateKey(
   try {
     return { value, publicKey: getPublicKey(decodeBuzzPrivateKey(value)) };
   } catch {
-    throwPayloadError(
+    return throwPayloadError(
       createFailure,
       `Credential payload for kind "buzz" must include "${key}" as an nsec or 64-character hex private key.`,
     );

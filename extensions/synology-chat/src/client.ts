@@ -395,8 +395,25 @@ function doPost(url: string, body: string, allowInsecureSsl = false): Promise<bo
       },
       (res) => {
         response = res;
+        const responseChunks: Buffer[] = [];
+        let responseBytes = 0;
+        res.on("data", (chunk: Buffer) => {
+          responseBytes += chunk.length;
+          if (responseBytes <= USER_LIST_RESPONSE_MAX_BYTES) {
+            responseChunks.push(chunk);
+          } else {
+            responseChunks.length = 0;
+          }
+        });
         res.on("end", () => {
-          finish({ ok: res.statusCode === 200 });
+          const result =
+            responseBytes <= USER_LIST_RESPONSE_MAX_BYTES
+              ? safeParseJsonWithSchema(
+                  ChatUserListResponseSchema.pick({ success: true }),
+                  Buffer.concat(responseChunks).toString("utf8"),
+                )
+              : null;
+          finish({ ok: res.statusCode === 200 && result?.success !== false });
         });
         res.on("error", (error) => finish({ error }));
         res.resume();

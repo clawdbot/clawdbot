@@ -52,7 +52,11 @@ type SessionCatalogGroupsParams = {
   onFinishSectionDrag: () => void;
   viewMenuOpenCatalogId: string | null;
   creatorFilterActive: boolean;
-  onOpenViewMenu: (trigger: HTMLElement) => void;
+  onOpenViewMenu: (
+    catalogId: string,
+    trigger: HTMLElement,
+    position?: { x: number; y: number },
+  ) => void;
   onLoadMore: (catalogId: string) => void;
   onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   newSessionDisabledReason?: string;
@@ -175,6 +179,16 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
           disabledReason: params.sectionDragDisabledReason,
           onStartDrag: params.onStartSectionDrag,
           onFinishDrag: params.onFinishSectionDrag,
+          onContextMenu: (event) => {
+            event.preventDefault();
+            const header = event.currentTarget as HTMLElement;
+            const trigger =
+              header.querySelector<HTMLElement>("[data-session-catalog-view-menu]") ?? header;
+            params.onOpenViewMenu(catalog.id, trigger, {
+              x: event.clientX,
+              y: event.clientY,
+            });
+          },
           content: html`
             <button
               type="button"
@@ -217,7 +231,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               aria-expanded=${String(params.viewMenuOpenCatalogId === catalog.id)}
               @click=${(event: MouseEvent) => {
                 event.stopPropagation();
-                params.onOpenViewMenu(event.currentTarget as HTMLElement);
+                params.onOpenViewMenu(catalog.id, event.currentTarget as HTMLElement);
               }}
             >
               ${icons.listFilter}

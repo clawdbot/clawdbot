@@ -8,11 +8,13 @@ import {
 
 describe("parseOffsetlessIsoDateTimeInTimeZone", () => {
   it.each([
+    ["2026-03-23", true],
     ["2026-03-23T23:00:00", true],
     ["2026-03-23t23:00:00", true],
     ["2027-02-28T24:00:00", true],
     ["2027-02-28t24:00", true],
     ["2027-02-28t24:00:00.000", true],
+    ["2026-03-23Z", false],
     ["2026-03-23T23:00:00+02:00", false],
     ["+20m", false],
   ])("detects offset-less ISO datetime %s", (input, expected) => {
@@ -20,6 +22,10 @@ describe("parseOffsetlessIsoDateTimeInTimeZone", () => {
   });
 
   it.each([
+    ["2026-03-23", "UTC", "2026-03-23T00:00:00.000Z"],
+    ["2026-03-23", "Asia/Shanghai", "2026-03-22T16:00:00.000Z"],
+    ["2026-03-23", "America/New_York", "2026-03-23T04:00:00.000Z"],
+    ["2011-12-30", "Pacific/Apia", null],
     ["2026-03-23T23:00:00", "Europe/Oslo", "2026-03-23T22:00:00.000Z"],
     ["2026-03-23t23:00:00", "Europe/Oslo", "2026-03-23T22:00:00.000Z"],
     ["2026-03-23T00:00:00", "UTC", "2026-03-23T00:00:00.000Z"],
@@ -28,6 +34,10 @@ describe("parseOffsetlessIsoDateTimeInTimeZone", () => {
     ["2026-03-23T00:30:00", "Europe/Oslo", "2026-03-22T23:30:00.000Z"],
     ["2026-03-29T01:30:00", "Europe/Oslo", "2026-03-29T00:30:00.000Z"],
     ["2026-03-29T02:30:00", "Europe/Oslo", null],
+    ["2026-10-25T02:30:00", "Europe/Oslo", "2026-10-25T00:30:00.000Z"],
+    ["2026-11-01T01:30:00", "America/New_York", "2026-11-01T05:30:00.000Z"],
+    ["2026-04-05T01:45:00", "Australia/Lord_Howe", "2026-04-04T14:45:00.000Z"],
+    ["2026-10-04T02:15:00", "Australia/Lord_Howe", null],
     ["2026-03-23T23:00:00+02:00", "Europe/Oslo", null],
     ["2026-03-23T23:00:00", "Invalid/Timezone", null],
     // Sub-second precision is accepted by the regex and must round-trip rather
@@ -35,6 +45,7 @@ describe("parseOffsetlessIsoDateTimeInTimeZone", () => {
     ["2026-03-23T23:00:00.250", "UTC", "2026-03-23T23:00:00.250Z"],
     ["2026-03-23T23:00:00.999", "UTC", "2026-03-23T23:00:00.999Z"],
     ["2026-03-23T23:00:00.123", "Europe/Oslo", "2026-03-23T22:00:00.123Z"],
+    ["2026-10-25T02:30:00.250", "Europe/Oslo", "2026-10-25T00:30:00.250Z"],
   ])("parses zoned datetime %s in %s", (input, timezone, expected) => {
     expect(parseOffsetlessIsoDateTimeInTimeZone(input, timezone)).toBe(expected);
   });

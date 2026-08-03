@@ -252,15 +252,6 @@ export function resolveLoadedContextWindow(
   return contextWindow;
 }
 
-/** Uses the loaded context when present, otherwise the model's advertised maximum. */
-export function resolveLmstudioEffectiveContextWindow(
-  entry: Pick<LmstudioModelWire, "loaded_instances" | "max_context_length">,
-): number | null {
-  return (
-    resolveLoadedContextWindow(entry) ?? asPositiveSafeInteger(entry.max_context_length) ?? null
-  );
-}
-
 function normalizeLmstudioVariantIds(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];

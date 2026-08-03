@@ -1,5 +1,11 @@
 // Sms plugin module implements gateway behavior.
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  channelBlockedPatch,
+  channelReadyPatch,
+  channelStoppedPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { createSmsIngressSpool, type SmsIngressLog } from "./ingress-spool.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -108,6 +114,7 @@ async function registerSmsWebhookRoute(params: {
       pluginId: CHANNEL_ID,
       accountId: params.account.accountId,
       log: (msg) => params.log?.info?.(msg),
+      throwOnFailure: true,
       handler: createSmsWebhookHandler({ ...params, ingress }),
     });
   } catch (error) {
@@ -153,9 +160,12 @@ export async function startSmsGatewayAccount(params: {
   channelRuntime: Parameters<typeof createSmsIngressSpool>[0]["channelRuntime"];
   abortSignal: AbortSignal;
   log?: SmsIngressLog;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
+  params.statusSink?.({ lifecycle: "starting" });
   if (!params.account.enabled) {
     params.log?.info?.(`SMS account ${params.account.accountId} is disabled`);
+    params.statusSink?.(channelStoppedPatch());
     return waitUntilAbort(params.abortSignal);
   }
   const warnings = collectSmsStartupWarnings(params.account);
@@ -163,6 +173,12 @@ export async function startSmsGatewayAccount(params: {
     for (const warning of warnings) {
       params.log?.warn?.(warning);
     }
+    params.statusSink?.(
+      channelBlockedPatch(warnings.join("; "), {
+        running: true,
+        connected: false,
+      }),
+    );
     return waitUntilAbort(params.abortSignal);
   }
   for (const warning of warnings) {
@@ -173,6 +189,9 @@ export async function startSmsGatewayAccount(params: {
     params.log?.info?.(
       `Registered SMS webhook route ${params.account.webhookPath} for account ${params.account.accountId}`,
     );
+    params.statusSink?.(channelReadyPatch());
   }
-  return registration.lifecycle;
+  return registration.lifecycle.finally(() => {
+    params.statusSink?.(channelStoppedPatch());
+  });
 }

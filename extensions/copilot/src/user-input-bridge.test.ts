@@ -80,7 +80,10 @@ describe("Copilot user input bridge", () => {
     });
     const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];
     expect(payload.channelData).toEqual({
-      askUser: { questionId: (request.params as { id: string }).id },
+      askUser: {
+        questionId: (request.params as { id: string }).id,
+        optionValues: ["Fast", "Deep"],
+      },
     });
     expect(payload.presentationTextMode).toBe("fallback");
     expect(payload.text).toContain("Reply with the number or option text.");

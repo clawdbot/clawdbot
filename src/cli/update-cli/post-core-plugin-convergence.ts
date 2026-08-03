@@ -5,9 +5,15 @@ import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/u
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
-import { resolveDefaultPluginNpmDir } from "../../plugins/install-paths.js";
+import {
+  resolveDefaultPluginExtensionsDir,
+  resolveDefaultPluginNpmDir,
+} from "../../plugins/install-paths.js";
 import { listManagedPluginNpmRoots } from "../../plugins/npm-project-roots.js";
-import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
+import {
+  reconcileRegisteredOpenClawHostLinks,
+  relinkOpenClawPeerDependenciesInManagedNpmRoot,
+} from "../../plugins/plugin-peer-link.js";
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
 import { resolveUserPath } from "../../utils.js";
 import { VERSION } from "../../version.js";
@@ -60,7 +66,10 @@ function smokeFailureGuidance(failure: PluginPayloadSmokeFailure): string[] {
   ];
 }
 
-async function repairManagedNpmOpenClawPeerLinks(params: { env: NodeJS.ProcessEnv }): Promise<{
+async function repairInstalledNpmOpenClawHostLinks(params: {
+  env: NodeJS.ProcessEnv;
+  installRecords: Record<string, PluginInstallRecord>;
+}): Promise<{
   changes: string[];
   warnings: PostCoreConvergenceWarning[];
   packageReadFailures: Array<{ error: unknown; packageDir: string }>;
@@ -80,11 +89,27 @@ async function repairManagedNpmOpenClawPeerLinks(params: { env: NodeJS.ProcessEn
       ),
     );
     const repaired = results.reduce((total, result) => total + result.repaired, 0);
+    // Legacy npm-owned installs live under extensions/, outside every managed npm project root.
+    const registeredRepair = await reconcileRegisteredOpenClawHostLinks({
+      installRecords: params.installRecords,
+      extensionsDir: resolveDefaultPluginExtensionsDir(params.env),
+      env: params.env,
+      mode: "repair",
+      onPackageReadError: (error, packageDir) => {
+        packageReadFailures.push({ error, packageDir });
+      },
+    });
     return {
-      changes:
-        repaired > 0
+      changes: [
+        ...(repaired > 0
           ? [`Repaired OpenClaw host peer link(s) for ${repaired} managed npm plugin package(s).`]
-          : [],
+          : []),
+        ...(registeredRepair.repaired > 0
+          ? [
+              `Repaired OpenClaw host peer link(s) for ${registeredRepair.repaired} registered npm plugin package(s).`,
+            ]
+          : []),
+      ],
       warnings: [],
       packageReadFailures,
     };
@@ -163,7 +188,10 @@ export async function runPostCorePluginConvergence(params: {
     message,
     guidance: [REPAIR_GUIDANCE],
   }));
-  const peerLinkRepair = await repairManagedNpmOpenClawPeerLinks({ env });
+  const peerLinkRepair = await repairInstalledNpmOpenClawHostLinks({
+    env,
+    installRecords: repair.records,
+  });
   warnings.push(...peerLinkRepair.warnings);
   const notices: PostCoreConvergenceWarning[] = (repair.notices ?? []).map((message) => ({
     reason: message,
