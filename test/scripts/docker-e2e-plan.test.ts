@@ -244,12 +244,22 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.command).toContain('bash "$harness/scripts/e2e/codex-npm-plugin-live-docker.sh"');
   });
 
-  it("plans package-backed Compose and package artifact proofs", () => {
+  it("plans package-backed installer, Compose, and package artifact proofs", () => {
     const plan = planFor({
-      selectedLaneNames: ["compose-setup", "docker-package-install"],
+      selectedLaneNames: ["cli-installer-distribution", "compose-setup", "docker-package-install"],
     });
 
     expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cli-installer-distribution",
+        imageKind: "bare",
+        live: false,
+        name: "cli-installer-distribution",
+        resources: ["docker", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 1_800_000,
+        weight: 3,
+      },
       {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:compose-setup",
         imageKind: "functional",
