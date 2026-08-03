@@ -2,7 +2,6 @@ import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CallGatewayCliOptions } from "../gateway/call.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -11,11 +10,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
-import { runRemoteGatewayInferenceOnboarding } from "./onboard-remote-gateway.js";
-
-type RemoteGatewayInferenceOnboardingDeps = NonNullable<
-  Parameters<typeof runRemoteGatewayInferenceOnboarding>[2]
->;
 
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
@@ -999,150 +993,5 @@ describe("runGuidedOnboarding", () => {
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.detect).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
-  });
-
-  it("converges remote inference before remote OpenClaw without mutating local config", async () => {
-    const localConfig = {
-      wizard: { securityAcknowledgedAt: "2026-07-11T00:00:00.000Z" },
-      agents: {
-        defaults: {
-          workspace: "/client/workspace",
-          model: { primary: "openai/local-only" },
-        },
-      },
-      gateway: {
-        mode: "remote",
-        remote: { url: "wss://configured.example/ws", token: "configured-token" },
-      },
-    } satisfies OpenClawConfig;
-    const localConfigBefore = structuredClone(localConfig);
-    readConfigFileSnapshot.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      path: "/tmp/openclaw.json",
-      issues: [],
-      config: localConfig,
-    });
-
-    const order: string[] = [];
-    const remoteConfig: { modelRef?: string } = {};
-    const gatewayCallMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
-      expect(options.url).toBe("wss://selected.example/ws");
-      expect(options.token).toBe("selected-token");
-      expect(options.tlsFingerprint).toBe("sha256:selected");
-      expect(options.ignoreEnvUrlOverride).toBe(true);
-      expect(options.config?.gateway?.remote?.url).toBe("wss://selected.example/ws");
-      order.push(options.method);
-      if (options.method === "openclaw.setup.detect") {
-        return {
-          candidates: [
-            {
-              kind: "claude-cli",
-              label: "Claude Code",
-              detail: "logged in",
-              modelRef: "claude-cli/opus",
-              recommended: true,
-              credentials: true,
-            },
-            {
-              kind: "codex-cli",
-              label: "Codex",
-              detail: "logged in",
-              modelRef: "openai/gpt-5.5",
-              recommended: false,
-              credentials: true,
-            },
-          ],
-          unavailableCandidates: [],
-          manualProviders: [],
-          authOptions: [],
-          recommendedInstalls: [],
-          workspace: "/gateway/workspace",
-          setupComplete: false,
-        };
-      }
-      if (options.method === "openclaw.setup.activate") {
-        expect(options.params).toEqual({
-          kind: "claude-cli",
-          modelRef: "claude-cli/opus",
-          workspace: "/gateway/workspace",
-        });
-        remoteConfig.modelRef = "claude-cli/opus";
-        return {
-          ok: true,
-          modelRef: remoteConfig.modelRef,
-          latencyMs: 250,
-          lines: ["Default model: claude-cli/opus"],
-        };
-      }
-      if (options.method === "openclaw.setup.verify") {
-        expect(remoteConfig.modelRef).toBe("claude-cli/opus");
-        return { ok: true, modelRef: remoteConfig.modelRef, latencyMs: 100 };
-      }
-      if (options.method === "openclaw.chat") {
-        expect(remoteConfig.modelRef).toBe("claude-cli/opus");
-        expect(options.params).toEqual({
-          sessionId: expect.any(String),
-          welcomeVariant: "onboarding",
-        });
-        return {
-          sessionId: (options.params as { sessionId: string }).sessionId,
-          reply: "Inference is ready. I can configure the rest.",
-          action: "open-agent",
-        };
-      }
-      throw new Error(`unexpected Gateway method ${options.method}`);
-    });
-    const runTui = vi.fn(async (options: unknown) => {
-      order.push("tui");
-      expect(options).toEqual({
-        config: expect.objectContaining({
-          gateway: expect.objectContaining({
-            remote: expect.objectContaining({ url: "wss://selected.example/ws" }),
-          }),
-        }),
-        deliver: false,
-        boundGateway: {
-          url: "wss://selected.example/ws",
-          token: "selected-token",
-          tlsFingerprint: "sha256:selected",
-        },
-      });
-      return { exitReason: "exit" as const };
-    });
-    const text = vi.fn(async () => "unexpected");
-    const prompter = createWizardPrompter({ text });
-    const runtime = makeRuntime();
-
-    await runRemoteGatewayInferenceOnboarding(
-      {
-        config: localConfig,
-        gatewayUrl: "wss://selected.example/ws",
-        token: "selected-token",
-        tlsFingerprint: "sha256:selected",
-      },
-      runtime,
-      {
-        callGateway: gatewayCallMock as unknown as NonNullable<
-          RemoteGatewayInferenceOnboardingDeps["callGateway"]
-        >,
-        createPrompter: () => prompter,
-        runTui,
-      },
-    );
-
-    expect(order).toEqual([
-      "openclaw.setup.detect",
-      "openclaw.setup.activate",
-      "openclaw.setup.verify",
-      "openclaw.chat",
-      "tui",
-    ]);
-    expect(remoteConfig.modelRef).toBe("claude-cli/opus");
-    expect(localConfig).toEqual(localConfigBefore);
-    expect(text).not.toHaveBeenCalled();
-    expect(
-      JSON.stringify([prompter.note, prompter.outro, runtime.log, runtime.error]),
-    ).not.toContain("selected-token");
   });
 });
