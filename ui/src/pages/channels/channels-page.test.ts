@@ -267,6 +267,33 @@ describe("ChannelsPage lifecycle", () => {
     source.channels.dispose();
   });
 
+  it("applies a non-merging imported profile to the draft", async () => {
+    const gateway = createGateway();
+    const source = createContext(gateway);
+    const response = createDeferred<Response>();
+    const fetchMock = vi.fn(() => response.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const page = document.createElement("openclaw-channels-page") as NostrTestPage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+    page.editNostrProfile("default", null);
+
+    const load = page.importNostrProfile();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    response.resolve(
+      new Response(JSON.stringify({ ok: true, imported: { name: "imported" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await load;
+
+    expect(page.nostrProfileFormState?.values.name).toBe("imported");
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
   it("does not overwrite a replacement profile form", async () => {
     const gateway = createGateway();
     const source = createContext(gateway);

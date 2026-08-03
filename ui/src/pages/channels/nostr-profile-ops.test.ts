@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importNostrProfile, putNostrProfile } from "./nostr-profile-ops.ts";
+import type { NostrProfile } from "../../api/types.ts";
+import {
+  importNostrProfile,
+  mergeNostrProfileDraft,
+  putNostrProfile,
+} from "./nostr-profile-ops.ts";
 
 const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -87,7 +92,7 @@ describe("Nostr profile HTTP operations", () => {
       "/api/channels/nostr/default/profile/import",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ autoMerge: true }),
+        body: JSON.stringify({ autoMerge: false }),
         signal: expect.any(AbortSignal),
       }),
     );
@@ -124,5 +129,41 @@ describe("Nostr profile HTTP operations", () => {
       data: null,
       response,
     });
+  });
+
+  it("accepts newer relay values while preserving local edits", () => {
+    const original: NostrProfile = { name: "", about: "" };
+    const firstImport: NostrProfile = { name: "relay-one", about: "relay-one bio" };
+    const firstDraft = mergeNostrProfileDraft(firstImport, original, original);
+    const editedDraft = { ...firstDraft, about: "local bio" };
+
+    expect(mergeNostrProfileDraft(firstImport, editedDraft, original, firstImport)).toEqual(
+      editedDraft,
+    );
+    expect(
+      mergeNostrProfileDraft(
+        { name: "relay-two", about: "relay-two bio" },
+        editedDraft,
+        original,
+        firstImport,
+      ),
+    ).toEqual({ name: "relay-two", about: "local bio" });
+
+    expect(
+      mergeNostrProfileDraft(
+        { name: "relay-two", about: "relay-two bio" },
+        { name: "relay-one", about: "" },
+        original,
+        firstImport,
+      ),
+    ).toEqual({ name: "relay-two", about: "" });
+
+    expect(
+      mergeNostrProfileDraft(
+        { name: "relay-three" },
+        { name: "relay-two", about: "existing bio" },
+        { name: "relay-two", about: "existing bio" },
+      ),
+    ).toEqual({ name: "relay-three", about: "existing bio" });
   });
 });

@@ -3,6 +3,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { WhatsAppStatus } from "../../api/types.ts";
 import { renderChannelDetail } from "./view.detail.ts";
+import { createNostrProfileFormState, renderNostrProfileForm } from "./view.nostr-profile-form.ts";
 import {
   channelEnabled,
   resolveChannelConfigured,
@@ -548,5 +549,34 @@ describe("WhatsApp card actions", () => {
     const qrRow = container.querySelector(".qr-wrap")?.closest(".settings-row");
     expect(qrRow).not.toBeNull();
     expect(qrRow?.nextElementSibling?.classList.contains("settings-row--actions")).toBe(true);
+  });
+});
+
+describe("Nostr profile form actions", () => {
+  it("locks editing controls during an import but keeps Cancel available", () => {
+    const container = document.createElement("div");
+    const state = { ...createNostrProfileFormState({ name: "local" }), importing: true };
+    render(
+      renderNostrProfileForm({
+        state,
+        accountId: "default",
+        callbacks: {
+          onFieldChange: vi.fn(),
+          onSave: vi.fn(),
+          onImport: vi.fn(),
+          onCancel: vi.fn(),
+          onToggleAdvanced: vi.fn(),
+        },
+      }),
+      container,
+    );
+
+    const fields = Array.from(
+      container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"),
+    );
+    expect(fields.every((field) => field.disabled)).toBe(true);
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+    expect(buttons.find((button) => button.textContent?.includes("Cancel"))?.disabled).toBe(false);
+    expect(buttons.find((button) => button.textContent?.includes("Import"))?.disabled).toBe(true);
   });
 });
