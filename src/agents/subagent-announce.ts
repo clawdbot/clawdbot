@@ -48,6 +48,7 @@ import {
   filterCurrentDirectChildCompletionRows,
   readLatestSubagentOutputWithRetry,
   readSubagentOutput,
+  readSubagentTimeoutProgress,
   type SubagentRunOutcome,
   waitForSubagentRunOutcome,
 } from "./subagent-announce-output.js";
@@ -466,6 +467,18 @@ export async function runSubagentAnnounceFlow(params: {
     if (!childCompletionFindings) {
       if (params.terminalReply?.disposition === "silent") {
         return true;
+      }
+      if (params.terminalReply?.disposition === "empty" && outcome.status === "timeout") {
+        const timeoutProgress = await readSubagentTimeoutProgress(
+          params.childSessionKey,
+          params.timeoutMs,
+          outcome,
+        );
+        // Empty remains the authoritative terminal fact. Transcript text is a
+        // timeout-only progress hint and must never reclassify silence as output.
+        if (timeoutProgress) {
+          reply = stripAndClassifyReply(timeoutProgress) ?? undefined;
+        }
       }
       if (!params.terminalReply) {
         const fallbackReply = failedTerminalOutcome

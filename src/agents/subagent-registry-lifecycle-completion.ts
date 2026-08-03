@@ -1,5 +1,5 @@
-import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { recordSubagentTerminalState } from "../sessions/session-state-events.js";
 import type { DetachedTaskFindResult } from "../tasks/detached-task-runtime-contract.js";

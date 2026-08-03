@@ -33,6 +33,13 @@ const MAX_CHILD_COMPLETION_RESULT_CHARS = 512;
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
 const MAX_CHILD_COMPLETION_FINDINGS_CHARS = 4_096;
 const CHILD_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
+const ASSISTANT_TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "tool_use",
+  "toolUse",
+  "functionCall",
+  "function_call",
+]);
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -60,6 +67,7 @@ function isFastTestMode() {
 type SubagentOutputSnapshot = {
   latestAssistantText?: string;
   latestSilentText?: string;
+  latestToolCallCount?: number;
   waitingForContinuation?: boolean;
 };
 
@@ -121,6 +129,25 @@ function extractSubagentAssistantText(message: unknown): string {
   return extractAssistantText(message) ?? "";
 }
 
+function countAssistantToolCalls(message: unknown): number {
+  if (!message || typeof message !== "object") {
+    return 0;
+  }
+  const content = (message as { content?: unknown }).content;
+  const contentToolCalls = Array.isArray(content)
+    ? content.filter(
+        (block) =>
+          block &&
+          typeof block === "object" &&
+          ASSISTANT_TOOL_CALL_BLOCK_TYPES.has((block as { type?: string }).type ?? ""),
+      ).length
+    : 0;
+  const toolCalls =
+    (message as { toolCalls?: unknown; tool_calls?: unknown }).toolCalls ??
+    (message as { tool_calls?: unknown }).tool_calls;
+  return contentToolCalls + (Array.isArray(toolCalls) ? toolCalls.length : 0);
+}
+
 function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutputSnapshot {
   const snapshot: SubagentOutputSnapshot = {};
   let previousAssistantCalledYield = false;
@@ -141,6 +168,7 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       // when the current run fails or completes without visible output.
       snapshot.latestAssistantText = undefined;
       snapshot.latestSilentText = undefined;
+      snapshot.latestToolCallCount = undefined;
       snapshot.waitingForContinuation = false;
       previousAssistantCalledYield = false;
       continue;
@@ -155,6 +183,8 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       }
       const text = extractSubagentAssistantText(message).trim();
       if (!text) {
+        snapshot.latestToolCallCount =
+          (snapshot.latestToolCallCount ?? 0) + countAssistantToolCalls(message);
         snapshot.waitingForContinuation = false;
         previousAssistantCalledYield = false;
         continue;
@@ -184,7 +214,10 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
   return snapshot;
 }
 
-function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | undefined {
+function selectSubagentOutputText(
+  snapshot: SubagentOutputSnapshot,
+  outcome?: SubagentRunOutcome,
+): string | undefined {
   if (snapshot.waitingForContinuation) {
     return undefined;
   }
@@ -194,12 +227,21 @@ function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | un
   if (snapshot.latestAssistantText) {
     return snapshot.latestAssistantText;
   }
+  // Tool activity is partial-progress evidence only for a timed-out run. It is
+  // not authoritative completion output when producer terminal facts are absent.
+  if (
+    outcome?.status === "timeout" &&
+    snapshot.latestToolCallCount &&
+    snapshot.latestToolCallCount > 0
+  ) {
+    return `${snapshot.latestToolCallCount} tool call(s) made without visible output.`;
+  }
   return undefined;
 }
 
 export async function readSubagentOutput(
   sessionKey: string,
-  _outcome?: SubagentRunOutcome,
+  outcome?: SubagentRunOutcome,
   options?: { sessionTarget?: SessionTranscriptRuntimeTarget },
 ): Promise<string | undefined> {
   let messages: unknown[] | undefined;
@@ -223,7 +265,7 @@ export async function readSubagentOutput(
       : undefined;
   const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
   const snapshot = summarizeSubagentOutputHistory(sourceMessages);
-  const selected = selectSubagentOutputText(snapshot);
+  const selected = selectSubagentOutputText(snapshot, outcome);
   if (selected?.trim()) {
     return selected;
   }
@@ -242,6 +284,20 @@ export async function readLatestSubagentOutputWithRetry(params: {
     retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
     readSubagentOutput,
   });
+}
+
+export async function readSubagentTimeoutProgress(
+  sessionKey: string,
+  maxWaitMs: number,
+  outcome: SubagentRunOutcome,
+): Promise<string | undefined> {
+  const initial = await readSubagentOutput(sessionKey, outcome);
+  const progress = initial?.trim()
+    ? initial
+    : await readLatestSubagentOutputWithRetry({ sessionKey, maxWaitMs, outcome });
+  return progress && !isAnnounceSkip(progress) && !isSilentReplyText(progress, SILENT_REPLY_TOKEN)
+    ? progress
+    : undefined;
 }
 
 export async function waitForSubagentRunOutcome(

@@ -422,6 +422,7 @@ export function createSubagentRunManager(params: {
           sendFarewell: true,
           accountId: entry.requesterOrigin?.accountId,
           triggerCleanup: true,
+          terminalReply: wait.terminalReply,
         };
         if (typeof endedAt === "number") {
           timeoutCompletion.endedAt = endedAt;

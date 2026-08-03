@@ -3469,6 +3469,37 @@ describe("subagent registry seam flow", () => {
     expect(run?.execution.outcome?.status).toBe(expectedOutcome.status);
   });
 
+  it("carries producer reply evidence through a provider hard-timeout wait", async () => {
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": {
+        status: "error",
+        startedAt: 100,
+        endedAt: 250,
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "model timed out",
+        terminalReply: { disposition: "empty" },
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-hard-timeout-terminal-reply",
+      task: "provider timeout reply evidence",
+      expectsCompletionMessage: true,
+    });
+
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
+    expect(getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "timeout announce")).toMatchObject({
+      childRunId: "run-hard-timeout-terminal-reply",
+      outcome: { status: "timeout" },
+      terminalReply: { disposition: "empty" },
+    });
+    expect(findRequesterRun("run-hard-timeout-terminal-reply")?.completion).toMatchObject({
+      terminalReply: { disposition: "empty" },
+      resultText: null,
+    });
+  });
+
   it("publishes aborted agent.wait snapshots only after killed reconciliation", async () => {
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": {

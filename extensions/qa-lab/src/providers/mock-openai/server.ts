@@ -734,15 +734,11 @@ async function buildResponsesPayload(
   if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
     return buildAssistantEvents(QA_SUBAGENT_DIRECT_FALLBACK_MARKER);
   }
-  const terminalCompletionCase = Array.from(
-    allInputText.matchAll(
-      new RegExp(
-        QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE.source,
-        `${QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE.flags.replaceAll("g", "")}g`,
-      ),
-    ),
+  const terminalCompletionCase = extractLastMatchingUserTurn(
+    input,
+    QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
   )
-    .at(-1)?.[1]
+    ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
     ?.toLowerCase();
   if (terminalCompletionCase && /Internal task completion event/i.test(allInputText)) {
     if (terminalCompletionCase === "empty") {
@@ -767,8 +763,9 @@ async function buildResponsesPayload(
       return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS.empty);
     }
     // The direct delivery fallback owns visible, silent, restart, and sanitized
-    // fallback results when the resumed requester turn has no visible answer.
-    return buildAssistantEvents("");
+    // fallback results. Use explicit silence so generic empty-response recovery
+    // cannot replay the historical spawn before that fallback runs.
+    return buildAssistantEvents("NO_REPLY");
   }
   const terminalWorkerCase = Array.from(
     allInputText.matchAll(

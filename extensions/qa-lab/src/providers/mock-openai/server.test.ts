@@ -2842,6 +2842,32 @@ describe("qa mock openai server", () => {
     },
   );
 
+  it.each(["visible", "silent", "fallback", "restart"])(
+    "uses explicit silence for the %s completion-agent direct fallback",
+    async (terminalCase) => {
+      const server = await startMockServer();
+      const payload = await expectNonStreamingResponsesJson(server, {
+        tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+        input: [
+          makeUserInput(`Subagent terminal reply QA check: ${terminalCase}.`),
+          makeUserInput(
+            TEST_RUNTIME_CONTEXT_CARRIER.replace(
+              "runtime metadata",
+              [
+                "[Internal task completion event]",
+                `Task: qa-terminal-${terminalCase}`,
+                `Result: QA-SUBAGENT-TERMINAL-${terminalCase.toUpperCase()}-OK`,
+              ].join("\n"),
+            ),
+          ),
+        ],
+      });
+
+      expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(payload)).toBe("NO_REPLY");
+    },
+  );
+
   it("uses the latest terminal-reply case in a shared parent transcript", async () => {
     const server = await startMockServer();
     const payload = await expectNonStreamingResponsesJson(server, {
@@ -2860,6 +2886,32 @@ describe("qa mock openai server", () => {
     expect(debugRequest.plannedToolName).toBe("sessions_spawn");
     expect(requireRecord(debugRequest.plannedToolArgs, "latest terminal case args").label).toBe(
       "qa-terminal-silent",
+    );
+  });
+
+  it("ignores a stale terminal-reply case in a later internal runtime carrier", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput("Subagent terminal reply QA check: fallback."),
+        makeUserInput(
+          TEST_RUNTIME_CONTEXT_CARRIER.replace(
+            "runtime metadata",
+            "Subagent terminal reply QA check: silent.",
+          ),
+        ),
+      ],
+    });
+
+    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(true);
+    const debugRequest = requireRecord(
+      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+      "current terminal case debug request",
+    );
+    expect(debugRequest.plannedToolName).toBe("sessions_spawn");
+    expect(requireRecord(debugRequest.plannedToolArgs, "current terminal case args").label).toBe(
+      "qa-terminal-fallback",
     );
   });
 

@@ -150,6 +150,9 @@ flow:
         - set: preRestartOutbound
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && verdicts.some((verdict) => verdict.conversationId === message.conversation.id)).map((message) => ({ id: message.id, conversationId: message.conversation.id, text: String(message.text ?? '') }))"
+        - set: preRestartTerminalPayloads
+          value:
+            expr: "preRestartOutbound.filter((message) => verdicts.some((verdict) => verdict.capturedTerminalPayloads.includes(message.text)))"
         - set: restartPatch
           value:
             expr: "({ gateway: { controlUi: { allowedOrigins: [`http://127.0.0.1:${64000 + Math.floor(Math.random() * 999)}`] } } })"
@@ -180,9 +183,9 @@ flow:
           value:
             expr: "postRestartOutbound.filter((message) => !preRestartOutbound.some((before) => before.id === message.id))"
         - assert:
-            expr: "JSON.stringify(postRestartTerminalPayloads) === JSON.stringify(preRestartOutbound)"
+            expr: "JSON.stringify(postRestartTerminalPayloads) === JSON.stringify(preRestartTerminalPayloads)"
             message:
-              expr: "`Gateway restart replayed or lost a prior terminal payload: before=${JSON.stringify(preRestartOutbound)} after=${JSON.stringify(postRestartTerminalPayloads)}`"
+              expr: "`Gateway restart replayed or lost a prior terminal payload: before=${JSON.stringify(preRestartTerminalPayloads)} after=${JSON.stringify(postRestartTerminalPayloads)}`"
         - assert:
             expr: "restartInterruptionPayloads.length === 1 && restartInterruptionPayloads.every((message) => message.text.includes('interrupted by a gateway restart'))"
             message:
@@ -225,7 +228,7 @@ flow:
               expr: "`restart completion produced a failure diagnostic: outbound=${recentOutboundSummary(state)}`"
         - set: appendRestartVerdict
           value:
-            expr: "verdicts.push({ case: 'restart', conversationId: restartConversationId, inputDisposition: 'visible', restart: true, fallback: true, preRestartTerminalMessageCount: preRestartOutbound.length, postRestartTerminalPayloadCount: postRestartTerminalPayloads.length, priorTerminalPayloadReplayCount: postRestartTerminalPayloads.length - preRestartOutbound.length, interruptedHandoffRepresentationCount: restartInterruptionPayloads.length, interruptedHandoffPayloads: restartInterruptionPayloads.map((message) => message.text), expectedTerminalSendCount: 1, actualTerminalSendCount: restartMatches.length, capturedTerminalPayloads: restartMatches.map((message) => String(message.text ?? '')), silenceTokenLeaked: false, internalMetadataLeak: false, pass: true })"
+            expr: "verdicts.push({ case: 'restart', conversationId: restartConversationId, inputDisposition: 'visible', restart: true, fallback: true, preRestartTerminalMessageCount: preRestartTerminalPayloads.length, postRestartTerminalPayloadCount: postRestartTerminalPayloads.length, priorTerminalPayloadReplayCount: postRestartTerminalPayloads.length - preRestartTerminalPayloads.length, interruptedHandoffRepresentationCount: restartInterruptionPayloads.length, interruptedHandoffPayloads: restartInterruptionPayloads.map((message) => message.text), expectedTerminalSendCount: 1, actualTerminalSendCount: restartMatches.length, capturedTerminalPayloads: restartMatches.map((message) => String(message.text ?? '')), silenceTokenLeaked: false, internalMetadataLeak: false, pass: true })"
         - set: emptyStartIndex
           value:
             expr: state.getSnapshot().messages.length

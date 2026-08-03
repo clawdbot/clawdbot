@@ -224,6 +224,8 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
 
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
+  resolveAgentIdFromSessionKey: (sessionKey: string) =>
+    sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
   resolveStorePath: hoisted.resolveStorePathMock,
 }));
 
