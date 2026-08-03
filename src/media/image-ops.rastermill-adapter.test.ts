@@ -78,6 +78,38 @@ describe("image ops Rastermill adapter", () => {
     expect(resolveSystemBin).toHaveBeenLastCalledWith("powershell", { trust: "strict" });
   });
 
+  it.each([
+    { orientation: null, expected: { width: 640, height: 480 } },
+    { orientation: 1, expected: { width: 640, height: 480 } },
+    { orientation: 4, expected: { width: 640, height: 480 } },
+    { orientation: 5, expected: { width: 480, height: 640 } },
+    { orientation: 6, expected: { width: 480, height: 640 } },
+    { orientation: 7, expected: { width: 480, height: 640 } },
+    { orientation: 8, expected: { width: 480, height: 640 } },
+  ] as const)("reports display dimensions for EXIF orientation $orientation", async (testCase) => {
+    const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
+    const probe = {
+      width: 640,
+      height: 480,
+      format: "jpeg" as const,
+      hasAlpha: false,
+      orientation: testCase.orientation,
+      bytes: 24,
+    };
+    vi.doMock("rastermill", () => ({
+      ...actualRastermill,
+      createRastermill: vi.fn(() => ({ probe: vi.fn(async () => probe) })),
+      readImageProbeFromHeader: vi.fn(() => probe),
+    }));
+    const { getImageMetadata, readImageMetadataFromHeader, readImageProbeFromHeader } =
+      await import("./image-ops.js");
+    const image = Buffer.from("image");
+
+    expect(readImageMetadataFromHeader(image)).toEqual(testCase.expected);
+    await expect(getImageMetadata(image)).resolves.toEqual(testCase.expected);
+    expect(readImageProbeFromHeader(image)).toEqual(probe);
+  });
+
   it("exposes Rastermill unavailable errors through the SDK alias", async () => {
     const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
     const unavailableError = new actualRastermill.RastermillUnavailableError(

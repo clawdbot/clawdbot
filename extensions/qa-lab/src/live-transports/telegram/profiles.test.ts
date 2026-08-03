@@ -25,7 +25,7 @@ describe("Telegram QA profiles", () => {
 
     expect(live).not.toContain("telegram-long-final-reuses-preview");
     expect(mock).toContain("telegram-long-final-reuses-preview");
-    expect(mock).toContain("telegram-assistant-transcript-role-boundary");
+    expect(mock).not.toContain("telegram-assistant-transcript-role-boundary");
     expect(mock).not.toContain("telegram-startup-getme-live");
   });
 
@@ -36,7 +36,7 @@ describe("Telegram QA profiles", () => {
     });
 
     expect(scenarioIds).toContain("channel-message-flows");
-    expect(scenarioIds).toContain("native-command-session-target");
+    expect(scenarioIds).not.toContain("native-command-session-target");
   });
 
   it("lets explicit scenarios override profile selection", () => {
@@ -54,6 +54,16 @@ describe("Telegram QA profiles", () => {
         scenarioIds: ["telegram-startup-getme-live"],
       }),
     ).toThrow("execution.kind=flow");
+  });
+
+  it("selects the native queue-validation regression as an explicit live scenario", () => {
+    expect(
+      resolveTelegramQaScenarioIds({
+        profile: "release",
+        providerMode: "live-frontier",
+        scenarioIds: ["telegram-queue-invalid-mode"],
+      }),
+    ).toEqual(["telegram-queue-invalid-mode"]);
   });
 
   it("rejects unknown profiles and channel-ineligible explicit scenarios", () => {

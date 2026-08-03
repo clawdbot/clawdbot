@@ -281,19 +281,17 @@ function artifactSidebarContent(params: {
       rawText: url ?? null,
     };
   }
-  if (encoding === "base64" && data && mimeType === "application/json") {
-    const decoded = globalThis.atob(data);
+  if (
+    encoding === "base64" &&
+    data &&
+    (mimeType === "application/json" || mimeType.startsWith("text/"))
+  ) {
+    const bytes = Uint8Array.from(globalThis.atob(data), (char) => char.charCodeAt(0));
+    const decoded = new TextDecoder().decode(bytes);
+    const language = mimeType === "application/json" ? "json" : "";
     return {
       kind: "markdown",
-      content: `# ${title}\n\n\`\`\`json\n${decoded}\n\`\`\``,
-      rawText: decoded,
-    };
-  }
-  if (encoding === "base64" && data && mimeType.startsWith("text/")) {
-    const decoded = globalThis.atob(data);
-    return {
-      kind: "markdown",
-      content: `# ${title}\n\n\`\`\`\n${decoded}\n\`\`\``,
+      content: `# ${title}\n\n\`\`\`${language}\n${decoded}\n\`\`\``,
       rawText: decoded,
     };
   }

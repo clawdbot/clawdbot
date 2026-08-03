@@ -8,10 +8,10 @@ import {
   directSessionReq,
   seedSessionTranscript,
   sessionLifecycleHookMocks,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 type HookEvent = {
   sessionKey?: string;

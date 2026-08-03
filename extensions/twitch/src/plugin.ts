@@ -12,7 +12,10 @@ import {
   createChatChannelPlugin,
   stripChannelTargetPrefix,
 } from "openclaw/plugin-sdk/channel-core";
-import { runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createAccountStatusSink,
+  runPassiveAccountLifecycle,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
@@ -38,7 +41,7 @@ import {
 import { twitchMessageAdapter, twitchOutbound } from "./outbound.js";
 import { probeTwitch } from "./probe.js";
 import { resolveTwitchTargets } from "./resolver.js";
-import { twitchSetupAdapter, twitchSetupContract, twitchSetupWizard } from "./setup-surface.js";
+import { twitchSetupContract, twitchSetupWizard } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
 import type {
   ChannelLogSink,
@@ -88,7 +91,6 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         blurb: "Twitch chat integration",
         aliases: ["twitch-chat"],
       },
-      setup: twitchSetupAdapter,
       setupContract: twitchSetupContract,
       setupWizard: twitchSetupWizard,
       capabilities: {
@@ -182,12 +184,16 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         startAccount: async (ctx): Promise<void> => {
           const account = ctx.account;
           const accountId = ctx.accountId;
-
-          ctx.setStatus?.({
+          const statusSink = createAccountStatusSink({
             accountId,
+            setStatus: ctx.setStatus,
+          });
+
+          statusSink({
             running: true,
             lastStartAt: Date.now(),
             lastError: null,
+            lifecycle: "starting",
           });
 
           ctx.log?.info(`Starting Twitch connection for ${account.username}`);
@@ -207,6 +213,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
                   config: ctx.cfg,
                   runtime: ctx.runtime,
                   abortSignal: ctx.abortSignal,
+                  statusSink,
                 });
               },
               stop: async (monitor) => {

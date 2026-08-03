@@ -221,6 +221,15 @@ describe("dependency guard workflow", () => {
     expect(script).toContain("process.exitCode = 1");
   });
 
+  it("keeps removal-only dependency changes informational", () => {
+    const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
+
+    expect(script).toContain("isRemovalOnlyDependencyGraphChange");
+    expect(script).toContain("Dependency removals detected; guard is informational.");
+    expect(script).toContain("/dependency-graph/compare/");
+    expect(script).toContain('change.change_type === "removed"');
+  });
+
   it("cleans dependency label and guard comment after successful autoscrub", () => {
     const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
     const autoscrubCommitIndex = script.indexOf("const commit = await createAutoscrubCommit");

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLegacyCronQuarantineForMigration } from "../commands/doctor/cron/legacy-quarantine-migration.js";
 import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
@@ -13,11 +14,11 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreSync,
-  loadCronQuarantineFile,
+  loadCronQuarantinedJobs,
   loadCronStore,
-  resolveCronQuarantinePath,
   resolveCronStorePath,
-  saveCronQuarantineFile,
+  saveCronJobsStore,
+  saveCronQuarantinedJobs,
   saveCronStore,
 } from "./store.js";
 import type { CronStoreFile } from "./types.js";
@@ -41,6 +42,10 @@ async function makeStorePath() {
   return {
     storePath: path.join(dir, "cron", "jobs.json"),
   };
+}
+
+function resolveLegacyCronQuarantinePath(storePath: string): string {
+  return storePath.replace(/\.json$/, "-quarantine.json");
 }
 
 function makeStore(jobId: string, enabled: boolean): CronStoreFile {
@@ -290,9 +295,9 @@ describe("cron store", () => {
     await expectPathMissing(`${store.storePath}.migrated`);
   });
 
-  it("fails closed instead of overwriting unrecognized quarantine files", async () => {
+  it("rejects unrecognized historical quarantine files without modifying them", async () => {
     const { storePath } = await makeStorePath();
-    const quarantinePath = resolveCronQuarantinePath(storePath);
+    const quarantinePath = resolveLegacyCronQuarantinePath(storePath);
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.writeFile(
       quarantinePath,
@@ -300,16 +305,9 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    await expect(loadCronQuarantineFile(quarantinePath)).rejects.toThrow(
+    await expect(loadLegacyCronQuarantineForMigration(storePath)).rejects.toThrow(
       /Unsupported cron quarantine file shape/,
     );
-    await expect(
-      saveCronQuarantineFile({
-        storePath,
-        nowMs: 123,
-        entries: [{ sourceIndex: 0, reason: "missing-schedule", job: { id: "new-row" } }],
-      }),
-    ).rejects.toThrow(/Unsupported cron quarantine file shape/);
 
     const preserved = JSON.parse(await fs.readFile(quarantinePath, "utf-8")) as {
       jobs: Array<Record<string, unknown>>;
@@ -317,16 +315,73 @@ describe("cron store", () => {
     expect(preserved.jobs[0]?.raw).toBe("keep-me");
   });
 
-  it("does not rewrite quarantine files when every entry is already present", async () => {
+  it("stores quarantined jobs in SQLite and preserves the first recovery timestamp", async () => {
     const { storePath } = await makeStorePath();
-    const quarantinePath = resolveCronQuarantinePath(storePath);
+    const quarantinePath = resolveLegacyCronQuarantinePath(storePath);
     const entry = { sourceIndex: 0, reason: "missing-schedule", job: { id: "same-row" } };
 
-    await saveCronQuarantineFile({ storePath, nowMs: 100, entries: [entry] });
-    const firstRaw = await fs.readFile(quarantinePath, "utf-8");
-    await saveCronQuarantineFile({ storePath, nowMs: 200, entries: [entry] });
+    saveCronQuarantinedJobs({ storePath, nowMs: 100, entries: [entry] });
+    saveCronQuarantinedJobs({ storePath, nowMs: 200, entries: [entry] });
 
-    expect(await fs.readFile(quarantinePath, "utf-8")).toBe(firstRaw);
+    expect(loadCronQuarantinedJobs(storePath)).toEqual([{ ...entry, quarantinedAtMs: 100 }]);
+    await expectPathMissing(quarantinePath);
+  });
+
+  it("rolls back quarantine records when the cron row update cannot commit", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeStore("atomic-quarantine-job", true);
+    await saveCronStore(storePath, store);
+    const database = openOpenClawStateDatabase().db;
+    database.exec(
+      "CREATE TEMP TRIGGER fail_cron_quarantine_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron update rejected'); END",
+    );
+    try {
+      await expect(
+        saveCronJobsStore(storePath, store, {
+          quarantine: {
+            nowMs: 123,
+            entries: [{ sourceIndex: 0, reason: "invalid-schedule", job: { id: "bad-row" } }],
+          },
+        }),
+      ).rejects.toThrow("cron update rejected");
+      expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
+        "atomic-quarantine-job",
+      ]);
+    } finally {
+      database.exec("DROP TRIGGER fail_cron_quarantine_update");
+    }
+  });
+
+  it("keeps valid cron row metadata aligned when an earlier SQLite row is malformed", async () => {
+    const { storePath } = await makeStorePath();
+    const malformed = expectDefined(
+      makeStore("malformed-first", true).jobs[0],
+      "malformed cron fixture",
+    );
+    const surviving = expectDefined(
+      makeStore("surviving-second", true).jobs[0],
+      "surviving cron fixture",
+    );
+    surviving.state = { nextRunAtMs: 987_654 };
+    await saveCronStore(storePath, { version: 1, jobs: [malformed, surviving] });
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE cron_jobs SET schedule_kind = ? WHERE store_key = ? AND job_id = ?")
+      .run("unsupported", path.resolve(storePath), malformed.id);
+
+    const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
+
+    expect(loaded.store.jobs.map((job) => job.id)).toEqual([surviving.id]);
+    expect(loaded.configJobs.map((job) => job.id)).toEqual([surviving.id]);
+    expect(loaded.configJobIndexes).toEqual([1]);
+    expect(loaded.configJobRuntimeEntries[0]?.state?.nextRunAtMs).toBe(987_654);
+    expect(loaded.invalidConfigRows).toEqual([
+      expect.objectContaining({
+        sourceIndex: 0,
+        reason: "invalid-schedule",
+        job: expect.objectContaining({ id: malformed.id }),
+      }),
+    ]);
   });
 
   it("loads split cron state synchronously for task reconciliation", async () => {
@@ -495,6 +550,25 @@ describe("cron store", () => {
     await expectPathMissing(store.storePath);
     await expectPathMissing(store.storePath.replace(/\.json$/, "-state.json"));
     await expectPathMissing(`${store.storePath}.bak`);
+  });
+
+  it("round-trips the auto-disable reason through runtime state JSON", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("auto-disabled-job", false);
+    const job = expectDefined(payload.jobs[0], "payload.jobs[0] test invariant");
+    await saveCronStore(store.storePath, payload);
+
+    job.state = {
+      consecutiveErrors: 10,
+      autoDisabled: {
+        reason: "consecutive-failures",
+        atMs: job.updatedAtMs,
+        consecutiveErrors: 10,
+      },
+    };
+    await saveCronStore(store.storePath, payload, { stateOnly: true });
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject(job.state);
   });
 
   it("stores queued reservations separately from active run markers", async () => {

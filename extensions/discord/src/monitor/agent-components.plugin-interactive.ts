@@ -66,10 +66,11 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
     },
     reply: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
       responded = true;
-      await params.interaction.reply({
-        content: text,
-        ephemeral,
-      });
+      const payload = { content: text, ephemeral };
+      // Deferred component replies edit the public source; follow-ups preserve reply visibility.
+      await (acknowledged
+        ? params.interaction.followUp(payload)
+        : params.interaction.reply(payload));
     },
     followUp: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
       responded = true;

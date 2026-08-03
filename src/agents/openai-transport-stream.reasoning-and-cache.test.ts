@@ -10,6 +10,42 @@ import {
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
 
+function emptyContext() {
+  return { systemPrompt: "system", messages: [], tools: [] } as never;
+}
+
+function lookupWeatherContext(
+  parameters: Record<string, unknown> = { type: "object", properties: {} },
+) {
+  return {
+    systemPrompt: "system",
+    messages: [],
+    tools: [
+      {
+        name: "lookup_weather",
+        description: "Get forecast",
+        parameters,
+      },
+    ],
+  } as never;
+}
+
+function promptCacheModel() {
+  return {
+    id: "custom-model",
+    name: "Custom Model",
+    api: "openai-completions",
+    provider: "custom-cpa",
+    baseUrl: "https://proxy.example.com/v1",
+    compat: { supportsPromptCacheKey: true },
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32768,
+    maxTokens: 8192,
+  } as unknown as Model<"openai-completions">;
+}
+
 describe("openai transport stream", () => {
   it("omits responses strict tool shaping for proxy-like OpenAI routes", () => {
     const params = buildOpenAIResponsesParams(
@@ -18,17 +54,7 @@ describe("openai transport stream", () => {
         name: "Custom Model",
         baseUrl: "https://proxy.example.com/v1",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      } as never,
+      lookupWeatherContext(),
       undefined,
     ) as { tools?: Array<{ strict?: boolean }> };
 
@@ -94,17 +120,7 @@ describe("openai transport stream", () => {
         name: "Custom Model",
         baseUrl: "https://proxy.example.com/v1",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: {},
-          },
-        ],
-      } as never,
+      lookupWeatherContext({}),
       undefined,
     ) as { tools?: Array<{ strict?: boolean; parameters?: Record<string, unknown> }> };
 
@@ -152,11 +168,7 @@ describe("openai transport stream", () => {
         id: "gpt-5.4",
         name: "GPT-5.4",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       { sessionId: "session-123" } as never,
       {
         openclaw_session_id: "session-123",
@@ -181,11 +193,7 @@ describe("openai transport stream", () => {
         name: "Custom Model",
         baseUrl: "https://proxy.example.com/v1",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       { sessionId: "session-123" } as never,
       undefined,
     ) as { metadata?: Record<string, string> };
@@ -199,11 +207,7 @@ describe("openai transport stream", () => {
         id: "gpt-5.4",
         name: "GPT-5.4",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       {
         serviceTier: "priority",
       },
@@ -214,11 +218,7 @@ describe("openai transport stream", () => {
         name: "Custom Model",
         baseUrl: "https://proxy.example.com/v1",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       {
         serviceTier: "priority",
       },
@@ -243,11 +243,7 @@ describe("openai transport stream", () => {
         contextWindow: 200000,
         maxTokens: 8192,
       } as never,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     ) as { store?: unknown };
 
@@ -262,11 +258,7 @@ describe("openai transport stream", () => {
         provider: "xai",
         baseUrl: "https://api.x.ai/v1",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     ) as { input?: Array<{ role?: string }> };
 
@@ -287,11 +279,7 @@ describe("openai transport stream", () => {
         contextWindow: 200000,
         maxTokens: 8192,
       } as unknown as Model<"openai-completions">,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     ) as { messages?: Array<{ role?: string }> };
 
@@ -322,11 +310,7 @@ describe("openai transport stream", () => {
         id: "gpt-5.4",
         name: "GPT-5.4",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       {
         reasoning: "medium",
       } as never,
@@ -341,11 +325,7 @@ describe("openai transport stream", () => {
         id: "gpt-5.4",
         name: "GPT-5.4",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       {
         reasoning: "minimal",
       } as never,
@@ -360,11 +340,7 @@ describe("openai transport stream", () => {
         id: "gpt-5.4",
         name: "GPT-5.4",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     ) as { reasoning_effort?: unknown };
 
@@ -509,11 +485,7 @@ describe("openai transport stream", () => {
         contextWindow: 1000000,
         maxTokens: 128000,
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       {
         reasoning: "medium",
       } as never,
@@ -531,11 +503,7 @@ describe("openai transport stream", () => {
         contextWindow: 400000,
         maxTokens: 128000,
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       {
         reasoning: "medium",
       } as never,
@@ -637,11 +605,7 @@ describe("openai transport stream", () => {
           thinkingFormat: "qwen-chat-template",
         },
       } as unknown as Model<"openai-completions">,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       {
         reasoning: "off",
       } as never,
@@ -712,11 +676,7 @@ describe("openai transport stream", () => {
           supportedReasoningEfforts: ["low", "medium", "high"],
         },
       } as unknown as Model<"openai-completions">,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       {
         reasoning: "off",
       } as never,
@@ -734,11 +694,7 @@ describe("openai transport stream", () => {
         baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         compat: { supportsUsageInStreaming: true },
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     ) as {
       messages?: Array<{ role?: string }>;
@@ -758,11 +714,7 @@ describe("openai transport stream", () => {
         baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
         compat: { supportsUsageInStreaming: true },
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     ) as {
       stream_options?: { include_usage?: boolean };
@@ -786,11 +738,7 @@ describe("openai transport stream", () => {
         contextWindow: 32768,
         maxTokens: 8192,
       } as unknown as Model<"openai-completions">,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     ) as {
       stream_options?: { include_usage?: boolean };
@@ -848,27 +796,10 @@ describe("openai transport stream", () => {
   });
 
   it("forwards prompt_cache_key for opted-in OpenAI-compatible completions providers", () => {
-    const params = buildOpenAICompletionsParams(
-      {
-        id: "custom-model",
-        name: "Custom Model",
-        api: "openai-completions",
-        provider: "custom-cpa",
-        baseUrl: "https://proxy.example.com/v1",
-        compat: { supportsPromptCacheKey: true },
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 32768,
-        maxTokens: 8192,
-      } as unknown as Model<"openai-completions">,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
-      { sessionId: "session-123", promptCacheKey: "cron-cache-key" },
-    ) as { prompt_cache_key?: string };
+    const params = buildOpenAICompletionsParams(promptCacheModel(), emptyContext(), {
+      sessionId: "session-123",
+      promptCacheKey: "cron-cache-key",
+    }) as { prompt_cache_key?: string };
 
     expect(params.prompt_cache_key).toBe("cron-cache-key");
   });
@@ -905,24 +836,8 @@ describe("openai transport stream", () => {
   });
 
   it("emits prompt_cache_retention=24h for completions when cacheRetention is long", () => {
-    const model = {
-      id: "custom-model",
-      name: "Custom Model",
-      api: "openai-completions",
-      provider: "custom-cpa",
-      baseUrl: "https://proxy.example.com/v1",
-      compat: { supportsPromptCacheKey: true },
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32768,
-      maxTokens: 8192,
-    } as unknown as Model<"openai-completions">;
-    const context = {
-      systemPrompt: "system",
-      messages: [],
-      tools: [],
-    } as never;
+    const model = promptCacheModel();
+    const context = emptyContext();
 
     const longRetention = buildOpenAICompletionsParams(model, context, {
       sessionId: "session-123",
@@ -934,24 +849,8 @@ describe("openai transport stream", () => {
   });
 
   it("omits prompt_cache_retention for completions when cacheRetention is short or unset", () => {
-    const model = {
-      id: "custom-model",
-      name: "Custom Model",
-      api: "openai-completions",
-      provider: "custom-cpa",
-      baseUrl: "https://proxy.example.com/v1",
-      compat: { supportsPromptCacheKey: true },
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32768,
-      maxTokens: 8192,
-    } as unknown as Model<"openai-completions">;
-    const context = {
-      systemPrompt: "system",
-      messages: [],
-      tools: [],
-    } as never;
+    const model = promptCacheModel();
+    const context = emptyContext();
 
     const shortRetention = buildOpenAICompletionsParams(model, context, {
       sessionId: "session-123",
@@ -1001,19 +900,7 @@ describe("openai transport stream", () => {
   });
 
   it("sorts Chat Completions tools by function name for stable prompt-cache payloads", () => {
-    const model = {
-      id: "custom-model",
-      name: "Custom Model",
-      api: "openai-completions",
-      provider: "custom-cpa",
-      baseUrl: "https://proxy.example.com/v1",
-      compat: { supportsPromptCacheKey: true },
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32768,
-      maxTokens: 8192,
-    } as unknown as Model<"openai-completions">;
+    const model = promptCacheModel();
     const zetaTool = {
       name: "zeta",
       description: "Z",
@@ -1056,17 +943,7 @@ describe("openai transport stream", () => {
         provider: "custom-cpa",
         baseUrl: "https://proxy.example.com/v1",
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      } as never,
+      lookupWeatherContext(),
       {
         reasoningEffort: "high",
       } as never,

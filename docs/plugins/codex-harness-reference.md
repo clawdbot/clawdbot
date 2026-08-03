@@ -418,13 +418,17 @@ rejects that combination.
 
 ## Auth and environment isolation
 
-In the default per-agent home, auth is selected in this order:
+In the default per-agent home, managed stdio launches use Codex's ephemeral
+credential store. OpenClaw supplies auth in this order:
 
-1. An explicit OpenClaw Codex auth profile for the agent.
-2. The app-server's existing account in that agent's Codex home.
-3. For local stdio app-server launches only, `CODEX_API_KEY`, then
-   `OPENAI_API_KEY`, when no app-server account is present and OpenAI auth is
-   still required.
+1. An explicit or ordered OpenClaw auth profile for the agent.
+2. For an API-key route only, a prepared key or local stdio fallback from
+   `CODEX_API_KEY`, then `OPENAI_API_KEY`.
+
+The managed app-server does not read an existing `codex-home/auth.json` in
+this mode. Import that file explicitly as described below. Set
+`appServer.homeScope: "user"` only when the app-server should instead own and
+use the operator's native Codex account.
 
 When OpenClaw sees a ChatGPT subscription-style Codex auth profile (OAuth or
 token credential type), it removes `CODEX_API_KEY` and `OPENAI_API_KEY` from
@@ -483,6 +487,15 @@ agent, inventory them explicitly:
 ```bash
 openclaw migrate codex --dry-run
 openclaw migrate apply codex --yes
+```
+
+Credentials need the sensitive migration path because the default agent scope
+does not consume a copied or mounted `codex-home/auth.json` directly. Replace
+`<agent-id>` with the configured agent that owns this Codex home:
+
+```bash
+openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai
+openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai --yes
 ```
 
 If a deployment needs additional environment isolation, add those variables

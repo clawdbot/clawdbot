@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const mocks = vi.hoisted(() => ({
+  getSubagentRunsForChildSession: vi.fn<(childSessionKey: string) => Iterable<SubagentRunRecord>>(
+    () => [],
+  ),
   getSubagentRunsSnapshotForChildSession: vi.fn<
     (
       runs: Map<string, SubagentRunRecord>,
@@ -22,6 +25,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./subagent-registry-memory.js", () => ({
+  getSubagentRunsForChildSession: mocks.getSubagentRunsForChildSession,
   subagentRuns: new Map<string, SubagentRunRecord>(),
 }));
 
@@ -33,6 +37,7 @@ vi.mock("./subagent-registry-state.js", () => ({
 
 function createRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
   const runId = overrides.runId ?? "run";
+  const { execution = { status: "running" }, ...recordOverrides } = overrides;
   return {
     runId,
     childSessionKey: overrides.childSessionKey ?? `agent:main:subagent:${runId}`,
@@ -41,7 +46,8 @@ function createRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
     task: "test task",
     cleanup: "keep",
     createdAt: 1,
-    ...overrides,
+    ...recordOverrides,
+    execution,
   };
 }
 
@@ -49,6 +55,7 @@ describe("subagent registry scoped reads", () => {
   let mod: typeof import("./subagent-registry-read.js");
 
   beforeEach(async () => {
+    mocks.getSubagentRunsForChildSession.mockReset().mockReturnValue([]);
     mocks.getSubagentRunsSnapshotForChildSession.mockReset().mockReturnValue(new Map());
     mocks.getSubagentRunsSnapshotForController.mockReset().mockReturnValue(new Map());
     mocks.getSubagentRunsSnapshotForRead.mockClear();
@@ -70,6 +77,17 @@ describe("subagent registry scoped reads", () => {
     expect(mod.getSessionDisplaySubagentRunByChildSessionKey(childSessionKey)).toEqual(latest);
     expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledTimes(2);
     expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
+  });
+
+  it("prefers the latest indexed live generation without loading persisted rows", () => {
+    const childSessionKey = "agent:main:subagent:child";
+    const older = createRun({ runId: "older", childSessionKey, generation: 1, createdAt: 200 });
+    const latest = createRun({ runId: "latest", childSessionKey, generation: 2, createdAt: 100 });
+    mocks.getSubagentRunsForChildSession.mockReturnValue([older, latest]);
+
+    expect(mod.getSessionDisplaySubagentRunByChildSessionKey(childSessionKey)).toBe(latest);
+    expect(mocks.getSubagentRunsForChildSession).toHaveBeenCalledWith(childSessionKey);
+    expect(mocks.getSubagentRunsSnapshotForChildSession).not.toHaveBeenCalled();
   });
 
   it("uses the controller snapshot while retaining legacy requester-owned runs", () => {

@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
-import { InMemoryBoardStore } from "../boards/board-store.js";
+import { createTestBoardStore } from "../boards/board-store.test-support.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 import { buildWidgetDocument } from "./wrap.js";
@@ -19,6 +21,8 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.useRealTimers();
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -269,7 +273,7 @@ describe("show_widget", () => {
 
   it("lets the board domain wrap pinned source before storing and broadcasting", async () => {
     const stateDir = await createStateDir();
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore({ stateDir });
     const broadcast = vi.fn();
     const handlers = createBoardHandlers(store);
     const title = "Release Status ".repeat(8).trim();
@@ -331,7 +335,7 @@ describe("show_widget", () => {
 
   it("pins a granted-CSP document and declaration without networking in the inline preview", async () => {
     const stateDir = await createStateDir();
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore({ stateDir });
     const handlers = createBoardHandlers(store);
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,
@@ -413,6 +417,7 @@ describe("show_widget", () => {
             revision: 1,
           },
         ],
+        resolvedWidgetName: request.name,
       } as T;
     };
 
@@ -455,6 +460,79 @@ describe("show_widget", () => {
     expect(longA.boardWidgetName).not.toBe(longB.boardWidgetName);
     expect(longA.boardWidgetName).toHaveLength(64);
     expect(longB.boardWidgetName).toHaveLength(64);
+  });
+
+  it("keeps colliding generated pins distinct and canonical spellings stable", async () => {
+    const stateDir = await createStateDir();
+    const store = createTestBoardStore({ stateDir });
+    const handlers = createBoardHandlers(store);
+    const callGateway: InProcessGatewayCaller = async <T>(
+      method: string,
+      params: Record<string, unknown>,
+    ): Promise<T> => {
+      let result: unknown;
+      let failure: Error | undefined;
+      await handlers[method]!({
+        req: { type: "req", id: "generated-pin", method, params },
+        params,
+        client: null,
+        isWebchatConnect: () => false,
+        respond: (ok, payload, error) => {
+          if (ok) {
+            result = payload;
+          } else {
+            failure = new Error(error?.message ?? "board request failed");
+          }
+        },
+        context: { broadcast: vi.fn() } as unknown as GatewayRequestContext,
+      });
+      if (failure) {
+        throw failure;
+      }
+      return result as T;
+    };
+    const sessionKey = "agent:main:generated-collision";
+    const [slash, plus] = await Promise.all([
+      executeWidget({
+        stateDir,
+        agentSessionKey: sessionKey,
+        title: "Revenue / Cost",
+        widgetCode: "<p>slash</p>",
+        pin: true,
+        callGateway,
+      }),
+      executeWidget({
+        stateDir,
+        agentSessionKey: sessionKey,
+        title: "Revenue + Cost",
+        widgetCode: "<p>plus</p>",
+        pin: true,
+        callGateway,
+      }),
+    ]);
+    expect(new Set([slash.boardWidgetName, plus.boardWidgetName]).size).toBe(2);
+    expect(store.getSnapshot(sessionKey).widgets).toHaveLength(2);
+
+    const composed = await executeWidget({
+      stateDir,
+      agentSessionKey: sessionKey,
+      title: "Café Menu".normalize("NFC"),
+      widgetCode: "<p>one</p>",
+      pin: true,
+      callGateway,
+    });
+    const decomposed = await executeWidget({
+      stateDir,
+      agentSessionKey: sessionKey,
+      title: "Café Menu".normalize("NFD"),
+      widgetCode: "<p>two</p>",
+      pin: true,
+      callGateway,
+    });
+    expect(decomposed.boardWidgetName).toBe(composed.boardWidgetName);
+    expect(store.readWidgetHtml(sessionKey, composed.boardWidgetName ?? "")).toMatchObject({
+      revision: 2,
+    });
   });
 
   it("keeps the host bridges ordered around HTML widget code", async () => {

@@ -10,7 +10,7 @@ import {
   handleTelegramAction as handleTelegramActionRuntime,
   telegramActionRuntime,
 } from "./action-runtime.js";
-import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
+import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest,
@@ -74,6 +74,7 @@ const sendDurableMessageBatch = vi.fn(
     mediaAccess?: {
       localRoots?: readonly string[];
       readFile?: (filePath: string) => Promise<Buffer>;
+      workspaceDir?: string;
     };
   }) => {
     const payload = params.payloads[0] ?? {};
@@ -111,6 +112,7 @@ const sendDurableMessageBatch = vi.fn(
       asVideoNote: payload.videoAsNote,
       silent: params.silent,
       forceDocument: params.forceDocument,
+      ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
       mediaLocalRoots: params.mediaAccess?.localRoots,
       mediaReadFile: params.mediaAccess?.readFile,
     };
@@ -902,12 +904,18 @@ describe("handleTelegramAction", () => {
         expect(entries[0]).toMatchObject({
           channel: "telegram",
           to: "12345",
-          payloads: [
-            {
-              text: "times out after queue write",
-              delivery: { pin: { enabled: true, required: true } },
-            },
-          ],
+          preparedBatch: {
+            sourcePayloadCount: 1,
+            entries: [
+              {
+                status: "accepted",
+                payload: {
+                  text: "times out after queue write",
+                  delivery: { pin: { enabled: true, required: true } },
+                },
+              },
+            ],
+          },
           session: { key: "agent:main:telegram:direct:12345", agentId: "main" },
           gatewayClientScopes: ["operator.write"],
           retryCount: 0,
@@ -917,12 +925,20 @@ describe("handleTelegramAction", () => {
       .mockImplementationOnce(async () => {
         const entries = readDurableQueueEntries();
         const liveEntry = entries.find((entry) =>
-          JSON.stringify(entry.payloads).includes("delivers after queue write"),
+          JSON.stringify(entry.preparedBatch).includes("delivers after queue write"),
         );
         expect(liveEntry).toMatchObject({
           channel: "telegram",
           to: "12345",
-          payloads: [{ text: "delivers after queue write" }],
+          preparedBatch: {
+            sourcePayloadCount: 1,
+            entries: [
+              {
+                status: "accepted",
+                payload: { text: "delivers after queue write" },
+              },
+            ],
+          },
           retryCount: 0,
         });
         return { channel: "telegram", messageId: "tg-ok" };
@@ -978,12 +994,18 @@ describe("handleTelegramAction", () => {
       const retryableEntries = readDurableQueueEntries();
       expect(retryableEntries).toHaveLength(1);
       expect(retryableEntries[0]).toMatchObject({
-        payloads: [
-          {
-            text: "times out after queue write",
-            delivery: { pin: { enabled: true, required: true } },
-          },
-        ],
+        preparedBatch: {
+          sourcePayloadCount: 1,
+          entries: [
+            {
+              status: "accepted",
+              payload: {
+                text: "times out after queue write",
+                delivery: { pin: { enabled: true, required: true } },
+              },
+            },
+          ],
+        },
         retryCount: 1,
       });
       expect(String(retryableEntries[0]?.lastError)).toContain("telegram timeout");
@@ -1004,12 +1026,18 @@ describe("handleTelegramAction", () => {
       });
       expect(readDurableQueueEntries()).toHaveLength(1);
       expect(readDurableQueueEntries()[0]).toMatchObject({
-        payloads: [
-          {
-            text: "times out after queue write",
-            delivery: { pin: { enabled: true, required: true } },
-          },
-        ],
+        preparedBatch: {
+          sourcePayloadCount: 1,
+          entries: [
+            {
+              status: "accepted",
+              payload: {
+                text: "times out after queue write",
+                delivery: { pin: { enabled: true, required: true } },
+              },
+            },
+          ],
+        },
         retryCount: 1,
       });
     } finally {
@@ -1034,7 +1062,7 @@ describe("handleTelegramAction", () => {
 
   it("marks the matching inbound event delivered after a successful send", async () => {
     let count = 0;
-    const end = beginTelegramInboundEventDeliveryCorrelation("telegram-session", {
+    const end = telegramInboundEventDelivery.begin("telegram-session", {
       outboundTo: "@testchannel",
       markInboundEventDelivered: () => {
         count += 1;
@@ -1056,7 +1084,7 @@ describe("handleTelegramAction", () => {
   it("marks room-event delivery correlations separately", async () => {
     let roomEventCount = 0;
     let userRequestCount = 0;
-    const endRoomEvent = beginTelegramInboundEventDeliveryCorrelation(
+    const endRoomEvent = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
         outboundTo: "@testchannel",
@@ -1066,7 +1094,7 @@ describe("handleTelegramAction", () => {
       },
       { inboundEventKind: "room_event" },
     );
-    const endUserRequest = beginTelegramInboundEventDeliveryCorrelation("telegram-session", {
+    const endUserRequest = telegramInboundEventDelivery.begin("telegram-session", {
       outboundTo: "@testchannel",
       markInboundEventDelivered: () => {
         userRequestCount += 1;
@@ -1091,7 +1119,7 @@ describe("handleTelegramAction", () => {
 
   it("marks topic room-event delivery when send uses a separate thread id", async () => {
     let count = 0;
-    const end = beginTelegramInboundEventDeliveryCorrelation(
+    const end = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
         outboundTo: "-100123:topic:77",
@@ -1119,7 +1147,7 @@ describe("handleTelegramAction", () => {
 
   it("marks topic room-event delivery when send uses topic shorthand", async () => {
     let count = 0;
-    const end = beginTelegramInboundEventDeliveryCorrelation(
+    const end = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
         outboundTo: "-100123:topic:77",
@@ -1166,7 +1194,7 @@ describe("handleTelegramAction", () => {
     },
   ])("marks room-event delivery after successful $name actions", async ({ params, cfg }) => {
     let count = 0;
-    const end = beginTelegramInboundEventDeliveryCorrelation(
+    const end = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
         outboundTo: "@testchannel",
@@ -1366,22 +1394,64 @@ describe("handleTelegramAction", () => {
     expect(options.silent).toBe(true);
   });
 
-  it("forwards trusted mediaLocalRoots into sendMessageTelegram", async () => {
+  it("preserves host-owned workspace media access and legacy roots", async () => {
+    const mediaReadFile = vi.fn(async (_filePath: string) => Buffer.from("chart"));
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-root"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/agent-root",
+    };
     await handleTelegramAction(
       {
         action: "sendMessage",
         to: "@testchannel",
         content: "Hello with local media",
+        mediaUrl: "chart.png",
+        mediaAccess: { localRoots: ["/tmp/model-root"], workspaceDir: "/tmp/model-root" },
       },
       telegramConfig(),
-      { mediaLocalRoots: ["/tmp/agent-root"] },
+      {
+        mediaAccess,
+        mediaLocalRoots: ["/tmp/conflicting-root"],
+        mediaReadFile: vi.fn(async (_filePath: string) => Buffer.from("untrusted")),
+      },
     );
+    const durableOptions = requireRecord(
+      mockCall(sendDurableMessageBatch, 0, "workspace media access")[0],
+      "workspace media access batch",
+    );
+    expect(durableOptions.mediaAccess).toBe(mediaAccess);
+    expect(durableOptions.session).toBeUndefined();
     const call = mockCall(sendMessageTelegram, 0, "local media roots");
     expect(call[0]).toBe("@testchannel");
     expect(call[1]).toBe("Hello with local media");
-    expect(requireRecord(call[2], "local media roots options").mediaLocalRoots).toEqual([
-      "/tmp/agent-root",
-    ]);
+    const sendOptions = requireRecord(call[2], "local media roots options");
+    expect(sendOptions.mediaUrl).toBe("chart.png");
+    expect(sendOptions.mediaAccess).toBe(mediaAccess);
+    expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
+    expect(sendOptions.mediaReadFile).toBe(mediaReadFile);
+
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello with legacy media roots",
+        mediaUrl: "legacy-chart.png",
+      },
+      telegramConfig(),
+      { mediaLocalRoots: ["/tmp/legacy-root"] },
+    );
+    const legacyDurableOptions = requireRecord(
+      mockCall(sendDurableMessageBatch, 1, "legacy media access")[0],
+      "legacy media access batch",
+    );
+    expect(legacyDurableOptions.mediaAccess).toEqual({ localRoots: ["/tmp/legacy-root"] });
+    expect(
+      requireRecord(
+        mockCall(sendMessageTelegram, 1, "legacy media roots")[2],
+        "legacy media options",
+      ).mediaLocalRoots,
+    ).toEqual(["/tmp/legacy-root"]);
   });
 
   it("forwards gateway client scopes into Telegram send target resolution", async () => {
@@ -1828,21 +1898,26 @@ describe("handleTelegramAction", () => {
     expect(requireRecord(call[3], "reply markup edit options").token).toBe("tok");
   });
 
-  it("uses Telegram caption edits when editMessage receives a caption", async () => {
+  it.each([
+    { description: "non-empty", caption: "Updated caption", richMessages: false },
+    { description: "empty", caption: "", richMessages: false },
+    { description: "non-empty rich", caption: "Updated caption", richMessages: true },
+    { description: "empty rich", caption: "", richMessages: true },
+  ])("uses Telegram caption edits for $description captions", async ({ caption, richMessages }) => {
     await handleTelegramAction(
       {
         action: "editMessage",
         chatId: "123456",
         messageId: 321,
-        caption: "Updated caption",
+        caption,
       },
-      telegramConfig(),
+      telegramConfig(richMessages ? { richMessages: true } : undefined),
     );
 
     const call = mockCall(editMessageTelegram, 0, "caption edit");
     expect(call[0]).toBe("123456");
     expect(call[1]).toBe(321);
-    expect(call[2]).toBe("Updated caption");
+    expect(call[2]).toBe(caption);
     expect(requireRecord(call[3], "caption edit options").editMode).toBe("caption");
   });
 

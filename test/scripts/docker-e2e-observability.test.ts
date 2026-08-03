@@ -50,7 +50,7 @@ describe("Docker E2E observability", () => {
     const script = readFileSync("scripts/e2e/cron-cli-docker.sh", "utf8");
 
     expect(script).toMatch(
-      /docker_e2e_run_with_harness[\s\S]*\n  -i \\\n  "\$IMAGE_NAME" \\\n  bash -s >"\$CLIENT_LOG" 2>&1 <<'INNER'/u,
+      /docker_e2e_run_with_harness[\s\S]*\n {2}-i \\\n {2}"\$IMAGE_NAME" \\\n {2}bash -s >"\$CLIENT_LOG" 2>&1 <<'INNER'/u,
     );
   });
 

@@ -17,6 +17,7 @@ import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
+import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { EmbeddedAgentAttempt } from "./run-embedded-attempt.js";
 import {
@@ -212,6 +213,28 @@ export async function finalizeEmbeddedAgentCommand(params: {
         log.warn(
           `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
         );
+        if (
+          sessionStore &&
+          sessionKey &&
+          !params.suppressVisibleSessionEffects &&
+          !sessionReboundDuringRun &&
+          !assistantTranscriptOwned
+        ) {
+          await persistAssistantTranscriptRepairRecord({
+            context: {
+              sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? effectiveSessionId,
+              sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
+              sessionStore,
+              storePath: internalSessionTarget?.storePath ?? storePath,
+              sessionAgentId: internalSessionTarget?.agentId ?? sessionAgentId,
+              config: cfg,
+            },
+            replyText: attemptExecutionRuntime.resolveCliTranscriptReplyText(result),
+            provider: result.meta.agentMeta?.provider,
+            model: result.meta.agentMeta?.model,
+            runOwnedSessionId,
+          });
+        }
       }
     }
 

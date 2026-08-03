@@ -55,6 +55,7 @@ import {
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
@@ -956,6 +957,29 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (accountId) {
             request.params.accountId = accountId;
           }
+          const resolvedMediaAccess =
+            request.action === "send"
+              ? resolveAgentScopedOutboundMediaAccess({
+                  cfg,
+                  agentId,
+                  sessionKey,
+                  messageProvider: sessionKey ? undefined : channel,
+                  accountId: sessionKey
+                    ? (trustedContext.requesterAccountId ?? accountId)
+                    : accountId,
+                  requesterSenderId: trustedContext.requesterSenderId,
+                })
+              : undefined;
+          // Gateway identities omit trusted sender aliases; expose roots/workspace
+          // only so a host reader cannot bypass alias-based group read policy.
+          const mediaAccess = resolvedMediaAccess
+            ? {
+                localRoots: resolvedMediaAccess.localRoots,
+                ...(resolvedMediaAccess.workspaceDir
+                  ? { workspaceDir: resolvedMediaAccess.workspaceDir }
+                  : {}),
+              }
+            : undefined;
           if (request.action === "send") {
             await hydrateAttachmentParamsForAction({
               cfg,
@@ -1006,7 +1030,9 @@ export const sendHandlers: GatewayRequestHandlers = {
             sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
             inboundEventKind: request.inboundTurnKind,
             agentId,
-            mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+            ...(mediaAccess
+              ? { mediaAccess, mediaLocalRoots: mediaAccess.localRoots }
+              : { mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId) }),
             toolContext: trustedContext.toolContext,
             dryRun: false,
             gatewayClientScopes,
@@ -1081,7 +1107,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       idempotencyKey: string;
     };
     const to = normalizeOptionalString(request.to) ?? "";
-    const message = normalizeOptionalString(request.message) ?? "";
+    const message = request.message?.trim() ? request.message : "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
     const mediaUrls = Array.isArray(request.mediaUrls)
       ? request.mediaUrls

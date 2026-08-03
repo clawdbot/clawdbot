@@ -530,6 +530,42 @@ describe("anthropic transport stream", () => {
     expect(result.usage.contextUsage).toEqual(testCase.context);
   });
 
+  it("prices one-hour cache writes at the same rate as the direct Anthropic provider", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_cache_ttl_usage",
+            usage: {
+              input_tokens: 100,
+              output_tokens: 0,
+              cache_creation_input_tokens: 1_000_000,
+              cache_creation: {
+                ephemeral_5m_input_tokens: 600_000,
+                ephemeral_1h_input_tokens: 400_000,
+              },
+            },
+          },
+        },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      {
+        ...makeAnthropicTransportModel(),
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      },
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.usage).toMatchObject({ cacheWrite: 1_000_000, cacheWrite1h: 400_000 });
+    expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
+  });
+
   it("tags pre-tool narration as commentary when a proxy mislabels stop_reason (pioneer/Bedrock)", async () => {
     // Bedrock/Vertex-proxied routes (e.g. pioneer; tool ids "toolu_vrtx_…") report
     // stop_reason "end_turn" on turns that DO carry a tool call. Commentary tagging

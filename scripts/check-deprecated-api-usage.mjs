@@ -2,7 +2,7 @@
 // Scans source files for usage of deprecated API markers.
 import fs from "node:fs";
 import path from "node:path";
-import { collectDeprecatedInternalConfigApiViolations } from "./lib/deprecated-config-api-guard.mjs";
+import { collectDeprecatedInternalConfigApiViolations } from "./lib/config-boundary-guard.mjs";
 import {
   BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES,
   buildDeprecatedPluginSdkModuleSpecifiers,

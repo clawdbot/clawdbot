@@ -4,8 +4,8 @@ import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
-import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
-import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
+import { commandReply as directReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import type { CommandHandler } from "./commands-types.js";
 
 const LOOP_COMMAND_PREFIX = "/loop";
 const LOOP_MIN_INTERVAL_MS = 30_000;
@@ -13,10 +13,6 @@ const LOOP_DEFAULT_INTERVAL_MS = 15 * 60_000;
 const LOOP_NAME_MAX_LENGTH = 40;
 const LOOP_USAGE =
   "Usage: /loop [interval] <prompt> — repeat a prompt in this chat (e.g. /loop 5m check deploy status). Without interval the loop self-paces between 1m and 1h. /loop status lists loops; /loop stop [name] stops.";
-
-function directReply(text: string): CommandHandlerResult {
-  return { shouldContinue: false, reply: { text } };
-}
 
 function loopShortName(prompt: string): string {
   return truncateUtf16Safe(prompt.trim(), LOOP_NAME_MAX_LENGTH).trimEnd();
@@ -84,61 +80,58 @@ function buildLoopStopWorkOrder(name: string, sessionKey: string): string {
 }
 
 /** Command handler for conversation-bound recurring loops. */
-export const handleLoopCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const trimmed = params.command.commandBodyNormalized.trim();
-  const commandEnd = trimmed.search(/\s/u);
-  const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
-  if (commandToken.toLowerCase() !== LOOP_COMMAND_PREFIX) {
-    return null;
-  }
-  const unauthorized = rejectUnauthorizedCommand(params, LOOP_COMMAND_PREFIX);
-  if (unauthorized) {
-    return unauthorized;
-  }
-  const nonOwner = rejectNonOwnerCommand(params, LOOP_COMMAND_PREFIX);
-  if (nonOwner) {
-    return nonOwner;
-  }
-
-  const spec = commandEnd === -1 ? "" : trimmed.slice(commandEnd).trim();
-  if (!spec || spec.toLowerCase() === "help") {
-    return directReply(LOOP_USAGE);
-  }
-  if (spec.toLowerCase() === "status") {
-    applyCommandTextToParams(params, buildLoopStatusWorkOrder(params.sessionKey));
-    return { shouldContinue: true };
-  }
-
-  const [firstToken = ""] = spec.split(/\s+/u);
-  if (firstToken.toLowerCase() === "stop") {
-    const name = spec.slice(firstToken.length).trim();
-    applyCommandTextToParams(params, buildLoopStopWorkOrder(name, params.sessionKey));
-    return { shouldContinue: true };
-  }
-
-  let everyMs: number | undefined;
-  // Preserve parseDurationMs semantics: bare numbers are milliseconds.
-  // The 30s floor rejects hot-loop values instead of reinterpreting them as prompt text.
-  try {
-    everyMs = parseDurationMs(firstToken);
-  } catch {
-    everyMs = undefined;
-  }
-  if (everyMs !== undefined) {
-    if (everyMs < LOOP_MIN_INTERVAL_MS) {
-      return directReply(`${LOOP_USAGE} Minimum interval 30s.`);
-    }
-    const prompt = spec.slice(firstToken.length).trim();
-    if (!prompt) {
+export const handleLoopCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: LOOP_COMMAND_PREFIX,
+    match: (body) => {
+      const trimmed = body.trim();
+      const commandEnd = trimmed.search(/\s/u);
+      const token = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
+      return token.toLowerCase() === LOOP_COMMAND_PREFIX
+        ? commandEnd === -1
+          ? ""
+          : trimmed.slice(commandEnd).trim()
+        : null;
+    },
+    ownerOnly: true,
+  },
+  (params, spec) => {
+    if (!spec || spec.toLowerCase() === "help") {
       return directReply(LOOP_USAGE);
     }
-    applyCommandTextToParams(params, buildFixedLoopWorkOrder(prompt, everyMs, params.sessionKey));
-    return { shouldContinue: true };
-  }
+    if (spec.toLowerCase() === "status") {
+      applyCommandTextToParams(params, buildLoopStatusWorkOrder(params.sessionKey));
+      return { shouldContinue: true };
+    }
 
-  applyCommandTextToParams(params, buildSelfPacedLoopWorkOrder(spec, params.sessionKey));
-  return { shouldContinue: true };
-};
+    const [firstToken = ""] = spec.split(/\s+/u);
+    if (firstToken.toLowerCase() === "stop") {
+      const name = spec.slice(firstToken.length).trim();
+      applyCommandTextToParams(params, buildLoopStopWorkOrder(name, params.sessionKey));
+      return { shouldContinue: true };
+    }
+
+    let everyMs: number | undefined;
+    // Preserve parseDurationMs semantics: bare numbers are milliseconds.
+    // The 30s floor rejects hot-loop values instead of reinterpreting them as prompt text.
+    try {
+      everyMs = parseDurationMs(firstToken);
+    } catch {
+      everyMs = undefined;
+    }
+    if (everyMs !== undefined) {
+      if (everyMs < LOOP_MIN_INTERVAL_MS) {
+        return directReply(`${LOOP_USAGE} Minimum interval 30s.`);
+      }
+      const prompt = spec.slice(firstToken.length).trim();
+      if (!prompt) {
+        return directReply(LOOP_USAGE);
+      }
+      applyCommandTextToParams(params, buildFixedLoopWorkOrder(prompt, everyMs, params.sessionKey));
+      return { shouldContinue: true };
+    }
+
+    applyCommandTextToParams(params, buildSelfPacedLoopWorkOrder(spec, params.sessionKey));
+    return { shouldContinue: true };
+  },
+);

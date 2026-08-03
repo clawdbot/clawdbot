@@ -44,6 +44,7 @@ import { asRecord, formatErrorMessage, readString } from "./utils.js";
 import {
   extractMessageText,
   formatModelName,
+  formatSummarizationHistoryText,
   isBotMentioned,
   isDmAllowedWithIngress,
   isGroupInviteAllowed,
@@ -392,11 +393,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           return;
         }
 
-        const historyText = history
-          .map(
-            (msg) => `[${new Date(msg.timestamp).toLocaleString()}] ${msg.author}: ${msg.content}`,
-          )
-          .join("\n");
+        const historyText = formatSummarizationHistoryText(history, cfg);
 
         messageText =
           `Please summarize this channel conversation (${history.length} recent messages):\n\n${historyText}\n\n` +

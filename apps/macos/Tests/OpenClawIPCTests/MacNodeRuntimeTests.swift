@@ -87,6 +87,35 @@ struct MacNodeRuntimeTests {
         return counter.value() >= expected
     }
 
+    private func invoke(
+        _ runtime: MacNodeRuntime,
+        _ id: String,
+        _ command: String,
+        _ paramsJSON: String? = nil,
+        nodeId: String? = nil) async -> BridgeInvokeResponse
+    {
+        await runtime.handleInvoke(BridgeInvokeRequest(
+            id: id,
+            command: command,
+            paramsJSON: paramsJSON,
+            nodeId: nodeId))
+    }
+
+    private func invoke(
+        _ runtime: MacNodeRuntime,
+        _ id: String,
+        _ command: String,
+        params: some Encodable,
+        nodeId: String? = nil) async throws -> BridgeInvokeResponse
+    {
+        return await self.invoke(
+            runtime,
+            id,
+            command,
+            String(decoding: try JSONEncoder().encode(params), as: UTF8.self),
+            nodeId: nodeId)
+    }
+
     actor CanvasRefreshProbe {
         private(set) var calls = 0
 
@@ -110,11 +139,24 @@ struct MacNodeRuntimeTests {
     }
 
     @MainActor
-    final class ScreenSnapshotProbeServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+    final class MainActorServicesProbe: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+        typealias SnapshotInspection = (Int?, Int?, Double?, OpenClawScreenSnapshotFormat?) -> Void
+
         var snapshotCallCount = 0
         var receivedSnapshotParams: MacNodeScreenSnapshotParams?
         var snapshotResult: ScreenSnapshotResult
         var snapshotError: Error?
+        var snapshotCalledAtMs: Int64?
+        var receivedParams: OpenClawComputerActParams?
+        var actError: Error?
+        var performCallCount = 0
+        var releaseCallCount = 0
+        var receivedLifecycleGenerations: [UInt64] = []
+        var receivedReleaseGenerations: [UInt64] = []
+        private let snapshotInspection: SnapshotInspection?
+        private let performEnteredGate: AsyncGate?
+        private let allowPerformGate: AsyncGate?
+        private var latestLifecycleGeneration: UInt64 = 0
 
         init(
             snapshotResult: ScreenSnapshotResult = ScreenSnapshotResult(
@@ -123,10 +165,18 @@ struct MacNodeRuntimeTests {
                 width: 10,
                 height: 10,
                 displayFrameId: "display-frame-test"),
-            snapshotError: Error? = nil)
+            snapshotError: Error? = nil,
+            snapshotInspection: SnapshotInspection? = nil,
+            actError: Error? = nil,
+            performEnteredGate: AsyncGate? = nil,
+            allowPerformGate: AsyncGate? = nil)
         {
             self.snapshotResult = snapshotResult
             self.snapshotError = snapshotError
+            self.snapshotInspection = snapshotInspection
+            self.actError = actError
+            self.performEnteredGate = performEnteredGate
+            self.allowPerformGate = allowPerformGate
         }
 
         func snapshotScreen(
@@ -136,11 +186,13 @@ struct MacNodeRuntimeTests {
             format: OpenClawScreenSnapshotFormat?) async throws -> ScreenSnapshotResult
         {
             self.snapshotCallCount += 1
+            self.snapshotCalledAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             self.receivedSnapshotParams = MacNodeScreenSnapshotParams(
                 screenIndex: screenIndex,
                 maxWidth: maxWidth,
                 quality: quality,
                 format: format)
+            self.snapshotInspection?(screenIndex, maxWidth, quality, format)
             if let snapshotError {
                 throw snapshotError
             }
@@ -183,20 +235,34 @@ struct MacNodeRuntimeTests {
             _ params: OpenClawComputerActParams,
             lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
         {
-            _ = params
-            _ = lifecycleGeneration
-            return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
+            self.performCallCount += 1
+            self.receivedParams = params
+            self.receivedLifecycleGenerations.append(lifecycleGeneration)
+            await self.performEnteredGate?.open()
+            await self.allowPerformGate?.wait()
+            guard lifecycleGeneration >= self.latestLifecycleGeneration else {
+                throw ComputerActionService.ComputerActionError.lifecycleChanged
+            }
+            if lifecycleGeneration > self.latestLifecycleGeneration {
+                self.latestLifecycleGeneration = lifecycleGeneration
+            }
+            if let actError {
+                throw actError
+            }
+            return OpenClawComputerActResult(ok: true, cursorX: params.x ?? 0, cursorY: params.y ?? 0)
         }
 
         func releaseHeldInput(lifecycleGeneration: UInt64) async {
-            _ = lifecycleGeneration
+            guard lifecycleGeneration > self.latestLifecycleGeneration else { return }
+            self.latestLifecycleGeneration = lifecycleGeneration
+            self.receivedReleaseGenerations.append(lifecycleGeneration)
+            self.releaseCallCount += 1
         }
     }
 
     @Test func `handle invoke rejects unknown command`() async {
         let runtime = MacNodeRuntime()
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(id: "req-1", command: "unknown.command"))
+        let response = await self.invoke(runtime, "req-1", "unknown.command")
         #expect(response.ok == false)
     }
 
@@ -208,10 +274,8 @@ struct MacNodeRuntimeTests {
                 #expect(paramsJSON == #"{"limit":7}"#)
                 return payload
             })
-        let response = await runtime.handleInvoke(BridgeInvokeRequest(
-            id: "req-codex-threads",
-            command: MacNodeCodexThreadCatalogContract.listCommand,
-            paramsJSON: #"{"limit":7}"#))
+        let response = await self.invoke(
+            runtime, "req-codex-threads", MacNodeCodexThreadCatalogContract.listCommand, #"{"limit":7}"#)
 
         #expect(response.ok)
         #expect(response.payloadJSON == payload)
@@ -224,9 +288,8 @@ struct MacNodeRuntimeTests {
                 Issue.record("disabled Codex catalog request must not execute")
                 return #"{"sessions":[]}"#
             })
-        let response = await runtime.handleInvoke(BridgeInvokeRequest(
-            id: "req-codex-disabled",
-            command: MacNodeCodexThreadCatalogContract.listCommand))
+        let response = await self.invoke(
+            runtime, "req-codex-disabled", MacNodeCodexThreadCatalogContract.listCommand)
 
         #expect(!response.ok)
         #expect(response.error?.code == .unavailable)
@@ -241,10 +304,9 @@ struct MacNodeRuntimeTests {
                 #expect(paramsJSON == #"{"threadId":"thread-1","limit":50}"#)
                 return payload
             })
-        let response = await runtime.handleInvoke(BridgeInvokeRequest(
-            id: "req-codex-items",
-            command: MacNodeCodexThreadCatalogContract.turnsCommand,
-            paramsJSON: #"{"threadId":"thread-1","limit":50}"#))
+        let response = await self.invoke(
+            runtime, "req-codex-items", MacNodeCodexThreadCatalogContract.turnsCommand,
+            #"{"threadId":"thread-1","limit":50}"#)
 
         #expect(response.ok)
         #expect(response.payloadJSON == payload)
@@ -264,14 +326,11 @@ struct MacNodeRuntimeTests {
                 return readPayload
             })
 
-        let list = await runtime.handleInvoke(BridgeInvokeRequest(
-            id: "req-claude-list",
-            command: MacNodeClaudeSessionCatalogContract.listCommand,
-            paramsJSON: #"{"limit":7}"#))
-        let read = await runtime.handleInvoke(BridgeInvokeRequest(
-            id: "req-claude-read",
-            command: MacNodeClaudeSessionCatalogContract.readCommand,
-            paramsJSON: #"{"threadId":"thread-1","limit":20}"#))
+        let list = await self.invoke(
+            runtime, "req-claude-list", MacNodeClaudeSessionCatalogContract.listCommand, #"{"limit":7}"#)
+        let read = await self.invoke(
+            runtime, "req-claude-read", MacNodeClaudeSessionCatalogContract.readCommand,
+            #"{"threadId":"thread-1","limit":20}"#)
 
         #expect(list.ok)
         #expect(list.payloadJSON == listPayload)
@@ -343,9 +402,8 @@ struct MacNodeRuntimeTests {
                 Issue.record("disabled Claude catalog request must not execute")
                 return #"{"sessions":[]}"#
             })
-        let response = await runtime.handleInvoke(BridgeInvokeRequest(
-            id: "req-claude-disabled",
-            command: MacNodeClaudeSessionCatalogContract.listCommand))
+        let response = await self.invoke(
+            runtime, "req-claude-disabled", MacNodeClaudeSessionCatalogContract.listCommand)
 
         #expect(!response.ok)
         #expect(response.error?.code == .unavailable)
@@ -402,93 +460,27 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke rejects empty notification`() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemNotifyParams(title: "", body: "")
-        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(id: "req-3", command: OpenClawSystemCommand.notify.rawValue, paramsJSON: json))
+        let response = try await self.invoke(
+            runtime, "req-3", OpenClawSystemCommand.notify.rawValue, params: params)
         #expect(response.ok == false)
     }
 
     @Test func `handle invoke camera list requires enabled camera`() async {
         await TestIsolation.withUserDefaultsValues([cameraEnabledKey: false]) {
             let runtime = MacNodeRuntime()
-            let response = await runtime.handleInvoke(
-                BridgeInvokeRequest(id: "req-4", command: OpenClawCameraCommand.list.rawValue))
+            let response = await self.invoke(runtime, "req-4", OpenClawCameraCommand.list.rawValue)
             #expect(response.ok == false)
             #expect(response.error?.message.contains("CAMERA_DISABLED") == true)
         }
     }
 
     @Test func `handle invoke screen record uses injected services`() async throws {
-        @MainActor
-        final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
-            func snapshotScreen(
-                screenIndex: Int?,
-                maxWidth: Int?,
-                quality: Double?,
-                format: OpenClawScreenSnapshotFormat?) async throws
-                -> ScreenSnapshotResult
-            {
-                _ = screenIndex
-                _ = maxWidth
-                _ = quality
-                return ScreenSnapshotResult(
-                    data: Data("snapshot".utf8),
-                    format: format ?? .jpeg,
-                    width: 640,
-                    height: 360,
-                    displayFrameId: "display-frame-test")
-            }
-
-            func recordScreen(
-                screenIndex _: Int?,
-                durationMs _: Int?,
-                fps _: Double?,
-                includeAudio _: Bool?,
-                outPath _: String?) async throws -> (path: String, hasAudio: Bool)
-            {
-                let url = FileManager().temporaryDirectory
-                    .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
-                try Data("ok".utf8).write(to: url)
-                return (path: url.path, hasAudio: false)
-            }
-
-            func locationAuthorizationStatus() -> CLAuthorizationStatus {
-                .authorizedAlways
-            }
-
-            func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
-                .fullAccuracy
-            }
-
-            func currentLocation(
-                desiredAccuracy _: OpenClawLocationAccuracy,
-                maxAgeMs _: Int?,
-                timeoutMs _: Int?) async throws -> CLLocation
-            {
-                CLLocation(latitude: 0, longitude: 0)
-            }
-
-            func performComputerAct(
-                _ params: OpenClawComputerActParams,
-                lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
-            {
-                _ = params
-                _ = lifecycleGeneration
-                return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
-            }
-
-            func releaseHeldInput(lifecycleGeneration: UInt64) async {
-                _ = lifecycleGeneration
-            }
-        }
-
-        let services = await MainActor.run { FakeMainActorServices() }
+        let services = await MainActor.run { MainActorServicesProbe() }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
         let params = MacNodeScreenRecordParams(durationMs: 250)
-        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(id: "req-5", command: MacNodeScreenCommand.record.rawValue, paramsJSON: json))
+        let response = try await self.invoke(
+            runtime, "req-5", MacNodeScreenCommand.record.rawValue, params: params)
         #expect(response.ok == true)
         let payloadJSON = try #require(response.payloadJSON)
 
@@ -502,76 +494,20 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `handle invoke screen snapshot uses injected services`() async throws {
-        @MainActor
-        final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
-            var snapshotCalledAtMs: Int64?
-
-            func snapshotScreen(
-                screenIndex: Int?,
-                maxWidth: Int?,
-                quality: Double?,
-                format: OpenClawScreenSnapshotFormat?) async throws
-                -> ScreenSnapshotResult
-            {
-                self.snapshotCalledAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let services = await MainActor.run {
+            MainActorServicesProbe(
+                snapshotResult: ScreenSnapshotResult(
+                    data: Data("ok".utf8),
+                    format: .jpeg,
+                    width: 800,
+                    height: 450,
+                    displayFrameId: "display-frame-test"),
+                snapshotInspection: { screenIndex, maxWidth, quality, _ in
                 #expect(screenIndex == 0)
                 #expect(maxWidth == 800)
                 #expect(quality == 0.5)
-                return ScreenSnapshotResult(
-                    data: Data("ok".utf8),
-                    format: format ?? .jpeg,
-                    width: 800,
-                    height: 450,
-                    displayFrameId: "display-frame-test")
-            }
-
-            func recordScreen(
-                screenIndex _: Int?,
-                durationMs _: Int?,
-                fps _: Double?,
-                includeAudio _: Bool?,
-                outPath _: String?) async throws -> (path: String, hasAudio: Bool)
-            {
-                let url = FileManager().temporaryDirectory
-                    .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
-                try Data("ok".utf8).write(to: url)
-                return (path: url.path, hasAudio: false)
-            }
-
-            func locationAuthorizationStatus() -> CLAuthorizationStatus {
-                .authorizedAlways
-            }
-
-            func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
-                .fullAccuracy
-            }
-
-            func currentLocation(
-                desiredAccuracy: OpenClawLocationAccuracy,
-                maxAgeMs: Int?,
-                timeoutMs: Int?) async throws -> CLLocation
-            {
-                _ = desiredAccuracy
-                _ = maxAgeMs
-                _ = timeoutMs
-                return CLLocation(latitude: 0, longitude: 0)
-            }
-
-            func performComputerAct(
-                _ params: OpenClawComputerActParams,
-                lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
-            {
-                _ = params
-                _ = lifecycleGeneration
-                return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
-            }
-
-            func releaseHeldInput(lifecycleGeneration: UInt64) async {
-                _ = lifecycleGeneration
-            }
+                })
         }
-
-        let services = await MainActor.run { FakeMainActorServices() }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
         let params = MacNodeScreenSnapshotParams(
@@ -579,12 +515,8 @@ struct MacNodeRuntimeTests {
             maxWidth: 800,
             quality: 0.5,
             format: .jpeg)
-        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-screen-snapshot",
-                command: MacNodeScreenCommand.snapshot.rawValue,
-                paramsJSON: json))
+        let response = try await self.invoke(
+            runtime, "req-screen-snapshot", MacNodeScreenCommand.snapshot.rawValue, params: params)
         #expect(response.ok == true)
         let payloadJSON = try #require(response.payloadJSON)
 
@@ -610,14 +542,11 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `handle invoke screen snapshot rejects malformed params before capture`() async {
-        let services = await MainActor.run { ScreenSnapshotProbeServices() }
+        let services = await MainActor.run { MainActorServicesProbe() }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-screen-snapshot-invalid",
-                command: MacNodeScreenCommand.snapshot.rawValue,
-                paramsJSON: #"{"screenIndex":"#))
+        let response = await self.invoke(
+            runtime, "req-screen-snapshot-invalid", MacNodeScreenCommand.snapshot.rawValue, #"{"screenIndex":"#)
 
         #expect(response.ok == false)
         #expect(response.error?.code == .invalidRequest)
@@ -627,124 +556,26 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `handle invoke screen snapshot keeps nil params as defaults`() async {
-        let services = await MainActor.run { ScreenSnapshotProbeServices() }
+        let services = await MainActor.run { MainActorServicesProbe() }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-screen-snapshot-defaults",
-                command: MacNodeScreenCommand.snapshot.rawValue))
+        let response = await self.invoke(
+            runtime, "req-screen-snapshot-defaults", MacNodeScreenCommand.snapshot.rawValue)
 
         #expect(response.ok == true)
         let received = await MainActor.run { services.receivedSnapshotParams }
         #expect(received == MacNodeScreenSnapshotParams())
     }
 
-    @MainActor
-    final class ComputerActProbeServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
-        var receivedParams: OpenClawComputerActParams?
-        var actError: Error?
-        var performCallCount = 0
-        var releaseCallCount = 0
-        var receivedLifecycleGenerations: [UInt64] = []
-        var receivedReleaseGenerations: [UInt64] = []
-        private let performEnteredGate: AsyncGate?
-        private let allowPerformGate: AsyncGate?
-        private var latestLifecycleGeneration: UInt64 = 0
-
-        init(
-            actError: Error? = nil,
-            performEnteredGate: AsyncGate? = nil,
-            allowPerformGate: AsyncGate? = nil)
-        {
-            self.actError = actError
-            self.performEnteredGate = performEnteredGate
-            self.allowPerformGate = allowPerformGate
-        }
-
-        func snapshotScreen(
-            screenIndex _: Int?,
-            maxWidth _: Int?,
-            quality _: Double?,
-            format: OpenClawScreenSnapshotFormat?) async throws
-            -> ScreenSnapshotResult
-        {
-            ScreenSnapshotResult(
-                data: Data("ok".utf8),
-                format: format ?? .jpeg,
-                width: 10,
-                height: 10,
-                displayFrameId: "display-frame-test")
-        }
-
-        func recordScreen(
-            screenIndex _: Int?,
-            durationMs _: Int?,
-            fps _: Double?,
-            includeAudio _: Bool?,
-            outPath _: String?) async throws -> (path: String, hasAudio: Bool)
-        {
-            (path: "/tmp/none", hasAudio: false)
-        }
-
-        func locationAuthorizationStatus() -> CLAuthorizationStatus {
-            .authorizedAlways
-        }
-
-        func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
-            .fullAccuracy
-        }
-
-        func currentLocation(
-            desiredAccuracy _: OpenClawLocationAccuracy,
-            maxAgeMs _: Int?,
-            timeoutMs _: Int?) async throws -> CLLocation
-        {
-            CLLocation(latitude: 0, longitude: 0)
-        }
-
-        func performComputerAct(
-            _ params: OpenClawComputerActParams,
-            lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
-        {
-            self.performCallCount += 1
-            self.receivedParams = params
-            self.receivedLifecycleGenerations.append(lifecycleGeneration)
-            await self.performEnteredGate?.open()
-            await self.allowPerformGate?.wait()
-            guard lifecycleGeneration >= self.latestLifecycleGeneration else {
-                throw ComputerActionService.ComputerActionError.lifecycleChanged
-            }
-            if lifecycleGeneration > self.latestLifecycleGeneration {
-                self.latestLifecycleGeneration = lifecycleGeneration
-            }
-            if let actError {
-                throw actError
-            }
-            return OpenClawComputerActResult(ok: true, cursorX: params.x ?? 0, cursorY: params.y ?? 0)
-        }
-
-        func releaseHeldInput(lifecycleGeneration: UInt64) async {
-            guard lifecycleGeneration > self.latestLifecycleGeneration else { return }
-            self.latestLifecycleGeneration = lifecycleGeneration
-            self.receivedReleaseGenerations.append(lifecycleGeneration)
-            self.releaseCallCount += 1
-        }
-    }
-
     @Test func `handle invoke rejects computer act when control disabled`() async throws {
-        let services = await MainActor.run { ComputerActProbeServices() }
+        let services = await MainActor.run { MainActorServicesProbe() }
         let runtime = MacNodeRuntime(
             makeMainActorServices: { services },
             computerControlEnabled: { false })
 
         let params = OpenClawComputerActParams(action: .leftClick, x: 5, y: 6, refWidth: 1280)
-        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-computer-disabled",
-                command: OpenClawComputerCommand.act.rawValue,
-                paramsJSON: json))
+        let response = try await self.invoke(
+            runtime, "req-computer-disabled", OpenClawComputerCommand.act.rawValue, params: params)
 
         #expect(response.ok == false)
         #expect(response.error?.code == .unavailable)
@@ -754,18 +585,14 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `handle invoke routes computer act to the injected services when enabled`() async throws {
-        let services = await MainActor.run { ComputerActProbeServices() }
+        let services = await MainActor.run { MainActorServicesProbe() }
         let runtime = MacNodeRuntime(
             makeMainActorServices: { services },
             computerControlEnabled: { true })
 
         let params = OpenClawComputerActParams(action: .leftClick, x: 12, y: 34, refWidth: 1280)
-        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-computer-ok",
-                command: OpenClawComputerCommand.act.rawValue,
-                paramsJSON: json))
+        let response = try await self.invoke(
+            runtime, "req-computer-ok", OpenClawComputerCommand.act.rawValue, params: params)
 
         #expect(response.ok == true)
         let received = await MainActor.run { services.receivedParams }
@@ -778,7 +605,7 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `concurrent invokes share one main actor services initialization`() async throws {
-        let services = await MainActor.run { ComputerActProbeServices() }
+        let services = await MainActor.run { MainActorServicesProbe() }
         let factoryGate = AsyncGate()
         let factoryCalls = LockedCounter()
         let admissionCalls = LockedCounter()
@@ -796,17 +623,11 @@ struct MacNodeRuntimeTests {
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
         let first = Task {
-            await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "req-computer-single-flight-1",
-                command: OpenClawComputerCommand.act.rawValue,
-                paramsJSON: json))
+            await self.invoke(runtime, "req-computer-single-flight-1", OpenClawComputerCommand.act.rawValue, json)
         }
         #expect(await self.waitForCount(1, counter: factoryCalls))
         let second = Task {
-            await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "req-computer-single-flight-2",
-                command: OpenClawComputerCommand.act.rawValue,
-                paramsJSON: json))
+            await self.invoke(runtime, "req-computer-single-flight-2", OpenClawComputerCommand.act.rawValue, json)
         }
         #expect(await self.waitForCount(2, counter: admissionCalls))
         // The actor barrier proves the second invoke reached its first suspension.
@@ -821,7 +642,7 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `lifecycle release invalidates first invoke awaiting service initialization`() async throws {
-        let services = await MainActor.run { ComputerActProbeServices() }
+        let services = await MainActor.run { MainActorServicesProbe() }
         let factoryGate = AsyncGate()
         let factoryCalls = LockedCounter()
         let runtime = MacNodeRuntime(
@@ -834,10 +655,7 @@ struct MacNodeRuntimeTests {
         let params = OpenClawComputerActParams(action: .leftMouseDown, x: 12, y: 34, refWidth: 1280)
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
         let invoke = Task {
-            await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "req-computer-release-during-init",
-                command: OpenClawComputerCommand.act.rawValue,
-                paramsJSON: json))
+            await self.invoke(runtime, "req-computer-release-during-init", OpenClawComputerCommand.act.rawValue, json)
         }
         #expect(await self.waitForCount(1, counter: factoryCalls))
 
@@ -859,7 +677,7 @@ struct MacNodeRuntimeTests {
         let performEntered = AsyncGate()
         let allowPerform = AsyncGate()
         let services = await MainActor.run {
-            ComputerActProbeServices(
+            MainActorServicesProbe(
                 performEnteredGate: performEntered,
                 allowPerformGate: allowPerform)
         }
@@ -869,10 +687,7 @@ struct MacNodeRuntimeTests {
         let params = OpenClawComputerActParams(action: .leftMouseDown, x: 12, y: 34, refWidth: 1280)
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
         let invoke = Task {
-            await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "req-computer-release-after-admission",
-                command: OpenClawComputerCommand.act.rawValue,
-                paramsJSON: json))
+            await self.invoke(runtime, "req-computer-release-after-admission", OpenClawComputerCommand.act.rawValue, json)
         }
         await performEntered.wait()
 
@@ -894,19 +709,15 @@ struct MacNodeRuntimeTests {
 
     @Test func `handle invoke maps accessibility denial to unavailable`() async throws {
         let services = await MainActor.run {
-            ComputerActProbeServices(actError: ComputerActionService.ComputerActionError.accessibilityNotTrusted)
+            MainActorServicesProbe(actError: ComputerActionService.ComputerActionError.accessibilityNotTrusted)
         }
         let runtime = MacNodeRuntime(
             makeMainActorServices: { services },
             computerControlEnabled: { true })
 
         let params = OpenClawComputerActParams(action: .leftClick, x: 1, y: 1, refWidth: 1280)
-        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-computer-ax",
-                command: OpenClawComputerCommand.act.rawValue,
-                paramsJSON: json))
+        let response = try await self.invoke(
+            runtime, "req-computer-ax", OpenClawComputerCommand.act.rawValue, params: params)
 
         #expect(response.ok == false)
         #expect(response.error?.code == .unavailable)
@@ -914,16 +725,13 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `handle invoke rejects malformed computer act params`() async {
-        let services = await MainActor.run { ComputerActProbeServices() }
+        let services = await MainActor.run { MainActorServicesProbe() }
         let runtime = MacNodeRuntime(
             makeMainActorServices: { services },
             computerControlEnabled: { true })
 
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-computer-bad",
-                command: OpenClawComputerCommand.act.rawValue,
-                paramsJSON: #"{"action":"#))
+        let response = await self.invoke(
+            runtime, "req-computer-bad", OpenClawComputerCommand.act.rawValue, #"{"action":"#)
 
         #expect(response.ok == false)
         #expect(response.error?.code == .invalidRequest)
@@ -939,14 +747,12 @@ struct MacNodeRuntimeTests {
         }
 
         let services = await MainActor.run {
-            ScreenSnapshotProbeServices(snapshotError: SensitiveError(detail: "TCC_DENIED display-id=ABC123"))
+            MainActorServicesProbe(snapshotError: SensitiveError(detail: "TCC_DENIED display-id=ABC123"))
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-screen-snapshot-error",
-                command: MacNodeScreenCommand.snapshot.rawValue))
+        let response = await self.invoke(
+            runtime, "req-screen-snapshot-error", MacNodeScreenCommand.snapshot.rawValue)
 
         #expect(response.ok == false)
         #expect(response.error?.code == .unavailable)
@@ -955,27 +761,23 @@ struct MacNodeRuntimeTests {
 
     @Test func `handle invoke screen snapshot reports validation failures as invalid request`() async {
         let invalidIndexServices = await MainActor.run {
-            ScreenSnapshotProbeServices(
+            MainActorServicesProbe(
                 snapshotError: ScreenSnapshotService.ScreenSnapshotError.invalidScreenIndex(4))
         }
         let invalidIndexRuntime = MacNodeRuntime(makeMainActorServices: { invalidIndexServices })
-        let invalidIndexResponse = await invalidIndexRuntime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-screen-snapshot-bad-index",
-                command: MacNodeScreenCommand.snapshot.rawValue))
+        let invalidIndexResponse = await self.invoke(
+            invalidIndexRuntime, "req-screen-snapshot-bad-index", MacNodeScreenCommand.snapshot.rawValue)
 
         #expect(invalidIndexResponse.ok == false)
         #expect(invalidIndexResponse.error?.code == .invalidRequest)
         #expect(invalidIndexResponse.error?.message == "INVALID_REQUEST: invalid screen index 4")
 
         let noDisplaysServices = await MainActor.run {
-            ScreenSnapshotProbeServices(snapshotError: ScreenSnapshotService.ScreenSnapshotError.noDisplays)
+            MainActorServicesProbe(snapshotError: ScreenSnapshotService.ScreenSnapshotError.noDisplays)
         }
         let noDisplaysRuntime = MacNodeRuntime(makeMainActorServices: { noDisplaysServices })
-        let noDisplaysResponse = await noDisplaysRuntime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-screen-snapshot-no-displays",
-                command: MacNodeScreenCommand.snapshot.rawValue))
+        let noDisplaysResponse = await self.invoke(
+            noDisplaysRuntime, "req-screen-snapshot-no-displays", MacNodeScreenCommand.snapshot.rawValue)
 
         #expect(noDisplaysResponse.ok == false)
         #expect(noDisplaysResponse.error?.code == .invalidRequest)
@@ -987,7 +789,7 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke screen snapshot rejects raw payloads above base64 ceiling`() async {
         let payloadSize = 19_660_801
         let services = await MainActor.run {
-            ScreenSnapshotProbeServices(snapshotResult: ScreenSnapshotResult(
+            MainActorServicesProbe(snapshotResult: ScreenSnapshotResult(
                 data: Data(repeating: 0x41, count: payloadSize),
                 format: .jpeg,
                 width: 4000,
@@ -996,10 +798,8 @@ struct MacNodeRuntimeTests {
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-screen-snapshot-too-large",
-                command: MacNodeScreenCommand.snapshot.rawValue))
+        let response = await self.invoke(
+            runtime, "req-screen-snapshot-too-large", MacNodeScreenCommand.snapshot.rawValue)
 
         #expect(response.ok == false)
         #expect(response.payloadJSON == nil)
@@ -1012,7 +812,7 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke screen snapshot rejects escaped oversized outer frames`() async {
         let payloadSize = 12 * 1024 * 1024
         let services = await MainActor.run {
-            ScreenSnapshotProbeServices(snapshotResult: ScreenSnapshotResult(
+            MainActorServicesProbe(snapshotResult: ScreenSnapshotResult(
                 data: Data(repeating: 0xFF, count: payloadSize),
                 format: .png,
                 width: 4000,
@@ -1021,11 +821,9 @@ struct MacNodeRuntimeTests {
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-screen-snapshot-slash-heavy",
-                command: MacNodeScreenCommand.snapshot.rawValue,
-                nodeId: "node-slash-heavy"))
+        let response = await self.invoke(
+            runtime, "req-screen-snapshot-slash-heavy", MacNodeScreenCommand.snapshot.rawValue,
+            nodeId: "node-slash-heavy")
 
         #expect(response.ok == false)
         #expect(response.error?.code == .unavailable)
@@ -1037,7 +835,7 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke screen snapshot accepts near-limit frames that fit`() async throws {
         let payloadSize = 19_660_100
         let services = await MainActor.run {
-            ScreenSnapshotProbeServices(snapshotResult: ScreenSnapshotResult(
+            MainActorServicesProbe(snapshotResult: ScreenSnapshotResult(
                 data: Data(repeating: 0x00, count: payloadSize),
                 format: .jpeg,
                 width: 4000,
@@ -1046,11 +844,8 @@ struct MacNodeRuntimeTests {
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(
-                id: "req-fit",
-                command: MacNodeScreenCommand.snapshot.rawValue,
-                nodeId: "node-fit"))
+        let response = await self.invoke(
+            runtime, "req-fit", MacNodeScreenCommand.snapshot.rawValue, nodeId: "node-fit")
 
         #expect(response.ok == true)
         let payloadJSON = try #require(response.payloadJSON)

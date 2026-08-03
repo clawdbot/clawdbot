@@ -1,5 +1,6 @@
 // Sessions cleanup tests cover stale session cleanup and runtime output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -641,6 +642,76 @@ describe("sessionsCleanupCommand", () => {
     );
     expect(logs.join("\n")).not.toContain("\u001b[31m");
     expectLogsToInclude(logs, "Total: 3 kept, 4 pruned");
+  });
+
+  it("aligns the label summary columns for emoji and CJK labels", async () => {
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 2,
+            afterCount: 2,
+            missing: 0,
+            dmScopeRetired: 0,
+            pruned: 0,
+            capped: 0,
+            unreferencedArtifacts: {
+              scannedFiles: 0,
+              removedFiles: 0,
+              freedBytes: 0,
+              olderThanMs: 604800000,
+            },
+            diskBudget: null,
+            wouldMutate: true,
+          },
+          beforeStore: {
+            emojiKept: {
+              sessionId: "emoji-kept",
+              updatedAt: 2,
+              model: "test:opus",
+              label: "🔥修复",
+            },
+            plainKept: {
+              sessionId: "plain-kept",
+              updatedAt: 1,
+              model: "test:opus",
+              label: "plain",
+            },
+          },
+          missingKeys: new Set<string>(),
+          staleKeys: new Set<string>(),
+          cappedKeys: new Set<string>(),
+          budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        dryRun: true,
+      },
+      runtime,
+    );
+
+    expectLogsToInclude(logs, "Summary by Label:");
+    const summaryLogs = logs.slice(logs.indexOf("Summary by Label:") + 1);
+    const emojiLine = summaryLogs.find((line) => line.includes("🔥修复"));
+    const plainLine = summaryLogs.find((line) => line.includes("plain"));
+    expect(emojiLine).toBeDefined();
+    expect(plainLine).toBeDefined();
+    // "🔥修复" is 6 visible columns (wide emoji + 2 CJK) but only 5 UTF-16 code
+    // units; padding by code-unit length would shift the counts column left.
+    const keptColumn = (line: string) => visibleWidth(line.slice(0, line.indexOf("1 kept")));
+    expect(keptColumn(emojiLine ?? "")).toBe(keptColumn(plainLine ?? ""));
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {

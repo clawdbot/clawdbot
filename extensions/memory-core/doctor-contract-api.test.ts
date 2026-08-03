@@ -19,7 +19,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import {
   DREAMING_DAILY_INGESTION_NAMESPACE,
@@ -1437,6 +1437,91 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
+  it("removes an empty legacy memory sidecar placeholder without warning", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, "");
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      `Removed empty Memory Core legacy memory index sidecar placeholder: ${legacyPath}`,
+    ]);
+    await expect(fs.access(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves the main sidecar when a companion stat fails with ELOOP", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, "");
+    // Create a self-referential symlink as the WAL companion — fs.stat will
+    // fail with ELOOP, which must NOT be treated as "sidecar is absent".
+    const walPath = `${legacyPath}-wal`;
+    await fs.symlink(walPath, walPath);
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    // Fail-closed: the migration must NOT remove the main file because the
+    // WAL companion's state is unknown (ELOOP).  No removal change and no
+    // crash — the migration should skip the empty-sidecar cleanup path.
+    expect(result.changes).toEqual([]);
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+  });
+
+  it("preserves the main sidecar when a companion stat fails with EACCES", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, "");
+    // Create a WAL companion then make it unreadable — fs.stat will fail
+    // with EACCES on some platforms, or succeed on others (running as root).
+    // We mock fs.stat to simulate the EACCES failure deterministically.
+    const walPath = `${legacyPath}-wal`;
+    await fs.writeFile(walPath, "");
+    const originalStat = fs.stat;
+    vi.spyOn(fs, "stat").mockImplementation(async (p: unknown, ...args: unknown[]) => {
+      if (typeof p === "string" && p === walPath) {
+        const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return originalStat.call(fs, p as string, ...(args as []));
+    });
+
+    try {
+      const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+      // Fail-closed: the migration must NOT remove the main file.
+      expect(result.changes).toEqual([]);
+      await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("keeps the schema warning for a non-empty sidecar that is not a legacy index", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    const db = new DatabaseSync(legacyPath);
+    try {
+      db.exec("CREATE TABLE unrelated (value TEXT)");
+    } finally {
+      db.close();
+    }
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped Memory Core legacy memory index import for agent main because the sidecar schema is not a legacy memory index",
+    ]);
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+  });
+
   it("creates migrated FTS tables with the configured legacy tokenizer", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
@@ -1807,41 +1892,6 @@ describe("memory-core doctor dreaming migration", () => {
   });
 
   it("archives legacy vector sidecars when memory search is disabled", async () => {
-    const stateDir = path.join(rootDir, "state");
-    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
-    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-    await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
-    const config: OpenClawConfig = {
-      memory: {
-        search: {
-          provider: "none",
-          store: {
-            vector: {
-              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-            },
-          },
-        },
-      },
-
-      agents: {
-        defaults: {},
-        list: [{ id: "main", workspace: workspaceDir }],
-      },
-    };
-
-    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
-      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
-    ]);
-    const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
-    expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
-  });
-
-  it("archives legacy vector sidecars when memory search provider is none", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");

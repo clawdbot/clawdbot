@@ -149,21 +149,35 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
       });
 
       await page.setViewportSize({ height: 844, width: 390 });
-      const mobileNudgeBox = await channelNudge.boundingBox();
-      const mobileCtaBox = await page
-        .getByRole("button", { name: "Set up a channel" })
-        .boundingBox();
-      expect(mobileNudgeBox).not.toBeNull();
-      expect(mobileCtaBox).not.toBeNull();
-      expect(mobileNudgeBox!.x).toBeGreaterThanOrEqual(0);
-      expect(mobileNudgeBox!.x + mobileNudgeBox!.width).toBeLessThanOrEqual(390);
-      expect(mobileCtaBox!.x).toBeGreaterThanOrEqual(mobileNudgeBox!.x);
-      expect(mobileCtaBox!.x + mobileCtaBox!.width).toBeLessThanOrEqual(
-        mobileNudgeBox!.x + mobileNudgeBox!.width,
-      );
-      expect(
-        await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth),
-      ).toBe(false);
+      await expect
+        .poll(() =>
+          channelNudge.evaluate((nudge) => {
+            const cta = nudge.querySelector<HTMLElement>(".custodian__nudge-cta");
+            if (!cta) {
+              return null;
+            }
+            const nudgeBox = nudge.getBoundingClientRect();
+            const ctaBox = cta.getBoundingClientRect();
+            return {
+              ctaVisible: ctaBox.width > 0 && ctaBox.height > 0,
+              mobileMediaQuery: window.matchMedia("(max-width: 640px)").matches,
+              noHorizontalOverflow: document.documentElement.scrollWidth <= window.innerWidth,
+              nudgeVisible: nudgeBox.width > 0 && nudgeBox.height > 0,
+              nudgeWithinViewport: nudgeBox.left >= 0 && nudgeBox.right <= window.innerWidth,
+              ctaWithinNudge: ctaBox.left >= nudgeBox.left && ctaBox.right <= nudgeBox.right,
+              viewportWidth: window.innerWidth,
+            };
+          }),
+        )
+        .toEqual({
+          ctaVisible: true,
+          mobileMediaQuery: true,
+          noHorizontalOverflow: true,
+          nudgeVisible: true,
+          nudgeWithinViewport: true,
+          ctaWithinNudge: true,
+          viewportWidth: 390,
+        });
       await page.screenshot({
         animations: "disabled",
         path: path.join(artifactDir, "02b-after-custodian-channel-nudge-mobile.png"),

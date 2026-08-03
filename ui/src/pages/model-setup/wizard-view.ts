@@ -69,6 +69,10 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                       value: props.value,
                       busy: props.state.busy,
                       inputId: WIZARD_TEXT_INPUT_ID,
+                      confirmAffirmativeLabel:
+                        props.mode === "prepare" && props.state.step.type === "confirm"
+                          ? t("modelSetup.wizard.continue")
+                          : undefined,
                       onValueChange: props.onValueChange,
                       onAnswer: props.onAnswer,
                     })}
@@ -77,11 +81,21 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                       : nothing}
                   `}
         </div>
-        <div class="model-setup-wizard__footer">
-          <button type="button" class="btn" @click=${canCancel ? props.onCancel : props.onClose}>
-            ${canCancel ? t("common.cancel") : t("common.close")}
-          </button>
-        </div>
+        ${props.mode === "prepare" &&
+        props.state.phase === "step" &&
+        props.state.step.type === "confirm"
+          ? nothing
+          : html`
+              <div class="model-setup-wizard__footer">
+                <button
+                  type="button"
+                  class="btn"
+                  @click=${canCancel ? props.onCancel : props.onClose}
+                >
+                  ${canCancel ? t("common.cancel") : t("common.close")}
+                </button>
+              </div>
+            `}
       </div>
     </openclaw-modal-dialog>
   `;

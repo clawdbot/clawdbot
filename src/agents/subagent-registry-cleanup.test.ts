@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import { resolveDeferredCleanupDecision } from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function makeEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+type EntryOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & { endedAt?: number };
+
+function makeEntry(overrides: EntryOverrides = {}): SubagentRunRecord {
+  const { endedAt = 1_000, ...recordOverrides } = overrides;
   return {
     runId: "run-1",
     childSessionKey: "agent:main:subagent:child",
@@ -13,8 +16,8 @@ function makeEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
     task: "test",
     cleanup: "keep",
     createdAt: 0,
-    endedAt: 1_000,
-    ...overrides,
+    execution: { status: "terminal", endedAt },
+    ...recordOverrides,
   };
 }
 
@@ -36,7 +39,6 @@ describe("resolveDeferredCleanupDecision", () => {
       now,
       announceExpiryMs: 5 * 60_000,
       announceCompletionHardExpiryMs: 30 * 60_000,
-      maxAnnounceRetryCount: 3,
       deferDescendantDelayMs: 1_000,
       resolveAnnounceRetryDelayMs: () => 2_000,
       ...overrides,

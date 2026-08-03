@@ -18,6 +18,7 @@ vi.mock("../../gateway/server-plugins.js", () => ({
 
 vi.mock("./gateway.js", () => ({ callGatewayTool: mocks.callGatewayTool }));
 
+import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { callInProcessGatewayToolWithCreation } from "./in-process-gateway.js";
 
 describe("trusted in-process Gateway session creation", () => {
@@ -54,5 +55,44 @@ describe("trusted in-process Gateway session creation", () => {
       { agentId: "main" },
       { scopes: ["operator.write"] },
     );
+  });
+
+  it("carries visible-spawn policy through signed identity on fallback dispatch", async () => {
+    mocks.hasContext = false;
+    const inheritedToolPolicy = {
+      version: 1 as const,
+      allow: ["read", "sessions_spawn"],
+      deny: ["exec"],
+    };
+
+    mocks.callGatewayTool.mockImplementationOnce(async () => {
+      expect(getGatewaySessionSpawnContext()).toEqual({
+        completionOwnerSessionKey: "agent:main:discord:direct:alice",
+        inheritedToolPolicy,
+      });
+      return { key: "agent:main:dashboard:child" };
+    });
+
+    await callInProcessGatewayToolWithCreation(
+      "sessions.create",
+      { agentId: "main", parentSessionKey: "agent:main:main", spawnDepth: 1 },
+      {
+        via: "spawn",
+        actor: { type: "agent", id: "agent:main:main" },
+        completionOwnerSessionKey: "agent:main:discord:direct:alice",
+        inheritedToolPolicy,
+      },
+    );
+
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+      "sessions.create",
+      {},
+      { agentId: "main", parentSessionKey: "agent:main:main", spawnDepth: 1 },
+      {
+        scopes: ["operator.write"],
+        requireAgentRuntimeIdentity: true,
+      },
+    );
+    expect(getGatewaySessionSpawnContext()).toBeUndefined();
   });
 });

@@ -23,7 +23,6 @@ import {
   expireDueOperatorApprovals,
   forceDenyOperatorApproval,
   getOperatorApprovalDetailed,
-  getOperatorApprovalDetailedByLocator,
   insertOperatorApproval,
   listPendingOperatorApprovals,
   listTerminalOperatorApprovals,
@@ -174,8 +173,9 @@ describe("operator approval store", () => {
       inserted.record,
     );
     expect(
-      getOperatorApprovalDetailedByLocator({
-        locator: inserted.record.resolutionRef,
+      getOperatorApprovalDetailed({
+        id: inserted.record.resolutionRef,
+        allowTransportRef: true,
         nowMs: 2_000,
         databaseOptions,
       }),
@@ -410,7 +410,7 @@ describe("operator approval store", () => {
     expect(record).toMatchObject({ status: "expired", terminalReason: "timeout" });
   });
 
-  it("preserves protocol-valid boundary whitespace as opaque approval identity", () => {
+  it("preserves BOM, NBSP, and boundary spaces as opaque approval identity", () => {
     const databaseOptions = createDatabaseOptions();
     for (const [index, id] of ["\uFEFF", "\u00A0", " approval-edge "].entries()) {
       const inserted = insertOperatorApproval({
@@ -462,23 +462,6 @@ describe("operator approval store", () => {
     }
   });
 
-  it("preserves protocol-valid boundary whitespace as opaque approval identity", () => {
-    const databaseOptions = createDatabaseOptions();
-    for (const [index, id] of ["\uFEFF", "\u00A0", " approval-edge "].entries()) {
-      const inserted = insertOperatorApproval({
-        approval: approval(id, { createdAtMs: 1_000 + index }),
-        databaseOptions,
-      });
-
-      expect(inserted).toMatchObject({ outcome: "inserted", record: { id } });
-      expect(getOperatorApproval({ id, nowMs: 2_000, databaseOptions })).toMatchObject({
-        id,
-        status: "pending",
-      });
-    }
-    expect(getOperatorApproval({ id: "approval-edge", nowMs: 2_000, databaseOptions })).toBeNull();
-  });
-
   it("keeps canonical ids and transport references in disjoint lookup namespaces", () => {
     const databaseOptions = createDatabaseOptions();
     const inserted = insertOperatorApproval({
@@ -496,8 +479,9 @@ describe("operator approval store", () => {
       }),
     ).toEqual({ outcome: "conflict" });
     expect(
-      getOperatorApprovalDetailedByLocator({
-        locator: inserted.record.resolutionRef,
+      getOperatorApprovalDetailed({
+        id: inserted.record.resolutionRef,
+        allowTransportRef: true,
         nowMs: 2_000,
         databaseOptions,
       }),

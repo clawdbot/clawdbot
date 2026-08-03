@@ -101,6 +101,11 @@ export type CreateChannelIngressDrainOptions<
     pendingEvent: ChannelIngressQueueClaim<TPayload, TMetadata>,
   ) => boolean | Promise<boolean>;
   deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
+  reconcileStoredLaneKey?: (
+    record: ChannelIngressQueueRecord<TPayload, TMetadata>,
+    storedLaneKey: string,
+    derivedLaneKey: string,
+  ) => boolean;
   ownerId?: string;
   adoptionStallTimeoutMs?: number;
   claimLeaseMs?: number;
@@ -715,12 +720,16 @@ export function createChannelIngressDrain<
             !state.superseded
           );
         })
-        .map((claim) => resolveLaneKey(claim, options.deriveLaneKey)),
+        .map((claim) =>
+          resolveLaneKey(claim, options.deriveLaneKey, options.reconcileStoredLaneKey),
+        ),
     );
     const retryDelayedLaneKeys = new Set<string>();
     for (const event of pending) {
       if (resolveIngressRetryDelayMs(event, options.retryPolicy, now()) > 0) {
-        retryDelayedLaneKeys.add(resolveLaneKey(event, options.deriveLaneKey));
+        retryDelayedLaneKeys.add(
+          resolveLaneKey(event, options.deriveLaneKey, options.reconcileStoredLaneKey),
+        );
       }
     }
 
@@ -737,13 +746,13 @@ export function createChannelIngressDrain<
       if (shouldStop()) {
         break;
       }
-      const laneKey = resolveLaneKey(event, options.deriveLaneKey);
+      const laneKey = resolveLaneKey(event, options.deriveLaneKey, options.reconcileStoredLaneKey);
       if (await supersedeActiveIfNeeded(event, laneKey)) {
         blockedLaneKeys.delete(laneKey);
       }
     }
 
-    const candidateIds = pending.map((event) => event.id);
+    const candidateIds = new Set(pending.map((event) => event.id));
     let started = 0;
     while (started < startLimit) {
       if (shouldStop()) {
@@ -756,15 +765,25 @@ export function createChannelIngressDrain<
         scanLimit,
         candidateIds,
         deriveLaneKey: options.deriveLaneKey,
+        ...(options.reconcileStoredLaneKey
+          ? { reconcileStoredLaneKey: options.reconcileStoredLaneKey }
+          : {}),
       });
       if (!claimed) {
         break;
       }
+      // One snapshot row gets one attempt per pass. A released claim remains
+      // pending for the next pump instead of spinning through SQLite here.
+      candidateIds.delete(claimed.id);
       if (shouldStop()) {
         await queue.release(claimed, { recordAttempt: false });
         break;
       }
-      const laneKey = resolveLaneKey(claimed, options.deriveLaneKey);
+      const laneKey = resolveLaneKey(
+        claimed,
+        options.deriveLaneKey,
+        options.reconcileStoredLaneKey,
+      );
       const existing = laneOwnerByKey.get(laneKey);
       if (existing && existing.phase !== "settled") {
         if (await supersedeActiveIfNeeded(claimed, laneKey)) {

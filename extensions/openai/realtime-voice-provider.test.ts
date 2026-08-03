@@ -1,10 +1,17 @@
 // Openai tests cover realtime voice provider plugin behavior.
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
-import type { RealtimeVoiceBridge, RealtimeVoiceTool } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceBridgeEvent,
+  RealtimeVoiceTool,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
+const OPENAI_REALTIME_REJECTED_KEY_MESSAGE =
+  "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source";
 
 function readInternalRealtimeVoiceProviderApi(provider: object) {
   return Reflect.get(provider, INTERNAL_REALTIME_VOICE_PROVIDER) as {
@@ -151,6 +158,7 @@ type SentRealtimeEvent = {
   event_id?: string;
   audio?: string;
   item_id?: string;
+  item?: unknown;
   content_index?: number;
   audio_end_ms?: number;
   session?: {
@@ -182,12 +190,83 @@ type SentRealtimeEvent = {
         voice?: string;
       };
     };
-    item?: unknown;
   };
 };
 
 function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
   return socket.sent.map((payload: string) => JSON.parse(payload) as SentRealtimeEvent);
+}
+
+function createNativeBridge(
+  overrides: Partial<RealtimeVoiceBridgeCreateRequest> = {},
+): RealtimeVoiceBridge {
+  return buildOpenAIRealtimeVoiceProvider().createBridge({
+    providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    onAudio: vi.fn(),
+    onClearAudio: vi.fn(),
+    ...overrides,
+  });
+}
+
+function requireSocket(index = 0): FakeWebSocketInstance {
+  const socket = FakeWebSocket.instances[index];
+  if (!socket) {
+    throw new Error("expected bridge to create a websocket");
+  }
+  return socket;
+}
+
+function beginBridgeConnection(
+  bridge: RealtimeVoiceBridge,
+  socketIndex = 0,
+): { connecting: Promise<void>; socket: FakeWebSocketInstance } {
+  const connecting = bridge.connect();
+  return { connecting, socket: requireSocket(socketIndex) };
+}
+
+function openSocket(socket: FakeWebSocketInstance): void {
+  socket.readyState = FakeWebSocket.OPEN;
+  socket.emit("open");
+}
+
+function emitServerEvent(socket: FakeWebSocketInstance, event: Record<string, unknown>): void {
+  socket.emit("message", Buffer.from(JSON.stringify(event)));
+}
+
+function emitSessionUpdated(socket: FakeWebSocketInstance): void {
+  emitServerEvent(socket, { type: "session.updated" });
+}
+
+function emitCompletedToolCalls(
+  socket: FakeWebSocketInstance,
+  callIds: string[] = ["call_1"],
+): void {
+  emitServerEvent(socket, {
+    type: "response.done",
+    response: {
+      id: "response_tools",
+      status: "completed",
+      output: callIds.map((callId, index) => ({
+        id: `item_${index + 1}`,
+        type: "function_call",
+        status: "completed",
+        call_id: callId,
+        name: "lookup_weather",
+        arguments: "{}",
+      })),
+    },
+  });
+}
+
+async function connectReadyBridge(
+  bridge: RealtimeVoiceBridge,
+  socketIndex = 0,
+): Promise<FakeWebSocketInstance> {
+  const { connecting, socket } = beginBridgeConnection(bridge, socketIndex);
+  openSocket(socket);
+  emitSessionUpdated(socket);
+  await connecting;
+  return socket;
 }
 
 function expectedResponseCreateEvent() {
@@ -1456,32 +1535,23 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("waits for session.updated before draining audio and firing onReady", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onReady = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       instructions: "Be helpful.",
       language: "de",
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
       onReady,
     });
-    const connecting = bridge.connect();
+    const { connecting, socket } = beginBridgeConnection(bridge);
     let connectResolved = false;
     void connecting.then(() => {
       connectResolved = true;
     });
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
+    openSocket(socket);
     await Promise.resolve();
 
     bridge.sendAudio(Buffer.from("before-ready"));
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.created" })));
+    emitServerEvent(socket, { type: "session.created" });
 
     expect(connectResolved).toBe(false);
     expect(onReady).not.toHaveBeenCalled();
@@ -1505,7 +1575,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(session).not.toHaveProperty("temperature");
     expect(bridge.isConnected()).toBe(false);
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    emitSessionUpdated(socket);
     await connecting;
 
     expect(connectResolved).toBe(true);
@@ -1518,25 +1588,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("bounds queued audio by aggregate bytes before session readiness", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
+    const bridge = createNativeBridge();
+    const { connecting, socket } = beginBridgeConnection(bridge);
+    openSocket(socket);
     await Promise.resolve();
 
     bridge.sendAudio(Buffer.alloc(512 * 1024, 0x01));
     bridge.sendAudio(Buffer.alloc(512 * 1024, 0x02));
     bridge.sendAudio(Buffer.from("overflow"));
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    emitSessionUpdated(socket);
     await connecting;
 
     const audioEvents = parseSent(socket).filter(
@@ -1549,20 +1609,36 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.close();
   });
 
+  it("discards audio closed before the first connection and reconnects fresh", async () => {
+    const onClose = vi.fn();
+    const bridge = createNativeBridge({ onClose });
+
+    bridge.sendAudio(Buffer.from("queued-before-connect"));
+    bridge.close();
+    bridge.close();
+    bridge.sendAudio(Buffer.from("sent-after-close"));
+
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(onClose).not.toHaveBeenCalled();
+
+    const { connecting, socket } = beginBridgeConnection(bridge);
+    openSocket(socket);
+    emitSessionUpdated(socket);
+    await connecting;
+
+    expect(
+      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
+    ).toHaveLength(0);
+
+    bridge.close();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("completed");
+  });
+
   it("does not carry queued audio across terminal close and explicit reconnect", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const firstConnect = bridge.connect();
-    const firstSocket = FakeWebSocket.instances[0];
-    if (!firstSocket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
+    const bridge = createNativeBridge();
+    const { connecting: firstConnect, socket: firstSocket } = beginBridgeConnection(bridge);
+    openSocket(firstSocket);
     await Promise.resolve();
 
     bridge.sendAudio(Buffer.from("queued-before-close"));
@@ -1570,14 +1646,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     await firstConnect;
     bridge.sendAudio(Buffer.from("sent-after-close"));
 
-    const reconnecting = bridge.connect();
-    const secondSocket = FakeWebSocket.instances[1];
-    if (!secondSocket) {
-      throw new Error("expected bridge to reconnect");
-    }
-    secondSocket.readyState = FakeWebSocket.OPEN;
-    secondSocket.emit("open");
-    secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting: reconnecting, socket: secondSocket } = beginBridgeConnection(bridge, 1);
+    openSocket(secondSocket);
+    emitSessionUpdated(secondSocket);
     await reconnecting;
 
     expect(
@@ -1587,57 +1658,82 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("shares an in-flight connection until session readiness", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onReady = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onReady,
-    });
+    const bridge = createNativeBridge({ onReady });
     const firstConnect = bridge.connect();
     const secondConnect = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const socket = requireSocket();
 
     expect(FakeWebSocket.instances).toHaveLength(1);
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    openSocket(socket);
+    emitSessionUpdated(socket);
 
     await Promise.all([firstConnect, secondConnect]);
     expect(onReady).toHaveBeenCalledOnce();
     bridge.close();
   });
 
+  it("fails terminally when the readiness callback throws", async () => {
+    vi.useFakeTimers();
+    const readyError = new Error("readiness callback failed");
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const onReady = vi.fn(() => {
+      throw readyError;
+    });
+    const bridge = createNativeBridge({ onClose, onError, onReady });
+    const { connecting, socket } = beginBridgeConnection(bridge);
+    let connectError: unknown;
+    const observedConnect = connecting.catch((error: unknown) => {
+      connectError = error;
+    });
+
+    openSocket(socket);
+    bridge.sendAudio(Buffer.from("queued-before-ready"));
+    emitSessionUpdated(socket);
+    await vi.advanceTimersByTimeAsync(0);
+    const immediateConnectError = connectError;
+
+    bridge.close();
+    await observedConnect;
+
+    expect(immediateConnectError).toBe(readyError);
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(readyError);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(socket.closed).toBe(true);
+    expect(bridge.isConnected()).toBe(false);
+    expect(
+      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
+    ).toHaveLength(0);
+
+    emitSessionUpdated(socket);
+    await expect(bridge.connect()).rejects.toBe(readyError);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("suppresses auto responses before draining queued initial greeting audio", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const bridgeRef: { current?: RealtimeVoiceBridge } = {};
     const onReady = vi.fn(() => {
       bridgeRef.current?.triggerGreeting?.("Say exactly: hello from explicit speech.");
     });
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       instructions: "Be helpful.",
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
       onReady,
     });
     bridgeRef.current = bridge;
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const { connecting, socket } = beginBridgeConnection(bridge);
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
+    openSocket(socket);
     await Promise.resolve();
 
     bridge.sendAudio(Buffer.from("before-ready"));
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    emitSessionUpdated(socket);
     await connecting;
 
     const sent = parseSent(socket);
@@ -1673,7 +1769,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(sent.filter((event) => event.type === "response.create")).toHaveLength(1);
     expect(onReady).toHaveBeenCalledTimes(1);
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    emitServerEvent(socket, { type: "response.done" });
 
     expectRecordFields(
       requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
@@ -1686,9 +1782,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("omits unsupported OpenAI tool names from GA session updates", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       tools: [
         createRealtimeTool("1_lookup"),
         createRealtimeTool("calendar.lookup:next"),
@@ -1698,46 +1792,29 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         createMalformedToolName(42),
         createUnreadableToolName(),
       ],
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const { connecting, socket } = beginBridgeConnection(bridge);
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
+    openSocket(socket);
 
     const tools = requireSession(socket).tools as Array<{ name?: string }>;
     expect(tools.map((tool) => tool.name)).toEqual(["1_lookup", "x".repeat(65)]);
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    emitSessionUpdated(socket);
     await connecting;
   });
 
   it("rotates realtime bridges on provider max-duration events without reporting an error", async () => {
     vi.useFakeTimers();
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
     const onEvent = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-      onEvent,
-    });
-    const connecting = bridge.connect();
-    const firstSocket = FakeWebSocket.instances[0];
-    if (!firstSocket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const onReady = vi.fn();
+    const bridge = createNativeBridge({ onError, onEvent, onReady });
+    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
 
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    openSocket(firstSocket);
+    emitSessionUpdated(firstSocket);
     await connecting;
+    expect(onReady).toHaveBeenCalledOnce();
 
     firstSocket.emit(
       "message",
@@ -1764,13 +1841,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     await vi.advanceTimersByTimeAsync(1000);
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
-    const secondSocket = FakeWebSocket.instances[1];
-    if (!secondSocket) {
-      throw new Error("expected bridge to reconnect");
-    }
-    secondSocket.readyState = FakeWebSocket.OPEN;
-    secondSocket.emit("open");
-    secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const secondSocket = requireSocket(1);
+    openSocket(secondSocket);
+    emitSessionUpdated(secondSocket);
 
     await vi.waitFor(() =>
       expect(onEvent).toHaveBeenCalledWith({
@@ -1787,29 +1860,80 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       }),
     );
     expect(bridge.isConnected()).toBe(true);
+    expect(onReady).toHaveBeenCalledOnce();
 
     bridge.close();
   });
 
+  it("clears canceled rotation metadata before an explicit reconnect", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const onReady = vi.fn();
+    const bridge = createNativeBridge({ onClose, onError, onEvent, onReady });
+    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
+
+    firstSocket.deferClose = true;
+    openSocket(firstSocket);
+    emitSessionUpdated(firstSocket);
+    await connecting;
+    expect(onReady).toHaveBeenCalledOnce();
+
+    emitServerEvent(firstSocket, {
+      type: "error",
+      error: { message: "Your session hit the maximum duration of 60 minutes." },
+    });
+    expect(firstSocket.closed).toBe(true);
+
+    bridge.close();
+    bridge.close();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("completed");
+
+    const { connecting: reconnecting, socket: secondSocket } = beginBridgeConnection(bridge, 1);
+    firstSocket.emitDeferredClose();
+    openSocket(secondSocket);
+    emitSessionUpdated(secondSocket);
+    await reconnecting;
+
+    expect(onReady).toHaveBeenCalledTimes(2);
+    expect(onEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "session.rotation.ready" }),
+    );
+    expect(onError).not.toHaveBeenCalled();
+
+    secondSocket.readyState = FakeWebSocket.CLOSED;
+    secondSocket.emit("close", 1006, Buffer.from("ordinary drop"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "client",
+      type: "session.reconnect.scheduled",
+      detail: "reason=websocket-close attempt=1 delayMs=1000",
+    });
+    expect(onEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session.reconnect.scheduled",
+        detail: expect.stringContaining("reason=max-duration"),
+      }),
+    );
+
+    bridge.close();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenLastCalledWith("completed");
+  });
+
   it("cancels a pending reconnect and allows a later explicit connect", async () => {
     vi.useFakeTimers();
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const bridge = createNativeBridge({ onError });
+    const { connecting, socket } = beginBridgeConnection(bridge);
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    openSocket(socket);
+    emitSessionUpdated(socket);
     await connecting;
 
     socket.readyState = FakeWebSocket.CLOSED;
@@ -1824,14 +1948,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(onError).not.toHaveBeenCalled();
 
-    const reconnecting = bridge.connect();
-    const reconnectedSocket = FakeWebSocket.instances[1];
-    if (!reconnectedSocket) {
-      throw new Error("expected bridge to reconnect after close");
-    }
-    reconnectedSocket.readyState = FakeWebSocket.OPEN;
-    reconnectedSocket.emit("open");
-    reconnectedSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting: reconnecting, socket: reconnectedSocket } = beginBridgeConnection(
+      bridge,
+      1,
+    );
+    openSocket(reconnectedSocket);
+    emitSessionUpdated(reconnectedSocket);
     await reconnecting;
 
     expect(bridge.isConnected()).toBe(true);
@@ -1840,28 +1962,103 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.close();
   });
 
+  it("does not report reconnect readiness after cancellation during provider setup", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = createNativeBridge({ onClose, onError, onEvent });
+    const socket = await connectReadyBridge(bridge);
+
+    socket.readyState = FakeWebSocket.CLOSED;
+    socket.emit("close", 1006, Buffer.from("transient drop"));
+    await vi.advanceTimersByTimeAsync(1000);
+    const retrySocket = requireSocket(1);
+    openSocket(retrySocket);
+
+    bridge.close();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "session.reconnect.ready" }),
+    );
+    expect(onError).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("completed");
+  });
+
+  it("lets cancellation win a queued reconnect startup error", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const bridge = createNativeBridge({ onClose, onError });
+    const socket = await connectReadyBridge(bridge);
+
+    socket.readyState = FakeWebSocket.CLOSED;
+    socket.emit("close", 1006, Buffer.from("transient drop"));
+    await vi.advanceTimersByTimeAsync(1000);
+    const retrySocket = requireSocket(1);
+    openSocket(retrySocket);
+    emitServerEvent(retrySocket, {
+      type: "error",
+      error: { message: "queued retry startup failure" },
+    });
+
+    bridge.close();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("completed");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reports one terminal error for malformed audio during reconnect setup", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = createNativeBridge({ onClose, onError, onEvent });
+    const socket = await connectReadyBridge(bridge);
+
+    socket.readyState = FakeWebSocket.CLOSED;
+    socket.emit("close", 1006, Buffer.from("transient drop"));
+    await vi.advanceTimersByTimeAsync(1000);
+    const retrySocket = requireSocket(1);
+    openSocket(retrySocket);
+    emitServerEvent(retrySocket, {
+      type: "response.output_audio.delta",
+      item_id: "item_1",
+      delta: "not-base64!",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      new Error("OpenAI realtime stream returned malformed base64 audio data"),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(onEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "session.reconnect.ready" }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("ignores late events from a socket replaced by reconnect", async () => {
     vi.useFakeTimers();
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onAudio = vi.fn();
     const onClose = vi.fn();
     const onError = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       onAudio,
-      onClearAudio: vi.fn(),
       onClose,
       onError,
     });
-    const connecting = bridge.connect();
-    const firstSocket = FakeWebSocket.instances[0];
-    if (!firstSocket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
 
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    openSocket(firstSocket);
+    emitSessionUpdated(firstSocket);
     await connecting;
 
     firstSocket.readyState = FakeWebSocket.CLOSED;
@@ -1880,16 +2077,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(onError).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1000);
-    const secondSocket = FakeWebSocket.instances[1];
-    if (!secondSocket) {
-      throw new Error("expected bridge to reconnect");
-    }
-    secondSocket.readyState = FakeWebSocket.OPEN;
-    secondSocket.emit("open");
-    secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const secondSocket = requireSocket(1);
+    openSocket(secondSocket);
+    emitSessionUpdated(secondSocket);
     await vi.waitFor(() => expect(bridge.isConnected()).toBe(true));
 
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    emitSessionUpdated(firstSocket);
     firstSocket.emit("error", new Error("late socket failure"));
     firstSocket.emit("close", 1006, Buffer.from("late socket close"));
     await vi.advanceTimersByTimeAsync(0);
@@ -1904,27 +2097,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
   it("exhausts retries when sockets open but never become provider-ready", async () => {
     vi.useFakeTimers();
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onClose = vi.fn();
     const onError = vi.fn();
     const onEvent = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onClose,
-      onError,
-      onEvent,
-    });
-    const connecting = bridge.connect();
-    const firstSocket = FakeWebSocket.instances[0];
-    if (!firstSocket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const bridge = createNativeBridge({ onClose, onError, onEvent });
+    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
 
-    firstSocket.readyState = FakeWebSocket.OPEN;
-    firstSocket.emit("open");
-    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    openSocket(firstSocket);
+    emitSessionUpdated(firstSocket);
     await connecting;
 
     firstSocket.readyState = FakeWebSocket.CLOSED;
@@ -1939,12 +2119,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         }),
       );
       await vi.advanceTimersByTimeAsync(1000 * 2 ** (attempt - 1));
-      const retrySocket = FakeWebSocket.instances[attempt];
-      if (!retrySocket) {
-        throw new Error(`expected reconnect socket ${attempt}`);
-      }
-      retrySocket.readyState = FakeWebSocket.OPEN;
-      retrySocket.emit("open");
+      const retrySocket = requireSocket(attempt);
+      openSocket(retrySocket);
       retrySocket.emit(
         "message",
         Buffer.from(
@@ -1971,8 +2147,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("keeps Azure deployment bridges on deployment-compatible session payloads", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
+    const bridge = createNativeBridge({
       providerConfig: {
         apiKey: "sk-test", // pragma: allowlist secret
         azureEndpoint: "https://example.openai.azure.com/",
@@ -1987,21 +2162,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         createRealtimeTool("calendar.lookup:next"),
         createRealtimeTool("x".repeat(65)),
       ],
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const { connecting, socket } = beginBridgeConnection(bridge);
 
     expect(socket.args[0]).toBe(
       "wss://example.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=realtime-prod",
     );
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
+    openSocket(socket);
     await Promise.resolve();
 
     const session = requireSession(socket);
@@ -2026,7 +2194,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const tools = session.tools as Array<{ name?: string }>;
     expect(tools.map((tool) => tool.name)).toEqual(["1_lookup"]);
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    emitSessionUpdated(socket);
     await connecting;
 
     bridge.triggerGreeting?.("Say hello.");
@@ -2046,7 +2214,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       expectedResponseCreateEvent(),
     ]);
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    emitServerEvent(socket, { type: "response.done" });
     expect(parseSent(socket).at(-1)).toEqual({
       type: "session.update",
       session: {
@@ -2062,20 +2230,10 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("rejects connection when session configuration fails before readiness", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const bridge = createNativeBridge();
+    const { connecting, socket } = beginBridgeConnection(bridge);
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
+    openSocket(socket);
     socket.emit(
       "message",
       Buffer.from(
@@ -2091,30 +2249,18 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("treats pre-ready auth errors as a single startup failure", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
     const onClose = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-      onClose,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const bridge = createNativeBridge({ onError, onClose });
+    const { connecting, socket } = beginBridgeConnection(bridge);
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
+    openSocket(socket);
     socket.emit(
       "message",
       Buffer.from(
         JSON.stringify({
           type: "error",
-          error: { message: "Incorrect API key provided" },
+          error: { message: "Incorrect API key provided: sk-proj-***" },
         }),
       ),
     );
@@ -2123,36 +2269,86 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       Buffer.from(
         JSON.stringify({
           type: "error",
-          error: { message: "Incorrect API key provided" },
+          error: { message: "Incorrect API key provided: sk-proj-***" },
         }),
       ),
     );
 
-    await expect(connecting).rejects.toThrow("Incorrect API key provided");
+    await expect(connecting).rejects.toThrow(OPENAI_REALTIME_REJECTED_KEY_MESSAGE);
     expect(onError).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(socket.closed).toBe(true);
     expect(bridge.isConnected()).toBe(false);
   });
 
-  it("keeps a retried connection ready after delayed startup failure close", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const onClose = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onClose,
+  it("normalizes structured direct OpenAI startup auth errors", async () => {
+    const bridge = createNativeBridge();
+    const { connecting, socket } = beginBridgeConnection(bridge);
+
+    openSocket(socket);
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            code: "invalid_api_key",
+            message: "Invalid API key",
+          },
+        }),
+      ),
+    );
+
+    await expect(connecting).rejects.toThrow(OPENAI_REALTIME_REJECTED_KEY_MESSAGE);
+    expect(bridge.isConnected()).toBe(false);
+  });
+
+  it("normalizes direct OpenAI socket handshake auth errors", async () => {
+    const bridge = createNativeBridge();
+    const { connecting, socket } = beginBridgeConnection(bridge);
+
+    socket.emit("error", new Error("Unexpected server response: 401"));
+
+    await expect(connecting).rejects.toThrow(OPENAI_REALTIME_REJECTED_KEY_MESSAGE);
+    expect(bridge.isConnected()).toBe(false);
+  });
+
+  it.each([
+    [
+      "Azure deployment",
+      {
+        apiKey: "sk-test", // pragma: allowlist secret
+        azureEndpoint: "https://example.openai.azure.com",
+        azureDeployment: "realtime-prod",
+      },
+    ],
+    [
+      "custom endpoint",
+      {
+        apiKey: "sk-test", // pragma: allowlist secret
+        azureEndpoint: "https://realtime-proxy.example.com",
+      },
+    ],
+  ])("preserves %s startup auth errors", async (_label, providerConfig) => {
+    const bridge = createNativeBridge({
+      providerConfig,
     });
-    const failedConnect = bridge.connect();
-    const failedSocket = FakeWebSocket.instances[0];
-    if (!failedSocket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const { connecting, socket } = beginBridgeConnection(bridge);
+
+    socket.emit("error", new Error("Unexpected server response: 401"));
+
+    await expect(connecting).rejects.toThrow("Unexpected server response: 401");
+    expect(bridge.isConnected()).toBe(false);
+  });
+
+  it("keeps a retried connection ready after delayed startup failure close", async () => {
+    const onClose = vi.fn();
+    const bridge = createNativeBridge({ onClose });
+    const { connecting: failedConnect, socket: failedSocket } = beginBridgeConnection(bridge);
     failedSocket.deferClose = true;
 
-    failedSocket.readyState = FakeWebSocket.OPEN;
-    failedSocket.emit("open");
+    openSocket(failedSocket);
     failedSocket.emit(
       "message",
       Buffer.from(
@@ -2163,17 +2359,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       ),
     );
 
-    await expect(failedConnect).rejects.toThrow("Incorrect API key provided");
+    await expect(failedConnect).rejects.toThrow(OPENAI_REALTIME_REJECTED_KEY_MESSAGE);
     expect(failedSocket.deferredClose).toBeDefined();
 
-    const retryConnect = bridge.connect();
-    const retrySocket = FakeWebSocket.instances[1];
-    if (!retrySocket) {
-      throw new Error("expected bridge retry to create a websocket");
-    }
-    retrySocket.readyState = FakeWebSocket.OPEN;
-    retrySocket.emit("open");
-    retrySocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const { connecting: retryConnect, socket: retrySocket } = beginBridgeConnection(bridge, 1);
+    openSocket(retrySocket);
+    emitSessionUpdated(retrySocket);
     await retryConnect;
 
     expect(bridge.isConnected()).toBe(true);
@@ -2183,20 +2374,10 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("rejects connection when the socket closes before session readiness", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const bridge = createNativeBridge();
+    const { connecting, socket } = beginBridgeConnection(bridge);
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
+    openSocket(socket);
     socket.close(1006, "session closed");
 
     await expect(connecting).rejects.toThrow("OpenAI realtime connection closed before ready");
@@ -2205,19 +2386,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
   it("does not report startup timeout shutdown as a clean close", async () => {
     vi.useFakeTimers();
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onClose = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onClose,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const bridge = createNativeBridge({ onClose });
+    const { connecting, socket } = beginBridgeConnection(bridge);
 
     const timeoutAssertion = expect(connecting).rejects.toThrow(
       "OpenAI realtime connection timeout",
@@ -2231,22 +2402,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("can disable automatic audio turn responses for agent-routed voice loops", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       autoRespondToAudio: false,
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const { connecting, socket } = beginBridgeConnection(bridge);
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    openSocket(socket);
+    emitSessionUpdated(socket);
     await connecting;
 
     expectRecordFields(
@@ -2260,24 +2422,11 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("can disable realtime response interruption while keeping audio responses enabled", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       autoRespondToAudio: true,
       interruptResponseOnInputAudio: false,
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
 
     expectRecordFields(
       requireNestedRecord(requireSession(socket), ["audio", "input", "turn_detection"]),
@@ -2290,26 +2439,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("does not locally clear playback on speech-start events when input interruption is disabled", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onAudio = vi.fn();
     const onClearAudio = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       autoRespondToAudio: true,
       interruptResponseOnInputAudio: false,
       onAudio,
       onClearAudio,
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
 
     socket.emit(
       "message",
@@ -2337,25 +2475,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("keeps assistant playback active on server VAD when automatic audio responses are disabled", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onAudio = vi.fn();
     const onClearAudio = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       autoRespondToAudio: false,
       onAudio,
       onClearAudio,
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
 
     socket.emit(
       "message",
@@ -2383,24 +2510,10 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("can request PCM16 24 kHz realtime audio for Chrome command-pair bridges", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
     });
-
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
 
     const session = requireSession(socket);
     expect(requireNestedRecord(session, ["audio", "input", "format"])).toEqual({
@@ -2414,19 +2527,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("settles cleanly when closed before the websocket opens", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onClose = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onClose,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const bridge = createNativeBridge({ onClose });
+    const { connecting, socket } = beginBridgeConnection(bridge);
 
     bridge.close();
     bridge.close();
@@ -2439,25 +2542,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("truncates externally interrupted playback after an immediate mark acknowledgement", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onAudio = vi.fn();
     const onClearAudio = vi.fn();
-    const bridge: ReturnType<typeof provider.createBridge> = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       onAudio,
       onClearAudio,
       onMark: () => bridge.acknowledgeMark(),
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
 
     bridge.setMediaTimestamp(1000);
     socket.emit(
@@ -2492,25 +2584,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("preserves FIFO playback acknowledgements after sustained output", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onClearAudio = vi.fn();
     const onMark = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
+    const bridge = createNativeBridge({
       onClearAudio,
       onMark,
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
 
     bridge.setMediaTimestamp(1000);
     for (let index = 0; index < 300; index += 1) {
@@ -2571,24 +2651,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("treats a later named mark as cumulative playback progress", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onMark = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onMark,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge({ onMark });
+    const socket = await connectReadyBridge(bridge);
 
     bridge.setMediaTimestamp(1000);
     for (let index = 0; index < 3; index += 1) {
@@ -2619,25 +2684,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("forwards current realtime output audio events", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onAudio = vi.fn();
     const onTranscript = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       onAudio,
-      onClearAudio: vi.fn(),
       onTranscript,
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
 
     const audio = Buffer.from("assistant audio");
     socket.emit(
@@ -2668,30 +2721,67 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
   });
 
+  it("surfaces input transcription failures with their provider error details", async () => {
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = createNativeBridge({ onError, onEvent });
+    const socket = await connectReadyBridge(bridge);
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.failed",
+          item_id: "item_speech",
+          error: { code: "decoder_failure", message: "speech decoder exploded" },
+        }),
+      ),
+    );
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "speech decoder exploded" }),
+    );
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "conversation.item.input_audio_transcription.failed",
+      itemId: "item_speech",
+      detail: "speech decoder exploded",
+    });
+  });
+
+  it("preserves corrected final text from legacy realtime text events", async () => {
+    const onTranscript = vi.fn();
+    const bridge = createNativeBridge({ onTranscript });
+    const socket = await connectReadyBridge(bridge);
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.text.delta", delta: "draft assistant" })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.text.done", text: "corrected assistant" })),
+    );
+
+    expect(onTranscript.mock.calls).toEqual([
+      ["assistant", "draft assistant", false],
+      ["assistant", "corrected assistant", true],
+    ]);
+  });
+
   it.each([
     ["invalid alphabet", "not-base64!"],
     ["non-canonical pad bits", "ZE=="],
   ])("terminates the session for %s in output audio", async (_scenario, delta) => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onAudio = vi.fn();
     const onError = vi.fn();
     const onClose = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       onAudio,
-      onClearAudio: vi.fn(),
       onError,
       onClose,
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
 
     socket.emit(
       "message",
@@ -2718,25 +2808,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("forwards Codex-compatible legacy realtime audio and transcript events", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onAudio = vi.fn();
     const onTranscript = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+    const bridge = createNativeBridge({
       onAudio,
-      onClearAudio: vi.fn(),
       onTranscript,
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
 
     const audio = Buffer.from("legacy assistant audio");
     socket.emit(
@@ -2784,115 +2862,56 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(onTranscript).toHaveBeenCalledWith("assistant", "final assistant text", true);
   });
 
-  it("emits tool calls from realtime conversation item done events", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
+  it("executes tool calls only from successful response output", async () => {
     const onToolCall = vi.fn();
-    const onEvent = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onToolCall,
-      onEvent,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const bridge = createNativeBridge({ onToolCall });
+    const socket = await connectReadyBridge(bridge);
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
-
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "conversation.item.done",
-          item: {
-            id: "item_tool_1",
-            type: "function_call",
-            name: "openclaw_agent_consult",
-            call_id: "call_1",
-            arguments: JSON.stringify({ question: "delegate this" }),
-          },
-        }),
-      ),
-    );
-
-    expect(onToolCall).toHaveBeenCalledWith({
-      itemId: "item_tool_1",
-      callId: "call_1",
+    emitServerEvent(socket, {
+      type: "response.function_call_arguments.delta",
+      item_id: "item_tool_1",
       name: "openclaw_agent_consult",
-      args: { question: "delegate this" },
+      call_id: "call_1",
+      delta: '{"question":"provisional',
     });
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "server",
+    emitServerEvent(socket, {
+      type: "response.function_call_arguments.done",
+      item_id: "item_tool_1",
+      name: "openclaw_agent_consult",
+      call_id: "call_1",
+      arguments: '{"question":"still provisional"}',
+    });
+    emitServerEvent(socket, {
       type: "conversation.item.done",
-      detail: "function_call name=openclaw_agent_consult",
+      item: {
+        id: "item_tool_1",
+        type: "function_call",
+        name: "openclaw_agent_consult",
+        call_id: "call_1",
+        arguments: '{"question":"not terminal"}',
+      },
     });
-  });
+    expect(onToolCall).not.toHaveBeenCalled();
 
-  it("deduplicates tool calls reported by arguments done and item done events", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const onToolCall = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onToolCall,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
-
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.function_call_arguments.delta",
-          item_id: "item_tool_1",
-          name: "openclaw_agent_consult",
-          call_id: "call_1",
-          delta: JSON.stringify({ question: "delegate this" }),
-        }),
-      ),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.function_call_arguments.done",
-          item_id: "item_tool_1",
-          name: "openclaw_agent_consult",
-          call_id: "call_1",
-        }),
-      ),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "conversation.item.done",
-          item: {
+    const completed = {
+      type: "response.done",
+      response: {
+        id: "response_1",
+        status: "completed",
+        output: [
+          {
             id: "item_tool_1",
             type: "function_call",
+            status: "completed",
             name: "openclaw_agent_consult",
             call_id: "call_1",
-            arguments: JSON.stringify({ question: "delegate this" }),
+            arguments: '{"question":"delegate this"}',
           },
-        }),
-      ),
-    );
+        ],
+      },
+    };
+    emitServerEvent(socket, completed);
+    emitServerEvent(socket, completed);
 
     expect(onToolCall).toHaveBeenCalledTimes(1);
     expect(onToolCall).toHaveBeenCalledWith({
@@ -2903,25 +2922,302 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
   });
 
-  it("creates an explicit user item and response for manual speech", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const onEvent = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onEvent,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+  it.each(["cancelled", "failed", "incomplete"])(
+    "ignores function calls from a %s response",
+    async (status) => {
+      const onToolCall = vi.fn();
+      const bridge = createNativeBridge({ onToolCall });
+      const socket = await connectReadyBridge(bridge);
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+      emitServerEvent(socket, {
+        type: "response.done",
+        response: {
+          id: "response_1",
+          status,
+          output: [
+            {
+              id: "item_tool_1",
+              type: "function_call",
+              status: "completed",
+              name: "openclaw_agent_consult",
+              call_id: "call_1",
+              arguments: '{"question":"must stay inert"}',
+            },
+          ],
+        },
+      });
+
+      expect(onToolCall).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ignores malformed and unfinished response output items", async () => {
+    const onToolCall = vi.fn();
+    const bridge = createNativeBridge({ onToolCall });
+    const socket = await connectReadyBridge(bridge);
+
+    emitServerEvent(socket, {
+      type: "response.done",
+      response: {
+        id: "response_1",
+        status: "completed",
+        output: [
+          null,
+          "invalid",
+          {
+            id: "item_tool_1",
+            type: "function_call",
+            status: "incomplete",
+            name: "openclaw_agent_consult",
+            call_id: "call_1",
+            arguments: '{"question":"unfinished"}',
+          },
+        ],
+      },
+    });
+
+    expect(onToolCall).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "an argument object",
+      finalArguments: '{"city":"Paris"}',
+      expectedArguments: { city: "Paris" },
+    },
+    {
+      name: "the shipped empty argument contract",
+      finalArguments: "",
+      expectedArguments: {},
+    },
+  ])(
+    "uses terminal response arguments for $name",
+    async ({ finalArguments, expectedArguments }) => {
+      const onToolCall = vi.fn();
+      const bridge = createNativeBridge({ onToolCall });
+      const socket = await connectReadyBridge(bridge);
+
+      emitServerEvent(socket, {
+        type: "response.done",
+        response: {
+          id: "response_1",
+          status: "completed",
+          output: [
+            {
+              id: "item_tool_1",
+              type: "function_call",
+              status: "completed",
+              call_id: "call_1",
+              name: "lookup_weather",
+              arguments: finalArguments,
+            },
+          ],
+        },
+      });
+
+      expect(onToolCall).toHaveBeenCalledWith({
+        itemId: "item_tool_1",
+        callId: "call_1",
+        name: "lookup_weather",
+        args: expectedArguments,
+      });
+    },
+  );
+
+  it.each([
+    { name: "malformed JSON", arguments: '{"city":', reason: "malformed-json" },
+    { name: "an array", arguments: '["Paris"]', reason: "non-object-json" },
+    { name: "JSON null", arguments: "null", reason: "non-object-json" },
+    { name: "a number", arguments: "42", reason: "non-object-json" },
+    { name: "a boolean", arguments: "true", reason: "non-object-json" },
+    { name: "missing arguments", arguments: undefined, reason: "invalid-json-type" },
+    { name: "non-string arguments", arguments: { city: "Paris" }, reason: "invalid-json-type" },
+  ])("rejects $name per call without ending the session", async ({ arguments: args, reason }) => {
+    const onToolCall = vi.fn();
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = createNativeBridge({ onToolCall, onError, onEvent });
+    const socket = await connectReadyBridge(bridge);
+    const completed = {
+      type: "response.done",
+      response: {
+        id: "response_1",
+        status: "completed",
+        output: [
+          {
+            id: "item_tool_1",
+            type: "function_call",
+            status: "completed",
+            call_id: "call_1",
+            name: "lookup_weather",
+            arguments: args,
+          },
+        ],
+      },
+    };
+
+    emitServerEvent(socket, { type: "response.created", response: { id: "response_1" } });
+    emitServerEvent(socket, completed);
+    emitServerEvent(socket, completed);
+
+    expect(onToolCall).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "tool_call.arguments.rejected",
+      detail: `reason=${reason}`,
+      itemId: "item_tool_1",
+    });
+    expect(
+      parseSent(socket).filter(
+        (event) =>
+          event.type === "conversation.item.create" &&
+          (event.item as { call_id?: string } | undefined)?.call_id === "call_1",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "accepts",
+      encoding: "ASCII",
+      argumentBytes: 256_000,
+      unit: "a",
+      repeat: 255_992,
+      suffix: "",
+      rejected: false,
+    },
+    {
+      name: "rejects",
+      encoding: "ASCII",
+      argumentBytes: 256_001,
+      unit: "a",
+      repeat: 255_993,
+      suffix: "",
+      rejected: true,
+    },
+    {
+      name: "accepts",
+      encoding: "multibyte",
+      argumentBytes: 256_000,
+      unit: "é",
+      repeat: 127_996,
+      suffix: "",
+      rejected: false,
+    },
+    {
+      name: "rejects",
+      encoding: "multibyte",
+      argumentBytes: 256_001,
+      unit: "é",
+      repeat: 127_996,
+      suffix: "a",
+      rejected: true,
+    },
+  ])(
+    "$name $argumentBytes-byte $encoding UTF-8 arguments",
+    async ({ argumentBytes, unit, repeat, suffix, rejected }) => {
+      const onToolCall = vi.fn();
+      const onError = vi.fn();
+      const bridge = createNativeBridge({ onToolCall, onError });
+      const socket = await connectReadyBridge(bridge);
+      const rawArgs = `{"x":"${unit.repeat(repeat)}${suffix}"}`;
+      expect(Buffer.byteLength(rawArgs, "utf8")).toBe(argumentBytes);
+
+      emitServerEvent(socket, {
+        type: "response.done",
+        response: {
+          id: "response_1",
+          status: "completed",
+          output: [
+            {
+              id: "item_tool_1",
+              type: "function_call",
+              status: "completed",
+              call_id: "call_1",
+              name: "lookup_weather",
+              arguments: rawArgs,
+            },
+          ],
+        },
+      });
+
+      expect(onToolCall).toHaveBeenCalledTimes(rejected ? 0 : 1);
+      expect(
+        parseSent(socket).some(
+          (event) =>
+            event.type === "conversation.item.create" &&
+            (event.item as { call_id?: string } | undefined)?.call_id === "call_1",
+        ),
+      ).toBe(rejected);
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ends an extreme session before terminal tool-call ids become unbounded", async () => {
+    const onToolCall = vi.fn();
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const bridge = createNativeBridge({ onToolCall, onError, onClose });
+    const socket = await connectReadyBridge(bridge);
+
+    emitServerEvent(socket, {
+      type: "response.done",
+      response: {
+        id: "response_1",
+        status: "completed",
+        output: Array.from({ length: 1_025 }, (_, index) => ({
+          id: `item_${index}`,
+          type: "function_call",
+          status: "completed",
+          call_id: `call_${index}`,
+          name: "lookup_weather",
+          arguments: "{}",
+        })),
+      },
+    });
+
+    expect(onToolCall).toHaveBeenCalledTimes(1_024);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      new Error("OpenAI realtime tool-call session limit exceeded (1024)"),
+    );
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(socket.closed).toBe(true);
+    await expect(bridge.connect()).rejects.toThrow(
+      "OpenAI realtime tool-call session limit exceeded (1024)",
+    );
+  });
+
+  it("stops dispatching terminal output when a tool callback closes the bridge", async () => {
+    const onToolCall = vi.fn();
+    const bridge = createNativeBridge({ onToolCall });
+    onToolCall.mockImplementation(() => bridge.close());
+    const socket = await connectReadyBridge(bridge);
+
+    emitServerEvent(socket, {
+      type: "response.done",
+      response: {
+        id: "response_1",
+        status: "completed",
+        output: Array.from({ length: 2 }, (_, index) => ({
+          id: `item_${index}`,
+          type: "function_call",
+          status: "completed",
+          call_id: `call_${index}`,
+          name: "lookup_weather",
+          arguments: "{}",
+        })),
+      },
+    });
+
+    expect(onToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates an explicit user item and response for manual speech", async () => {
+    const onEvent = vi.fn();
+    const bridge = createNativeBridge({ onEvent });
+    const socket = await connectReadyBridge(bridge);
 
     bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
 
@@ -2952,7 +3248,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "conversation.item.create" });
     expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "response.create" });
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    emitServerEvent(socket, { type: "response.done" });
 
     expectRecordFields(
       requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
@@ -2965,64 +3261,35 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("defers manual response.create while a realtime response is active", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge();
+    const socket = await connectReadyBridge(bridge);
     socket.emit(
       "message",
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
 
-    void bridge.submitToolResult("call_1", { text: "done" });
+    bridge.sendUserMessage?.("queued manual response");
 
     expect(parseSent(socket).slice(-1)).toEqual([
       {
         type: "conversation.item.create",
         item: {
-          type: "function_call_output",
-          call_id: "call_1",
-          output: JSON.stringify({ text: "done" }),
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "queued manual response" }],
         },
       },
     ]);
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    emitServerEvent(socket, { type: "response.done" });
 
     expect(parseSent(socket).slice(-1)).toEqual([expectedResponseCreateEvent()]);
   });
 
   it("restores automatic audio responses when a manual response is rejected", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge({ onError });
+    const socket = await connectReadyBridge(bridge);
 
     bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
 
@@ -3067,24 +3334,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("keeps automatic audio suppressed for unrelated errors during a manual response", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge({ onError });
+    const socket = await connectReadyBridge(bridge);
 
     bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
     const sessionUpdatesBeforeError = parseSent(socket).filter(
@@ -3106,7 +3358,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       sessionUpdatesBeforeError.length,
     );
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    emitServerEvent(socket, { type: "response.done" });
 
     expectRecordFields(
       requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
@@ -3119,24 +3371,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("flushes a queued manual response after the prior request is rejected", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge({ onError });
+    const socket = await connectReadyBridge(bridge);
 
     bridge.triggerGreeting?.("Say exactly: first greeting.");
     const firstResponseCreate = parseSent(socket).findLast(
@@ -3172,7 +3409,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
     expect(onError).toHaveBeenCalledWith(new Error("bad response request"));
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    emitServerEvent(socket, { type: "response.done" });
 
     expectRecordFields(
       requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
@@ -3185,22 +3422,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("does not request a realtime response for continuing tool results", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge({ onToolCall: vi.fn() });
+    const socket = await connectReadyBridge(bridge);
+    emitCompletedToolCalls(socket);
 
     void bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
 
@@ -3234,28 +3458,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       "message",
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_2" } })),
     );
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    emitServerEvent(socket, { type: "response.done" });
 
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
   });
 
   it("does not request a realtime response for suppressed tool results", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge({ onToolCall: vi.fn() });
+    const socket = await connectReadyBridge(bridge);
+    emitCompletedToolCalls(socket);
 
     void bridge.submitToolResult(
       "call_1",
@@ -3276,32 +3487,94 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(hasSentEventType(socket, "response.create")).toBe(false);
   });
 
-  it("does not flush deferred response.create while a tool result is still continuing", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const onError = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+  it("waits for every parallel tool result before continuing the response", async () => {
+    const bridge = createNativeBridge({ onToolCall: vi.fn() });
+    const socket = await connectReadyBridge(bridge);
+    emitCompletedToolCalls(socket, ["call_1", "call_2"]);
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    void bridge.submitToolResult("call_1", { text: "first" });
 
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+
+    void bridge.submitToolResult("call_2", { text: "second" });
+
+    expect(
+      parseSent(socket).filter((event) => event.type === "conversation.item.create"),
+    ).toHaveLength(2);
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+  });
+
+  it("releases a deferred continuation when the last parallel result is suppressed", async () => {
+    const bridge = createNativeBridge({ onToolCall: vi.fn() });
+    const socket = await connectReadyBridge(bridge);
+    emitCompletedToolCalls(socket, ["call_1", "call_2"]);
+
+    void bridge.submitToolResult("call_1", { text: "first" });
+    void bridge.submitToolResult(
+      "call_2",
+      { status: "already_delivered" },
+      { suppressResponse: true },
     );
+
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+  });
+
+  it("resets consumer tool ownership before a fresh reconnect can reuse a call id", async () => {
+    vi.useFakeTimers();
+    const staleWork = new AbortController();
+    const onEvent = vi.fn((event: RealtimeVoiceBridgeEvent) => {
+      if (event.direction === "client" && event.type === "session.continuity.reset") {
+        staleWork.abort();
+      }
+    });
+    const onToolCall = vi.fn();
+    const bridge = createNativeBridge({ onEvent, onToolCall });
+    const socket = await connectReadyBridge(bridge);
+    emitCompletedToolCalls(socket, ["call_reused"]);
+    expect(onToolCall).toHaveBeenCalledTimes(1);
+
+    socket.emit("close", 1006, Buffer.from("transient drop"));
+    const lifecycleEvents = onEvent.mock.calls.map(([event]) => event.type);
+    expect(lifecycleEvents.indexOf("session.continuity.reset")).toBeLessThan(
+      lifecycleEvents.indexOf("session.reconnect.scheduled"),
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    const reconnectedSocket = requireSocket(1);
+    openSocket(reconnectedSocket);
+    emitSessionUpdated(reconnectedSocket);
+
+    emitCompletedToolCalls(socket, ["call_from_old_socket"]);
+    expect(
+      parseSent(reconnectedSocket).filter((event) => event.type === "conversation.item.create"),
+    ).toEqual([]);
+    expect(onToolCall).toHaveBeenCalledTimes(1);
+
+    emitCompletedToolCalls(reconnectedSocket, ["call_reused"]);
+    if (!staleWork.signal.aborted) {
+      void bridge.submitToolResult("call_reused", { text: "stale" });
+    }
+    void bridge.submitToolResult("call_reused", { text: "fresh" });
+
+    expect(onToolCall).toHaveBeenCalledTimes(2);
+    expect(
+      parseSent(reconnectedSocket)
+        .filter(
+          (event) =>
+            event.type === "conversation.item.create" &&
+            (event.item as { call_id?: string } | undefined)?.call_id === "call_reused",
+        )
+        .map((event) => (event.item as { output?: string } | undefined)?.output),
+    ).toEqual([JSON.stringify({ text: "fresh" })]);
+  });
+
+  it("does not flush deferred response.create while a tool result is still continuing", async () => {
+    const onError = vi.fn();
+    const bridge = createNativeBridge({ onError, onToolCall: vi.fn() });
+    const socket = await connectReadyBridge(bridge);
+
+    emitCompletedToolCalls(socket);
     void bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    bridge.sendUserMessage?.("queue after tool result");
 
     expect(onError).not.toHaveBeenCalled();
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
@@ -3323,52 +3596,23 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("drains deferred response.create after response.cancelled", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge();
+    const socket = await connectReadyBridge(bridge);
     socket.emit(
       "message",
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
 
-    void bridge.submitToolResult("call_1", { text: "done" });
+    bridge.sendUserMessage?.("queued after cancellation");
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.cancelled" })));
 
     expect(parseSent(socket).slice(-1)).toEqual([expectedResponseCreateEvent()]);
   });
 
   it("does not send duplicate response.cancel while cancellation is pending", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onEvent = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onEvent,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge({ onEvent });
+    const socket = await connectReadyBridge(bridge);
     socket.emit(
       "message",
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
@@ -3403,25 +3647,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("ignores zero-length playback barge-in without clearing audio", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onClearAudio = vi.fn();
     const onEvent = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
+    const bridge = createNativeBridge({
       onClearAudio,
       onEvent,
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
     bridge.setMediaTimestamp(1000);
     socket.emit(
       "message",
@@ -3453,25 +3685,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("force-cancels zero-length playback barge-in for agent handoff fallback", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onClearAudio = vi.fn();
     const onEvent = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
+    const bridge = createNativeBridge({
       onClearAudio,
       onEvent,
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
     bridge.setMediaTimestamp(1000);
     socket.emit(
       "message",
@@ -3508,26 +3728,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("allows immediate playback barge-in when the minimum audio window is zero", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onClearAudio = vi.fn();
-    const bridge = provider.createBridge({
+    const bridge = createNativeBridge({
       providerConfig: {
         apiKey: "sk-test", // pragma: allowlist secret
         minBargeInAudioEndMs: 0,
       },
-      onAudio: vi.fn(),
       onClearAudio,
     });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
     bridge.setMediaTimestamp(1000);
     socket.emit(
       "message",
@@ -3559,30 +3768,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("drains deferred response.create after a no-active-response cancellation error", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge({ onError });
+    const socket = await connectReadyBridge(bridge);
     socket.emit(
       "message",
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
 
-    void bridge.submitToolResult("call_1", { text: "done" });
+    bridge.sendUserMessage?.("queued after cancellation error");
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
     const responseCancelEvent = parseSent(socket).findLast(
       (event) => event.type === "response.cancel",
@@ -3608,24 +3802,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("ignores a stale cancellation error after a newer manual response starts", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge({ onError });
+    const socket = await connectReadyBridge(bridge);
     bridge.setMediaTimestamp(1000);
     socket.emit(
       "message",
@@ -3650,8 +3829,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     if (!responseCancelEvent?.event_id) {
       throw new Error("expected response.cancel event id");
     }
-    void bridge.submitToolResult("call_1", { text: "done" });
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    bridge.sendUserMessage?.("queued newer response");
+    emitServerEvent(socket, { type: "response.done" });
     const sessionUpdateCount = parseSent(socket).filter(
       (event) => event.type === "session.update",
     ).length;
@@ -3675,7 +3854,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
     expect(parseSent(socket).at(-1)).toEqual(expectedResponseCreateEvent());
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    emitServerEvent(socket, { type: "response.done" });
     expectRecordFields(
       requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
       "restored turn detection",
@@ -3688,40 +3867,21 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
   it("resets deferred response guards after websocket reconnect", async () => {
     vi.useFakeTimers();
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
+    const bridge = createNativeBridge();
+    const socket = await connectReadyBridge(bridge);
     socket.emit(
       "message",
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
-    void bridge.submitToolResult("call_1", { text: "done" });
+    bridge.sendUserMessage?.("queued before reconnect");
 
     expect(parseSent(socket).slice(-1)[0]?.type).toBe("conversation.item.create");
 
     socket.emit("close", 1006, Buffer.from("transient drop"));
     await vi.advanceTimersByTimeAsync(1000);
-    const reconnectedSocket = FakeWebSocket.instances[1];
-    if (!reconnectedSocket) {
-      throw new Error("expected bridge to reconnect");
-    }
-
-    reconnectedSocket.readyState = FakeWebSocket.OPEN;
-    reconnectedSocket.emit("open");
-    reconnectedSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    const reconnectedSocket = requireSocket(1);
+    openSocket(reconnectedSocket);
+    emitSessionUpdated(reconnectedSocket);
     bridge.sendUserMessage?.("Say hello after reconnect.");
 
     expect(parseSent(reconnectedSocket).slice(-3)).toEqual([
@@ -3739,26 +3899,11 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("turns active-response errors into a deferred response.create retry", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
+    const bridge = createNativeBridge({ onError });
+    const socket = await connectReadyBridge(bridge);
 
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
-
-    void bridge.submitToolResult("call_1", { text: "done" });
+    bridge.sendUserMessage?.("trigger active-response retry");
     const responseCreateEvent = parseSent(socket).findLast(
       (event) => event.type === "response.create",
     );
@@ -3788,12 +3933,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       },
     );
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    emitServerEvent(socket, { type: "response.done" });
 
     expect(onError).not.toHaveBeenCalled();
     expect(parseSent(socket).slice(-1)).toEqual([expectedResponseCreateEvent()]);
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    emitServerEvent(socket, { type: "response.done" });
 
     expectRecordFields(
       requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),

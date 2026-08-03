@@ -1,6 +1,11 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
+import {
+  hasProviderBrandIcon,
+  providerIdFromModelRef,
+  renderProviderBrandIcon,
+} from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
 import type { ModelSetupActivationState } from "./state.ts";
 
@@ -10,6 +15,8 @@ export function renderModelSetupSuccessDialog(
   onClose: () => void,
   firstRun: boolean,
 ) {
+  const providerId = providerIdFromModelRef(activation.modelRef);
+  const providerIconId = providerId && hasProviderBrandIcon(providerId) ? providerId : null;
   return html`
     <openclaw-modal-dialog
       label=${t("modelSetup.success.title")}
@@ -17,7 +24,19 @@ export function renderModelSetupSuccessDialog(
       @modal-cancel=${onClose}
     >
       <section class="model-setup-success" role="status">
-        <div class="model-setup-success__icon" aria-hidden="true">${icons.shieldCheck}</div>
+        <div
+          class=${`model-setup-success__icon${providerIconId ? " model-setup-success__icon--provider" : ""}`}
+          aria-hidden="true"
+        >
+          ${providerIconId
+            ? html`
+                ${renderProviderBrandIcon(providerIconId, {
+                  className: "model-setup-success__provider-icon",
+                })}
+                <span class="model-setup-success__status-badge">${icons.check}</span>
+              `
+            : icons.shieldCheck}
+        </div>
         <div class="model-setup-success__copy">
           <h2>${t("modelSetup.success.title")}</h2>
           <p>${t("modelSetup.success.body", { modelRef: activation.modelRef })}</p>

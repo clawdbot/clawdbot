@@ -767,8 +767,8 @@ vi.mock("../plugins/status.js", () => ({
 }));
 
 vi.mock("./status.scan.fast-json.js", () => ({
-  scanStatusJsonFast: vi.fn(async () =>
-    createMockStatusScanResult({ includePluginCompatibility: false }),
+  scanStatusJsonFast: vi.fn(async (opts: { all?: boolean }) =>
+    createMockStatusScanResult({ includePluginCompatibility: opts.all === true }),
   ),
 }));
 
@@ -1011,7 +1011,7 @@ describe("statusCommand", () => {
     (runtime.error as Mock<(...args: unknown[]) => void>).mockClear();
   });
 
-  it("prints JSON and includes security audit only when all is requested", async () => {
+  it("prints JSON and includes full diagnostics only when all is requested", async () => {
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
     ]);
@@ -1034,10 +1034,7 @@ describe("statusCommand", () => {
     expect(payload.securityAudit).toBeUndefined();
     expect(payload.gatewayService.label).toBe("LaunchAgent");
     expect(payload.nodeService.label).toBe("LaunchAgent");
-    expect(payload.pluginCompatibility).toEqual({
-      count: 0,
-      warnings: [],
-    });
+    expect(payload.pluginCompatibility).toBeUndefined();
     expect(payload.tasks.total).toBe(0);
     expect(payload.tasks.active).toBe(0);
     expect(payload.tasks.byStatus.queued).toBe(0);
@@ -1050,6 +1047,10 @@ describe("statusCommand", () => {
     const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
     expect(allPayload.securityAudit.summary.warn).toBe(1);
+    expect(allPayload.pluginCompatibility).toEqual({
+      count: 1,
+      warnings: [createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" })],
+    });
     const auditParams = mocks.runSecurityAudit.mock.calls[0]?.[0];
     expect(auditParams?.includeFilesystem).toBe(true);
     expect(auditParams?.includeChannelSecurity).toBe(true);
@@ -1090,6 +1091,13 @@ describe("statusCommand", () => {
     await statusCommand({}, runtime as never);
 
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
+  });
+
+  it("includes the security audit for deep JSON status", async () => {
+    await statusCommand({ json: true, deep: true }, runtime as never);
+
+    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
+    expect(JSON.parse(getRuntimeLog(0)).securityAudit.summary.critical).toBe(1);
   });
 
   it("passes deep mode through to the text status scan", async () => {

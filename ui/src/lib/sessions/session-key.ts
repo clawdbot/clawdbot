@@ -49,6 +49,21 @@ export function parseAgentSessionKey(
   return { agentId, rest };
 }
 
+export function parseSessionKeyParts(
+  key: string,
+): { agentId: string; channel: string; accountId: string } | null {
+  const match = /^agent:([^:]+):([^:]+):(.+)$/.exec(key);
+  return match
+    ? { agentId: match[1] as string, channel: match[2] as string, accountId: match[3] as string }
+    : null;
+}
+
+export function resolveUiSessionNavigationParentKey(
+  row: { parentSessionKey?: string | null; spawnedBy?: string | null } | null | undefined,
+): string | undefined {
+  return normalizeOptionalString(row?.parentSessionKey) ?? normalizeOptionalString(row?.spawnedBy);
+}
+
 function normalizeMainKey(value: string | undefined | null): string {
   return normalizeOptionalLowercaseString(value) ?? DEFAULT_MAIN_KEY;
 }
@@ -275,12 +290,14 @@ export function uiSessionEventMatches(
     : selectedAgentId === resolveUiDefaultAgentId(host);
 }
 
-export function isUiSelectedGlobalSessionKey(sessionKey: string | undefined | null): boolean {
+export function isUiSelectedGlobalSessionKey(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  sessionKey: string | undefined | null,
+): boolean {
   if (isUiGlobalSessionKey(sessionKey)) {
     return true;
   }
-  const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeLowercaseStringOrEmpty(parsed?.rest) === DEFAULT_MAIN_KEY;
+  return resolveUiMainAliasAgentId(host, sessionKey) !== null;
 }
 
 export function resolveUiSelectedSessionAgentId(

@@ -1,5 +1,5 @@
 // Matrix plugin module implements draft stream behavior.
-import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-outbound";
+import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient } from "./sdk.js";
 import { editMessageMatrix, prepareMatrixSingleText, sendSingleTextMessageMatrix } from "./send.js";
@@ -71,7 +71,7 @@ export function createMatrixDraftStream(params: {
   let currentEventId: string | undefined;
   let lastSentText = "";
   let lastSentContent = "";
-  let stopped = false;
+  const streamState = { stopped: false, final: false };
   let sendFailed = false;
   let finalizeInPlaceBlocked = false;
   let liveFinalized = false;
@@ -79,16 +79,20 @@ export function createMatrixDraftStream(params: {
 
   const sendOrEdit = async (text: string): Promise<boolean> => {
     const trimmed = text.trimEnd();
-    if (!trimmed) {
+    if (!trimmed.trim()) {
       return false;
     }
-    const preparedText = prepareMatrixSingleText(trimmed, { cfg, accountId });
+    const preparedText = prepareMatrixSingleText(trimmed, {
+      cfg,
+      accountId,
+      preserveWhitespace: true,
+    });
     if (!preparedText.fitsInSingleEvent) {
       finalizeInPlaceBlocked = true;
       if (!currentEventId) {
         sendFailed = true;
       }
-      stopped = true;
+      streamState.stopped = true;
       log?.(
         `draft-stream: preview exceeded single-event limit (${preparedText.convertedText.length} > ${preparedText.singleEventLimit})`,
       );
@@ -140,14 +144,19 @@ export function createMatrixDraftStream(params: {
       if (!currentEventId) {
         sendFailed = true;
       }
-      stopped = true;
+      streamState.stopped = true;
       return false;
     }
   };
 
-  const loop = createDraftStreamLoop({
+  const {
+    loop,
+    update,
+    stop: stopDraft,
+    discardPending,
+  } = createFinalizableDraftStreamControlsForState({
     throttleMs: DEFAULT_THROTTLE_MS,
-    isStopped: () => stopped,
+    state: streamState,
     sendOrEditStreamMessage: sendOrEdit,
   });
 
@@ -185,16 +194,8 @@ export function createMatrixDraftStream(params: {
   };
 
   const stop = async (): Promise<string | undefined> => {
-    // Flush before marking stopped so the loop can drain pending text.
-    await loop.flush();
-    stopped = true;
+    await stopDraft();
     return currentEventId;
-  };
-
-  const discardPending = async (): Promise<void> => {
-    stopped = true;
-    loop.stop();
-    await loop.waitForInFlight();
   };
 
   const reset = (): void => {
@@ -204,7 +205,8 @@ export function createMatrixDraftStream(params: {
     currentEventId = undefined;
     lastSentText = "";
     lastSentContent = "";
-    stopped = false;
+    streamState.stopped = false;
+    streamState.final = false;
     sendFailed = false;
     finalizeInPlaceBlocked = false;
     liveFinalized = false;
@@ -213,12 +215,7 @@ export function createMatrixDraftStream(params: {
   };
 
   return {
-    update: (text: string) => {
-      if (stopped) {
-        return;
-      }
-      loop.update(text);
-    },
+    update,
     flush: loop.flush,
     stop,
     discardPending,
@@ -227,9 +224,10 @@ export function createMatrixDraftStream(params: {
     eventId: () => currentEventId,
     content: () => lastSentContent || undefined,
     matchesPreparedText: (text: string) =>
-      prepareMatrixSingleText(text, {
+      prepareMatrixSingleText(text.trimEnd(), {
         cfg,
         accountId,
+        preserveWhitespace: true,
       }).trimmedText === lastSentText,
     mustDeliverFinalNormally: () => sendFailed || finalizeInPlaceBlocked,
   };

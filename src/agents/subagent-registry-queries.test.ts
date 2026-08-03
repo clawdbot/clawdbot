@@ -13,14 +13,18 @@ import {
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "./subagent-test-fixtures.test-helpers.js";
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
-function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
+function makeRun(overrides: Partial<SubagentRunRecordOverrides>): SubagentRunRecord {
   const runId = overrides.runId ?? "run-default";
   const childSessionKey = overrides.childSessionKey ?? `agent:main:subagent:${runId}`;
   const requesterSessionKey = overrides.requesterSessionKey ?? "agent:main:main";
-  return {
+  return createSubagentRunRecord({
     runId,
     childSessionKey,
     requesterSessionKey,
@@ -29,7 +33,7 @@ function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
     cleanup: "keep",
     createdAt: overrides.createdAt ?? 1,
     ...overrides,
-  };
+  });
 }
 
 function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
@@ -759,6 +763,28 @@ describe("hasDescendantRunAwaitingSettleFromRuns", () => {
     ]);
 
     expect(countPendingDescendantRunsFromRuns(runs, requester)).toBe(1);
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(false);
+  });
+
+  it("waits for queued completion delivery, then settles after delivery or dismissal", () => {
+    const now = Date.now();
+    const run = makeRun({
+      runId: "run-queued-delivery",
+      childSessionKey: "agent:main:subagent:queued-delivery",
+      requesterSessionKey: requester,
+      createdAt: now - 50_000,
+      endedAt: now - 2_000,
+      expectsCompletionMessage: true,
+      delivery: { status: "in_progress", disposition: "session_queued" },
+    });
+    const runs = toRunMap([run]);
+
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(true);
+
+    run.delivery = { status: "delivered", disposition: "delivered" };
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(false);
+
+    run.delivery = { status: "discarded", disposition: "intentional_non_delivery" };
     expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(false);
   });
 

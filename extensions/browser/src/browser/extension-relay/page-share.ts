@@ -1,9 +1,11 @@
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import {
   enqueueSystemEvent,
   resolveMainSessionKeyFromConfig,
 } from "openclaw/plugin-sdk/system-event-runtime";
+import { getRuntimeConfig } from "../../sdk-config.js";
 import type { PageSharePayload } from "./relay-protocol.js";
 
 export const PAGE_SHARE_GATEWAY_REQUIRED_ERROR =
@@ -11,7 +13,15 @@ export const PAGE_SHARE_GATEWAY_REQUIRED_ERROR =
 
 type PageShareSink = {
   enqueueSystemEvent(text: string, opts: { sessionKey: string }): unknown;
-  requestHeartbeat(opts: { source: "other"; intent: "immediate"; reason: string }): unknown;
+  requestHeartbeat(opts: {
+    source: "notifications-event";
+    intent: "immediate";
+    reason: "wake";
+    agentId?: string;
+    sessionKey: string;
+    heartbeat: { target: "last" };
+  }): unknown;
+  resolveDefaultAgentId(): string;
   resolveMainSessionKey(): string;
 };
 
@@ -27,6 +37,7 @@ export function createGatewayPageShareSink(): PageShareSink {
   return {
     enqueueSystemEvent,
     requestHeartbeat,
+    resolveDefaultAgentId: () => resolveDefaultAgentId(getRuntimeConfig()),
     resolveMainSessionKey: resolveMainSessionKeyFromConfig,
   };
 }
@@ -51,10 +62,14 @@ export async function deliverPageShare(payload: PageSharePayload): Promise<void>
   ].join("\n");
   const text = `${header}\n\n${wrapped}`;
 
-  await sink.enqueueSystemEvent(text, { sessionKey: sink.resolveMainSessionKey() });
+  const sessionKey = sink.resolveMainSessionKey();
+  await sink.enqueueSystemEvent(text, { sessionKey });
   await sink.requestHeartbeat({
-    source: "other",
+    source: "notifications-event",
     intent: "immediate",
-    reason: "browser-page-share",
+    reason: "wake",
+    ...(sessionKey === "global" ? { agentId: sink.resolveDefaultAgentId() } : {}),
+    sessionKey,
+    heartbeat: { target: "last" },
   });
 }

@@ -16,6 +16,7 @@ import { probeLocalCommand } from "./probes.js";
 import {
   listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
+  listSetupInferencePrepareOptions,
   supportsSetupTextInference,
 } from "./setup-inference-auth-options.js";
 import {
@@ -64,7 +65,10 @@ function resolveConfiguredCandidateKind(
 export async function listManualSetupInferenceOptions(
   deps: DetectSetupInferenceDeps = {},
 ): Promise<
-  Pick<SetupInferenceDetection, "manualProviders" | "authOptions" | "workspace" | "setupComplete">
+  Pick<
+    SetupInferenceDetection,
+    "manualProviders" | "authOptions" | "prepareOptions" | "workspace" | "setupComplete"
+  >
 > {
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
@@ -89,6 +93,7 @@ export async function listManualSetupInferenceOptions(
   return {
     manualProviders: listSetupInferenceManualProviders(authChoices),
     authOptions: listSetupInferenceAuthOptions(authChoices),
+    prepareOptions: listSetupInferencePrepareOptions(authChoices),
     workspace,
     // Derived from config only (no probing): a pre-existing default model must
     // keep classifying the install as configured even when scanning declined.
@@ -109,20 +114,7 @@ export async function detectSetupInference(
   const unavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const deferredUnavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const probe = deps.probeLocalCommand ?? probeLocalCommand;
-  const [antigravity, pi, opencode] = await Promise.all([
-    probe("agy"),
-    probe("pi"),
-    probe("opencode"),
-  ]);
-  if (antigravity.found && !antigravity.timedOut) {
-    deferredUnavailableCandidates.push({
-      id: "antigravity-cli",
-      label: "Antigravity CLI",
-      detail: "installed",
-      reason:
-        "Can't be auto-tested safely here. Sign in with a provider or use an API key instead.",
-    });
-  }
+  const [pi, opencode] = await Promise.all([probe("pi"), probe("opencode")]);
   if (pi.found && !pi.timedOut) {
     deferredUnavailableCandidates.push({
       id: "pi-cli",
@@ -170,40 +162,7 @@ export async function detectSetupInference(
   );
   const manualProviders = listSetupInferenceManualProviders(authChoices);
   const authOptions = listSetupInferenceAuthOptions(authChoices);
-  const manualProviderIds = new Set(manualProviders.map((provider) => provider.id));
-  const authOptionIds = new Set(authOptions.map((option) => option.id));
-  // Gemini CLI has no hard tool-off mode: wildcard exclusions can be
-  // overridden by admin policy and do not stop discovery or MCP startup.
-  // Keep normal agent support, but route setup through provider-owned methods
-  // that OpenClaw can verify without inspecting Gemini's private auth store.
-  for (const candidate of detected.filter((entry) => entry.kind === "gemini-cli")) {
-    const providerId = parseRef(candidate.modelRef).provider;
-    const ownerChoice = authChoices.find(
-      (choice) => normalizeProviderId(choice.providerId) === normalizeProviderId(providerId),
-    );
-    const ownerGroup = ownerChoice?.groupId ?? ownerChoice?.providerId ?? providerId;
-    const relatedChoices = authChoices.filter(
-      (choice) => (choice.groupId ?? choice.providerId) === ownerGroup,
-    );
-    const authOptionId = relatedChoices.find((choice) =>
-      authOptionIds.has(choice.choiceId),
-    )?.choiceId;
-    const manualProviderId = relatedChoices.find((choice) =>
-      manualProviderIds.has(choice.choiceId),
-    )?.choiceId;
-    unavailableCandidates.push({
-      id: candidate.kind,
-      brandId: providerId,
-      label: candidate.label,
-      detail: candidate.detail,
-      reason:
-        "OpenClaw cannot confirm whether this private Gemini CLI login works without starting a session that may expose tools. Sign in through OpenClaw or use a Gemini API key to create a connection it can verify.",
-      ...(authOptionId ? { authOptionId } : {}),
-      ...(manualProviderId ? { manualProviderId } : {}),
-      ...(ownerChoice?.icon ? { icon: ownerChoice.icon } : {}),
-      ...(ownerChoice?.website ? { website: ownerChoice.website } : {}),
-    });
-  }
+  const prepareOptions = listSetupInferencePrepareOptions(authChoices);
   unavailableCandidates.push(...deferredUnavailableCandidates);
   const candidates: SetupInferenceCandidate[] = raw.map((candidate) =>
     // Released macOS clients require this field. Keep it false so the wire
@@ -297,6 +256,7 @@ export async function detectSetupInference(
     unavailableCandidates,
     manualProviders,
     authOptions,
+    prepareOptions,
     recommendedInstalls: listRecommendedToolInstalls(),
     workspace,
     ...(configuredModel ? { configuredModel } : {}),

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { beforeAll, describe, expect, it, test } from "vitest";
+import { resolveNpmJsonEntries } from "../infra/npm-registry-spec.js";
 import { isScannable, scanDirectoryWithSummary } from "../skills/security/scanner.js";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoPath, toRepoRelativePath } from "../test-utils/repo-files.js";
@@ -32,7 +33,9 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS = new Map<string, nu
   ["@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts", 1],
   ["@openclaw/discord:dangerous-exec:src/voice/audio.ts", 1],
   ["@openclaw/google-meet:dangerous-exec:src/node-host.ts", 1],
+  ["@openclaw/imessage:dangerous-exec:src/client.ts", 1],
   ["@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts", 2],
+  ["@openclaw/opencode-provider:dangerous-exec:session-catalog.ts", 1],
   ["@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
   ["@openclaw/signal:dangerous-exec:src/daemon.ts", 1],
   ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 1],
@@ -53,11 +56,12 @@ const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS = new Map<strin
 
 function parseNpmPackFiles(raw: string, packageName: string): string[] {
   const parsed = JSON.parse(raw) as unknown;
-  if (!Array.isArray(parsed) || parsed.length !== 1) {
+  const entries = resolveNpmJsonEntries(parsed);
+  if (entries.length !== 1) {
     throw new Error(`${packageName}: npm pack --dry-run did not return one package result.`);
   }
 
-  const result = parsed[0] as NpmPackResult;
+  const result = entries[0] as NpmPackResult;
   if (!Array.isArray(result.files)) {
     throw new Error(`${packageName}: npm pack --dry-run did not return a files list.`);
   }

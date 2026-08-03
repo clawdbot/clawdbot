@@ -1,6 +1,7 @@
 import { expect } from "vitest";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 // OpenClaw test helpers build runtime environments for rescue tests.
 import {
   fingerprintAuthProfileOwnerShape,
@@ -11,6 +12,12 @@ import {
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  captureCurrentPluginMetadataSnapshotState,
+  restoreCurrentPluginMetadataSnapshotState,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
@@ -24,6 +31,57 @@ type SystemAgentVerifiedInferenceTestFixture = {
   binding: SystemAgentVerifiedInferenceBinding;
   deps: SystemAgentVerifiedInferenceDeps;
 };
+
+export type SystemAgentPluginMetadataTestSnapshot = {
+  /** Rebind after a test redirects to another empty state root with the same plugin inventory. */
+  rebindForCurrentEnv: () => void;
+  restore: () => void;
+};
+
+/** Install the contract-level selectable CLI backend used by core system-agent tests. */
+export function installSystemAgentClaudeCliBackendTestFixture(): () => void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        pluginId: "anthropic",
+        modelProvider: "anthropic",
+        bundleMcp: true,
+        bundleMcpMode: "claude-config-file",
+        config: { command: "claude" },
+        normalizeConfig: (config, context) => ({
+          ...config,
+          args: [
+            ...(config.args ?? []),
+            "--test-exec-policy",
+            JSON.stringify(context?.config?.tools?.exec ?? null),
+          ],
+        }),
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "execution-args",
+        sideQuestionToolMode: "disabled",
+        resolveExecutionArgs: (context) => context.baseArgs,
+      },
+    ],
+  });
+  return () => cliBackendsTesting.resetDepsForTest();
+}
+
+/** Install the process-stable plugin metadata snapshot that the real Gateway owns. */
+export function installSystemAgentPluginMetadataTestSnapshot(
+  config: OpenClawConfig = {},
+): SystemAgentPluginMetadataTestSnapshot {
+  const previous = captureCurrentPluginMetadataSnapshotState();
+  const snapshot = resolvePluginMetadataSnapshot({ config, env: process.env });
+  const rebindForCurrentEnv = () => {
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env: process.env });
+  };
+  rebindForCurrentEnv();
+  return {
+    rebindForCurrentEnv,
+    restore: () => restoreCurrentPluginMetadataSnapshotState(previous),
+  };
+}
 
 export function readLastSystemAgentAuditEntry(): unknown {
   return listSystemAgentAuditEntriesForTests().at(-1)?.value;

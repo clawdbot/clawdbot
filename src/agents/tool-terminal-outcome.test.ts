@@ -118,4 +118,23 @@ describe("tool terminal outcome observer", () => {
       lastToolError: { mutatingAction: false },
     });
   });
+
+  it("preserves durable memory recall side-effect evidence", () => {
+    const observe = createToolTerminalObserver("run-memory");
+
+    expect(
+      observe({
+        toolName: "memory_search",
+        arguments: { query: "recall" },
+        outcome: "success",
+      }),
+    ).toMatchObject({ executionStarted: true, sideEffectEvidence: true });
+    expect(
+      observe({
+        toolName: "memory_get",
+        arguments: { path: "memory/notes.md" },
+        outcome: "success",
+      }),
+    ).toMatchObject({ executionStarted: true, sideEffectEvidence: false });
+  });
 });

@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ControlUiGitHubPreview } from "./control-ui-contract.js";
 // Same-origin GitHub metadata adapter for Control UI link previews.
 import {
@@ -325,12 +326,6 @@ export function loadControlUiGitHubPreview(
     }),
   };
   previewCache.set(key, entry);
-  while (previewCache.size > CACHE_LIMIT) {
-    const oldestKey = previewCache.keys().next().value as string | undefined;
-    if (!oldestKey) {
-      break;
-    }
-    previewCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(previewCache, CACHE_LIMIT);
   return entry.promise;
 }

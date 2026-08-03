@@ -33,6 +33,12 @@ const SINGLE_VALUE_FLAGS = new Set([
 ]);
 const DEFAULT_CPU_CORE_WARN = 0.9;
 const DEFAULT_HOT_WALL_WARN_MS = 30_000;
+const DEFAULT_GATEWAY_CONCURRENCY = 8;
+// Local N=8 mock-stream p99s were 1.3-1.5s on the shared maintainer host;
+// 3s leaves roughly 2x headroom while still flagging a material regression.
+const CONCURRENCY_EVENT_LOOP_DELAY_P99_WARN_MS = 3_000;
+const CONCURRENCY_RPC_P99_WARN_MS = 3_000;
+const CONCURRENCY_CONTROL_UI_P99_WARN_MS = 3_000;
 const PRIVATE_QA_REQUIRED_DIST_ENTRIES = [
   "dist/plugin-sdk/qa-lab.js",
   "dist/plugin-sdk/qa-runtime.js",
@@ -191,6 +197,75 @@ function readStartupReport(startupOutput) {
   }
 }
 
+function validateConcurrencyReport(report) {
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    return "concurrency report must be a JSON object";
+  }
+  if (report.mode !== "mock-streaming-agent") {
+    return "concurrency report has an unexpected mode";
+  }
+  if (!Array.isArray(report.runs) || report.runs.length === 0) {
+    return "concurrency report has no measured runs";
+  }
+  if (!report.summary || typeof report.summary !== "object") {
+    return "concurrency report missing summary";
+  }
+  return null;
+}
+
+function readConcurrencyReport(concurrencyOutput) {
+  if (!fs.existsSync(concurrencyOutput)) {
+    return {
+      diagnosticFailure: "concurrency-report-missing",
+      diagnosticDetail: `expected concurrency bench report at ${concurrencyOutput}`,
+      report: null,
+    };
+  }
+  try {
+    const report = readJsonIfExists(concurrencyOutput);
+    const invalidReason = validateConcurrencyReport(report);
+    return invalidReason
+      ? {
+          diagnosticFailure: "concurrency-report-invalid",
+          diagnosticDetail: invalidReason,
+          report: null,
+        }
+      : { diagnosticFailure: null, diagnosticDetail: null, report };
+  } catch (error) {
+    return {
+      diagnosticFailure: "concurrency-report-invalid",
+      diagnosticDetail: error instanceof Error ? error.message : String(error),
+      report: null,
+    };
+  }
+}
+
+function collectConcurrencyWarnings(report) {
+  if (!report?.summary) {
+    return [];
+  }
+  const candidates = [
+    {
+      kind: "event-loop-delay-p99",
+      value: report.summary.eventLoopDelayP99Ms?.max,
+      threshold: CONCURRENCY_EVENT_LOOP_DELAY_P99_WARN_MS,
+    },
+    {
+      kind: "sessions-list-p99",
+      value: report.summary.sessionsListLatencyMs?.p99,
+      threshold: CONCURRENCY_RPC_P99_WARN_MS,
+    },
+    {
+      kind: "control-ui-p99",
+      value: report.summary.controlUiLatencyMs?.p99,
+      threshold: CONCURRENCY_CONTROL_UI_P99_WARN_MS,
+    },
+  ];
+  return candidates.flatMap((candidate) =>
+    typeof candidate.value === "number" && candidate.value > candidate.threshold ? [candidate] : [],
+  );
+}
+
 function runStep(name, command, args, options = {}, params = {}) {
   console.error(`[gateway-cpu] start ${name}`);
   const spawn = params.spawnSync ?? defaultSpawnSync;
@@ -287,6 +362,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
   fs.mkdirSync(options.outputDir, { recursive: true });
 
   const startupOutput = path.join(options.outputDir, "gateway-startup-bench.json");
+  const concurrencyOutput = path.join(options.outputDir, "gateway-concurrency-bench.json");
   const qaOutputDir = path.join(options.outputDir, "qa-suite");
   const qaSummaryPath = path.join(qaOutputDir, "qa-suite-summary.json");
   const qaState = options.skipQa ? null : createQaState(options.outputDir);
@@ -328,6 +404,27 @@ async function runGatewayCpuScenarios(options, params = {}) {
             params,
           )
         : { name: "startup bench", signal: null, status: 1 },
+    );
+    steps.push(
+      startupBuild.status === 0
+        ? runStep(
+            "concurrency bench",
+            process.execPath,
+            [
+              "scripts/bench-gateway-concurrency.ts",
+              "--concurrency",
+              String(DEFAULT_GATEWAY_CONCURRENCY),
+              "--runs",
+              String(options.runs),
+              "--warmup",
+              String(options.warmup),
+              "--output",
+              concurrencyOutput,
+            ],
+            { env: baseEnv },
+            params,
+          )
+        : { name: "concurrency bench", signal: null, status: 1 },
     );
   }
 
@@ -373,6 +470,15 @@ async function runGatewayCpuScenarios(options, params = {}) {
       ? (startupReportResult?.diagnosticFailure ?? null)
       : null;
   const startup = startupReportResult?.report ?? null;
+  const concurrencyReportResult = options.skipStartup
+    ? null
+    : readConcurrencyReport(concurrencyOutput);
+  const concurrencyReportFailure =
+    steps.find((step) => step.name === "concurrency bench")?.status === 0
+      ? (concurrencyReportResult?.diagnosticFailure ?? null)
+      : null;
+  const concurrency = concurrencyReportResult?.report ?? null;
+  const concurrencyWarnings = collectConcurrencyWarnings(concurrency);
   const qaSummaryResult = options.skipQa ? null : readQaSuiteSummary(qaSummaryPath);
   const qaSummaryFailure =
     qaStep?.status === 0 ? (qaSummaryResult?.diagnosticFailure ?? null) : null;
@@ -387,6 +493,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
     generatedAt: new Date().toISOString(),
     outputDir: options.outputDir,
     startupOutput: fs.existsSync(startupOutput) ? startupOutput : null,
+    concurrencyOutput: fs.existsSync(concurrencyOutput) ? concurrencyOutput : null,
     qaSummary: fs.existsSync(qaSummaryPath) ? qaSummaryPath : null,
     ...(startupReportFailure
       ? {
@@ -400,6 +507,12 @@ async function runGatewayCpuScenarios(options, params = {}) {
           qaSummaryFailureDetail: qaSummaryResult?.diagnosticDetail ?? null,
         }
       : {}),
+    ...(concurrencyReportFailure
+      ? {
+          concurrencyReportFailure,
+          concurrencyReportFailureDetail: concurrencyReportResult?.diagnosticDetail ?? null,
+        }
+      : {}),
     options: {
       startupCases: options.startupCases,
       qaScenarios: options.qaScenarios,
@@ -407,10 +520,17 @@ async function runGatewayCpuScenarios(options, params = {}) {
       warmup: options.warmup,
       cpuCoreWarn: options.cpuCoreWarn,
       hotWallWarnMs: options.hotWallWarnMs,
+      concurrency: DEFAULT_GATEWAY_CONCURRENCY,
+      concurrencyWarnThresholds: {
+        eventLoopDelayP99Ms: CONCURRENCY_EVENT_LOOP_DELAY_P99_WARN_MS,
+        sessionsListP99Ms: CONCURRENCY_RPC_P99_WARN_MS,
+        controlUiP99Ms: CONCURRENCY_CONTROL_UI_P99_WARN_MS,
+      },
       qaStateDir: qaState?.stateDir ?? null,
     },
     steps,
     observations,
+    concurrencyWarnings,
   };
   const summaryPath = path.join(options.outputDir, "summary.json");
   fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
@@ -430,12 +550,23 @@ async function runGatewayCpuScenarios(options, params = {}) {
   if (startupReportFailure) {
     console.error(`[gateway-cpu] fail startup report: ${startupReportResult?.diagnosticDetail}`);
   }
+  for (const warning of concurrencyWarnings) {
+    console.error(
+      `[gateway-cpu] warn ${warning.kind}: ${warning.value}ms > ${warning.threshold}ms`,
+    );
+  }
+  if (concurrencyReportFailure) {
+    console.error(
+      `[gateway-cpu] fail concurrency report: ${concurrencyReportResult?.diagnosticDetail}`,
+    );
+  }
 
   const exitCode =
     steps.some((step) => step.status !== 0) ||
     observations.length > 0 ||
     qaSummaryFailure ||
-    startupReportFailure
+    startupReportFailure ||
+    concurrencyReportFailure
       ? 1
       : 0;
   return { exitCode, summary };

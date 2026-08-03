@@ -12,6 +12,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -86,6 +87,7 @@ const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
 const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
 // Loaded Docker runners can take several seconds to reap a force-killed process group.
 const QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS = 10_000;
+const QA_GATEWAY_LOG_CLOSE_TIMEOUT_MS = 5_000;
 const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
@@ -142,7 +144,7 @@ function createQaGatewayEmptyTransport() {
 }
 
 function resolveQaGatewayChildCommand(repoRoot: string): QaGatewayChildCommand {
-  for (const relativePath of ["dist/index.mjs", "dist/index.js"]) {
+  for (const relativePath of ["scripts/run-node.mjs", "dist/index.mjs", "dist/index.js"]) {
     const entryPath = path.join(repoRoot, relativePath);
     if (existsSync(entryPath)) {
       return {
@@ -154,16 +156,9 @@ function resolveQaGatewayChildCommand(repoRoot: string): QaGatewayChildCommand {
     }
   }
 
-  const sourceEntryPath = path.join(repoRoot, "src/entry.ts");
-  if (existsSync(sourceEntryPath)) {
-    return {
-      executablePath: process.execPath,
-      argsPrefix: ["--import", "tsx", sourceEntryPath],
-      cwd: repoRoot,
-    };
-  }
-
-  throw new Error("OpenClaw CLI entry not found: expected dist/index.(m)js or src/entry.ts");
+  throw new Error(
+    "OpenClaw CLI entry not found: expected scripts/run-node.mjs or dist/index.(m)js",
+  );
 }
 
 async function runQaGatewayCliCommand(params: {
@@ -250,10 +245,29 @@ async function getFreePort() {
   });
 }
 
-async function closeWriteStream(stream: WriteStream) {
-  await new Promise<void>((resolve) => {
-    stream.end(() => resolve());
-  });
+async function closeWriteStream(
+  stream: WriteStream,
+  label: "stderr" | "stdout",
+  timeoutMs = QA_GATEWAY_LOG_CLOSE_TIMEOUT_MS,
+) {
+  if (stream.destroyed) {
+    return;
+  }
+  stream.end();
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    await finished(stream, { cleanup: true, signal });
+  } catch (error) {
+    if (!signal.aborted) {
+      throw error;
+    }
+    // Gateway logs are diagnostic only. Never let a stuck filesystem flush
+    // retain the stopped child runtime and its live transport credentials.
+    process.stderr.write(
+      `[qa-suite] ${label} gateway log flush exceeded ${timeoutMs}ms; forcing close\n`,
+    );
+    stream.destroy();
+  }
 }
 
 async function writeSanitizedQaGatewayDebugLog(params: { sourcePath: string; targetPath: string }) {
@@ -429,6 +443,7 @@ export function buildQaRuntimeEnv(params: {
   };
   const normalizedEnv = normalizeQaProviderModeEnv(env, params.providerMode);
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
   return scrubQaGatewayChildSecretEnv(normalizedEnv);
@@ -666,6 +681,7 @@ export const testing = {
   resolveQaGatewayChildStopTimeouts,
   stopQaGatewayChildProcessTree,
   classifyLinuxProcessGroupStats,
+  closeWriteStream,
 };
 
 function hasChildExited(child: ChildProcess) {
@@ -1047,6 +1063,7 @@ export async function startQaGatewayChild(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
+  allowUnhealthyStartup?: boolean;
   forwardHostHome?: boolean;
   mockAuthAgentIds?: readonly string[];
   onListening?: (context: QaGatewayChildListeningContext) => Promise<void> | void;
@@ -1401,13 +1418,15 @@ export async function startQaGatewayChild(params: {
           configPath,
           runtimeEnv: env,
         });
-        await waitForGatewayReady({
-          baseUrl,
-          logs,
-          child: attemptChild,
-          getChildFailure: getAttemptChildFailure,
-          timeoutMs: 120_000,
-        });
+        if (!params.allowUnhealthyStartup) {
+          await waitForGatewayReady({
+            baseUrl,
+            logs,
+            child: attemptChild,
+            getChildFailure: getAttemptChildFailure,
+            timeoutMs: 120_000,
+          });
+        }
         const attemptRpcClient = await startQaGatewayRpcClient({
           wsUrl,
           token: gatewayToken,
@@ -1718,9 +1737,12 @@ export async function startQaGatewayChild(params: {
           processStopped = false;
           cleanupErrors.push(error);
         }
-        for (const stream of [stdoutLog, stderrLog]) {
+        for (const [label, stream] of [
+          ["stdout", stdoutLog],
+          ["stderr", stderrLog],
+        ] as const) {
           try {
-            await closeWriteStream(stream);
+            await closeWriteStream(stream, label);
           } catch (error) {
             cleanupErrors.push(error);
           }
@@ -1786,9 +1808,12 @@ export async function startQaGatewayChild(params: {
         cleanupErrors.push(cleanupError);
       }
     }
-    for (const stream of [stdoutLog, stderrLog]) {
+    for (const [label, stream] of [
+      ["stdout", stdoutLog],
+      ["stderr", stderrLog],
+    ] as const) {
       try {
-        await closeWriteStream(stream);
+        await closeWriteStream(stream, label);
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError);
       }

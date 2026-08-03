@@ -19,16 +19,16 @@ import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snap
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
+import type {
+  ChannelPluginLoadIntent,
+  PluginLoadOptions,
+  PluginRuntimeSubagentMode,
+} from "./loader-types.js";
 import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
 } from "./plugin-control-plane-context.js";
-import {
-  hasExplicitPluginIdScope,
-  normalizePluginIdScope,
-  serializePluginIdScope,
-} from "./plugin-scope.js";
+import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 function safeRealpathOrResolve(value: string): string {
@@ -75,6 +75,30 @@ type BundledPackageCacheIdentity = {
 };
 
 const bundledPackageCacheIdentityByStockRoot = new Map<string, BundledPackageCacheIdentity>();
+const runtimeBindingCacheIds = new WeakMap<object, number>();
+let nextRuntimeBindingCacheId = 1;
+
+function resolveRuntimeBindingCacheId(value: object | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const existing = runtimeBindingCacheIds.get(value);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const id = nextRuntimeBindingCacheId++;
+  runtimeBindingCacheIds.set(value, id);
+  return id;
+}
+
+function resolveRuntimeBindingCacheIdentity(
+  runtimeOptions: PluginLoadOptions["runtimeOptions"],
+): string {
+  return JSON.stringify({
+    nodes: resolveRuntimeBindingCacheId(runtimeOptions?.nodes),
+    subagent: resolveRuntimeBindingCacheId(runtimeOptions?.subagent),
+  });
+}
 
 function resolveBundledPackageCacheIdentity(
   stockRoot?: string,
@@ -152,16 +176,6 @@ function buildActivationMetadataHash(params: {
     .digest("hex");
 }
 
-function redactPluginConfigForCacheKey(plugins: NormalizedPluginsConfig): NormalizedPluginsConfig {
-  const entries = Object.fromEntries(
-    Object.entries(plugins.entries).map(([pluginId, entry]) => [
-      pluginId,
-      "config" in entry ? { ...entry, config: "<plugin-config>" } : entry,
-    ]),
-  );
-  return { ...plugins, entries };
-}
-
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
@@ -173,13 +187,13 @@ function buildCacheKey(params: {
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
-  preferSetupRuntimeForChannelPlugins?: boolean;
-  forceFullRuntimeForChannelPlugins?: boolean;
+  channelPluginLoadIntent: ChannelPluginLoadIntent;
   preferBuiltPluginArtifacts?: boolean;
   resolveRawConfigEnvVars?: boolean;
   toolDiscovery?: boolean;
   loadModules?: boolean;
   runtimeSubagentMode?: PluginRuntimeSubagentMode;
+  runtimeBindingIdentity?: string;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
   activate?: boolean;
@@ -214,12 +228,6 @@ function buildCacheKey(params: {
     params.requireSetupEntryForSetupOnlyChannelPlugins === true
       ? "require-setup-entry"
       : "allow-full-fallback";
-  const startupChannelMode =
-    params.forceFullRuntimeForChannelPlugins === true
-      ? "force-full"
-      : params.preferSetupRuntimeForChannelPlugins === true
-        ? "prefer-setup"
-        : "full";
   const bundledArtifactMode =
     params.preferBuiltPluginArtifacts === true ? "prefer-built-artifacts" : "source-default";
   const rawConfigEnvMode =
@@ -227,15 +235,18 @@ function buildCacheKey(params: {
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
   const activationMode = params.activate === false ? "snapshot" : "active";
-  return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
-    bundledPackage,
-    devSourceRoot: params.devSourceRoot ?? "",
-    discoveryFingerprint: fingerprintPluginDiscoveryContext(discoveryContext),
-    ...params.plugins,
-    installs,
-    loadPaths,
-    activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  const cacheIdentity = `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(
+    {
+      bundledPackage,
+      devSourceRoot: params.devSourceRoot ?? "",
+      discoveryFingerprint: fingerprintPluginDiscoveryContext(discoveryContext),
+      ...params.plugins,
+      installs,
+      loadPaths,
+      activationMetadataKey: params.activationMetadataKey ?? "",
+    },
+  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  return createHash("sha256").update(cacheIdentity).digest("hex");
 }
 
 export function resolveRuntimeSubagentMode(
@@ -245,27 +256,6 @@ export function resolveRuntimeSubagentMode(
     return "gateway-bindable";
   }
   return runtimeOptions?.subagent ? "explicit" : "default";
-}
-
-export function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
-  return (
-    options.config !== undefined ||
-    options.activationSourceConfig !== undefined ||
-    options.autoEnabledReasons !== undefined ||
-    options.workspaceDir !== undefined ||
-    options.env !== undefined ||
-    options.resolveRawConfigEnvVars !== undefined ||
-    hasExplicitPluginIdScope(options.onlyPluginIds) ||
-    options.runtimeOptions !== undefined ||
-    options.pluginSdkResolution !== undefined ||
-    options.coreGatewayHandlers !== undefined ||
-    options.includeSetupOnlyChannelPlugins === true ||
-    options.forceSetupOnlyChannelPlugins === true ||
-    options.requireSetupEntryForSetupOnlyChannelPlugins === true ||
-    options.preferSetupRuntimeForChannelPlugins === true ||
-    options.preferBuiltPluginArtifacts === true ||
-    options.loadModules === false
-  );
 }
 
 function resolveCoreGatewayMethodNames(options: PluginLoadOptions): string[] {
@@ -342,8 +332,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const forceSetupOnlyChannelPlugins = options.forceSetupOnlyChannelPlugins === true;
   const requireSetupEntryForSetupOnlyChannelPlugins =
     options.requireSetupEntryForSetupOnlyChannelPlugins === true;
-  const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
-  const forceFullRuntimeForChannelPlugins = options.forceFullRuntimeForChannelPlugins === true;
+  const channelPluginLoadIntent = options.channelPluginLoadIntent ?? "full";
   const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
@@ -384,9 +373,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const devSourceRoot = resolveOpenClawDevSourceRoot(env);
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
-    plugins: shouldResolveRawConfigEnvVars
-      ? redactPluginConfigForCacheKey(trustNormalized)
-      : trustNormalized,
+    plugins: trustNormalized,
     activationMetadataKey: buildActivationMetadataHash({
       activationSource,
       autoEnabledReasons: options.autoEnabledReasons ?? {},
@@ -398,13 +385,13 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
-    preferSetupRuntimeForChannelPlugins,
-    forceFullRuntimeForChannelPlugins,
+    channelPluginLoadIntent,
     preferBuiltPluginArtifacts,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
     toolDiscovery: options.toolDiscovery,
     loadModules: options.loadModules,
     runtimeSubagentMode,
+    runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options.runtimeOptions),
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
     activate: options.activate,
@@ -421,8 +408,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
-    preferSetupRuntimeForChannelPlugins,
-    forceFullRuntimeForChannelPlugins,
+    channelPluginLoadIntent,
     preferBuiltPluginArtifacts,
     shouldActivate: options.activate !== false,
     shouldLoadModules: options.loadModules !== false,

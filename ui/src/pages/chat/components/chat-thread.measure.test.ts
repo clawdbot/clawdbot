@@ -26,6 +26,7 @@ import {
 
 const observedElements = new Set<Element>();
 const resizeObservers = new Set<RecordingResizeObserver>();
+let measuredRowHeight = 100;
 
 class RecordingResizeObserver implements ResizeObserver {
   private readonly targets = new Set<Element>();
@@ -58,6 +59,10 @@ class RecordingResizeObserver implements ResizeObserver {
     if (entries.length > 0) {
       this.callback(entries, this);
     }
+  }
+
+  observes(target: Element): boolean {
+    return this.targets.has(target);
   }
 }
 
@@ -107,11 +112,14 @@ describe("chat transcript row measurement", () => {
   beforeEach(() => {
     observedElements.clear();
     resizeObservers.clear();
+    measuredRowHeight = 100;
     vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
     // jsdom reports 0x0 rects and offsetHeight 0; keep the virtualizer
     // viewport and measured row sizes non-zero so re-renders keep producing
     // virtual rows.
-    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(100);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
+      () => measuredRowHeight,
+    );
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
       x: 0,
       y: 0,
@@ -163,6 +171,132 @@ describe("chat transcript row measurement", () => {
     for (const row of chatRows) {
       expect(observedElements.has(row)).toBe(false);
     }
+  });
+
+  it("loads a truncated assistant message once across inline collapse and re-expansion", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const loadFullAssistantMessage = vi.fn().mockResolvedValue({
+      ok: true,
+      message: { role: "assistant", content: "Complete assistant content." },
+    });
+    function rerender() {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    }
+    const props = {
+      ...threadProps("pane-assistant-expand", "agent:work:main", [
+        {
+          role: "assistant",
+          content: "Preview\n...(truncated)...",
+          __openclaw: { id: "assistant-full-1" },
+          timestamp: 1_000,
+        },
+      ]),
+      fullMessageAgentId: "work",
+      loadFullAssistantMessage,
+      onRequestUpdate: rerender,
+    };
+    rerender();
+    transcript.hostConnected();
+    transcript.hostUpdated();
+
+    const showMore = container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle");
+    expect(showMore?.textContent?.trim()).toBe("Show more");
+    showMore?.click();
+
+    await vi.waitFor(() => expect(container.textContent).toContain("Complete assistant content."));
+    expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
+    expect(loadFullAssistantMessage).toHaveBeenCalledWith({
+      sessionKey: "agent:work:main",
+      agentId: "work",
+      messageId: "assistant-full-1",
+      kind: "assistant_message",
+    });
+
+    const showLess = container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle");
+    expect(showLess?.textContent?.trim()).toBe("Show less");
+    showLess?.click();
+    expect(container.textContent).toContain("...(truncated)...");
+    expect(container.textContent).not.toContain("Complete assistant content.");
+
+    container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle")?.click();
+    expect(container.textContent).toContain("Complete assistant content.");
+    expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
+    transcript.hostDisconnected();
+  });
+
+  it("shows a retryable inline error when full assistant content cannot be loaded", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const loadFullAssistantMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({
+        ok: true,
+        message: { role: "assistant", content: "Recovered full content." },
+      });
+    function rerender() {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    }
+    const props = {
+      ...threadProps("pane-assistant-retry", "agent:main:main", [
+        {
+          role: "assistant",
+          content: "Preview\n...(truncated)...",
+          __openclaw: { id: "assistant-retry-1" },
+          timestamp: 1_000,
+        },
+      ]),
+      loadFullAssistantMessage,
+      onRequestUpdate: rerender,
+    };
+    rerender();
+    transcript.hostConnected();
+    transcript.hostUpdated();
+
+    container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle")?.click();
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("Could not load the full message."),
+    );
+    const retry = container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle");
+    expect(retry?.textContent?.trim()).toBe("Show more");
+    expect(retry?.disabled).toBe(false);
+
+    retry?.click();
+    await vi.waitFor(() => expect(container.textContent).toContain("Recovered full content."));
+    expect(loadFullAssistantMessage).toHaveBeenCalledTimes(2);
+    transcript.hostDisconnected();
+  });
+
+  it.each(["Enter", " "])("opens focused transcript file links with %j", async (key) => {
+    const transcript = createTestTranscript();
+    const onOpenWorkspaceFile = vi.fn();
+    const onHistoryIntent = vi.fn();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-file-link", "agent:main:main", [
+        { role: "assistant", content: "Inspect `src/chat.ts:17`", timestamp: 1_000 },
+      ]),
+      onOpenWorkspaceFile,
+      onHistoryIntent,
+    };
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const link = container.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+    link?.focus();
+    expect(document.activeElement).toBe(link);
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    link?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/chat.ts", line: 17 });
+    expect(onHistoryIntent).not.toHaveBeenCalled();
+    transcript.hostDisconnected();
   });
 
   it("keeps built row identities across an A to B to A presentation reset", () => {
@@ -326,6 +460,46 @@ describe("chat transcript row measurement", () => {
     expect(hostA?.measureRowRefs.size).toBe(0);
     transcript.hostDisconnected();
     expect(observedElements.size).toBe(0);
+  });
+
+  it("updates rendered row offsets from freshly wrapped heights while scrolling", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = threadProps("pane-width-remeasure");
+    const renderTranscript = async () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+      await flushDeferredRowPrune();
+    };
+
+    await renderTranscript();
+    transcript.hostConnected();
+    await renderTranscript();
+    expect(transcriptRows(container)[1]?.style.transform).toBe("translateY(100px)");
+
+    const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
+    expect(scrollElement).not.toBeNull();
+    scrollElement!.scrollTop = 40;
+    scrollElement!.dispatchEvent(new Event("scroll"));
+    const virtualizer = (
+      transcript as unknown as {
+        sessionVirtualizer: {
+          virtualizerController: { getVirtualizer: () => { isScrolling: boolean } };
+        };
+      }
+    ).sessionVirtualizer.virtualizerController.getVirtualizer();
+    expect(virtualizer.isScrolling).toBe(true);
+
+    measuredRowHeight = 180;
+    for (const observer of resizeObservers) {
+      if (scrollElement && observer.observes(scrollElement)) {
+        observer.emit(640, 600);
+      }
+    }
+    await renderTranscript();
+
+    expect(transcriptRows(container)[1]?.style.transform).toBe("translateY(180px)");
+    transcript.hostDisconnected();
   });
 
   it("rebinds guarded transcript images when the gateway rotates its auth token", async () => {

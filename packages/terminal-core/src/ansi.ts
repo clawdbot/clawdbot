@@ -1,3 +1,4 @@
+import stringWidth from "string-width";
 import {
   ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN,
   ANSI_OSC_INTRODUCER_PATTERN,
@@ -179,102 +180,27 @@ export function sanitizeForLog(v: string): string {
   return stripAnsi(v).replace(controlCharsRegex, "");
 }
 
-function isZeroWidthCodePoint(codePoint: number): boolean {
-  return (
-    (codePoint <= 0x1f && codePoint !== 0x09) ||
-    (codePoint >= 0x7f && codePoint <= 0x9f) ||
-    (codePoint >= 0x0300 && codePoint <= 0x036f) ||
-    (codePoint >= 0x1ab0 && codePoint <= 0x1aff) ||
-    (codePoint >= 0x1dc0 && codePoint <= 0x1dff) ||
-    (codePoint >= 0x20d0 && codePoint <= 0x20ff) ||
-    (codePoint >= 0xfe20 && codePoint <= 0xfe2f) ||
-    (codePoint >= 0xfe00 && codePoint <= 0xfe0f) ||
-    codePoint === 0x200d
-  );
-}
-
-function isFullWidthCodePoint(codePoint: number): boolean {
-  if (codePoint < 0x1100) {
-    return false;
+function textWidth(text: string): number {
+  // POSIX renders these default-ignorable Hangul fillers as wide/halfwidth cells;
+  // same-shaping representatives and well-formed surrogates preserve terminal output.
+  const printable = /[\u115F\u3164\uFFA0\uD800-\uDFFF]/u.test(text)
+    ? text
+        .replace(/[\uD800-\uDFFF]/gu, "\uFFFD")
+        .replaceAll("\u115F", "\u1100")
+        .replaceAll("\u3164", "\u3131")
+        .replaceAll("\uFFA0", "\uFF8A")
+    : text;
+  // OpenClaw owns ANSI parsing; upstream must not reinterpret malformed sequences.
+  let width = stringWidth(printable, { countAnsiEscapeCodes: true });
+  // Tabs execute inside CSI too; string-width intentionally treats them as zero-width.
+  for (let index = text.indexOf("\t"); index !== -1; index = text.indexOf("\t", index + 1)) {
+    width += 1;
   }
-  return (
-    codePoint <= 0x115f ||
-    codePoint === 0x2329 ||
-    codePoint === 0x232a ||
-    (codePoint >= 0x2e80 && codePoint <= 0x3247 && codePoint !== 0x303f) ||
-    (codePoint >= 0x3250 && codePoint <= 0x4dbf) ||
-    (codePoint >= 0x4e00 && codePoint <= 0xa4c6) ||
-    (codePoint >= 0xa960 && codePoint <= 0xa97c) ||
-    (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
-    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
-    (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
-    (codePoint >= 0xfe30 && codePoint <= 0xfe6b) ||
-    (codePoint >= 0xff01 && codePoint <= 0xff60) ||
-    (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
-    (codePoint >= 0x1aff0 && codePoint <= 0x1aff3) ||
-    (codePoint >= 0x1aff5 && codePoint <= 0x1affb) ||
-    (codePoint >= 0x1affd && codePoint <= 0x1affe) ||
-    (codePoint >= 0x1b000 && codePoint <= 0x1b2ff) ||
-    (codePoint >= 0x1f200 && codePoint <= 0x1f251) ||
-    (codePoint >= 0x20000 && codePoint <= 0x3fffd)
-  );
-}
-
-const rgiEmojiPattern = new RegExp("^\\p{RGI_Emoji}$", "v");
-const emojiPresentationPattern = /\p{Emoji_Presentation}/u;
-const regionalIndicatorPattern = /\p{Regional_Indicator}/u;
-const unqualifiedKeycapPattern = /^[#*0-9]\u20E3$/u;
-const extendedPictographicPattern = /\p{Extended_Pictographic}/gu;
-
-function isWideEmojiGrapheme(grapheme: string): boolean {
-  const isRgiEmoji = rgiEmojiPattern.test(grapheme);
-  // RGI recognizes paired flags while keeping a lone regional indicator narrow.
-  if (regionalIndicatorPattern.test(grapheme)) {
-    return isRgiEmoji;
-  }
-  if (
-    emojiPresentationPattern.test(grapheme) ||
-    isRgiEmoji ||
-    unqualifiedKeycapPattern.test(grapheme)
-  ) {
-    return true;
-  }
-  // Minimally qualified ZWJ sequences still shape as one wide emoji in terminals.
-  return (
-    grapheme.includes("\u200D") && (grapheme.match(extendedPictographicPattern)?.length ?? 0) >= 2
-  );
-}
-
-function graphemeWidth(grapheme: string): number {
-  if (!grapheme) {
-    return 0;
-  }
-  if (isWideEmojiGrapheme(grapheme)) {
-    return 2;
-  }
-
-  let sawPrintable = false;
-  for (const char of grapheme) {
-    const codePoint = char.codePointAt(0);
-    if (codePoint == null) {
-      continue;
-    }
-    if (isZeroWidthCodePoint(codePoint)) {
-      continue;
-    }
-    if (isFullWidthCodePoint(codePoint)) {
-      return 2;
-    }
-    sawPrintable = true;
-  }
-  return sawPrintable ? 1 : 0;
+  return width;
 }
 
 export function visibleWidth(input: string): number {
-  return splitGraphemes(stripAnsi(input)).reduce(
-    (sum, grapheme) => sum + graphemeWidth(grapheme),
-    0,
-  );
+  return textWidth(stripAnsi(input));
 }
 
 /**
@@ -288,7 +214,9 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
   if (maxWidth <= 0) {
     return "";
   }
-  if (visibleWidth(input) <= maxWidth) {
+  const plainInput = stripAnsi(input);
+  const inputWidth = textWidth(plainInput);
+  if (inputWidth <= maxWidth) {
     return input;
   }
   let out = "";
@@ -301,20 +229,89 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
     if (budgetSpent) {
       return;
     }
-    for (const grapheme of splitGraphemes(segment)) {
-      const width = graphemeWidth(grapheme);
-      if (used + width > maxWidth) {
-        budgetSpent = true;
-        return;
-      }
-      out += grapheme;
+    const remaining = maxWidth - used;
+    const width = segment === plainInput ? inputWidth : textWidth(segment);
+    if (width <= remaining) {
+      out += segment;
       used += width;
+      return;
     }
+
+    const graphemes = splitGraphemes(segment);
+    let offset = 0;
+    const offsets = [offset];
+    for (const grapheme of graphemes) {
+      offset += grapheme.length;
+      offsets.push(offset);
+    }
+    let start = 0;
+    let fittedWidth = 0;
+    if (remaining <= width / 2) {
+      let end = Math.max(
+        1,
+        Math.min(graphemes.length - 1, Math.floor((remaining * graphemes.length) / width)),
+      );
+      let stride = 1;
+      // Estimate the cell boundary first; gallop handles uneven/zero-width clusters.
+      while (end < graphemes.length) {
+        const candidateWidth = textWidth(segment.slice(0, offsets[end]));
+        if (candidateWidth > remaining) {
+          break;
+        }
+        start = end;
+        fittedWidth = candidateWidth;
+        end = Math.min(graphemes.length, end + stride);
+        stride *= 2;
+      }
+      while (start + 1 < end) {
+        const middle = Math.floor((start + end) / 2);
+        const candidateWidth = textWidth(segment.slice(0, offsets[middle]));
+        if (candidateWidth <= remaining) {
+          start = middle;
+          fittedWidth = candidateWidth;
+        } else {
+          end = middle;
+        }
+      }
+    } else {
+      const overflow = width - remaining;
+      let tooShort = 0;
+      let removed = Math.min(graphemes.length, 1);
+      let removedWidth = width;
+      // Near-end cuts search short complete-grapheme suffixes, not repeated full prefixes.
+      while (removed < graphemes.length) {
+        removedWidth = textWidth(segment.slice(offsets[graphemes.length - removed]));
+        if (removedWidth >= overflow) {
+          break;
+        }
+        tooShort = removed;
+        removed = Math.min(graphemes.length, removed * 2);
+      }
+      if (removed === graphemes.length) {
+        removedWidth = width;
+      }
+      while (tooShort + 1 < removed) {
+        const middle = Math.floor((tooShort + removed) / 2);
+        const candidateWidth = textWidth(segment.slice(offsets[graphemes.length - middle]));
+        if (candidateWidth >= overflow) {
+          removed = middle;
+          removedWidth = candidateWidth;
+        } else {
+          tooShort = middle;
+        }
+      }
+      start = graphemes.length - removed;
+      fittedWidth = width - removedWidth;
+    }
+    out += segment.slice(0, offsets[start]);
+    used += fittedWidth;
+    budgetSpent = true;
   };
   for (const segment of splitAnsiSegments(input)) {
     if (segment.kind === "ansi") {
-      const widthControls = segment.controls.filter((control) => graphemeWidth(control) > 0);
-      const controlWidth = widthControls.reduce((sum, control) => sum + graphemeWidth(control), 0);
+      // CSI retains only C0/DEL controls; TAB is the sole visible-width member.
+      const widthControls = segment.controls.filter((control) => control === "\t");
+      const controlWidth = widthControls.length;
       if (!budgetSpent && used + controlWidth <= maxWidth) {
         out += segment.value;
         used += controlWidth;

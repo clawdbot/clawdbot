@@ -5,6 +5,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { runSetupModelAuthStep } from "./setup.model-auth.js";
 
+type ResolveManifestProviderAuthChoice =
+  typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
+type ResolvePluginSetupProvider =
+  typeof import("../plugins/setup-registry.js").resolvePluginSetupProvider;
+
 const applyAuthChoice = vi.hoisted(() => vi.fn());
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn());
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn());
@@ -12,6 +17,18 @@ const promptDefaultModel = vi.hoisted(() => vi.fn());
 const applyPrimaryModel = vi.hoisted(() => vi.fn((config: unknown) => config));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
+const resolveManifestProviderAuthChoice = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoice>(() => ({
+    pluginId: "anthropic",
+    providerId: "anthropic",
+    methodId: "anthropic-cli",
+    choiceId: "anthropic-cli",
+    choiceLabel: "Anthropic CLI",
+  })),
+);
+const resolvePluginSetupProvider = vi.hoisted(() =>
+  vi.fn<ResolvePluginSetupProvider>(() => undefined),
+);
 
 vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice,
@@ -32,6 +49,14 @@ vi.mock("../commands/auth-choice-prompt.js", () => ({
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore,
+}));
+
+vi.mock("../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoice,
+}));
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider,
 }));
 
 function createPrompter(): WizardPrompter {

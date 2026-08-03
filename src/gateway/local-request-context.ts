@@ -2,7 +2,10 @@ import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import { loadResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.js";
+import {
+  getPreparedModelCatalogSnapshot,
+  loadResolvedPublishedModelCatalogOwner,
+} from "../agents/prepared-model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
@@ -128,6 +131,12 @@ function createLocalGatewayRequestContext(
         config: owner.config,
       };
     },
+    readPreparedGatewayModelCatalog: async (loadParams) =>
+      getPreparedModelCatalogSnapshot({
+        ...loadParams,
+        config: params.getRuntimeConfig(),
+        readOnly: true,
+      })?.entries,
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,

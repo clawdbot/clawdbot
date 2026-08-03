@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type NodeLlamaCppModule = typeof import("node-llama-cpp");
 
@@ -9,10 +10,6 @@ function isNodeLlamaCppMissing(error: unknown): boolean {
   }
   const code = (error as Error & { code?: unknown }).code;
   return code === "ERR_MODULE_NOT_FOUND" && error.message.includes("node-llama-cpp");
-}
-
-function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export function formatLlamaCppSetupError(error: unknown): string {

@@ -7,8 +7,11 @@ import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
-import { getActivePluginHttpRouteRegistry } from "../plugins/runtime.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { getActivePluginHttpRouteRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
@@ -27,6 +30,10 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
 import {
+  listCoreGatewayHandlerMethodNames,
+  type CoreGatewayHandlerFamily,
+} from "./methods/core-descriptors.js";
+import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
@@ -36,9 +43,7 @@ import {
 } from "./methods/registry.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
-import { NODE_PAIR_GATEWAY_METHODS } from "./server-methods-node-methods.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
-import { SKILLS_GATEWAY_METHOD_NAMES } from "./server-methods/skills-method-names.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
@@ -49,282 +54,167 @@ import {
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
 
-const loadAgentHandlers = lazyHandlerModule(
-  () => import("./server-methods/agent.js"),
-  (module) => module.agentHandlers,
-);
-const loadAgentIdentityHandlers = lazyHandlerModule(
-  () => import("./server-methods/agent-identity.js"),
-  (module) => module.agentIdentityHandlers,
-);
-const loadAgentsHandlers = lazyHandlerModule(
-  () => import("./server-methods/agents.js"),
-  (module) => module.agentsHandlers,
-);
-const loadAgentsWorkspaceHandlers = lazyHandlerModule(
-  () => import("./server-methods/agents-workspace.js"),
-  (module) => module.agentsWorkspaceHandlers,
-);
-const loadArtifactsHandlers = lazyHandlerModule(
-  () => import("./server-methods/artifacts.js"),
-  (module) => module.artifactsHandlers,
-);
-const loadBoardHandlers = lazyHandlerModule(
-  () => import("./server-methods/board.js"),
-  (module) => module.boardHandlers,
-);
-const loadAuditHandlers = lazyHandlerModule(
-  () => import("./server-methods/audit.js"),
-  (module) => module.auditHandlers,
-);
-const loadUsersHandlers = lazyHandlerModule(
-  () => import("./server-methods/users.js"),
-  (module) => module.usersHandlers,
-);
-const loadAttachHandlers = lazyHandlerModule(
-  () => import("./server-methods/attach.js"),
-  (module) => module.attachHandlers,
-);
-const loadChannelsHandlers = lazyHandlerModule(
-  () => import("./server-methods/channels.js"),
-  (module) => module.channelsHandlers,
-);
-const loadChannelPairingHandlers = lazyHandlerModule(
-  () => import("./server-methods/channel-pairing.js"),
-  (module) => module.channelPairingHandlers,
-);
-const loadChatHandlers = lazyHandlerModule(
-  () => import("./server-methods/chat.js"),
-  (module) => module.chatHandlers,
-);
-const loadCommandsHandlers = lazyHandlerModule(
-  () => import("./server-methods/commands.js"),
-  (module) => module.commandsHandlers,
-);
-const loadConfigHandlers = lazyHandlerModule(
-  () => import("./server-methods/config.js"),
-  (module) => module.configHandlers,
-);
-const loadConversationHandlers = lazyHandlerModule(
-  () => import("./server-methods/conversations.js"),
-  (module) => module.conversationHandlers,
-);
-const loadConnectHandlers = lazyHandlerModule(
-  () => import("./server-methods/connect.js"),
-  (module) => module.connectHandlers,
-);
-const loadControlUiHandlers = lazyHandlerModule(
-  () => import("./server-methods/control-ui.js"),
-  (module) => module.controlUiHandlers,
-);
-const loadCronHandlers = lazyHandlerModule(
-  () => import("./server-methods/cron.js"),
-  (module) => module.cronHandlers,
-);
-const loadDeviceHandlers = lazyHandlerModule(
-  () => import("./server-methods/devices.js"),
-  (module) => module.deviceHandlers,
-);
-const loadDevicePairSetupHandlers = lazyHandlerModule(
-  () => import("./server-methods/device-pair-setup.js"),
-  (module) => module.devicePairSetupHandlers,
-);
-const loadDiagnosticsHandlers = lazyHandlerModule(
-  () => import("./server-methods/diagnostics.js"),
-  (module) => module.diagnosticsHandlers,
-);
-const loadDoctorHandlers = lazyHandlerModule(
-  () => import("./server-methods/doctor.js"),
-  (module) => module.doctorHandlers,
-);
-const loadEnvironmentsHandlers = lazyHandlerModule(
-  () => import("./server-methods/environments.js"),
-  (module) => module.environmentsHandlers,
-);
-const loadWorktreesHandlers = lazyHandlerModule(
-  () => import("./server-methods/worktrees.js"),
-  (module) => module.worktreesHandlers,
-);
-const loadExecApprovalsHandlers = lazyHandlerModule(
-  () => import("./server-methods/exec-approvals.js"),
-  (module) => module.execApprovalsHandlers,
-);
-const loadFsHandlers = lazyHandlerModule(
-  () => import("./server-methods/fs.js"),
-  (module) => module.fsHandlers,
-);
-const loadHealthHandlers = lazyHandlerModule(
-  () => import("./server-methods/health.js"),
-  (module) => module.healthHandlers,
-);
-const loadLogsHandlers = lazyHandlerModule(
-  () => import("./server-methods/logs.js"),
-  (module) => module.logsHandlers,
-);
-const loadMemorySearchHandlers = lazyHandlerModule(
-  () => import("./server-methods/memory-search.js"),
-  (module) => module.memorySearchHandlers,
-);
-const loadTerminalHandlers = lazyHandlerModule(
-  () => import("./server-methods/terminal.js"),
-  (module) => module.terminalHandlers,
-);
-const loadUiCommandHandlers = lazyHandlerModule(
-  () => import("./server-methods/ui-command.js"),
-  (module) => module.uiCommandHandlers,
-);
-const loadModelsAuthStatusHandlers = lazyHandlerModule(
-  () => import("./server-methods/models-auth-status.js"),
-  (module) => module.modelsAuthStatusHandlers,
-);
-const loadModelsHandlers = lazyHandlerModule(
-  () => import("./server-methods/models.js"),
-  (module) => module.modelsHandlers,
-);
-const loadModelsProbeHandlers = lazyHandlerModule(
-  () => import("./server-methods/models-probe.js"),
-  (module) => module.modelsProbeHandlers,
-);
-const loadNativeHookRelayHandlers = lazyHandlerModule(
-  () => import("./server-methods/native-hook-relay.js"),
-  (module) => module.nativeHookRelayHandlers,
-);
-const loadNodePendingHandlers = lazyHandlerModule(
-  () => import("./server-methods/nodes-pending.js"),
-  (module) => module.nodePendingHandlers,
-);
-const loadNodeHandlers = lazyHandlerModule(
-  () => import("./server-methods/nodes.js"),
-  (module) => module.nodeHandlers,
-);
-const loadPluginHostHookHandlers = lazyHandlerModule(
-  () => import("./server-methods/plugin-host-hooks.js"),
-  (module) => module.pluginHostHookHandlers,
-);
-const loadPluginsHandlers = lazyHandlerModule(
-  () => import("./server-methods/plugins.js"),
-  (module) => module.pluginsHandlers,
-);
-const loadMigrationsHandlers = lazyHandlerModule(
-  () => import("./server-methods/migrations.js"),
-  (module) => module.migrationsHandlers,
-);
-const loadPushHandlers = lazyHandlerModule(
-  () => import("./server-methods/push.js"),
-  (module) => module.pushHandlers,
-);
-const loadRestartHandlers = lazyHandlerModule(
-  () => import("./server-methods/restart.js"),
-  (module) => module.restartHandlers,
-);
-const loadSuspendHandlers = lazyHandlerModule(
-  () => import("./server-methods/suspend.js"),
-  (module) => module.suspendHandlers,
-);
-const loadSendHandlers = lazyHandlerModule(
-  () => import("./server-methods/send.js"),
-  (module) => module.sendHandlers,
-);
-const loadSessionsFilesHandlers = lazyHandlerModule(
-  () => import("./server-methods/sessions-files.js"),
-  (module) => module.sessionsFilesHandlers,
-);
-const loadSessionsDiffHandlers = lazyHandlerModule(
-  () => import("./server-methods/sessions-diff.js"),
-  (module) => module.sessionsDiffHandlers,
-);
-const loadSessionsHandlers = lazyHandlerModule(
-  () => import("./server-methods/sessions.js"),
-  (module) => module.sessionsHandlers,
-);
-const loadSessionCatalogHandlers = lazyHandlerModule(
-  () => import("./server-methods/session-catalog.js"),
-  (module) => module.sessionCatalogHandlers,
-);
-const loadSessionDiscussionHandlers = lazyHandlerModule(
-  () => import("./server-methods/session-discussion.js"),
-  (module) => module.sessionDiscussionHandlers,
-);
-const loadSessionObserverHandlers = lazyHandlerModule(
-  () => import("./session-observer-rpc.js"),
-  (module) => module.sessionObserverHandlers,
-);
-const loadSessionCompanionHandlers = lazyHandlerModule(
-  () => import("./session-companion-rpc.js"),
-  (module) => module.sessionCompanionHandlers,
-);
-const loadSkillsHandlers = lazyHandlerModule(
-  () => import("./server-methods/skills.js"),
-  (module) => module.skillsHandlers,
-);
-const loadSystemHandlers = lazyHandlerModule(
-  () => import("./server-methods/system.js"),
-  (module) => module.systemHandlers,
-);
-const loadTalkHandlers = lazyHandlerModule(
-  () => import("./server-methods/talk.js"),
-  (module) => module.talkHandlers,
-);
-const loadTasksHandlers = lazyHandlerModule(
-  () => import("./server-methods/tasks.js"),
-  (module) => module.tasksHandlers,
-);
-const loadTaskSuggestionsHandlers = lazyHandlerModule(
-  () => import("./server-methods/task-suggestions.js"),
-  (module) => module.taskSuggestionsHandlers,
-);
-const loadToolsCatalogHandlers = lazyHandlerModule(
-  () => import("./server-methods/tools-catalog.js"),
-  (module) => module.toolsCatalogHandlers,
-);
-const loadToolsEffectiveHandlers = lazyHandlerModule(
-  () => import("./server-methods/tools-effective.js"),
-  (module) => module.toolsEffectiveHandlers,
-);
-const loadToolsInvokeHandlers = lazyHandlerModule(
-  () => import("./server-methods/tools-invoke.js"),
-  (module) => module.toolsInvokeHandlers,
-);
-const loadMcpAppHandlers = lazyHandlerModule(
-  () => import("./server-methods/mcp-app.js"),
-  (module) => module.mcpAppHandlers,
-);
-const loadTtsHandlers = lazyHandlerModule(
-  () => import("./server-methods/tts.js"),
-  (module) => module.ttsHandlers,
-);
-const loadUpdateHandlers = lazyHandlerModule(
-  () => import("./server-methods/update.js"),
-  (module) => module.updateHandlers,
-);
-const loadUsageHandlers = lazyHandlerModule(
-  () => import("./server-methods/usage.js"),
-  (module) => module.usageHandlers,
-);
-const loadVoicewakeRoutingHandlers = lazyHandlerModule(
-  () => import("./server-methods/voicewake-routing.js"),
-  (module) => module.voicewakeRoutingHandlers,
-);
-const loadVoicewakeHandlers = lazyHandlerModule(
-  () => import("./server-methods/voicewake.js"),
-  (module) => module.voicewakeHandlers,
-);
-const loadWebHandlers = lazyHandlerModule(
-  () => import("./server-methods/web.js"),
-  (module) => module.webHandlers,
-);
-const loadSystemAgentHandlers = lazyHandlerModule(
-  () => import("./server-methods/system-agent.js"),
-  (module) => module.systemAgentHandlers,
-);
-const loadSystemChangesHandlers = lazyHandlerModule(
-  () => import("./server-methods/system-changes.js"),
-  (module) => module.systemChangesHandlers,
-);
-const loadWizardHandlers = lazyHandlerModule(
-  () => import("./server-methods/wizard.js"),
-  (module) => module.wizardHandlers,
-);
+type CoreGatewayHandlerModuleLoader = () => Promise<GatewayRequestHandlers>;
+
+const CORE_GATEWAY_HANDLER_MODULES = {
+  agent: () => import("./server-methods/agent.js").then((module) => module.agentHandlers),
+  "agent-identity": () =>
+    import("./server-methods/agent-identity.js").then((module) => module.agentIdentityHandlers),
+  agents: () => import("./server-methods/agents.js").then((module) => module.agentsHandlers),
+  "agents-workspace": () =>
+    import("./server-methods/agents-workspace.js").then((module) => module.agentsWorkspaceHandlers),
+  artifacts: () =>
+    import("./server-methods/artifacts.js").then((module) => module.artifactsHandlers),
+  board: () => import("./server-methods/board.js").then((module) => module.boardHandlers),
+  audit: () => import("./server-methods/audit.js").then((module) => module.auditHandlers),
+  users: () => import("./server-methods/users.js").then((module) => module.usersHandlers),
+  attach: () => import("./server-methods/attach.js").then((module) => module.attachHandlers),
+  channels: () => import("./server-methods/channels.js").then((module) => module.channelsHandlers),
+  "channel-pairing": () =>
+    import("./server-methods/channel-pairing.js").then((module) => module.channelPairingHandlers),
+  chat: () => import("./server-methods/chat.js").then((module) => module.chatHandlers),
+  commands: () => import("./server-methods/commands.js").then((module) => module.commandsHandlers),
+  config: () => import("./server-methods/config.js").then((module) => module.configHandlers),
+  conversations: () =>
+    import("./server-methods/conversations.js").then((module) => module.conversationHandlers),
+  connect: () => import("./server-methods/connect.js").then((module) => module.connectHandlers),
+  "control-ui": () =>
+    import("./server-methods/control-ui.js").then((module) => module.controlUiHandlers),
+  cron: () => import("./server-methods/cron.js").then((module) => module.cronHandlers),
+  devices: () => import("./server-methods/devices.js").then((module) => module.deviceHandlers),
+  "device-pair-setup": () =>
+    import("./server-methods/device-pair-setup.js").then(
+      (module) => module.devicePairSetupHandlers,
+    ),
+  diagnostics: () =>
+    import("./server-methods/diagnostics.js").then((module) => module.diagnosticsHandlers),
+  doctor: () => import("./server-methods/doctor.js").then((module) => module.doctorHandlers),
+  environments: () =>
+    import("./server-methods/environments.js").then((module) => module.environmentsHandlers),
+  worktrees: () =>
+    import("./server-methods/worktrees.js").then((module) => module.worktreesHandlers),
+  "exec-approvals": () =>
+    import("./server-methods/exec-approvals.js").then((module) => module.execApprovalsHandlers),
+  fs: () => import("./server-methods/fs.js").then((module) => module.fsHandlers),
+  health: () => import("./server-methods/health.js").then((module) => module.healthHandlers),
+  logs: () => import("./server-methods/logs.js").then((module) => module.logsHandlers),
+  "memory-search": () =>
+    import("./server-methods/memory-search.js").then((module) => module.memorySearchHandlers),
+  terminal: () => import("./server-methods/terminal.js").then((module) => module.terminalHandlers),
+  "ui-command": () =>
+    import("./server-methods/ui-command.js").then((module) => module.uiCommandHandlers),
+  "models-auth-status": () =>
+    import("./server-methods/models-auth-status.js").then(
+      (module) => module.modelsAuthStatusHandlers,
+    ),
+  models: () => import("./server-methods/models.js").then((module) => module.modelsHandlers),
+  "models-probe": () =>
+    import("./server-methods/models-probe.js").then((module) => module.modelsProbeHandlers),
+  "native-hook-relay": () =>
+    import("./server-methods/native-hook-relay.js").then(
+      (module) => module.nativeHookRelayHandlers,
+    ),
+  "nodes-pending": () =>
+    import("./server-methods/nodes-pending.js").then((module) => module.nodePendingHandlers),
+  nodes: () => import("./server-methods/nodes.js").then((module) => module.nodeHandlers),
+  "plugin-host-hooks": () =>
+    import("./server-methods/plugin-host-hooks.js").then((module) => module.pluginHostHookHandlers),
+  plugins: () => import("./server-methods/plugins.js").then((module) => module.pluginsHandlers),
+  migrations: () =>
+    import("./server-methods/migrations.js").then((module) => module.migrationsHandlers),
+  push: () => import("./server-methods/push.js").then((module) => module.pushHandlers),
+  restart: () => import("./server-methods/restart.js").then((module) => module.restartHandlers),
+  suspend: () => import("./server-methods/suspend.js").then((module) => module.suspendHandlers),
+  send: () => import("./server-methods/send.js").then((module) => module.sendHandlers),
+  "sessions-files": () =>
+    import("./server-methods/sessions-files.js").then((module) => module.sessionsFilesHandlers),
+  "sessions-diff": () =>
+    import("./server-methods/sessions-diff.js").then((module) => module.sessionsDiffHandlers),
+  "sessions-abort": () =>
+    import("./server-methods/sessions-abort.js").then((module) => module.sessionAbortHandlers),
+  "sessions-compact": () =>
+    import("./server-methods/sessions-compact.js").then((module) => module.sessionCompactHandlers),
+  "sessions-compaction-checkpoints": () =>
+    import("./server-methods/sessions-compaction-checkpoints.js").then(
+      (module) => module.sessionCheckpointHandlers,
+    ),
+  "sessions-compaction-queries": () =>
+    import("./server-methods/sessions-compaction-queries.js").then(
+      (module) => module.sessionCheckpointQueryHandlers,
+    ),
+  "sessions-create": () =>
+    import("./server-methods/sessions-create.js").then((module) => module.sessionCreateHandlers),
+  "sessions-delete": () =>
+    import("./server-methods/sessions-delete.js").then((module) => module.sessionDeleteHandlers),
+  "sessions-dispatch": () =>
+    import("./server-methods/sessions-dispatch.js").then(
+      (module) => module.sessionDispatchHandlers,
+    ),
+  "sessions-groups": () =>
+    import("./server-methods/sessions-groups.js").then((module) => module.sessionGroupHandlers),
+  "sessions-messaging": () =>
+    import("./server-methods/sessions-messaging.js").then(
+      (module) => module.sessionMessagingHandlers,
+    ),
+  "sessions-mutations": () =>
+    import("./server-methods/sessions-mutations.js").then(
+      (module) => module.sessionMutationHandlers,
+    ),
+  "sessions-read": () =>
+    import("./server-methods/sessions-read.js").then((module) => module.sessionReadHandlers),
+  "sessions-rewind": () =>
+    import("./server-methods/sessions-rewind.js").then((module) => module.sessionRewindHandlers),
+  "sessions-sharing": () =>
+    import("./server-methods/sessions-sharing.js").then((module) => module.sessionSharingHandlers),
+  "sessions-subscriptions": () =>
+    import("./server-methods/sessions-subscriptions.js").then(
+      (module) => module.sessionSubscriptionHandlers,
+    ),
+  "sessions-suggestions": () =>
+    import("./server-methods/sessions-suggestions.js").then(
+      (module) => module.sessionSuggestionHandlers,
+    ),
+  "session-catalog": () =>
+    import("./server-methods/session-catalog.js").then((module) => module.sessionCatalogHandlers),
+  "session-discussion": () =>
+    import("./server-methods/session-discussion.js").then(
+      (module) => module.sessionDiscussionHandlers,
+    ),
+  "session-observer-rpc": () =>
+    import("./session-observer-rpc.js").then((module) => module.sessionObserverHandlers),
+  "session-companion-rpc": () =>
+    import("./session-companion-rpc.js").then((module) => module.sessionCompanionHandlers),
+  "hooks-status": () =>
+    import("./server-methods/hooks-status.js").then((module) => module.hooksStatusHandlers),
+  skills: () => import("./server-methods/skills.js").then((module) => module.skillsHandlers),
+  system: () => import("./server-methods/system.js").then((module) => module.systemHandlers),
+  talk: () => import("./server-methods/talk.js").then((module) => module.talkHandlers),
+  tasks: () => import("./server-methods/tasks.js").then((module) => module.tasksHandlers),
+  "task-suggestions": () =>
+    import("./server-methods/task-suggestions.js").then((module) => module.taskSuggestionsHandlers),
+  "tools-catalog": () =>
+    import("./server-methods/tools-catalog.js").then((module) => module.toolsCatalogHandlers),
+  "tools-effective": () =>
+    import("./server-methods/tools-effective.js").then((module) => module.toolsEffectiveHandlers),
+  "tools-invoke": () =>
+    import("./server-methods/tools-invoke.js").then((module) => module.toolsInvokeHandlers),
+  "mcp-app": () => import("./server-methods/mcp-app.js").then((module) => module.mcpAppHandlers),
+  tts: () => import("./server-methods/tts.js").then((module) => module.ttsHandlers),
+  update: () => import("./server-methods/update.js").then((module) => module.updateHandlers),
+  usage: () => import("./server-methods/usage.js").then((module) => module.usageHandlers),
+  "voicewake-routing": () =>
+    import("./server-methods/voicewake-routing.js").then(
+      (module) => module.voicewakeRoutingHandlers,
+    ),
+  voicewake: () =>
+    import("./server-methods/voicewake.js").then((module) => module.voicewakeHandlers),
+  web: () => import("./server-methods/web.js").then((module) => module.webHandlers),
+  "system-agent": () =>
+    import("./server-methods/system-agent.js").then((module) => module.systemAgentHandlers),
+  "system-changes": () =>
+    import("./server-methods/system-changes.js").then((module) => module.systemChangesHandlers),
+  wizard: () => import("./server-methods/wizard.js").then((module) => module.wizardHandlers),
+} satisfies Record<CoreGatewayHandlerFamily, CoreGatewayHandlerModuleLoader>;
 
 function authorizeGatewayMethod(
   method: string,
@@ -382,534 +272,21 @@ function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
   return SUSPEND_CONTROL_METHODS.has(method);
 }
 
-export const coreGatewayHandlers: GatewayRequestHandlers = {
-  ...createLazyCoreHandlers({
-    methods: ["connect"],
-    loadHandlers: loadConnectHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["attach.grant", "attach.revoke"],
-    loadHandlers: loadAttachHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["logs.tail"],
-    loadHandlers: loadLogsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["openclaw.changes.list"],
-    loadHandlers: loadSystemChangesHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "terminal.open",
-      "terminal.input",
-      "terminal.resize",
-      "terminal.close",
-      "terminal.attach",
-      "terminal.list",
-      "terminal.text",
-      "terminal.upload",
-    ],
-    loadHandlers: loadTerminalHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["ui.command"],
-    loadHandlers: loadUiCommandHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "board.get",
-      "board.update",
-      "board.widget.put",
-      "board.widget.grant",
-      "board.widget.appView",
-      "board.event",
-      "board.prompt.authorize",
-      "board.data.read",
-      "board.action",
-    ],
-    loadHandlers: loadBoardHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["voicewake.get", "voicewake.set"],
-    loadHandlers: loadVoicewakeHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["voicewake.routing.get", "voicewake.routing.set"],
-    loadHandlers: loadVoicewakeRoutingHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["health", "status"],
-    loadHandlers: loadHealthHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["channels.status", "channels.start", "channels.stop", "channels.logout"],
-    loadHandlers: loadChannelsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["channels.pairing.list", "channels.pairing.approve", "channels.pairing.dismiss"],
-    loadHandlers: loadChannelPairingHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "chat.history",
-      "chat.startup",
-      "chat.metadata",
-      "chat.message.get",
-      "chat.toolTitles",
-      "chat.abort",
-      "chat.send",
-      "chat.inject",
-    ],
-    loadHandlers: loadChatHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["commands.list"],
-    loadHandlers: loadCommandsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "wake",
-      "cron.list",
-      "cron.status",
-      "cron.get",
-      "cron.scratch.get",
-      "cron.scratch.set",
-      "cron.add",
-      "cron.update",
-      "cron.remove",
-      "cron.run",
-      "cron.runs",
-    ],
-    loadHandlers: loadCronHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "device.pair.list",
-      "device.pair.approve",
-      "device.pair.reject",
-      "device.pair.remove",
-      "device.pair.rename",
-      "device.token.rotate",
-      "device.token.revoke",
-    ],
-    loadHandlers: loadDeviceHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["device.pair.setupCode"],
-    loadHandlers: loadDevicePairSetupHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["diagnostics.stability"],
-    loadHandlers: loadDiagnosticsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests.subscribe"],
-    loadHandlers: loadControlUiHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "doctor.memory.status",
-      "doctor.memory.dreamDiary",
-      "doctor.memory.backfillDreamDiary",
-      "doctor.memory.resetDreamDiary",
-      "doctor.memory.resetGroundedShortTerm",
-      "doctor.memory.repairDreamingArtifacts",
-      "doctor.memory.dedupeDreamDiary",
-      "doctor.memory.remHarness",
-    ],
-    loadHandlers: loadDoctorHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "environments.list",
-      "environments.status",
-      "environments.create",
-      "environments.destroy",
-    ],
-    loadHandlers: loadEnvironmentsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "worktrees.list",
-      "worktrees.branches",
-      "worktrees.create",
-      "worktrees.remove",
-      "worktrees.restore",
-      "worktrees.gc",
-    ],
-    loadHandlers: loadWorktreesHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "exec.approvals.get",
-      "exec.approvals.set",
-      "exec.approvals.node.get",
-      "exec.approvals.node.set",
-    ],
-    loadHandlers: loadExecApprovalsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["fs.listDir"],
-    loadHandlers: loadFsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["web.login.start", "web.login.wait"],
-    loadHandlers: loadWebHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["models.list"],
-    loadHandlers: loadModelsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["models.probe"],
-    loadHandlers: loadModelsProbeHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["models.authLogout", "models.authStatus"],
-    loadHandlers: loadModelsAuthStatusHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["nativeHook.invoke"],
-    loadHandlers: loadNativeHookRelayHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["plugins.uiDescriptors", "plugins.sessionAction"],
-    loadHandlers: loadPluginHostHookHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "plugins.list",
-      "plugins.search",
-      "plugins.install",
-      "plugins.setEnabled",
-      "plugins.uninstall",
-      "plugins.refresh",
-    ],
-    loadHandlers: loadPluginsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "config.get",
-      "config.schema",
-      "config.schema.lookup",
-      "config.set",
-      "config.patch",
-      "config.apply",
-      "config.openFile",
-    ],
-    loadHandlers: loadConfigHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["wizard.start", "wizard.next", "wizard.cancel", "wizard.status"],
-    loadHandlers: loadWizardHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "openclaw.chat",
-      "openclaw.chat.history",
-      "openclaw.approval.list",
-      "openclaw.setup.detect",
-      "openclaw.setup.verify",
-      "openclaw.setup.activate",
-      "openclaw.setup.auth.start",
-      "openclaw.setup.prepare.start",
-    ],
-    loadHandlers: loadSystemAgentHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "talk.session.create",
-      "talk.session.join",
-      "talk.session.appendAudio",
-      "talk.session.startTurn",
-      "talk.session.endTurn",
-      "talk.session.cancelTurn",
-      "talk.session.cancelOutput",
-      "talk.session.acknowledgeMark",
-      "talk.session.submitToolResult",
-      "talk.session.steer",
-      "talk.session.close",
-      "talk.client.create",
-      "talk.client.transcript",
-      "talk.client.close",
-      "talk.client.toolCall",
-      "talk.client.steer",
-      "talk.catalog",
-      "talk.config",
-      "talk.speak",
-      "talk.mode",
-    ],
-    loadHandlers: loadTalkHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["audit.list", "audit.activity.list"],
-    loadHandlers: loadAuditHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "users.list",
-      "users.self",
-      "users.linkEmail",
-      "users.setDisplayName",
-      "users.setAvatar",
-    ],
-    loadHandlers: loadUsersHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["tasks.list", "tasks.get", "tasks.cancel"],
-    loadHandlers: loadTasksHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "taskSuggestions.list",
-      "taskSuggestions.create",
-      "taskSuggestions.accept",
-      "taskSuggestions.dismiss",
-    ],
-    loadHandlers: loadTaskSuggestionsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["tools.catalog"],
-    loadHandlers: loadToolsCatalogHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["tools.effective"],
-    loadHandlers: loadToolsEffectiveHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["tools.invoke"],
-    loadHandlers: loadToolsInvokeHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "mcp.app.view",
-      "mcp.app.callTool",
-      "mcp.app.listTools",
-      "mcp.app.listResources",
-      "mcp.app.listResourceTemplates",
-      "mcp.app.readResource",
-      "mcp.app.updateModelContext",
-    ],
-    loadHandlers: loadMcpAppHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "tts.status",
-      "tts.enable",
-      "tts.disable",
-      "tts.convert",
-      "tts.speak",
-      "tts.setProvider",
-      "tts.personas",
-      "tts.setPersona",
-      "tts.providers",
-    ],
-    loadHandlers: loadTtsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: SKILLS_GATEWAY_METHOD_NAMES,
-    loadHandlers: loadSkillsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "sessions.catalog.list",
-      "sessions.catalog.read",
-      "sessions.catalog.continue",
-      "sessions.catalog.archive",
-    ],
-    loadHandlers: loadSessionCatalogHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["session.discussion.info", "session.discussion.open"],
-    loadHandlers: loadSessionDiscussionHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["sessions.observer.visibility"],
-    loadHandlers: loadSessionObserverHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["sessions.companion.ask", "sessions.companion.state", "sessions.companion.reset"],
-    loadHandlers: loadSessionCompanionHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "sessions.list",
-      "sessions.search",
-      "sessions.cleanup",
-      "sessions.subscribe",
-      "sessions.unsubscribe",
-      "sessions.viewers.set",
-      "sessions.messages.subscribe",
-      "sessions.messages.unsubscribe",
-      "sessions.preview",
-      "sessions.describe",
-      "sessions.resolve",
-      "sessions.compaction.list",
-      "sessions.compaction.get",
-      "sessions.create",
-      "sessions.compaction.branch",
-      "sessions.compaction.restore",
-      "sessions.branches.list",
-      "sessions.branches.switch",
-      "sessions.rewind",
-      "sessions.fork",
-      "sessions.send",
-      "sessions.steer",
-      "sessions.abort",
-      "sessions.patch",
-      "sessions.pluginPatch",
-      "sessions.reset",
-      "sessions.delete",
-      "sessions.get",
-      "sessions.compact",
-      "sessions.groups.list",
-      "sessions.groups.put",
-      "sessions.groups.rename",
-      "sessions.groups.delete",
-      "sessions.dispatch",
-      "sessions.reclaim",
-      "session.visibility.set",
-      "session.members.list",
-      "session.members.add",
-      "session.members.remove",
-      "session.suggestions.add",
-      "session.suggestions.list",
-      "session.suggestions.resolve",
-      "session.typing",
-    ],
-    loadHandlers: loadSessionsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "gateway.identity.get",
-      "last-heartbeat",
-      "set-heartbeats",
-      "system-presence",
-      "system.info",
-      "system-event",
-    ],
-    loadHandlers: loadSystemHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["update.status", "update.run"],
-    loadHandlers: loadUpdateHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      ...NODE_PAIR_GATEWAY_METHODS,
-      "node.pair.remove",
-      "node.rename",
-      "node.list",
-      "node.describe",
-      "plugin.surface.refresh",
-      "node.pluginSurface.refresh",
-      "node.pluginTools.update",
-      "node.skills.update",
-      "node.pending.pull",
-      "node.pending.ack",
-      "node.invoke",
-      "node.invoke.progress",
-      "node.invoke.result",
-      "node.event",
-    ],
-    loadHandlers: loadNodeHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["node.pending.drain", "node.pending.enqueue"],
-    loadHandlers: loadNodePendingHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "push.test",
-      "push.web.vapidPublicKey",
-      "push.web.subscribe",
-      "push.web.unsubscribe",
-      "push.web.test",
-    ],
-    loadHandlers: loadPushHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["gateway.restart.request", "gateway.restart.preflight"],
-    loadHandlers: loadRestartHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["gateway.suspend.prepare", "gateway.suspend.status", "gateway.suspend.resume"],
-    loadHandlers: loadSuspendHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["message.action", "send", "poll"],
-    loadHandlers: loadSendHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "conversations.list",
-      "conversations.send",
-      "conversations.turn",
-      "conversations.turn.cancel",
-    ],
-    loadHandlers: loadConversationHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "usage.status",
-      "usage.cost",
-      "sessions.usage",
-      "sessions.usage.timeseries",
-      "sessions.usage.logs",
-    ],
-    loadHandlers: loadUsageHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["agent", "agent.wait"],
-    loadHandlers: loadAgentHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["agent.identity.get"],
-    loadHandlers: loadAgentIdentityHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "agents.list",
-      "agents.create",
-      "agents.update",
-      "agents.delete",
-      "agents.files.list",
-      "agents.files.get",
-      "agents.files.set",
-    ],
-    loadHandlers: loadAgentsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["agents.workspace.list", "agents.workspace.get"],
-    loadHandlers: loadAgentsWorkspaceHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["memory.search"],
-    loadHandlers: loadMemorySearchHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["artifacts.list", "artifacts.get", "artifacts.download"],
-    loadHandlers: loadArtifactsHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: [
-      "sessions.files.list",
-      "sessions.files.get",
-      "sessions.files.set",
-      "sessions.files.reveal",
-    ],
-    loadHandlers: loadSessionsFilesHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["sessions.diff"],
-    loadHandlers: loadSessionsDiffHandlers,
-  }),
-  ...createLazyCoreHandlers({
-    methods: ["migrations.memory.plan", "migrations.memory.apply"],
-    loadHandlers: loadMigrationsHandlers,
-  }),
-};
+const coreGatewayHandlerMethodNames = listCoreGatewayHandlerMethodNames();
+const coreGatewayHandlerModules = Object.entries(CORE_GATEWAY_HANDLER_MODULES) as Array<
+  [CoreGatewayHandlerFamily, CoreGatewayHandlerModuleLoader]
+>;
+
+export const coreGatewayHandlers: GatewayRequestHandlers = Object.fromEntries(
+  coreGatewayHandlerModules.flatMap(([family, loadModule]) =>
+    Object.entries(
+      createLazyCoreHandlers({
+        methods: coreGatewayHandlerMethodNames.get(family) ?? [],
+        loadHandlers: lazyHandlerModule(loadModule, (handlers) => handlers),
+      }),
+    ),
+  ),
+);
 
 /** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
 function createRequestGatewayMethodRegistry(
@@ -941,15 +318,18 @@ function createRequestGatewayMethodRegistry(
       ([method]) => !pluginMethodNames.has(method) && !coreMethodNames.has(method),
     ),
   );
-  return createGatewayMethodRegistry([
-    ...coreDescriptors,
-    ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
-    ...createGatewayMethodDescriptorsFromHandlers({
-      handlers: auxHandlers,
-      owner: { kind: "aux", area: "gateway-extra" },
-      defaultScope: ADMIN_SCOPE,
-    }),
-  ]);
+  return createGatewayMethodRegistry(
+    [
+      ...coreDescriptors,
+      ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
+      ...createGatewayMethodDescriptorsFromHandlers({
+        handlers: auxHandlers,
+        owner: { kind: "aux", area: "gateway-extra" },
+        defaultScope: ADMIN_SCOPE,
+      }),
+    ],
+    gatewayPluginRegistry ?? undefined,
+  );
 }
 
 /** Authorizes and dispatches one gateway JSON-RPC-style request. */
@@ -959,8 +339,8 @@ export async function handleGatewayRequest(
   const { req, respond, client, isWebchatConnect, context, signal } = opts;
   // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
   // metadata newer than global runtime state still authorizes and dispatches correctly. When the
-  // attached snapshot does not own the method, rebuild from the gateway-pinned registry. Without
-  // a gateway pin, that registry follows active plugins so late methods remain reachable (#94127).
+  // attached snapshot does not own the method, rebuild from the process-root registry so late
+  // methods remain reachable (#94127).
   const methodRegistry =
     opts.methodRegistry?.getHandler(req.method) !== undefined
       ? opts.methodRegistry
@@ -1115,8 +495,20 @@ export async function handleGatewayRequest(
   // The scope also carries caller identity into plugin-owned gateway methods.
   const invokeWithRequestScope = async () => {
     try {
+      const pluginRegistry =
+        (methodRegistry.pluginRegistry as
+          | NonNullable<ReturnType<typeof getActivePluginRegistry>>
+          | undefined) ??
+        getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+        getActivePluginRegistry() ??
+        undefined;
       await withPluginRuntimeGatewayRequestScope(
-        { context, client, isWebchatConnect },
+        {
+          context,
+          client,
+          isWebchatConnect,
+          ...(pluginRegistry ? { pluginRegistry } : {}),
+        },
         invokeHandler,
       );
     } catch (error) {
@@ -1137,4 +529,3 @@ export async function handleGatewayRequest(
     rootWorkAdmission.release();
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

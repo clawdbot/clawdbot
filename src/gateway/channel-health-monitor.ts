@@ -100,6 +100,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
         return;
       }
 
+      if (channelManager.getAutostartSuppression() !== null) {
+        await channelManager.recoverAutostartSuppression();
+      }
       const snapshot = channelManager.getRuntimeSnapshot();
       const globalAutostartSuppression = channelManager.getAutostartSuppression();
 
@@ -158,9 +161,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (health.healthy) {
             continue;
           }
-          if (health.reason === "terminal-disconnect") {
+          if (health.reason === "terminal-disconnect" || health.reason === "blocked") {
             log.info?.(
-              `[${channelId}:${accountId}] health-monitor: skipping restart, terminal disconnect`,
+              `[${channelId}:${accountId}] health-monitor: skipping restart, ${health.reason}`,
             );
             continue;
           }

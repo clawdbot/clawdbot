@@ -43,6 +43,7 @@ import {
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
   inspectGatewayCrashLoopBreaker,
   recordGatewayBootStart,
+  recordGatewayCrashLoopRecovery,
   type GatewayCrashLoopBreakerDecision,
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
@@ -59,6 +60,7 @@ import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { findOpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
+import { findOpenClawStateDatabaseSchemaMigrationRequiredError } from "../../state/openclaw-state-db-schema-migration-required.js";
 import { printClawBanner, type ClawBannerResult } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
@@ -475,7 +477,9 @@ function resolveGatewayLockErrorExitCode(err: unknown): number {
 }
 
 function resolveGatewayStartupFailureExitCode(err: unknown): number {
-  return isInvalidConfigError(err) || findOpenClawAgentDatabaseMediaMigrationRequiredError(err)
+  return isInvalidConfigError(err) ||
+    findOpenClawAgentDatabaseMediaMigrationRequiredError(err) ||
+    findOpenClawStateDatabaseSchemaMigrationRequiredError(err)
     ? EXIT_CONFIG_ERROR
     : 1;
 }
@@ -1133,6 +1137,22 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   let crashLoopDecision: GatewayCrashLoopBreakerDecision | undefined;
   let channelAutostartSuppression: { reason: "crash-loop-breaker"; message: string } | undefined;
   let activeBootId: string | undefined;
+  const tryRecoverChannelAutostartSuppression = () => {
+    const decision = inspectGatewayCrashLoopBreaker(process.env);
+    // The current safe-mode boot remains an open row until the full window has
+    // drained. Requiring zero prevents a near-expiry history from restoring
+    // channels before this process itself has proven stable for the whole window.
+    if (!decision.recovered || decision.uncleanBoots !== 0) {
+      return false;
+    }
+    const recoveredBootId = recordGatewayCrashLoopRecovery(activeBootId, process.env);
+    if (!recoveredBootId) {
+      return false;
+    }
+    activeBootId = recoveredBootId;
+    gatewayLog.info("gateway restart-loop breaker recovered; channel auto-start restored");
+    return true;
+  };
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
     // in-process restarts re-evaluate breaker state instead of reusing stale mode.
@@ -1144,6 +1164,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       : crashLoopDecision.recovered
         ? GATEWAY_CRASH_LOOP_RECOVERED_REASON
         : undefined;
+    // Shared-state schema failures make this write fail open, so no lifecycle
+    // row exists for Doctor to reconcile after it repairs the schema.
     activeBootId = recordGatewayBootStart(process.env, startedAtMs, bootStartReason);
     channelAutostartSuppression = undefined;
     if (crashLoopDecision.recovered) {
@@ -1189,6 +1211,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
             : {}),
           ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
           ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
+          ...(channelAutostartSuppression ? { tryRecoverChannelAutostartSuppression } : {}),
           ...(devMode
             ? {
                 ambientEnvTriggers: devAmbientEnvTriggers,
@@ -1245,6 +1268,20 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       } catch (parkError) {
         gatewayLog.error(
           `failed to park the managed LaunchAgent after migration-required startup: ${formatErrorMessage(parkError)}`,
+        );
+      }
+    }
+    if (findOpenClawStateDatabaseSchemaMigrationRequiredError(err)) {
+      try {
+        const { parkCurrentLaunchAgentForMaintenance } = await import("../../daemon/launchd.js");
+        if (await parkCurrentLaunchAgentForMaintenance()) {
+          gatewayLog.error(
+            `gateway requires state database schema migration; parked the managed LaunchAgent. Run ${formatCliCommand("openclaw doctor --fix")} to repair and restart it.`,
+          );
+        }
+      } catch (parkError) {
+        gatewayLog.error(
+          `failed to park the managed LaunchAgent after state schema migration-required startup: ${formatErrorMessage(parkError)}`,
         );
       }
     }

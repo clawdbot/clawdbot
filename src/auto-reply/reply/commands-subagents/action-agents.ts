@@ -64,13 +64,14 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   const recentCutoff = Date.now() - RECENT_WINDOW_MINUTES * 60_000;
   const numericOrder = [
     ...dedupedRuns.filter(
-      (entry) => !entry.endedAt || readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0,
+      (entry) =>
+        !entry.execution.endedAt || readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0,
     ),
     ...dedupedRuns.filter(
       (entry) =>
-        entry.endedAt &&
+        entry.execution.endedAt &&
         readIndex.countPendingDescendantRuns(entry.childSessionKey) === 0 &&
-        entry.endedAt >= recentCutoff,
+        entry.execution.endedAt >= recentCutoff,
     ),
   ];
   const indexByChildSessionKey = new Map(
@@ -80,7 +81,7 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   const visibleRuns: typeof dedupedRuns = [];
   for (const entry of dedupedRuns) {
     const visible =
-      !entry.endedAt ||
+      !entry.execution.endedAt ||
       readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0 ||
       resolveSessionBindings(entry.childSessionKey).length > 0;
     if (!visible) {

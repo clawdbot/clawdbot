@@ -12,7 +12,7 @@ type ToolMessageRef = {
   runId?: string;
 };
 
-type LiveToolStreamRef = ToolMessageRef & {
+export type LiveToolStreamRef = ToolMessageRef & {
   identity: string;
 };
 
@@ -51,7 +51,7 @@ function isToolMessageContentBlock(block: Record<string, unknown>): boolean {
   return isToolCallContentType(block.type) || isToolResultContentType(block.type);
 }
 
-/** Reads provider-shaped transcript ids without inventing a missing run owner. */
+/** Reads invocation ids without confusing row ids or inventing a missing run owner. */
 export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
   const record = asToolRecord(message);
   if (!record) {
@@ -65,7 +65,7 @@ export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
         (block): block is Record<string, unknown> => Boolean(block) && typeof block === "object",
       )
     : [];
-  const topLevelToolId = resolveToolUseId(record);
+  const topLevelToolId = resolveToolUseId({ ...record, id: undefined });
   const topLevelRunId = normalizeOptionalString(record.runId);
   const role = record.role;
   const messageHasToolShape =

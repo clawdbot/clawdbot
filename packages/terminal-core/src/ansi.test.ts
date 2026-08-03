@@ -193,6 +193,59 @@ describe("terminal ansi helpers", () => {
     expect(visibleWidth("a\u001B[31\u0001mb")).toBe(2);
   });
 
+  it.each([
+    ["halfwidth voiced kana", "ﾊﾞ", 2],
+    ["halfwidth semi-voiced kana", "ﾊﾟ", 2],
+    ["halfwidth kana with a prolonged sound", "ｳﾞｰ", 3],
+    ["zero-width space", "\u200B", 0],
+    ["zero-width non-joiner", "\u200C", 0],
+    ["word joiner", "\u2060", 0],
+    ["function application", "\u2061", 0],
+    ["soft hyphen", "\u00AD", 0],
+    ["zero-width no-break space", "\uFEFF", 0],
+    ["Hindi spacing mark", "का", 2],
+    ["repeated leading Hangul jamo", "ᄀᄀ", 4],
+    ["repeated Hangul jamo with a vowel", "ᄀ가", 4],
+    ["Hangul leading filler", "\u115F", 2],
+    ["Hangul vowel filler", "\u1160", 0],
+    ["Hangul compatibility filler", "\u3164", 2],
+    ["halfwidth Hangul filler", "\uFFA0", 1],
+    ["Hangul filler with a vowel", "\u115F\u1161", 2],
+    ["Hangul leading and vowel fillers", "\u115F\u1160", 2],
+    ["Hangul compatibility filler with a combining mark", "\u3164\u0301", 2],
+    ["halfwidth Hangul filler with a voiced mark", "\uFFA0\uFF9E", 2],
+    ["lone high surrogate", "\uD800", 1],
+    ["lone low surrogate", "\uDC00", 1],
+    ["well-formed emoji surrogate pair", "\uD83D\uDE00", 2],
+  ])("measures %s with Unicode terminal-width rules", (_label, text, width) => {
+    expect(visibleWidth(text)).toBe(width);
+  });
+
+  it("measures malformed UTF-16 by Node's rendered replacement cells", () => {
+    for (const input of ["\uD800", "\uDC00", "表\uD800\t", "\u001B[31m\uDC00\u001B[0m"]) {
+      const rendered = Buffer.from(input, "utf8").toString("utf8");
+      expect(visibleWidth(input)).toBe(visibleWidth(rendered));
+    }
+  });
+
+  it("preserves the executed width of tabs", () => {
+    expect(visibleWidth("\t")).toBe(1);
+    expect(visibleWidth("a\tb")).toBe(3);
+    expect(visibleWidth("a\u001B[31\tmb")).toBe(3);
+    expect(visibleWidth("a\u009B31\tmb")).toBe(3);
+  });
+
+  it("keeps malformed ANSI ownership with OpenClaw's canonical scanner", () => {
+    expect(visibleWidth("\u001B")).toBe(0);
+    expect(visibleWidth("\u009B")).toBe(0);
+    expect(visibleWidth("\u009D")).toBe(0);
+    expect(visibleWidth("\u001B[")).toBe(0);
+    expect(visibleWidth("\u001B]visible")).toBe("]visible".length);
+    expect(visibleWidth("\u009Dvisible")).toBe("visible".length);
+    // Removing CSI must not let another ANSI grammar reinterpret joined bytes as OSC.
+    expect(visibleWidth("\u001B\u001B[0m]visible\u0007after")).toBe("]visibleafter".length);
+  });
+
   it("keeps emoji zwj sequences as single graphemes", () => {
     expect(splitGraphemes("👨‍👩‍👧‍👦")).toEqual(["👨‍👩‍👧‍👦"]);
     expect(visibleWidth("👨‍👩‍👧‍👦")).toBe(2);
@@ -229,7 +282,30 @@ describe("terminal ansi helpers", () => {
     // never emitted half-width, so the result never exceeds the budget.
     expect(truncateToVisibleWidth("表文", 2)).toBe("表");
     expect(truncateToVisibleWidth("表", 1)).toBe("");
+    expect(truncateToVisibleWidth("ﾊﾞ", 1)).toBe("");
+    expect(truncateToVisibleWidth("ﾊﾞ", 2)).toBe("ﾊﾞ");
+    expect(truncateToVisibleWidth("का", 1)).toBe("");
+    expect(truncateToVisibleWidth("ᄀᄀ", 3)).toBe("");
+    expect(truncateToVisibleWidth("👨‍👩‍👧‍👦", 1)).toBe("");
+    expect(truncateToVisibleWidth("🇬🇧", 1)).toBe("");
+    expect(truncateToVisibleWidth("\u200B表", 1)).toBe("\u200B");
+    expect(truncateToVisibleWidth("a\tb", 2)).toBe("a\t");
+    expect(truncateToVisibleWidth("\u115F\u1161", 1)).toBe("");
+    expect(truncateToVisibleWidth("\u3164".repeat(30), 1)).toBe("");
+    expect(truncateToVisibleWidth("\u3164".repeat(30), 2)).toBe("\u3164");
+    expect(truncateToVisibleWidth("\uFFA0\uFF9E", 1)).toBe("");
+    expect(truncateToVisibleWidth("\uD800".repeat(30), 5)).toBe("\uD800".repeat(5));
+    expect(truncateToVisibleWidth("表\uDC00\t", 3)).toBe("表\uDC00");
     expect(visibleWidth(truncateToVisibleWidth("📸📸", 1))).toBeLessThanOrEqual(1);
+  });
+
+  it("keeps complete graphemes and zero-width prefixes at either truncation edge", () => {
+    expect(truncateToVisibleWidth("abcd", 3)).toBe("abc");
+    expect(truncateToVisibleWidth("表文字", 5)).toBe("表文");
+    expect(truncateToVisibleWidth("👨‍👩‍👧‍👦📸", 3)).toBe("👨‍👩‍👧‍👦");
+    expect(truncateToVisibleWidth("a\u200Bb", 1)).toBe("a\u200B");
+    expect(truncateToVisibleWidth("abc\u200B", 2)).toBe("ab");
+    expect(truncateToVisibleWidth("\u200Babc", 2)).toBe("\u200Bab");
   });
 
   it("preserves ANSI sequences when truncating styled text", () => {

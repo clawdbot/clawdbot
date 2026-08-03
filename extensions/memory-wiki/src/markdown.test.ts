@@ -4,7 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createWikiPageFilename,
+  extractHumanNotesBlock,
   parseWikiMarkdown,
+  preserveHumanNotesBlock,
   renderWikiMarkdown,
   scanWikiPageSummary,
   slugifyWikiSegment,
@@ -62,6 +64,112 @@ describe("slugifyWikiSegment", () => {
       Buffer.byteLength(`.${fileName}.00000000-0000-4000-8000-000000000000.fallback.tmp`),
     ).toBeLessThanOrEqual(255);
     expect(createWikiPageFilename(stem)).toBe(fileName);
+  });
+});
+
+describe("human Notes blocks", () => {
+  const startMarker = "<!-- openclaw:human:start -->";
+  const endMarker = "<!-- openclaw:human:end -->";
+  const rendered = ["# Source", "", "## Notes", startMarker, endMarker, ""].join("\n");
+
+  it("extracts and preserves complete human Notes blocks", () => {
+    const existing = rendered.replace(
+      `${startMarker}\n${endMarker}`,
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+
+    expect(extractHumanNotesBlock(existing)).toBe(
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
+    expect(extractHumanNotesBlock(rendered)).toBeNull();
+  });
+
+  it("leaves pages without human Notes markers unchanged", () => {
+    const existing = "# Source\n\nGenerated content only.\n";
+
+    expect(extractHumanNotesBlock(existing)).toBeNull();
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(rendered);
+    expect(preserveHumanNotesBlock(existing, rendered)).toBe(existing);
+  });
+
+  it.each([
+    {
+      name: "closing",
+      lines: [startMarker, "Durable human annotation"],
+      missingMarker: endMarker,
+    },
+    {
+      name: "opening",
+      lines: ["Durable human annotation", endMarker],
+      missingMarker: startMarker,
+    },
+  ])(
+    "rejects a missing $name marker before extracting or replacing Notes",
+    ({ lines, missingMarker }) => {
+      const malformed = ["# Source", "", "## Notes", ...lines, ""].join("\n");
+      const expectedError = `Memory Wiki human Notes are missing ${missingMarker}; restore the missing marker before updating or removing this page`;
+
+      expect(() => extractHumanNotesBlock(malformed)).toThrow(expectedError);
+      expect(() => preserveHumanNotesBlock(rendered, malformed)).toThrow(expectedError);
+      expect(() => preserveHumanNotesBlock(malformed, rendered)).toThrow(expectedError);
+    },
+  );
+
+  it.each([startMarker, endMarker])(
+    "ignores a standalone marker inside fenced source content",
+    (marker) => {
+      const existing = ["# Source", "", "## Content", "```text", marker, "```", ""].join("\n");
+
+      expect(extractHumanNotesBlock(existing)).toBeNull();
+      expect(preserveHumanNotesBlock(rendered, existing)).toBe(rendered);
+    },
+  );
+
+  it("preserves marker comments embedded in complete human Notes", () => {
+    const notes = [
+      "Before copied markers",
+      startMarker,
+      "Between copied markers",
+      endMarker,
+      "After copied markers",
+    ].join("\n");
+    const existing = rendered.replace(
+      `${startMarker}\n${endMarker}`,
+      `${startMarker}\n${notes}\n${endMarker}`,
+    );
+
+    expect(extractHumanNotesBlock(existing)).toBe(`${startMarker}\n${notes}\n${endMarker}`);
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
+  });
+
+  it("ignores source-body marker pairs when extracting and preserving actual Notes", () => {
+    const sourceWithMarkers = [
+      "# Source",
+      "",
+      "## Content",
+      "```text",
+      startMarker,
+      "Generated source annotation",
+      endMarker,
+      "```",
+      "",
+      "## Notes",
+      startMarker,
+      "Durable human annotation",
+      endMarker,
+      "",
+    ].join("\n");
+
+    expect(extractHumanNotesBlock(sourceWithMarkers)).toBe(
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+    expect(preserveHumanNotesBlock(rendered, sourceWithMarkers)).toBe(
+      rendered.replace(
+        `${startMarker}\n${endMarker}`,
+        `${startMarker}\nDurable human annotation\n${endMarker}`,
+      ),
+    );
   });
 });
 

@@ -373,6 +373,7 @@ describe("legacy MCP OAuth Doctor migration", () => {
 
   it("rejects malformed and unexpected store shapes without mutation", async () => {
     const { env, stateDir } = useStateDir();
+    const privateMarker = "must-not-appear-in-doctor-output";
     const malformedPath = await writeLegacy({
       stateDir,
       value: validStore({ tokens: { access_token: 42, token_type: "Bearer" } }),
@@ -382,14 +383,21 @@ describe("legacy MCP OAuth Doctor migration", () => {
       fileName: "other-1234567890abcdef.json",
       value: { ...validStore(), unexpected: true },
     });
+    const invalidJsonPath = await writeLegacy({
+      stateDir,
+      fileName: "syntax-1234567890abcdef.json",
+      bytes: Buffer.from(`{"tokens":{"access_token":${privateMarker}}}`, "utf8"),
+    });
 
     const result = await migrate(stateDir, env);
 
-    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings).toHaveLength(3);
     expect(result.warnings.join("\n")).toContain("tokens are invalid");
     expect(result.warnings.join("\n")).toContain("unexpected field");
+    expect(result.warnings.join("\n")).not.toContain(privateMarker);
     expect(fs.existsSync(malformedPath)).toBe(true);
     expect(fs.existsSync(unexpectedPath)).toBe(true);
+    expect(fs.existsSync(invalidJsonPath)).toBe(true);
     expect(storeRow(env)).toBeUndefined();
     expect(receipt(env)).toBeUndefined();
   });
@@ -451,8 +459,24 @@ describe("legacy MCP OAuth Doctor migration", () => {
     const sourcePath = await writeLegacy({ stateDir });
     await fsp.writeFile(`${sourcePath}.lock`, "not a verifiable lock owner");
 
-    const result = await migrate(stateDir, env);
+    const retryDelays: number[] = [];
+    const setTimeoutActual = globalThis.setTimeout;
+    // fs-safe owns backoff timing; this migration test still exercises every failed acquisition.
+    const fastSetTimeout = (...params: Parameters<typeof setTimeout>) => {
+      const [callback, delay, ...args] = params;
+      retryDelays.push(delay ?? 0);
+      return setTimeoutActual(callback, 0, ...args);
+    };
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(fastSetTimeout);
 
+    let result: Awaited<ReturnType<typeof migrate>>;
+    try {
+      result = await migrate(stateDir, env);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+
+    expect(retryDelays).toHaveLength(20);
     expect(result.changes).toEqual([]);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed locking legacy MCP OAuth store");

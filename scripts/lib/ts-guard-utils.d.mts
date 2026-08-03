@@ -13,8 +13,10 @@ export function collectTypeScriptFiles(
   targetPath: string,
   options?: {
     extraTestSuffixes?: string[];
+    fileExtensions?: string[];
     ignoreMissing?: boolean;
     includeTests?: boolean;
+    skipDirectories?: string[];
     skipNodeModules?: boolean;
   },
 ): Promise<string[]>;
@@ -25,7 +27,9 @@ export function collectTypeScriptFilesFromRoots(
   sourceRoots: string[],
   options?: {
     extraTestSuffixes?: string[];
+    fileExtensions?: string[];
     includeTests?: boolean;
+    skipDirectories?: string[];
     skipNodeModules?: boolean;
   },
 ): Promise<string[]>;

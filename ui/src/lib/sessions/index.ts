@@ -1,312 +1,47 @@
-import {
-  getGatewaySessionMessageSubscriptionCoordinator,
-  releaseGatewaySessionMessageSubscription,
-  resetGatewaySessionMessageSubscriptionCoordinator,
-  type GatewaySessionMessageSubscription,
-} from "@openclaw/gateway-client/browser";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayEventFrame,
-  type GatewayHelloOk,
-} from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionBranch,
-  SessionCompactionCheckpoint,
-  SessionRunStatus,
-  SessionsCompactionBranchResult,
-  SessionsCompactionListResult,
-  SessionsCompactionRestoreResult,
-  SessionsForkResult,
-  SessionsBranchesListResult,
-  SessionsBranchesSwitchResult,
-  SessionsListResult,
-  SessionsPatchResult,
-  SessionsRewindResult,
-  SessionWorkspaceGetResult,
-  SessionWorkspaceListResult,
-  SessionWorkspaceSetResult,
-} from "../../api/types.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
-import { getSafeLocalStorage } from "../../local-storage.ts";
-import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
-import {
-  requestSessionCreate,
-  resolveSessionCreateParams,
-  type SessionCreateOutcome,
-  type SessionCreateParams,
-} from "./create.ts";
-import { readSessionCustomGroupNames, readSidebarSectionOrder } from "./custom-groups.ts";
-import { scopedAgentListParamsForSession, type SessionArchivedFilter } from "./navigation.ts";
-import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
+import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
+import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
   readSessionChangedEvent,
   reconcileSessionChanged,
   reconcileSessionHistory,
+  reconcileSessionRunTerminal,
   type SessionChangedResult,
   type SessionReconcileOptions,
+  type SessionRunTerminal,
 } from "./reconcile.ts";
+import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
+import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
+import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import {
-  areUiSessionKeysEquivalent,
-  isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
   uiSessionEventMatches,
-  uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
+import { createSessionMutations } from "./session-mutations.ts";
+import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
+import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { SwarmActivityTracker } from "./swarm-activity.ts";
+
 export {
   buildSessionUsageDateParams,
   requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
 } from "./usage.ts";
-
-type SessionState = {
-  result: SessionsListResult | null;
-  agentId: string | null;
-  modelOverrides: Readonly<Record<string, string | null>>;
-  loading: boolean;
-  error: string | null;
-  deletedSessions: readonly SessionDeleteTarget[];
-  /** Gateway-owned custom group catalog in display order. */
-  groups: readonly string[];
-  /** Gateway-owned sidebar section order; pinned is intentionally absent. */
-  sectionOrder: readonly string[];
-};
-
-type SessionGroupMutationResult = "completed" | "stale";
-
 export type { SessionArchivedFilter } from "./navigation.ts";
-
-export type SessionListOptions = {
-  agentId?: string;
-  spawnedBy?: string;
-  boardFace?: "chat" | "dashboard";
-  activeMinutes?: number;
-  search?: string;
-  creatorId?: string;
-  offset?: number;
-  limit?: number;
-  includeGlobal?: boolean;
-  includeUnknown?: boolean;
-  configuredAgentsOnly?: boolean;
-  includeDerivedTitles?: boolean;
-  archivedFilter?: SessionArchivedFilter;
-  append?: boolean;
-};
-
-/** Gateway rosters omit recency so Chat and Settings agree.
- * The explicit cap keeps list work bounded. */
-export const DEFAULT_SESSION_LIST_QUERY = {
-  limit: 50,
-} as const satisfies SessionListOptions;
-
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
-const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
-
-type SessionRefreshOptions = SessionListOptions & {
-  force?: boolean;
-  // Sidebar startup hydration must not block session creation or drop the open session.
-  backgroundHydrate?: boolean;
-};
-
-export type SessionRunTerminal = {
-  sessionKeys: readonly string[];
-  runId?: string | null;
-  /** Latest session status after this owned model run leaves the active registry. */
-  status: SessionRunStatus;
-  endedAt: number;
-};
-
+export type {
+  SessionCapability,
+  SessionListOptions,
+  SessionListSnapshot,
+  SessionMessageSubscription,
+} from "./session-capability.ts";
 export type { SessionPatch } from "./patch.ts";
-
-type SessionDeleteOptions = {
-  agentId?: string;
-  deleteTranscript?: boolean;
-  archivedOnly?: boolean;
-};
-
-type SessionDeleteTarget = {
-  key: string;
-  agentId?: string;
-  deleteTranscript?: boolean;
-  archivedOnly?: boolean;
-};
-
-/** Dirty/unpushed checkouts survive session deletion; callers surface them. */
-type SessionDeleteOutcome = {
-  deleted: boolean;
-  worktreePreserved?: { id: string; branch: string; path: string };
-};
-
-type SessionDeleteBatchResult = {
-  deleted: string[];
-  errors: string[];
-  /** Dirty/unpushed checkouts kept by the gateway during this batch. */
-  preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
-};
-
-type SessionCompactResult = {
-  ok?: boolean;
-  compacted?: boolean;
-  reason?: string;
-  result?: { tokensBefore?: number; tokensAfter?: number };
-};
-
-type SessionSteerResult = {
-  runId?: string;
-  status?: unknown;
-};
-
-type SessionResetOptions = {
-  agentId?: string | null;
-};
-
-type SessionResetResult = "completed" | "not-started" | "uncertain";
-
-type SessionGateway = {
-  readonly snapshot: {
-    client: GatewayBrowserClient | null;
-    phase: ApplicationGatewayPhase;
-    hello: GatewayHelloOk | null;
-    assistantAgentId?: string | null;
-    sessionKey?: string;
-  };
-  subscribe: (listener: (snapshot: SessionGateway["snapshot"]) => void) => () => void;
-  subscribeEvents: (listener: (event: GatewayEventFrame) => void) => () => void;
-};
-
-type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
-
-type SessionDeleteResponse = {
-  deleted: boolean;
-  worktreePreserved?: SessionDeleteOutcome["worktreePreserved"];
-};
-
-type SessionConnectionScope = {
-  client: GatewayBrowserClient;
-  epoch: number;
-};
-
-type SessionCreateReconciliation = "blocking" | "background";
-
-export type SessionMessageSubscription = GatewaySessionMessageSubscription;
-
-export type SessionCapability = {
-  readonly state: SessionState;
-  /** Advances only when a canonical sessions.list result is published. */
-  readonly canonicalListRevision: number;
-  list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
-  setCreatorFilter: (creatorId: string | null) => Promise<void>;
-  reconcile: (
-    row: GatewaySessionRow | undefined,
-    defaults?: SessionsListResult["defaults"],
-    options?: SessionReconcileOptions,
-  ) => boolean;
-  reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
-  reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
-  refresh: (options?: SessionRefreshOptions) => Promise<void>;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
-  createResult: (
-    params?: SessionCreateParams,
-    options?: { reconciliation?: SessionCreateReconciliation },
-  ) => Promise<SessionCreateOutcome | null>;
-  create: (params?: SessionCreateParams) => Promise<string | null>;
-  patch: SessionPatchRoute;
-  setModelOverride: (key: string, value: string | null | undefined) => void;
-  /** Applies optimistic row fields to the published snapshot so mid-flight
-   * publishes (e.g. a refresh's loading flip) cannot revert them before the
-   * post-mutation canonical list lands. */
-  patchRowLocal: (key: string, patch: Partial<GatewaySessionRow>) => void;
-  /** True while a just-created work session is waiting for its canonical placement row. */
-  isPreparedWorkSession: (key: string) => boolean;
-  pullRequestSummary: (key: string) => SessionCatalogPullRequestSummary | undefined;
-  capturePullRequestEpoch: (key: string) => symbol;
-  setPullRequestSummary: (
-    key: string,
-    summary: SessionCatalogPullRequestSummary | undefined,
-    epoch?: symbol,
-  ) => void;
-  delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
-  deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
-  reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;
-  compact: (key: string, options?: { agentId?: string | null }) => Promise<SessionCompactResult>;
-  steer: (
-    key: string,
-    message: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionSteerResult>;
-  listFiles: (
-    key: string,
-    options?: { agentId?: string | null; path?: string; search?: string },
-  ) => Promise<SessionWorkspaceListResult | null>;
-  getFile: (
-    key: string,
-    path: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionWorkspaceGetResult | null>;
-  setFile: (
-    key: string,
-    path: string,
-    content: string,
-    options: { agentId?: string | null; expectedHash: string },
-  ) => Promise<SessionWorkspaceSetResult | null>;
-  subscribeMessages: (
-    key: string,
-    options?: { agentId?: string | null; includeApprovals?: boolean },
-  ) => Promise<SessionMessageSubscription>;
-  unsubscribeMessages: (subscription: SessionMessageSubscription) => Promise<void>;
-  listCheckpoints: (
-    key: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionCompactionCheckpoint[]>;
-  branchCheckpoint: (
-    key: string,
-    checkpointId: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionsCompactionBranchResult>;
-  restoreCheckpoint: (
-    key: string,
-    checkpointId: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionsCompactionRestoreResult>;
-  rewind: (
-    key: string,
-    entryId: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionsRewindResult>;
-  forkAtMessage: (
-    key: string,
-    entryId: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionsForkResult>;
-  listBranches: (key: string, options?: { agentId?: string | null }) => Promise<SessionBranch[]>;
-  switchBranch: (
-    key: string,
-    leafEntryId: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionsBranchesSwitchResult>;
-  /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
-  groupsLoad: () => Promise<void>;
-  /** Replaces the group catalog; stale means the initiating connection retired. */
-  groupsPut: (
-    names: readonly string[],
-    sectionOrder?: readonly string[],
-  ) => Promise<SessionGroupMutationResult>;
-  /** Renames a group; stale means the initiating connection retired before reconciliation. */
-  groupsRename: (from: string, to: string) => Promise<SessionGroupMutationResult>;
-  /** Deletes a group; stale means the initiating connection retired before reconciliation. */
-  groupsDelete: (name: string) => Promise<SessionGroupMutationResult>;
-  subscribeCreated: (listener: (key: string) => void) => () => void;
-  subscribe: (listener: (state: SessionState) => void) => () => void;
-  dispose: () => void;
-};
-
+export { DEFAULT_SESSION_LIST_QUERY } from "./session-requests.ts";
+export { reconcileSessionRunTerminal, type SessionRunTerminal } from "./reconcile.ts";
 export { requestSessionCreate } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";
 export {
@@ -328,391 +63,23 @@ export type {
   SessionScopeHostWithKey,
 } from "./navigation.ts";
 
-const SESSION_LIST_PARAMS = {
-  includeGlobal: true,
-  includeUnknown: true,
-  configuredAgentsOnly: true,
-} as const;
+const SESSION_RETRY_DEFAULT_MS = 500;
+const SESSION_RETRY_MIN_MS = 100;
+const SESSION_RETRY_MAX_MS = 30_000;
 
-function buildSessionRequestParams(
-  key: string,
-  agentId?: string | null,
-): { key: string; agentId?: string } {
-  const normalizedKey = key.trim();
-  const normalizedAgentId = agentId?.trim();
-  return {
-    key: normalizedKey,
-    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
-  };
-}
-
-function buildTranscriptMutationParams(
-  sessionKey: string,
-  agentId?: string | null,
-): { sessionKey: string; agentId?: string } {
-  const normalizedSessionKey = sessionKey.trim();
-  const normalizedAgentId = agentId?.trim();
-  return {
-    sessionKey: normalizedSessionKey,
-    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
-  };
-}
-
-function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
-  const params: Record<string, unknown> = {
-    ...SESSION_LIST_PARAMS,
-  };
-  if (options.limit === undefined) {
-    params.limit = DEFAULT_SESSION_LIST_QUERY.limit;
-  } else if (options.limit > 0) {
-    params.limit = Math.floor(options.limit);
+function sessionRetryDelayMs(error: unknown): number | null {
+  if (!(error instanceof GatewayRequestError) || !error.retryable) {
+    return null;
   }
-  if (options.includeGlobal !== undefined) {
-    params.includeGlobal = options.includeGlobal;
-  }
-  if (options.includeUnknown !== undefined) {
-    params.includeUnknown = options.includeUnknown;
-  }
-  if (options.configuredAgentsOnly !== undefined) {
-    params.configuredAgentsOnly = options.configuredAgentsOnly;
-  }
-  if (options.includeDerivedTitles === true) {
-    params.includeDerivedTitles = true;
-  }
-  if (options.archivedFilter === "archived") {
-    params.archived = true;
-  } else if (options.archivedFilter === "all") {
-    params.archived = "all";
-  }
-  const activeMinutes =
-    options.archivedFilter === "archived" || options.archivedFilter === "all"
-      ? 0
-      : typeof options.activeMinutes === "number" && options.activeMinutes > 0
-        ? Math.floor(options.activeMinutes)
-        : 0;
-  if (activeMinutes > 0) {
-    params.activeMinutes = activeMinutes;
-  }
-  const agentId = options.agentId?.trim();
-  const spawnedBy = options.spawnedBy?.trim();
-  const search = options.search?.trim();
-  const creatorId = options.creatorId?.trim();
-  if (options.boardFace) {
-    params.boardFace = options.boardFace;
-  }
-  if (agentId) {
-    params.agentId = agentId;
-  }
-  if (spawnedBy) {
-    params.spawnedBy = spawnedBy;
-  }
-  if (search) {
-    params.search = search;
-  }
-  if (creatorId) {
-    params.creatorId = creatorId;
-  }
-  if (typeof options.offset === "number" && options.offset > 0) {
-    params.offset = Math.floor(options.offset);
-  }
-  return params;
-}
-
-async function requestSessionList(
-  client: SessionRequestClient,
-  options: SessionListOptions = {},
-): Promise<SessionsListResult | null> {
-  const result = await client.request<SessionsListResult | undefined>(
-    "sessions.list",
-    buildSessionListParams(options),
-  );
-  return result ?? null;
-}
-
-function requestSessionPatch(
-  client: SessionRequestClient,
-  key: string,
-  patch: SessionPatch,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsPatchResult> {
-  return client.request<SessionsPatchResult>("sessions.patch", {
-    ...buildSessionRequestParams(key, options.agentId),
-    ...patch,
-  });
-}
-
-function requestSessionDelete(
-  client: SessionRequestClient,
-  key: string,
-  options: SessionDeleteOptions = {},
-): Promise<SessionDeleteResponse> {
-  return client.request<SessionDeleteResponse>("sessions.delete", {
-    ...buildSessionRequestParams(key, options.agentId),
-    deleteTranscript: options.deleteTranscript ?? true,
-    ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
-  });
-}
-
-function confirmsSessionDeletion(response: SessionDeleteResponse): boolean {
-  // A successful RPC can still be a lifecycle no-op. Only the canonical result
-  // may drive optimistic removal, navigation, and model-override cleanup.
-  return response.deleted;
-}
-
-function requestSessionReset(
-  client: SessionRequestClient,
-  key: string,
-  options: SessionResetOptions = {},
-): Promise<void> {
-  return client
-    .request("sessions.reset", {
-      ...buildSessionRequestParams(key, options.agentId),
-    })
-    .then(() => undefined);
-}
-
-function requestSessionCompact(
-  client: SessionRequestClient,
-  key: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionCompactResult> {
-  return client.request<SessionCompactResult>("sessions.compact", {
-    ...buildSessionRequestParams(key, options.agentId),
-  });
-}
-
-function requestSessionSteer(
-  client: SessionRequestClient,
-  key: string,
-  message: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionSteerResult> {
-  return client.request<SessionSteerResult>("sessions.steer", {
-    ...buildSessionRequestParams(key, options.agentId),
-    message,
-  });
-}
-
-function requestSessionFilesList(
-  client: SessionRequestClient,
-  key: string,
-  options: { agentId?: string | null; path?: string; search?: string } = {},
-): Promise<SessionWorkspaceListResult | null> {
-  return client.request<SessionWorkspaceListResult | null>("sessions.files.list", {
-    sessionKey: key,
-    path: options.path ?? "",
-    search: options.search ?? "",
-    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
-  });
-}
-
-function requestSessionFile(
-  client: SessionRequestClient,
-  key: string,
-  path: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionWorkspaceGetResult | null> {
-  return client.request<SessionWorkspaceGetResult | null>("sessions.files.get", {
-    sessionKey: key,
-    path,
-    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
-  });
-}
-
-function requestSessionFileSet(
-  client: SessionRequestClient,
-  key: string,
-  path: string,
-  content: string,
-  options: { agentId?: string | null; expectedHash: string },
-): Promise<SessionWorkspaceSetResult | null> {
-  return client.request<SessionWorkspaceSetResult | null>("sessions.files.set", {
-    sessionKey: key,
-    path,
-    content,
-    expectedHash: options.expectedHash,
-    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
-  });
-}
-
-async function listSessionCheckpoints(
-  client: SessionRequestClient,
-  key: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsCompactionListResult> {
-  return client.request<SessionsCompactionListResult>(
-    "sessions.compaction.list",
-    buildSessionRequestParams(key, options.agentId),
-  );
-}
-
-function branchSessionCheckpoint(
-  client: SessionRequestClient,
-  key: string,
-  checkpointId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsCompactionBranchResult> {
-  return client.request<SessionsCompactionBranchResult>("sessions.compaction.branch", {
-    ...buildSessionRequestParams(key, options.agentId),
-    checkpointId,
-  });
-}
-
-function restoreSessionCheckpoint(
-  client: SessionRequestClient,
-  key: string,
-  checkpointId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsCompactionRestoreResult> {
-  return client.request<SessionsCompactionRestoreResult>("sessions.compaction.restore", {
-    ...buildSessionRequestParams(key, options.agentId),
-    checkpointId,
-  });
-}
-
-function rewindSessionAtMessage(
-  client: SessionRequestClient,
-  key: string,
-  entryId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsRewindResult> {
-  return client.request<SessionsRewindResult>("sessions.rewind", {
-    ...buildTranscriptMutationParams(key, options.agentId),
-    entryId,
-  });
-}
-
-function forkSessionAtMessage(
-  client: SessionRequestClient,
-  key: string,
-  entryId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsForkResult> {
-  return client.request<SessionsForkResult>("sessions.fork", {
-    ...buildTranscriptMutationParams(key, options.agentId),
-    entryId,
-  });
-}
-
-function listSessionBranches(
-  client: SessionRequestClient,
-  key: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsBranchesListResult> {
-  return client.request<SessionsBranchesListResult>(
-    "sessions.branches.list",
-    buildTranscriptMutationParams(key, options.agentId),
-  );
-}
-
-function switchSessionBranch(
-  client: SessionRequestClient,
-  key: string,
-  leafEntryId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsBranchesSwitchResult> {
-  return client.request<SessionsBranchesSwitchResult>("sessions.branches.switch", {
-    ...buildTranscriptMutationParams(key, options.agentId),
-    leafEntryId,
-  });
-}
-
-function appendSessionResults(
-  previous: SessionsListResult,
-  page: SessionsListResult,
-): SessionsListResult {
-  const seen = new Set<string>();
-  const sessions = [...previous.sessions, ...page.sessions].filter((row) => {
-    if (!row.key || seen.has(row.key)) {
-      return false;
-    }
-    seen.add(row.key);
-    return true;
-  });
-  const totalCount = page.totalCount ?? previous.totalCount;
-  const hasMore =
-    page.hasMore ??
-    (typeof totalCount === "number" && Number.isFinite(totalCount)
-      ? sessions.length < totalCount
-      : false);
-  return {
-    ...page,
-    count: sessions.length,
-    totalCount,
-    hasMore,
-    nextOffset: page.nextOffset ?? (hasMore ? sessions.length : null),
-    sessions,
-  };
+  const requested =
+    typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
+      ? error.retryAfterMs
+      : SESSION_RETRY_DEFAULT_MS;
+  return Math.min(Math.max(requested, SESSION_RETRY_MIN_MS), SESSION_RETRY_MAX_MS);
 }
 
 function isSessionStateEvent(event: GatewayEventFrame): boolean {
   return event.event === "sessions.changed" || event.event === "session.message";
-}
-
-export function reconcileSessionRunTerminal(
-  result: SessionsListResult | null,
-  terminal: SessionRunTerminal,
-): SessionsListResult | null {
-  const keys = terminal.sessionKeys.map((key) => key.trim()).filter(Boolean);
-  if (!result || keys.length === 0) {
-    return result;
-  }
-  const runId = terminal.runId?.trim() || null;
-  let changed = false;
-  const sessions = result.sessions.map((row): GatewaySessionRow => {
-    if (!keys.some((key) => areUiSessionKeysEquivalent(row.key, key))) {
-      return row;
-    }
-    if (row.hasActiveRun === true || isSessionRunActive(row)) {
-      // Active rows without matching identity may describe a newer or embedded
-      // run. Only terminalize an active row when this event owns its run ID.
-      if (!runId || !row.activeRunIds?.includes(runId)) {
-        return row;
-      }
-    }
-    const remainingRunIds = runId ? row.activeRunIds?.filter((id) => id !== runId) : [];
-    if (remainingRunIds?.length) {
-      // Settling one owned model turn must not retire overlapping active runs.
-      changed = true;
-      return {
-        ...row,
-        activeRunIds: remainingRunIds,
-        hasActiveRun: true,
-        status: "running" as const,
-      };
-    }
-    const endedAt = row.endedAt ?? terminal.endedAt;
-    const runtimeMs =
-      typeof row.startedAt === "number" ? Math.max(0, endedAt - row.startedAt) : row.runtimeMs;
-    const activeRunIds = row.activeRunIds?.length ? [] : row.activeRunIds;
-    const abortedLastRun =
-      terminal.status === "killed"
-        ? true
-        : terminal.status === "running"
-          ? false
-          : row.abortedLastRun;
-    if (
-      row.hasActiveRun === false &&
-      row.status === terminal.status &&
-      row.endedAt === endedAt &&
-      row.runtimeMs === runtimeMs &&
-      row.activeRunIds === activeRunIds &&
-      row.abortedLastRun === abortedLastRun
-    ) {
-      return row;
-    }
-    changed = true;
-    return {
-      ...row,
-      activeRunIds,
-      hasActiveRun: false,
-      status: terminal.status,
-      endedAt,
-      runtimeMs,
-      abortedLastRun,
-    };
-  });
-  return changed ? { ...result, sessions } : result;
 }
 
 export function createSessionCapability(gateway: SessionGateway): SessionCapability {
@@ -726,74 +93,28 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     groups: [],
     sectionOrder: [],
   };
-  let inFlight: Promise<void> | null = null;
-  let queuedRefresh: SessionRefreshOptions | null = null;
-  let eventRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let eventRefreshDeadline: number | null = null;
-  let canonicalListRevision = 0;
-  let disposed = false;
-  let connectionEpoch = 0;
-  let connectionClient = gateway.snapshot.client;
-  let connectionConnected = gateway.snapshot.phase === "connected";
-  const pendingModelPatches = new Map<
-    string,
-    { token: symbol; previous: string | null | undefined }
-  >();
-  const preparedWorkSessionKeys = new Set<string>();
+  const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const pullRequestEpochs = new Map<string, symbol>();
-  let subscribedClient: GatewayBrowserClient | null = null;
-  let lastListOptions: SessionListOptions = {};
-  let hasForegroundListOptions = false;
-  let hasSeededListOptions = false;
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
-  const ownedMessageSubscriptions = new Set<SessionMessageSubscription>();
+  let canonicalListRevision = 0;
+  let hydratedClient: SessionGateway["snapshot"]["client"] = null;
+  let connectionClient = gateway.snapshot.client;
+  let sessionEventSubscriptionError: string | null = null;
+  let publishedErrorSource: "session-observer" | "operation" | null = null;
 
-  const captureConnection = (): SessionConnectionScope | null => {
-    const snapshot = gateway.snapshot;
-    return !disposed && snapshot.phase === "connected" && snapshot.client
-      ? { client: snapshot.client, epoch: connectionEpoch }
-      : null;
-  };
-
-  const isCurrentConnection = (scope: SessionConnectionScope): boolean => {
-    const snapshot = gateway.snapshot;
-    return (
-      !disposed &&
-      connectionEpoch === scope.epoch &&
-      snapshot.phase === "connected" &&
-      snapshot.client === scope.client
-    );
-  };
-
-  const requestList = async (
-    options: SessionListOptions = {},
-  ): Promise<SessionsListResult | null> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return null;
+  const publish = (next: SessionState, errorSource?: "session-observer" | "operation") => {
+    if (next.error === null) {
+      publishedErrorSource = null;
+    } else if (errorSource || next.error !== state.error) {
+      publishedErrorSource = errorSource ?? "operation";
     }
-    const result = await requestSessionList(scope.client, options);
-    return isCurrentConnection(scope) ? swarmActivity.decorate(result ?? null) : null;
-  };
-
-  const publish = (next: SessionState) => {
     state = next;
     for (const listener of listeners) {
       listener(state);
     }
-  };
-
-  const pullRequestSummary = (key: string): SessionCatalogPullRequestSummary | undefined =>
-    pullRequestSummaries.get(key.trim());
-
-  const capturePullRequestEpoch = (key: string): symbol => {
-    const normalizedKey = key.trim();
-    const epoch = Symbol(normalizedKey);
-    pullRequestEpochs.set(normalizedKey, epoch);
-    return epoch;
   };
 
   const retirePullRequestSummary = (key: string) => {
@@ -802,10 +123,76 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     pullRequestSummaries.delete(normalizedKey);
   };
 
-  // A deleted key stays reusable for a later ordinary thread, so a leftover
-  // prepared entry would keep classifying that new session as Coding forever.
-  const retirePreparedWorkSession = (key: string) => {
-    preparedWorkSessionKeys.delete(key.trim());
+  const roster = createSessionRosterRefresh({
+    connection,
+    snapshot: () => gateway.snapshot,
+    readState: () => state,
+    publish,
+    observerError: () => sessionEventSubscriptionError,
+    decorate: (result) => swarmActivity.decorate(result),
+    onCanonicalList(result) {
+      mutations.settlePrepared(result);
+      canonicalListRevision += 1;
+    },
+  });
+
+  const sessionEventSubscription = createSessionEventSubscriptionOwner({
+    isCurrent: (scope) => connection.isCurrent(scope),
+    retryDelayMs: sessionRetryDelayMs,
+    onError: (scope, error) => {
+      if (!connection.isCurrent(scope)) {
+        return;
+      }
+      const previousError = sessionEventSubscriptionError;
+      sessionEventSubscriptionError = error;
+      const observerOwnsVisibleError = publishedErrorSource === "session-observer";
+      if (error !== null && (state.error === null || observerOwnsVisibleError)) {
+        publish({ ...state, error }, "session-observer");
+      } else if (error === null && observerOwnsVisibleError) {
+        publish({ ...state, error: null });
+      }
+      if (previousError !== null && error === null) {
+        // Observer outages do not replay events; one canonical list closes the gap.
+        void roster.refresh({ ...roster.lastOptions(), backgroundHydrate: true, force: true });
+      }
+    },
+  });
+
+  const groups = createSessionGroupCatalog({
+    connection,
+    snapshot: () => gateway.snapshot,
+    readState: () => state,
+    publish,
+    refreshRows: () => roster.refresh({ ...roster.lastOptions(), force: true }),
+    retryDelayMs: sessionRetryDelayMs,
+  });
+
+  const mutations = createSessionMutations({
+    connection,
+    readState: () => state,
+    publish,
+    refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    notifyCreated(key) {
+      for (const listener of createdListeners) {
+        listener(key);
+      }
+    },
+    retirePullRequestSummary,
+  });
+
+  const operations = createSessionScopedOperations({
+    connection,
+    agentId: () => state.agentId,
+    refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+  });
+
+  const pullRequestSummary = (key: string) => pullRequestSummaries.get(key.trim());
+
+  const capturePullRequestEpoch = (key: string): symbol => {
+    const normalizedKey = key.trim();
+    const epoch = Symbol(normalizedKey);
+    pullRequestEpochs.set(normalizedKey, epoch);
+    return epoch;
   };
 
   const setPullRequestSummary = (
@@ -833,591 +220,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     publish({ ...state });
   };
 
-  const setModelOverride = (key: string, value: string | null | undefined) => {
-    const normalizedKey = key.trim();
-    if (!normalizedKey) {
-      return;
-    }
-    const modelOverrides = { ...state.modelOverrides };
-    if (value === undefined) {
-      if (!Object.hasOwn(state.modelOverrides, normalizedKey)) {
-        return;
-      }
-      delete modelOverrides[normalizedKey];
-    } else {
-      const normalizedValue = value === null ? null : value.trim();
-      if (
-        modelOverrides[normalizedKey] === normalizedValue &&
-        Object.hasOwn(modelOverrides, normalizedKey)
-      ) {
-        return;
-      }
-      modelOverrides[normalizedKey] = normalizedValue;
-    }
-    publish({ ...state, modelOverrides });
-  };
-
-  // Optimistic session-settings patches (thinking level, speed) must live in
-  // the published capability snapshot, not only in consumer copies: every
-  // publish replaces consumer state wholesale, so a copy-only patch reverts on
-  // the next loading flip until the post-patch canonical list arrives. The
-  // revert window loses keyboard commits on the reasoning slider (flaky UI).
-  const patchRowLocal = (key: string, patch: Partial<GatewaySessionRow>) => {
-    const result = state.result;
-    const normalizedKey = key.trim();
-    if (!result || !normalizedKey) {
-      return;
-    }
-    let changed = false;
-    const sessions = result.sessions.map((row) => {
-      if (row.key !== normalizedKey) {
-        return row;
-      }
-      changed = true;
-      return { ...row, ...patch };
-    });
-    if (!changed) {
-      return;
-    }
-    publish({ ...state, result: { ...result, sessions } });
-  };
-
-  const rollbackPendingModelPatches = () => {
-    const pending = [...pendingModelPatches];
-    pendingModelPatches.clear();
-    for (const [key, operation] of pending) {
-      setModelOverride(key, operation.previous);
-    }
-  };
-
-  const load = async (options: SessionRefreshOptions) => {
-    const scope = captureConnection();
-    if (!scope) {
-      return;
-    }
-    const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
-    const durableListOptions: SessionListOptions = { ...requestOptions };
-    // Pagination is request-local. Replacement refreshes restart at page one
-    // while retaining the filters and response enrichments that shape the list.
-    delete durableListOptions.offset;
-    // Foreground options become authoritative before I/O so a concurrent
-    // mutation cannot queue a replacement refresh with stale filters.
-    if (!backgroundHydrate) {
-      lastListOptions = durableListOptions;
-      hasForegroundListOptions = true;
-    } else if (!hasForegroundListOptions && !hasSeededListOptions) {
-      lastListOptions = durableListOptions;
-      hasSeededListOptions = true;
-    }
-    if (!backgroundHydrate) {
-      publish({ ...state, loading: true, error: null, deletedSessions: [] });
-    }
-    try {
-      const result = await requestSessionList(scope.client, requestOptions);
-      if (!isCurrentConnection(scope)) {
-        return;
-      }
-      let nextResult =
-        result && append && requestOptions.offset && state.result
-          ? appendSessionResults(state.result, result)
-          : result;
-      if (backgroundHydrate && nextResult) {
-        const currentKey = gateway.snapshot.sessionKey?.trim();
-        if (currentKey) {
-          const currentAgentId = normalizeAgentId(
-            parseAgentSessionKey(currentKey)?.agentId ??
-              resolveUiSelectedGlobalAgentId(gateway.snapshot),
-          );
-          const previousCurrentRow =
-            state.result?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, currentKey)) ??
-            (state.agentId === currentAgentId
-              ? state.result?.sessions.find((row) =>
-                  uiSessionRowMatchesSelectedChat(gateway.snapshot, row.key, currentKey),
-                )
-              : undefined);
-          if (
-            previousCurrentRow &&
-            !nextResult.sessions.some((row) =>
-              uiSessionRowMatchesSelectedChat(gateway.snapshot, row.key, currentKey),
-            )
-          ) {
-            const sessions = [...nextResult.sessions, previousCurrentRow];
-            nextResult = { ...nextResult, count: sessions.length, sessions };
-          }
-        }
-      }
-      nextResult = swarmActivity.decorate(nextResult);
-      for (const row of nextResult?.sessions ?? []) {
-        if (row.worktree || row.execNode) {
-          preparedWorkSessionKeys.delete(row.key);
-        }
-      }
-      canonicalListRevision += 1;
-      publish({
-        result: nextResult,
-        agentId: requestOptions.agentId?.trim() ? normalizeAgentId(requestOptions.agentId) : null,
-        modelOverrides: state.modelOverrides,
-        loading: backgroundHydrate ? state.loading : false,
-        error: null,
-        deletedSessions: [],
-        groups: state.groups,
-        sectionOrder: state.sectionOrder,
-      });
-    } catch (error) {
-      if (isCurrentConnection(scope)) {
-        publish({
-          ...state,
-          loading: backgroundHydrate ? state.loading : false,
-          error: String(error),
-          deletedSessions: [],
-        });
-      }
-    }
-  };
-
-  const drainRefreshQueue = async (options: SessionRefreshOptions) => {
-    const epoch = connectionEpoch;
-    let next: SessionRefreshOptions | null = options;
-    while (next) {
-      await load(next);
-      if (disposed || connectionEpoch !== epoch) {
-        return;
-      }
-      next = queuedRefresh;
-      queuedRefresh = null;
-    }
-  };
-
-  const clearEventRefreshTimer = () => {
-    if (eventRefreshTimer !== null) {
-      globalThis.clearTimeout(eventRefreshTimer);
-      eventRefreshTimer = null;
-    }
-    eventRefreshDeadline = null;
-  };
-
-  const refresh = (options: SessionRefreshOptions = {}) => {
-    if (gateway.snapshot.phase !== "connected" || !gateway.snapshot.client || disposed) {
-      return Promise.resolve();
-    }
-    if (inFlight) {
-      // An explicit queued refresh subsumes any older event invalidation.
-      clearEventRefreshTimer();
-      queuedRefresh = options;
-      return inFlight;
-    }
-    const hasListOverrides = Object.entries(options).some(
-      ([key, value]) => key !== "force" && key !== "backgroundHydrate" && value !== undefined,
-    );
-    if (state.result && !options.force && !hasListOverrides) {
-      return Promise.resolve();
-    }
-    // An explicit refresh that will issue a request must run now.
-    clearEventRefreshTimer();
-    const request = drainRefreshQueue(options).finally(() => {
-      if (inFlight === request) {
-        inFlight = null;
-      }
-    });
-    inFlight = request;
-    return request;
-  };
-
-  const flushEventRefresh = () => {
-    if (eventRefreshTimer === null) {
-      return;
-    }
-    clearEventRefreshTimer();
-    void refresh({ ...lastListOptions, force: true });
-  };
-
-  const scheduleEventRefresh = () => {
-    const now = Date.now();
-    eventRefreshDeadline ??= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
-    if (eventRefreshTimer !== null) {
-      globalThis.clearTimeout(eventRefreshTimer);
-    }
-    const delay = Math.min(
-      SESSION_EVENT_REFRESH_DEBOUNCE_MS,
-      Math.max(0, eventRefreshDeadline - now),
-    );
-    eventRefreshTimer = globalThis.setTimeout(() => {
-      eventRefreshTimer = null;
-      eventRefreshDeadline = null;
-      void refresh({ ...lastListOptions, force: true });
-    }, delay);
-  };
-
-  const handleVisibilityChange = () => {
-    if (document.visibilityState === "hidden") {
-      flushEventRefresh();
-    }
-  };
-  const observesPageLifecycle =
-    typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
-  if (observesPageLifecycle) {
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    globalThis.addEventListener("pagehide", flushEventRefresh);
-  }
-
-  const refreshReplacement = (agentId?: string | null) => {
-    // Mutation refreshes replace the visible sidebar rows. A foreground probe
-    // that omitted derived titles must not turn readable names back into ids.
-    const options = {
-      ...lastListOptions,
-      includeDerivedTitles: lastListOptions.includeDerivedTitles ?? true,
-    };
-    const normalizedAgentId = agentId?.trim();
-    if (normalizedAgentId) {
-      options.agentId = normalizedAgentId;
-    }
-    return refresh({ ...options, force: true });
-  };
-
-  const setCreatorFilter = (creatorId: string | null) => {
-    const options = { ...lastListOptions, creatorId: creatorId?.trim() || undefined };
-    delete options.offset;
-    return refresh({ ...options, force: true });
-  };
-
-  const createResult = async (
-    params: SessionCreateParams = {},
-    options: { reconciliation?: SessionCreateReconciliation } = {},
-  ) => {
-    const scope = captureConnection();
-    if (!scope) {
-      return null;
-    }
-    try {
-      const { currentSessionKey, ...requestParams } = params;
-      const result = await requestSessionCreate(scope.client, {
-        ...requestParams,
-        ...resolveSessionCreateParams(currentSessionKey, params.agentId),
-      });
-      if (!isCurrentConnection(scope)) {
-        return null;
-      }
-      // The create response precedes list reconciliation. Carry submitted facts
-      // across that gap so a partial history row cannot briefly lose its zone/model.
-      if (requestParams.worktree === true || Boolean(requestParams.execNode?.trim())) {
-        preparedWorkSessionKeys.add(result.key.trim());
-      }
-      if (requestParams.model?.trim()) {
-        setModelOverride(result.key, requestParams.model);
-      } else if (preparedWorkSessionKeys.has(result.key)) {
-        publish({ ...state });
-      }
-      const reconcileCreatedSession = async () => {
-        await refreshReplacement(params.agentId);
-        if (!isCurrentConnection(scope)) {
-          return;
-        }
-        // Creation may overlap read-only list loading. Notify presentation owners
-        // after its queued refresh so they never guess from stale list churn.
-        for (const listener of createdListeners) {
-          listener(result.key);
-        }
-      };
-      if (options.reconciliation === "background") {
-        void reconcileCreatedSession().catch((error: unknown) => {
-          if (isCurrentConnection(scope)) {
-            publish({ ...state, error: String(error) });
-          }
-        });
-      } else {
-        await reconcileCreatedSession();
-        if (!isCurrentConnection(scope)) {
-          return null;
-        }
-      }
-      return result;
-    } catch (error) {
-      if (isCurrentConnection(scope)) {
-        publish({ ...state, error: String(error) });
-      }
-      return null;
-    }
-  };
-
-  const create = async (params: SessionCreateParams = {}) =>
-    (await createResult(params))?.key ?? null;
-
-  const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
-  const GROUPS_LIST_METHOD = "sessions.groups.list";
-  const GROUPS_RETRY_DEFAULT_MS = 500;
-  const GROUPS_RETRY_MIN_MS = 100;
-  const GROUPS_RETRY_MAX_MS = 30_000;
-  let groupsLoadedEpoch = -1;
-  let groupsLoadGeneration = 0;
-  let groupsRetryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-
-  const clearGroupsRetry = () => {
-    if (groupsRetryTimer !== null) {
-      globalThis.clearTimeout(groupsRetryTimer);
-      groupsRetryTimer = null;
-    }
-  };
-
-  const invalidateGroupsLoad = () => {
-    groupsLoadedEpoch = -1;
-    groupsLoadGeneration += 1;
-    clearGroupsRetry();
-  };
-
-  const groupsRetryDelayMs = (error: unknown): number | null => {
-    if (!(error instanceof GatewayRequestError) || !error.retryable) {
-      return null;
-    }
-    const requested =
-      typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
-        ? error.retryAfterMs
-        : GROUPS_RETRY_DEFAULT_MS;
-    return Math.min(Math.max(requested, GROUPS_RETRY_MIN_MS), GROUPS_RETRY_MAX_MS);
-  };
-
-  const publishGroupCatalog = (groups: readonly string[], sectionOrder: readonly string[]) => {
-    const groupsUnchanged =
-      groups.length === state.groups.length &&
-      groups.every((group, i) => group === state.groups[i]);
-    const orderUnchanged =
-      sectionOrder.length === state.sectionOrder.length &&
-      sectionOrder.every((sectionId, i) => sectionId === state.sectionOrder[i]);
-    if (groupsUnchanged && orderUnchanged) {
-      return;
-    }
-    publish({ ...state, groups: [...groups], sectionOrder: [...sectionOrder] });
-  };
-
-  const finishGroupMutationFailure = (
-    current: boolean,
-    error: unknown,
-  ): SessionGroupMutationResult => {
-    if (!current) {
-      return "stale";
-    }
-    publish({ ...state, error: String(error) });
-    throw error;
-  };
-
-  const readLegacyStoredGroups = (): string[] => {
-    try {
-      const raw = getSafeLocalStorage()?.getItem(LEGACY_GROUPS_STORAGE_KEY);
-      const parsed: unknown = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed)
-        ? [
-            ...new Set(
-              parsed.flatMap((name) => {
-                const normalized = typeof name === "string" ? name.trim() : "";
-                return normalized ? [normalized] : [];
-              }),
-            ),
-          ]
-        : [];
-    } catch {
-      return [];
-    }
-  };
-
-  const loadGroups = async (
-    scope: SessionConnectionScope,
-    generation: number,
-    advertised: boolean | null,
-  ) => {
-    try {
-      const listed = await scope.client.request(GROUPS_LIST_METHOD, {});
-      if (!isCurrentConnection(scope) || generation !== groupsLoadGeneration) {
-        return;
-      }
-      let names = readSessionCustomGroupNames(listed);
-      let sectionOrder = readSidebarSectionOrder(listed);
-      // One-time migration: browser-local catalogs predate the gateway store.
-      const legacy = readLegacyStoredGroups();
-      if (names.length === 0 && legacy.length > 0) {
-        const put = await scope.client.request("sessions.groups.put", { names: legacy });
-        if (!isCurrentConnection(scope) || generation !== groupsLoadGeneration) {
-          return;
-        }
-        names = readSessionCustomGroupNames(put);
-        sectionOrder = readSidebarSectionOrder(put);
-      }
-      if (legacy.length > 0) {
-        try {
-          getSafeLocalStorage()?.removeItem(LEGACY_GROUPS_STORAGE_KEY);
-        } catch {
-          // The gateway catalog is canonical either way.
-        }
-      }
-      publishGroupCatalog(names, sectionOrder);
-    } catch (error) {
-      if (
-        !isCurrentConnection(scope) ||
-        generation !== groupsLoadGeneration ||
-        advertised !== true
-      ) {
-        // Gateways without feature metadata retain the legacy one-shot probe.
-        return;
-      }
-      groupsLoadedEpoch = -1;
-      const retryDelayMs = groupsRetryDelayMs(error);
-      if (retryDelayMs === null) {
-        return;
-      }
-      // The attempt token prevents an older rejection from reviving a retry
-      // after a newer event-driven catalog load has already succeeded.
-      groupsRetryTimer = globalThis.setTimeout(() => {
-        groupsRetryTimer = null;
-        if (isCurrentConnection(scope) && generation === groupsLoadGeneration) {
-          void groupsLoad();
-        }
-      }, retryDelayMs);
-    }
-  };
-
-  /** Idempotent per connection; list consumers call it when groups become visible. */
-  const groupsLoad = async () => {
-    const scope = captureConnection();
-    if (!scope || groupsLoadedEpoch === scope.epoch) {
-      return;
-    }
-    const advertised = isGatewayMethodAdvertised(gateway.snapshot, GROUPS_LIST_METHOD);
-    clearGroupsRetry();
-    const generation = ++groupsLoadGeneration;
-    groupsLoadedEpoch = scope.epoch;
-    if (advertised === false) {
-      publishGroupCatalog([], []);
-      return;
-    }
-    await loadGroups(scope, generation, advertised);
-  };
-
-  const groupsPut = async (
-    names: readonly string[],
-    sectionOrder?: readonly string[],
-  ): Promise<SessionGroupMutationResult> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return "stale";
-    }
-    try {
-      const result = await scope.client.request("sessions.groups.put", {
-        names: [...names],
-        ...(sectionOrder === undefined ? {} : { sectionOrder: [...sectionOrder] }),
-      });
-      if (!isCurrentConnection(scope)) {
-        return "stale";
-      }
-      publishGroupCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
-      return "completed";
-    } catch (error) {
-      return finishGroupMutationFailure(isCurrentConnection(scope), error);
-    }
-  };
-
-  const groupsRename = async (from: string, to: string): Promise<SessionGroupMutationResult> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return "stale";
-    }
-    try {
-      const result = await scope.client.request("sessions.groups.rename", { name: from, to });
-      if (!isCurrentConnection(scope)) {
-        return "stale";
-      }
-      publishGroupCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
-      // The mutation response is the commit point. Reconcile member rows in
-      // the background so a later disconnect cannot downgrade confirmed work.
-      void refresh({ ...lastListOptions, force: true });
-      return "completed";
-    } catch (error) {
-      return finishGroupMutationFailure(isCurrentConnection(scope), error);
-    }
-  };
-
-  const groupsDelete = async (name: string): Promise<SessionGroupMutationResult> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return "stale";
-    }
-    try {
-      const result = await scope.client.request("sessions.groups.delete", { name });
-      if (!isCurrentConnection(scope)) {
-        return "stale";
-      }
-      publishGroupCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
-      // See groupsRename: collapsed-state consumers must observe confirmed
-      // completion before an unrelated refresh can outlive the connection.
-      void refresh({ ...lastListOptions, force: true });
-      return "completed";
-    } catch (error) {
-      return finishGroupMutationFailure(isCurrentConnection(scope), error);
-    }
-  };
-
-  const patch = async (
-    key: string,
-    patchParams: SessionPatch,
-    options: SessionPatchOptions = {},
-  ): Promise<SessionsPatchResult | null> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return null;
-    }
-    const hasModelPatch = Object.hasOwn(patchParams, "model");
-    const normalizedKey = key.trim();
-    const pendingModelPatch = pendingModelPatches.get(normalizedKey);
-    const previousModelOverride = pendingModelPatch
-      ? pendingModelPatch.previous
-      : state.modelOverrides[normalizedKey];
-    const modelPatchToken = Symbol();
-    if (hasModelPatch) {
-      pendingModelPatches.set(normalizedKey, {
-        token: modelPatchToken,
-        previous: previousModelOverride,
-      });
-      setModelOverride(key, patchParams.model);
-    }
-    const restoreModelOverride = () => {
-      if (pendingModelPatches.get(normalizedKey)?.token !== modelPatchToken) {
-        return;
-      }
-      pendingModelPatches.delete(normalizedKey);
-      setModelOverride(key, previousModelOverride);
-    };
-    try {
-      if (options.waitFor) {
-        await options.waitFor;
-        if (!isCurrentConnection(scope)) {
-          restoreModelOverride();
-          return null;
-        }
-      }
-      const result = await requestSessionPatch(scope.client, key, patchParams, options);
-      if (!isCurrentConnection(scope)) {
-        restoreModelOverride();
-        return null;
-      }
-      if (!options.deferListRefresh) {
-        await refreshReplacement(options.agentId);
-        if (!isCurrentConnection(scope)) {
-          restoreModelOverride();
-          return null;
-        }
-      }
-      if (pendingModelPatches.get(normalizedKey)?.token === modelPatchToken) {
-        pendingModelPatches.delete(normalizedKey);
-        setModelOverride(key, patchParams.model);
-      }
-      return result;
-    } catch (error) {
-      restoreModelOverride();
-      if (!isCurrentConnection(scope)) {
-        return null;
-      }
-      publish({ ...state, error: String(error) });
-      throw error;
-    }
-  };
-
   const reconcile = (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
@@ -1439,6 +241,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return true;
   };
 
+  const publishReconciledState = (next: SessionState) => {
+    const operationOwnsError = publishedErrorSource === "operation";
+    const error = operationOwnsError ? state.error : sessionEventSubscriptionError;
+    publish(
+      { ...next, error },
+      error === null ? undefined : operationOwnsError ? "operation" : "session-observer",
+    );
+  };
+
   const reconcileChanged = (
     payload: unknown,
     options?: SessionReconcileOptions,
@@ -1457,13 +268,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       retirePullRequestSummary(reconciled.deletedKey);
     }
     if (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey)) {
-      publish({
+      publishReconciledState({
         ...state,
         result: reconciled.result,
         agentId: options?.resultAgentId?.trim()
           ? normalizeAgentId(options.resultAgentId)
           : state.agentId,
-        error: null,
         deletedSessions: reconciled.deletedKey
           ? [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }]
           : [],
@@ -1477,360 +287,33 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (result === state.result) {
       return false;
     }
-    publish({ ...state, result, error: null });
+    publishReconciledState({ ...state, result });
     return true;
-  };
-
-  const remove = async (
-    key: string,
-    options: SessionDeleteOptions = {},
-  ): Promise<SessionDeleteOutcome> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return { deleted: false };
-    }
-    try {
-      const response = await requestSessionDelete(scope.client, key, options);
-      if (!isCurrentConnection(scope)) {
-        return { deleted: false };
-      }
-      if (!confirmsSessionDeletion(response)) {
-        return { deleted: false };
-      }
-      retirePullRequestSummary(key);
-      retirePreparedWorkSession(key);
-      publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
-      setModelOverride(key, undefined);
-      await refreshReplacement(options.agentId);
-      return {
-        deleted: isCurrentConnection(scope),
-        ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
-      };
-    } catch (error) {
-      if (!isCurrentConnection(scope)) {
-        return { deleted: false };
-      }
-      publish({ ...state, error: String(error) });
-      throw error;
-    }
-  };
-
-  const removeMany = async (
-    targets: readonly SessionDeleteTarget[],
-  ): Promise<SessionDeleteBatchResult> => {
-    const scope = captureConnection();
-    if (!scope || targets.length === 0) {
-      return { deleted: [], errors: [], preservedWorktrees: [] };
-    }
-    const deleted: string[] = [];
-    const errors: string[] = [];
-    const preservedWorktrees: SessionDeleteBatchResult["preservedWorktrees"] = [];
-    for (const target of targets) {
-      if (!isCurrentConnection(scope)) {
-        break;
-      }
-      try {
-        const response = await requestSessionDelete(scope.client, target.key, target);
-        if (!isCurrentConnection(scope)) {
-          break;
-        }
-        if (!confirmsSessionDeletion(response)) {
-          continue;
-        }
-        deleted.push(target.key);
-        if (response.worktreePreserved) {
-          preservedWorktrees.push(response.worktreePreserved);
-        }
-      } catch (error) {
-        errors.push(String(error));
-      }
-    }
-    if (deleted.length > 0 && isCurrentConnection(scope)) {
-      for (const key of deleted) {
-        retirePullRequestSummary(key);
-        retirePreparedWorkSession(key);
-      }
-      publish({
-        ...state,
-        deletedSessions: targets.filter((target) => deleted.includes(target.key)),
-      });
-      for (const key of deleted) {
-        setModelOverride(key, undefined);
-      }
-      await refreshReplacement();
-    }
-    return isCurrentConnection(scope)
-      ? { deleted, errors, preservedWorktrees }
-      : { deleted: [], errors: [], preservedWorktrees: [] };
-  };
-
-  const reset = async (
-    key: string,
-    options: SessionResetOptions = {},
-  ): Promise<SessionResetResult> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return "not-started";
-    }
-    try {
-      await requestSessionReset(scope.client, key, options);
-      return isCurrentConnection(scope) ? "completed" : "uncertain";
-    } catch (error) {
-      if (isCurrentConnection(scope)) {
-        publish({ ...state, error: String(error) });
-      }
-      // The gateway commits the new session identity before every awaited
-      // post-reset lifecycle step finishes. Once requested, even a rejection
-      // on the same connection cannot prove that the destructive reset did not
-      // commit, so callers must never retry it automatically.
-      return "uncertain";
-    }
-  };
-
-  const compact = async (
-    key: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionCompactResult> => {
-    const scope = captureConnection();
-    if (!scope) {
-      throw new Error("Session compaction requires an active Gateway connection");
-    }
-    const result = await requestSessionCompact(scope.client, key, options);
-    if (!isCurrentConnection(scope)) {
-      throw new Error("Session compaction completed on a replaced Gateway connection");
-    }
-    return result;
-  };
-
-  const steer = async (
-    key: string,
-    message: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionSteerResult> => {
-    const scope = captureConnection();
-    if (!scope) {
-      throw new Error("Session steering requires an active Gateway connection");
-    }
-    const result = await requestSessionSteer(scope.client, key, message, options);
-    if (!isCurrentConnection(scope)) {
-      throw new Error("Session steering completed on a replaced Gateway connection");
-    }
-    return result;
-  };
-
-  const listFiles = async (
-    key: string,
-    options: { agentId?: string | null; path?: string; search?: string } = {},
-  ): Promise<SessionWorkspaceListResult | null> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return null;
-    }
-    const result = await requestSessionFilesList(scope.client, key, options);
-    return isCurrentConnection(scope) ? result : null;
-  };
-
-  const getFile = async (
-    key: string,
-    path: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionWorkspaceGetResult | null> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return null;
-    }
-    const result = await requestSessionFile(scope.client, key, path, options);
-    return isCurrentConnection(scope) ? result : null;
-  };
-
-  const setFile = async (
-    key: string,
-    path: string,
-    content: string,
-    options: { agentId?: string | null; expectedHash: string },
-  ): Promise<SessionWorkspaceSetResult | null> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return null;
-    }
-    const result = await requestSessionFileSet(scope.client, key, path, content, options);
-    return isCurrentConnection(scope) ? result : null;
-  };
-
-  const unsubscribeMessages = async (subscription: SessionMessageSubscription): Promise<void> => {
-    await releaseGatewaySessionMessageSubscription(subscription);
-    ownedMessageSubscriptions.delete(subscription);
-  };
-
-  const subscribeMessages = async (
-    key: string,
-    options: { agentId?: string | null; includeApprovals?: boolean } = {},
-  ): Promise<SessionMessageSubscription> => {
-    const scope = captureConnection();
-    if (!scope) {
-      throw new Error("Session message subscription requires an active Gateway connection");
-    }
-    const normalizedKey = key.trim();
-    const agentId =
-      isUiGlobalSessionKey(normalizedKey) && options.agentId?.trim()
-        ? normalizeAgentId(options.agentId)
-        : null;
-    const subscription = await getGatewaySessionMessageSubscriptionCoordinator(scope.client, {
-      keysEquivalent: areUiSessionKeysEquivalent,
-    }).acquire(normalizedKey, {
-      agentId,
-      ...(options.includeApprovals ? { includeApprovals: true } : {}),
-    });
-    ownedMessageSubscriptions.add(subscription);
-    if (!isCurrentConnection(scope)) {
-      await unsubscribeMessages(subscription).catch(() => undefined);
-      throw new Error("Session message subscription completed on a replaced Gateway connection");
-    }
-    return subscription;
-  };
-
-  const listCheckpoints = async (
-    key: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionCompactionCheckpoint[]> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return [];
-    }
-    const result = await listSessionCheckpoints(scope.client, key, options);
-    return isCurrentConnection(scope) ? (result.checkpoints ?? []) : [];
-  };
-
-  const branchCheckpoint = async (
-    key: string,
-    checkpointId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsCompactionBranchResult> => {
-    const scope = captureConnection();
-    if (!scope) {
-      throw new Error("Session checkpoint operation requires an active Gateway connection");
-    }
-    const result = await branchSessionCheckpoint(scope.client, key, checkpointId, options);
-    if (!isCurrentConnection(scope)) {
-      throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
-    }
-    await refreshReplacement(options.agentId ?? state.agentId ?? undefined);
-    if (!isCurrentConnection(scope)) {
-      throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
-    }
-    return result;
-  };
-
-  const restoreCheckpoint = async (
-    key: string,
-    checkpointId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsCompactionRestoreResult> => {
-    const scope = captureConnection();
-    if (!scope) {
-      throw new Error("Session checkpoint operation requires an active Gateway connection");
-    }
-    const result = await restoreSessionCheckpoint(scope.client, key, checkpointId, options);
-    if (!isCurrentConnection(scope)) {
-      throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
-    }
-    await refreshReplacement(options.agentId ?? state.agentId ?? undefined);
-    if (!isCurrentConnection(scope)) {
-      throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
-    }
-    return result;
-  };
-
-  const rewind = async (
-    key: string,
-    entryId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsRewindResult> => {
-    const scope = captureConnection();
-    if (!scope) {
-      throw new Error("Session rewind requires an active Gateway connection");
-    }
-    const result = await rewindSessionAtMessage(scope.client, key, entryId, options);
-    if (isCurrentConnection(scope)) {
-      await refreshReplacement(options.agentId ?? state.agentId ?? undefined).catch(() => {});
-    }
-    return result;
-  };
-
-  const forkAtMessage = async (
-    key: string,
-    entryId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsForkResult> => {
-    const scope = captureConnection();
-    if (!scope) {
-      throw new Error("Session fork requires an active Gateway connection");
-    }
-    const result = await forkSessionAtMessage(scope.client, key, entryId, options);
-    if (isCurrentConnection(scope)) {
-      await refreshReplacement(options.agentId ?? state.agentId ?? undefined).catch(() => {});
-    }
-    return result;
-  };
-
-  const listBranches = async (
-    key: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionBranch[]> => {
-    const scope = captureConnection();
-    if (!scope) {
-      return [];
-    }
-    const result = await listSessionBranches(scope.client, key, options);
-    return isCurrentConnection(scope) ? result.branches : [];
-  };
-
-  const switchBranch = async (
-    key: string,
-    leafEntryId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsBranchesSwitchResult> => {
-    const scope = captureConnection();
-    if (!scope) {
-      throw new Error("Session branch switch requires an active Gateway connection");
-    }
-    const result = await switchSessionBranch(scope.client, key, leafEntryId, options);
-    if (isCurrentConnection(scope)) {
-      await refreshReplacement(options.agentId ?? state.agentId ?? undefined).catch(() => {});
-    }
-    return result;
   };
 
   const stopGateway = gateway.subscribe((next) => {
     const previousClient = connectionClient;
     const connected = next.phase === "connected";
-    const connectionChanged = next.client !== connectionClient || connected !== connectionConnected;
+    const connectionChanged = connection.transition(next);
     connectionClient = next.client;
-    connectionConnected = connected;
     if (connectionChanged) {
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
-      clearEventRefreshTimer();
-      connectionEpoch += 1;
-      if (previousClient) {
-        resetGatewaySessionMessageSubscriptionCoordinator(previousClient);
-      }
-      ownedMessageSubscriptions.clear();
-      invalidateGroupsLoad();
+      roster.reset();
+      sessionEventSubscription.reset();
+      sessionEventSubscriptionError = null;
+      operations.retireConnection(previousClient);
+      groups.invalidate();
       swarmActivity.clear();
-      inFlight = null;
-      queuedRefresh = null;
-      rollbackPendingModelPatches();
-      preparedWorkSessionKeys.clear();
+      mutations.retireConnection();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
-      // A connected client replacement needs its own invalidation publish;
-      // disconnects publish the cleared state in the branch immediately below.
+      // Client replacement needs a publish; disconnect publishes cleared state below.
       if (hadPullRequestSummaries && connected && next.client) {
         publish({ ...state });
       }
     }
     if (!connected || !next.client) {
-      subscribedClient = null;
+      hydratedClient = null;
       publish({
         result: null,
         agentId: null,
@@ -1843,101 +326,88 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       return;
     }
-    if (subscribedClient !== next.client) {
-      const scope = captureConnection();
+    if (hydratedClient !== next.client) {
+      const scope = connection.capture();
       if (!scope) {
         return;
       }
-      subscribedClient = scope.client;
+      hydratedClient = scope.client;
       void (async () => {
-        try {
-          await scope.client.request("sessions.subscribe", {});
-        } catch (error) {
-          if (isCurrentConnection(scope)) {
-            publish({ ...state, error: String(error) });
-          }
-        } finally {
-          if (isCurrentConnection(scope)) {
-            const sessionKey = gateway.snapshot.sessionKey?.trim();
-            const agentScope = sessionKey
-              ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
-              : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
-            await refresh({
-              ...agentScope,
-              includeDerivedTitles: true,
-              backgroundHydrate: true,
-              force: true,
-            });
-          }
+        await sessionEventSubscription.ensure(scope);
+        if (connection.isCurrent(scope)) {
+          const sessionKey = gateway.snapshot.sessionKey?.trim();
+          const agentScope = sessionKey
+            ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
+            : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
+          await roster.refresh({
+            ...agentScope,
+            includeDerivedTitles: true,
+            backgroundHydrate: true,
+            force: true,
+          });
         }
       })();
     }
-    // Gateway snapshots also change for recovery scope, presence, and canvas metadata.
-    // Only a connection transition owns list hydration; refreshing here duplicates startup work.
   });
+
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (isSessionStateEvent(event)) {
-      swarmActivity.observe(event.payload);
-      // Preserve canonical list filtering: decorate rows already admitted here,
-      // then let the refresh below admit new children before applying cached notes.
-      const decoratedResult = swarmActivity.decorate(state.result);
-      if (decoratedResult !== state.result) {
-        publish({ ...state, result: decoratedResult });
-      }
-      const reconciled = reconcileSessionChanged(state.result, event.payload, {
-        resultAgentId: state.agentId,
-        archivedFilter: lastListOptions.archivedFilter,
-      });
-      const eventInfo = readSessionChangedEvent(event.payload);
-      // Catalog mutations from other clients invalidate the per-connection
-      // groups snapshot. Groups events carry no session key, so read the
-      // reason straight off the payload instead of the parsed row info.
-      const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
-      if (eventReason === "groups") {
-        invalidateGroupsLoad();
-        void groupsLoad();
-      }
-      const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
-      const status = reconciled.status ?? eventInfo?.status;
-      const runEnded =
-        hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
-      if (event.event === "session.message" && !runEnded) {
-        return;
-      }
-      if (reconciled.deletedKey) {
-        retirePullRequestSummary(reconciled.deletedKey);
-        // Preserve remote-deletion navigation before the canonical refresh
-        // clears transient event state.
-        publish({
-          ...state,
-          deletedSessions: [
-            { key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined },
-          ],
-        });
-      } else if ((eventReason === "create" || eventReason === "new") && eventInfo) {
-        const remainingDeletedSessions = state.deletedSessions.filter(
-          ({ key, agentId }) =>
-            !uiSessionEventMatches(
-              {
-                assistantAgentId: agentId ?? gateway.snapshot.assistantAgentId,
-                hello: gateway.snapshot.hello,
-                sessionKey: key,
-              },
-              eventInfo.key,
-              eventInfo.agentId,
-            ),
-        );
-        if (remainingDeletedSessions.length !== state.deletedSessions.length) {
-          // Gateway create events are ordered after the prior deletion. Retire
-          // only that generation's marker before the debounced list refresh.
-          publish({ ...state, deletedSessions: remainingDeletedSessions });
-        }
-      }
-      // Gateway lists are filtered and windowed. Events cannot preserve server
-      // membership or ordering, so the coalesced refresh remains canonical. Only
-      // events debounce, with a max wait; explicit refreshes and page exit flush it.
-      scheduleEventRefresh();
+    if (!isSessionStateEvent(event)) {
+      return;
     }
+    swarmActivity.observe(event.payload);
+    const decoratedResult = swarmActivity.decorate(state.result);
+    if (decoratedResult !== state.result) {
+      publish({ ...state, result: decoratedResult });
+    }
+    const reconciled = reconcileSessionChanged(state.result, event.payload, {
+      resultAgentId: state.agentId,
+      archivedFilter: roster.lastOptions().archivedFilter,
+    });
+    const eventInfo = readSessionChangedEvent(event.payload);
+    const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
+    const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
+    if (eventReason === "groups") {
+      groups.invalidate();
+      void groups.load();
+    }
+    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
+    const status = reconciled.status ?? eventInfo?.status;
+    const runEnded =
+      hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
+    if (event.event === "session.message" && !runEnded) {
+      return;
+    }
+    if (reconciled.deletedKey) {
+      retirePullRequestSummary(reconciled.deletedKey);
+      publish({
+        ...state,
+        deletedSessions: [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }],
+      });
+    } else if ((eventReason === "create" || eventReason === "new") && eventInfo) {
+      const remainingDeletedSessions = state.deletedSessions.filter(
+        ({ key, agentId }) =>
+          !uiSessionEventMatches(
+            {
+              assistantAgentId: agentId ?? gateway.snapshot.assistantAgentId,
+              hello: gateway.snapshot.hello,
+              sessionKey: key,
+            },
+            eventInfo.key,
+            eventInfo.agentId,
+          ),
+      );
+      if (remainingDeletedSessions.length !== state.deletedSessions.length) {
+        publish({ ...state, deletedSessions: remainingDeletedSessions });
+      }
+    }
+    // Gateway lists own filtering/order; events coalesce into one canonical refresh.
+    roster.scheduleEvent({
+      agentId:
+        eventInfo?.agentId ??
+        parseAgentSessionKey(eventInfo?.key)?.agentId ??
+        (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
+      filtered: event.event === "sessions.changed",
+    });
   });
 
   return {
@@ -1947,45 +417,54 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     get canonicalListRevision() {
       return canonicalListRevision;
     },
-    list: requestList,
-    setCreatorFilter,
+    list: roster.list,
+    listSnapshot: (scope) => roster.listSnapshot(scope),
+    subscribeList(scope, listener) {
+      if (scope.archivedFilter && scope.archivedFilter !== "active") {
+        return roster.subscribeList(scope, listener);
+      }
+      const notify = () => listener(roster.listSnapshot(scope));
+      listeners.add(notify);
+      return () => listeners.delete(notify);
+    },
+    refreshList: (options) => roster.refreshList(options),
+    setCreatorFilter: (creatorId) => roster.setCreatorFilter(creatorId),
     reconcile,
     reconcileChanged,
     reconcileRunTerminal,
-    refresh,
-    refreshReplacement,
-    createResult,
-    create,
-    patch,
-    setModelOverride,
-    patchRowLocal,
-    isPreparedWorkSession(key) {
-      return preparedWorkSessionKeys.has(key.trim());
-    },
+    refresh: roster.refresh,
+    refreshReplacement: roster.refreshReplacement,
+    createResult: mutations.createResult,
+    create: mutations.create,
+    patch: mutations.patch,
+    retireModelOverride: mutations.retireModelOverride,
+    setModelOverride: mutations.setModelOverride,
+    patchRowLocal: mutations.patchRowLocal,
+    isPreparedWorkSession: mutations.isPreparedWorkSession,
     pullRequestSummary,
     capturePullRequestEpoch,
     setPullRequestSummary,
-    delete: remove,
-    deleteMany: removeMany,
-    reset,
-    compact,
-    steer,
-    listFiles,
-    getFile,
-    setFile,
-    subscribeMessages,
-    unsubscribeMessages,
-    listCheckpoints,
-    branchCheckpoint,
-    restoreCheckpoint,
-    rewind,
-    forkAtMessage,
-    listBranches,
-    switchBranch,
-    groupsLoad,
-    groupsPut,
-    groupsRename,
-    groupsDelete,
+    delete: mutations.delete,
+    deleteMany: mutations.deleteMany,
+    reset: mutations.reset,
+    compact: operations.compact,
+    steer: operations.steer,
+    listFiles: operations.listFiles,
+    getFile: operations.getFile,
+    setFile: operations.setFile,
+    subscribeMessages: operations.subscribeMessages,
+    unsubscribeMessages: operations.unsubscribeMessages,
+    listCheckpoints: operations.listCheckpoints,
+    branchCheckpoint: operations.branchCheckpoint,
+    restoreCheckpoint: operations.restoreCheckpoint,
+    rewind: operations.rewind,
+    forkAtMessage: operations.forkAtMessage,
+    listBranches: operations.listBranches,
+    switchBranch: operations.switchBranch,
+    groupsLoad: groups.load,
+    groupsPut: groups.put,
+    groupsRename: groups.rename,
+    groupsDelete: groups.delete,
     subscribeCreated(listener) {
       createdListeners.add(listener);
       return () => createdListeners.delete(listener);
@@ -1995,28 +474,16 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return () => listeners.delete(listener);
     },
     dispose() {
-      // Page teardown must start the trailing refresh synchronously before the
-      // disposed guard makes the capability inert.
-      flushEventRefresh();
-      if (observesPageLifecycle) {
-        document.removeEventListener("visibilitychange", handleVisibilityChange);
-        globalThis.removeEventListener("pagehide", flushEventRefresh);
-      }
-      for (const subscription of ownedMessageSubscriptions) {
-        void unsubscribeMessages(subscription).catch(() => undefined);
-      }
-      disposed = true;
-      connectionEpoch += 1;
-      invalidateGroupsLoad();
-      connectionConnected = false;
-      inFlight = null;
-      queuedRefresh = null;
-      subscribedClient = null;
-      pendingModelPatches.clear();
-      preparedWorkSessionKeys.clear();
+      roster.dispose();
+      operations.dispose();
+      connection.dispose();
+      groups.dispose();
+      hydratedClient = null;
+      mutations.dispose();
       swarmActivity.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
+      sessionEventSubscription.dispose();
       stopGateway();
       stopEvents();
       createdListeners.clear();
@@ -2024,4 +491,3 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

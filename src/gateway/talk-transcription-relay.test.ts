@@ -4,15 +4,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSessionCreateRequest } from "../realtime-transcription/provider-types.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
+import { getUnifiedTalkSession, rememberUnifiedTalkSession } from "./talk-session-registry.js";
 import {
   cancelTalkTranscriptionRelayTurn,
+  closeTalkTranscriptionRelaySessionsForConnection,
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
   stopTalkTranscriptionRelaySession,
 } from "./talk-transcription-relay.js";
 import { expectRecordFields, isRecord, requireRecord } from "./test-helpers.assertions.js";
 
-type BroadcastEvent = { event: string; payload: unknown; connIds: string[] };
+type BroadcastEvent = {
+  event: string;
+  payload: unknown;
+  connIds: string[];
+  opts?: { dropIfSlow?: boolean };
+};
 
 function createSttSessionMock(connect: () => Promise<void> = async () => {}) {
   return {
@@ -40,13 +50,20 @@ function createTranscriptionProvider(
 
 function createBroadcastContext() {
   const events: BroadcastEvent[] = [];
+  const logGateway = { warn: vi.fn() };
   const context = {
     getRuntimeConfig: () => ({}),
-    broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-      events.push({ event, payload, connIds: [...connIds] });
+    logGateway,
+    broadcastToConnIds: (
+      event: string,
+      payload: unknown,
+      connIds: ReadonlySet<string>,
+      opts?: { dropIfSlow?: boolean },
+    ) => {
+      events.push({ event, payload, connIds: [...connIds], opts });
     },
   } as never;
-  return { context, events };
+  return { context, events, logGateway };
 }
 
 async function createStartedRelaySession(
@@ -210,6 +227,214 @@ describe("talk transcription gateway relay", () => {
       type: "session.closed",
       final: true,
     });
+    for (const { payload, opts } of events) {
+      const { type } = requireRecord(payload, "transcription relay event");
+      expect(opts, `${String(type)} delivery`).toEqual({
+        dropIfSlow: type === "partial" || type === "inputAudio",
+      });
+    }
+  });
+
+  it("keeps provider errors and terminal close events durable", async () => {
+    let sttRequest: RealtimeTranscriptionSessionCreateRequest | undefined;
+    const { events } = await createStartedRelaySession(createSttSessionMock(), {}, (request) => {
+      sttRequest = request;
+    });
+
+    sttRequest?.onError?.(new Error("transcription provider disconnected"));
+
+    for (const type of ["error", "close"]) {
+      const payload = findPayloadByType(events, type);
+      expect(events.find((event) => event.payload === payload)?.opts).toEqual({
+        dropIfSlow: false,
+      });
+    }
+  });
+
+  it("closes a backpressured owner for final transcripts while healthy owners still receive them", async () => {
+    const createSocket = () => ({
+      bufferedAmount: 0,
+      send: vi.fn<(payload: string) => void>(),
+      close: vi.fn<(code: number, reason: string) => void>(),
+    });
+    const slowSocket = createSocket();
+    const healthySocket = createSocket();
+    const createClient = (
+      connId: string,
+      socket: ReturnType<typeof createSocket>,
+    ): GatewayWsClient =>
+      ({
+        connId,
+        socket: socket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        usesSharedGatewayAuth: false,
+      }) satisfies GatewayWsClient;
+    const clients = new Set([
+      createClient("conn-slow", slowSocket),
+      createClient("conn-healthy", healthySocket),
+    ]);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients });
+    const context = { broadcastToConnIds, getRuntimeConfig: () => ({}) } as never;
+    const requests = new Map<string, RealtimeTranscriptionSessionCreateRequest>();
+    const createSession = (connId: string) =>
+      createTalkTranscriptionRelaySession({
+        context,
+        connId,
+        provider: createTranscriptionProvider(createSttSessionMock(), (request) => {
+          requests.set(connId, request);
+        }),
+        providerConfig: {},
+      });
+    const slowSession = createSession("conn-slow");
+    const healthySession = createSession("conn-healthy");
+    await Promise.resolve();
+    const slowRequest = requests.get("conn-slow");
+    const healthyRequest = requests.get("conn-healthy");
+    if (!slowRequest || !healthyRequest) {
+      throw new Error("expected transcription providers for both browser connections");
+    }
+
+    try {
+      slowRequest.onSpeechStart?.();
+      healthyRequest.onSpeechStart?.();
+      slowSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+      const slowFramesBeforePartial = slowSocket.send.mock.calls.length;
+
+      slowRequest.onPartial?.("slow draft");
+      healthyRequest.onPartial?.("healthy draft");
+
+      expect(slowSocket.send).toHaveBeenCalledTimes(slowFramesBeforePartial);
+      expect(slowSocket.close).not.toHaveBeenCalled();
+
+      slowRequest.onTranscript?.("slow final");
+      healthyRequest.onTranscript?.("healthy final");
+
+      expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+      const healthyFrames = healthySocket.send.mock.calls.map(
+        ([frame]) => JSON.parse(frame) as { event: string; payload: unknown },
+      );
+      expect(healthyFrames).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "talk.event",
+            payload: expect.objectContaining({ type: "partial", text: "healthy draft" }),
+          }),
+          expect.objectContaining({
+            event: "talk.event",
+            payload: expect.objectContaining({
+              type: "transcript",
+              text: "healthy final",
+              final: true,
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      slowSocket.bufferedAmount = 0;
+      stopTalkTranscriptionRelaySession({
+        transcriptionSessionId: slowSession.transcriptionSessionId,
+        connId: "conn-slow",
+      });
+      stopTalkTranscriptionRelaySession({
+        transcriptionSessionId: healthySession.transcriptionSessionId,
+        connId: "conn-healthy",
+      });
+    }
+  });
+
+  it("closes only transcription relays owned by the disconnected connection", async () => {
+    const firstOwned = createSttSessionMock();
+    const secondOwned = createSttSessionMock(async () => {
+      throw new Error("late connect failure");
+    });
+    const unrelated = createSttSessionMock();
+    const requests: RealtimeTranscriptionSessionCreateRequest[] = [];
+    const { context, events, logGateway } = createBroadcastContext();
+    const createSession = (connId: string, sttSession: ReturnType<typeof createSttSessionMock>) =>
+      createTalkTranscriptionRelaySession({
+        context,
+        connId,
+        provider: createTranscriptionProvider(sttSession, (request) => requests.push(request)),
+        providerConfig: {},
+      });
+    const firstSession = createSession("conn-owner", firstOwned);
+    const secondSession = createSession("conn-owner", secondOwned);
+    const unrelatedSession = createSession("conn-other", unrelated);
+    for (const session of [firstSession, secondSession]) {
+      rememberUnifiedTalkSession(session.transcriptionSessionId, {
+        kind: "transcription-relay",
+        connId: "conn-owner",
+        transcriptionSessionId: session.transcriptionSessionId,
+      });
+    }
+    firstOwned.close.mockImplementationOnce(() => {
+      throw new Error("provider close failed");
+    });
+
+    expect(() => closeTalkTranscriptionRelaySessionsForConnection("conn-owner")).not.toThrow();
+    closeTalkTranscriptionRelaySessionsForConnection("conn-owner");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(firstOwned.close).toHaveBeenCalledOnce();
+    expect(secondOwned.close).toHaveBeenCalledOnce();
+    expect(unrelated.close).not.toHaveBeenCalled();
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "failed to close transcription relay session after connection disconnect: provider close failed",
+    );
+    for (const transcriptionSessionId of [
+      firstSession.transcriptionSessionId,
+      secondSession.transcriptionSessionId,
+    ]) {
+      expect(
+        events.some(
+          (event) =>
+            isRecord(event.payload) &&
+            event.payload.transcriptionSessionId === transcriptionSessionId &&
+            event.payload.type === "close" &&
+            isRecord(event.payload.talkEvent) &&
+            event.payload.talkEvent.type === "session.closed" &&
+            event.payload.talkEvent.final === true,
+        ),
+      ).toBe(true);
+      expect(() =>
+        sendTalkTranscriptionRelayAudio({
+          transcriptionSessionId,
+          connId: "conn-owner",
+          audioBase64: "AQI=",
+        }),
+      ).toThrow("Unknown transcription Talk session");
+      expect(() => getUnifiedTalkSession(transcriptionSessionId)).toThrow("Unknown Talk session");
+    }
+    expect(
+      events.some(
+        (event) =>
+          isRecord(event.payload) &&
+          (event.payload.transcriptionSessionId === firstSession.transcriptionSessionId ||
+            event.payload.transcriptionSessionId === secondSession.transcriptionSessionId) &&
+          (event.payload.type === "ready" || event.payload.type === "error"),
+      ),
+    ).toBe(false);
+    const eventCountAfterClose = events.length;
+    requests[0]?.onSpeechStart?.();
+    requests[0]?.onPartial?.("late partial");
+    requests[0]?.onTranscript?.("late transcript");
+    requests[0]?.onError?.(new Error("late provider error"));
+    await Promise.resolve();
+    expect(events).toHaveLength(eventCountAfterClose);
+
+    sendTalkTranscriptionRelayAudio({
+      transcriptionSessionId: unrelatedSession.transcriptionSessionId,
+      connId: "conn-other",
+      audioBase64: "AQI=",
+    });
+    expect(unrelated.sendAudio).toHaveBeenCalledOnce();
+    stopTalkTranscriptionRelaySession({
+      transcriptionSessionId: unrelatedSession.transcriptionSessionId,
+      connId: "conn-other",
+    });
+    closeTalkTranscriptionRelaySessionsForConnection("conn-other");
+    expect(unrelated.close).toHaveBeenCalledOnce();
   });
 
   it("rejects provider configs that do not match relay audio input", () => {

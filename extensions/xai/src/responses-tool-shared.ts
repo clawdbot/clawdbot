@@ -1,13 +1,10 @@
 // Xai plugin module implements responses tool shared behavior.
 import {
+  isRecord,
   normalizeOptionalString as trimString,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
-}
 
 function extractUrlCitations(annotations: unknown): string[] {
   if (!Array.isArray(annotations)) {
@@ -51,32 +48,34 @@ export function extractXaiWebSearchContent(data: XaiWebSearchResponse): {
   text: string | undefined;
   annotationCitations: string[];
 } {
+  const textParts: string[] = [];
+  const annotationCitations: string[] = [];
   for (const output of data.output ?? []) {
     if (!isRecord(output)) {
       continue;
     }
-    if (output.type === "message") {
-      const content = Array.isArray(output.content) ? output.content : [];
-      for (const block of content) {
-        if (!isRecord(block)) {
-          continue;
-        }
-        if (block.type === "output_text" && typeof block.text === "string" && block.text) {
-          const urls = extractUrlCitations(block.annotations);
-          return { text: block.text, annotationCitations: uniqueStrings(urls) };
-        }
+    const blocks =
+      output.type === "message" && Array.isArray(output.content)
+        ? output.content
+        : output.type === "output_text"
+          ? [output]
+          : [];
+    for (const block of blocks) {
+      if (!isRecord(block) || block.type !== "output_text" || typeof block.text !== "string") {
+        continue;
       }
-    }
-
-    if (output.type === "output_text" && typeof output.text === "string" && output.text) {
-      const urls = extractUrlCitations(output.annotations);
-      return { text: output.text, annotationCitations: uniqueStrings(urls) };
+      if (block.text) {
+        textParts.push(block.text);
+        annotationCitations.push(...extractUrlCitations(block.annotations));
+      }
     }
   }
 
+  // Match the Responses SDK: adjacent output text blocks have no separator.
+  const text = textParts.join("");
   return {
-    text: typeof data.output_text === "string" ? data.output_text : undefined,
-    annotationCitations: [],
+    text: text || (typeof data.output_text === "string" ? data.output_text : undefined),
+    annotationCitations: uniqueStrings(annotationCitations),
   };
 }
 

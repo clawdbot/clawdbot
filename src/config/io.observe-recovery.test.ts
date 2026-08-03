@@ -727,6 +727,92 @@ describe("config observe recovery", () => {
     });
   });
 
+  it.each(["async", "sync"] as const)(
+    "%s recovery refuses a backup without gateway mode despite a stale healthy fingerprint",
+    async (mode) => {
+      await withSuiteHome(async (home) => {
+        const { deps, configPath, auditPath } = makeDeps(home);
+        const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
+        await promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger });
+        await fsp.writeFile(
+          `${configPath}.bak`,
+          `${JSON.stringify({ meta: { lastTouchedVersion: "2026.4.22" } })}\n`,
+          "utf-8",
+        );
+        const clobbered = await writeClobberedUpdateChannel(configPath);
+        const input = { deps, configPath, ...clobbered };
+
+        const recovered =
+          mode === "async"
+            ? await maybeRecoverSuspiciousConfigRead(input)
+            : maybeRecoverSuspiciousConfigReadSync(input);
+
+        expect(recovered).toEqual(clobbered);
+        await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+        await expect(readObserveEvents(auditPath)).resolves.toEqual([]);
+      });
+    },
+  );
+
+  it.each(["async", "sync"] as const)(
+    "%s recovery uses canonical metadata fingerprints",
+    async (mode) => {
+      await withSuiteHome(async (home) => {
+        const { deps, configPath } = makeDeps(home);
+        const backup = { meta: { authoredBy: "operator" }, gateway: { mode: "local" } };
+        await seedConfigBackup(configPath, backup);
+        const clobbered = await writeConfigRaw(configPath, { gateway: { mode: "local" } });
+        const input = { deps, configPath, ...clobbered };
+
+        const recovered =
+          mode === "async"
+            ? await maybeRecoverSuspiciousConfigRead(input)
+            : maybeRecoverSuspiciousConfigReadSync(input);
+
+        expect(recovered.parsed).toEqual(backup);
+      });
+    },
+  );
+
+  it.each(["async", "sync"] as const)(
+    "%s recovery tolerates an unreadable current config stat",
+    async (mode) => {
+      await withSuiteHome(async (home) => {
+        const { deps, configPath } = makeDeps(home);
+        await seedConfigBackup(configPath, recoverableTelegramConfig);
+        const clobbered = await writeClobberedUpdateChannel(configPath);
+        const statError = Object.assign(new Error("EACCES: stat denied"), { code: "EACCES" });
+        const statDeps: ObserveRecoveryDeps = {
+          ...deps,
+          fs: {
+            ...deps.fs,
+            promises: {
+              ...deps.fs.promises,
+              stat: ((target: fs.PathLike) =>
+                target === configPath
+                  ? Promise.reject(statError)
+                  : deps.fs.promises.stat(target)) as typeof fs.promises.stat,
+            },
+            statSync: ((target: fs.PathLike, options?: { throwIfNoEntry?: boolean }) => {
+              if (target === configPath) {
+                throw statError;
+              }
+              return deps.fs.statSync(target, options);
+            }) as typeof fs.statSync,
+          },
+        };
+        const input = { deps: statDeps, configPath, ...clobbered };
+
+        const recovered =
+          mode === "async"
+            ? await maybeRecoverSuspiciousConfigRead(input)
+            : maybeRecoverSuspiciousConfigReadSync(input);
+
+        expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
+      });
+    },
+  );
+
   it.each([
     {
       name: "records writeFile failure instead of falsely claiming restore succeeded",

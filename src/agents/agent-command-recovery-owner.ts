@@ -3,16 +3,12 @@ import type { InternalSessionEntry } from "../config/sessions.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { AgentCommandOpts } from "./command/types.js";
+import { repairMainSessionRecoveryMutation } from "./main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery-owner-release.js";
 import {
-  restoreAdmittedRecoveryWithRetries,
-  scheduleAdmittedRecoveryRestore,
-} from "./main-session-recovery-restore.js";
-import {
-  bindMainSessionRecoveryOwnerRun,
   claimMainSessionRecoveryOwner,
   inspectMainSessionRecoveryRequired,
-  readMainSessionRecoveryOwner,
+  refreshMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryOwnerLease,
   type MainSessionRecoveryPendingTarget,
@@ -85,14 +81,11 @@ async function claimAgentCommandRecoveryOwner(params: {
       // session resolution so rollover or rerouting cannot execute under another row's lease.
       throw new Error("main-session recovery owner changed during ingress preparation; retry");
     }
-    if (params.opts.runId) {
-      return await bindMainSessionRecoveryOwnerRun(transferredLease, params.opts.runId);
-    }
-    const snapshot = await readMainSessionRecoveryOwner(transferredLease);
+    const snapshot = await refreshMainSessionRecoveryOwner(transferredLease, params.opts.runId);
     if (!snapshot) {
       throw new Error("main-session recovery owner changed during ingress preparation; retry");
     }
-    return { ...snapshot, lease: transferredLease };
+    return snapshot;
   }
   if (params.opts.sessionEffects === "internal") {
     return undefined;
@@ -167,17 +160,16 @@ export async function runWithAgentCommandRecoveryOwner<
     } catch (error) {
       // Gateway admission consumes the durable reservation before command
       // preparation. Restore it when preparation fails before a run exists.
-      if (params.restoreAdmittedRecovery) {
-        try {
-          pendingRecovery = await restoreAdmittedRecoveryWithRetries(
-            params.restoreAdmittedRecovery,
-          );
-        } catch (restoreError) {
-          log.warn(
-            `failed to restore admitted recovery after command preparation: ${formatErrorMessage(restoreError)}`,
-          );
-          scheduleAdmittedRecoveryRestore(params.restoreAdmittedRecovery);
-        }
+      const restoreAdmittedRecovery = params.restoreAdmittedRecovery;
+      if (restoreAdmittedRecovery) {
+        pendingRecovery = await repairMainSessionRecoveryMutation({
+          mutation: restoreAdmittedRecovery,
+          onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
+          onError: (restoreError) =>
+            log.warn(
+              `failed to restore admitted recovery after command preparation: ${formatErrorMessage(restoreError)}`,
+            ),
+        });
       }
       throw error;
     }

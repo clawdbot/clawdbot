@@ -280,10 +280,14 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     await queuedReplyOptions?.onQueuedFollowupAdmitted?.();
     await queuedReplyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+    await queuedReplyOptions?.onToolResult?.({ text: "📄 Web Fetch: working" });
 
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ Exec\n📄 Web Fetch: working",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n📄 Web Fetch: working",
+      ),
     );
 
     await queuedReplyOptions?.onQueuedFollowupSettled?.();

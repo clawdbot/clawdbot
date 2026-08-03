@@ -1,10 +1,10 @@
 import type { LogRecord } from "@opentelemetry/api-logs";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { DiagnosticEventPayload, DiagnosticTraceContext } from "../api.js";
 import { redactSensitiveText } from "../api.js";
 import {
   BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS,
   DROPPED_OTEL_ATTRIBUTE_KEYS,
-  LOW_CARDINALITY_VALUE_RE,
   MAX_OTEL_LOG_ATTRIBUTE_COUNT,
   MAX_OTEL_LOG_ATTRIBUTE_VALUE_CHARS,
   OTEL_LOG_ATTRIBUTE_KEY_RE,
@@ -26,18 +26,6 @@ export function redactOtelAttributes(attributes: Record<string, string | number 
   return redactedAttributes;
 }
 
-export function lowCardinalityAttr(value: string | undefined, fallback = "unknown"): string {
-  if (!value) {
-    return fallback;
-  }
-  const redacted = redactSensitiveText(value.trim());
-  const redactedLower = redacted.toLowerCase();
-  if (redactedLower.startsWith("agent:") || redactedLower.includes(":agent:")) {
-    return fallback;
-  }
-  return LOW_CARDINALITY_VALUE_RE.test(redacted) ? redacted : fallback;
-}
-
 function securityTargetNameAttr(value: string | undefined, fallback = "unknown"): string {
   if (!value) {
     return fallback;
@@ -48,23 +36,6 @@ function securityTargetNameAttr(value: string | undefined, fallback = "unknown")
     return fallback;
   }
   return SECURITY_TARGET_NAME_VALUE_RE.test(redacted) ? redacted : fallback;
-}
-
-export function lowCardinalityQueueLaneAttr(
-  value: string | undefined,
-  fallback = "unknown",
-): string {
-  if (!value) {
-    return fallback;
-  }
-  const redacted = redactSensitiveText(value.trim());
-  const redactedLower = redacted.toLowerCase();
-  if (redactedLower.startsWith("agent:")) {
-    return fallback;
-  }
-  const scopedLaneIndex = redacted.indexOf(":");
-  const lane = scopedLaneIndex >= 0 ? redacted.slice(0, scopedLaneIndex) : redacted;
-  return LOW_CARDINALITY_VALUE_RE.test(lane) ? lane : fallback;
 }
 
 export function shouldCaptureOtelLogBody(policy: OtelContentCapturePolicy): boolean {
@@ -187,7 +158,7 @@ function assignOtelSecurityEventAttributes(
     assignOtelLogAttribute(
       attributes,
       `openclaw.security.attribute.${key}`,
-      typeof value === "string" ? lowCardinalityAttr(value) : value,
+      typeof value === "string" ? normalizeDiagnosticValue(value) : value,
     );
   }
 }
@@ -216,11 +187,19 @@ export function assignOtelSecurityAttributes(
 ): void {
   assignOtelLogAttribute(attributes, "openclaw.security.event_id", evt.eventId);
   assignOtelLogAttribute(attributes, "openclaw.security.category", evt.category);
-  assignOtelLogAttribute(attributes, "openclaw.security.action", lowCardinalityAttr(evt.action));
+  assignOtelLogAttribute(
+    attributes,
+    "openclaw.security.action",
+    normalizeDiagnosticValue(evt.action),
+  );
   assignOtelLogAttribute(attributes, "openclaw.security.outcome", evt.outcome);
   assignOtelLogAttribute(attributes, "openclaw.security.severity", evt.severity);
   if (evt.reason) {
-    assignOtelLogAttribute(attributes, "openclaw.security.reason", lowCardinalityAttr(evt.reason));
+    assignOtelLogAttribute(
+      attributes,
+      "openclaw.security.reason",
+      normalizeDiagnosticValue(evt.reason),
+    );
   }
   if (evt.actor) {
     assignOtelLogAttribute(attributes, "openclaw.security.actor.kind", evt.actor.kind);
@@ -228,35 +207,35 @@ export function assignOtelSecurityAttributes(
       assignOtelLogAttribute(
         attributes,
         "openclaw.security.actor.id_hash",
-        lowCardinalityAttr(evt.actor.idHash),
+        normalizeDiagnosticValue(evt.actor.idHash),
       );
     }
     if (evt.actor.deviceIdHash) {
       assignOtelLogAttribute(
         attributes,
         "openclaw.security.actor.device_id_hash",
-        lowCardinalityAttr(evt.actor.deviceIdHash),
+        normalizeDiagnosticValue(evt.actor.deviceIdHash),
       );
     }
     if (evt.actor.channel) {
       assignOtelLogAttribute(
         attributes,
         "openclaw.security.actor.channel",
-        lowCardinalityAttr(evt.actor.channel),
+        normalizeDiagnosticValue(evt.actor.channel),
       );
     }
     if (evt.actor.role) {
       assignOtelLogAttribute(
         attributes,
         "openclaw.security.actor.role",
-        lowCardinalityAttr(evt.actor.role),
+        normalizeDiagnosticValue(evt.actor.role),
       );
     }
     if (evt.actor.scopes?.length) {
       assignOtelLogAttribute(
         attributes,
         "openclaw.security.actor.scopes",
-        evt.actor.scopes.map((scope) => lowCardinalityAttr(scope)).join(","),
+        evt.actor.scopes.map((scope) => normalizeDiagnosticValue(scope)).join(","),
       );
     }
   }
@@ -266,7 +245,7 @@ export function assignOtelSecurityAttributes(
       assignOtelLogAttribute(
         attributes,
         "openclaw.security.target.id_hash",
-        lowCardinalityAttr(evt.target.idHash),
+        normalizeDiagnosticValue(evt.target.idHash),
       );
     }
     if (evt.target.name) {
@@ -280,7 +259,7 @@ export function assignOtelSecurityAttributes(
       assignOtelLogAttribute(
         attributes,
         "openclaw.security.target.owner",
-        lowCardinalityAttr(evt.target.owner),
+        normalizeDiagnosticValue(evt.target.owner),
       );
     }
   }
@@ -289,7 +268,7 @@ export function assignOtelSecurityAttributes(
       assignOtelLogAttribute(
         attributes,
         "openclaw.security.policy.id",
-        lowCardinalityAttr(evt.policy.id),
+        normalizeDiagnosticValue(evt.policy.id),
       );
     }
     if (evt.policy.decision) {
@@ -299,7 +278,7 @@ export function assignOtelSecurityAttributes(
       assignOtelLogAttribute(
         attributes,
         "openclaw.security.policy.reason",
-        lowCardinalityAttr(evt.policy.reason),
+        normalizeDiagnosticValue(evt.policy.reason),
       );
     }
   }
@@ -308,7 +287,7 @@ export function assignOtelSecurityAttributes(
       assignOtelLogAttribute(
         attributes,
         "openclaw.security.control.id",
-        lowCardinalityAttr(evt.control.id),
+        normalizeDiagnosticValue(evt.control.id),
       );
     }
     if (evt.control.family) {

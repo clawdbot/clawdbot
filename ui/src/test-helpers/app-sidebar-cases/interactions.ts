@@ -5,6 +5,10 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import {
+  loadStoredHiddenSessionCatalogIds,
+  storeHiddenSessionCatalogIds,
+} from "../../components/app-sidebar-session-types.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
 import {
@@ -18,6 +22,30 @@ import {
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
+
+describe("AppSidebar context menu boundary", () => {
+  it("suppresses native menus except on editable controls", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      createSessions("main", ["agent:main:main"]),
+    );
+    const aside = sidebar.querySelector<HTMLElement>("aside.sidebar");
+    const footer = sidebar.querySelector<HTMLElement>(".sidebar-shell__footer");
+    if (!aside || !footer) {
+      throw new Error("expected sidebar chrome");
+    }
+
+    const chromeMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    footer.dispatchEvent(chromeMenu);
+    expect(chromeMenu.defaultPrevented).toBe(true);
+
+    const input = document.createElement("input");
+    aside.append(input);
+    const editableMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    input.dispatchEvent(editableMenu);
+    expect(editableMenu.defaultPrevented).toBe(false);
+  });
+});
 
 describe("AppSidebar multi-select", () => {
   const KEYS = ["agent:main:main", "agent:main:a", "agent:main:b", "agent:main:c"];
@@ -67,6 +95,42 @@ describe("AppSidebar multi-select", () => {
     await sidebar.updateComplete;
     return { sidebar, harness };
   }
+
+  it("names each session's pin and menu buttons after their owning session", async () => {
+    const { sidebar } = await mountMultiSelect();
+
+    for (const key of ["agent:main:a", "agent:main:b"]) {
+      const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
+      const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
+      expect(label).toBeTruthy();
+      expect(row?.querySelector("[data-sidebar-session-pin]")?.getAttribute("aria-label")).toBe(
+        `Pin thread: ${label}`,
+      );
+      expect(row?.querySelector("[data-session-menu]")?.getAttribute("aria-label")).toBe(
+        `Open thread menu: ${label}`,
+      );
+    }
+  });
+
+  it("restores the thread action anchor when Tab exits its keyboard context menu", async () => {
+    const { sidebar } = await mountMultiSelect();
+    const link = rowLink(sidebar, "agent:main:a");
+    const trigger = sidebar.querySelector<HTMLElement>(
+      '[data-session-key="agent:main:a"] [data-session-menu]',
+    );
+    link.focus();
+    link.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+
+    const menu = await sessionMenu(sidebar);
+    const item = menu.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])");
+    item?.focus();
+    item?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+
+    expect(document.activeElement).toBe(trigger);
+  });
 
   it("cmd-click toggles rows into the selection and plain click clears it", async () => {
     const { sidebar } = await mountMultiSelect();
@@ -364,6 +428,47 @@ describe("AppSidebar catalog session rows", () => {
     await sidebar.updateComplete;
     return { sidebar, request };
   }
+
+  it("opens the catalog view menu from its header and hides that section", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
+        ["agent:main:main"],
+      );
+      const header = sidebar.querySelector<HTMLElement>(
+        '[data-session-section="catalog:codex"] .sidebar-recent-sessions__head',
+      );
+      if (!header) {
+        throw new Error("expected catalog section header");
+      }
+      const contextMenu = new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 24,
+        clientY: 36,
+      });
+      header.dispatchEvent(contextMenu);
+      await sidebar.updateComplete;
+
+      expect(contextMenu.defaultPrevented).toBe(true);
+      const menu = sidebar.querySelector<HTMLElement>(".sidebar-catalog-view-menu");
+      const hide = menu?.querySelector<HTMLElement>('wa-dropdown-item[value="hide-catalog"]');
+      expect(menu).not.toBeNull();
+      expect(hide).not.toBeNull();
+      menu?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item: hide } }));
+      await sidebar.updateComplete;
+
+      expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(true);
+      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
+
+      storeHiddenSessionCatalogIds(new Set());
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("renders local rows directly and keeps paired-node rows under their host heading", async () => {
     vi.useFakeTimers();

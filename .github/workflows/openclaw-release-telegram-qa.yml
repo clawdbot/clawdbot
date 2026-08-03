@@ -1819,8 +1819,15 @@ jobs:
           sut_tmp="${temp_root}/sut-tmp"
           install -d -o "$SUT_UID" -g "$SUT_GID" -m 0700 "$sut_tmp"
           export TMPDIR="$sut_tmp"
+          workspace="${temp_root}/workspace"
+          [[ -d "$workspace" && ! -L "$workspace" ]]
+          [[ "$(realpath -e "$workspace")" == "$workspace" ]]
+          # The trusted scenario host creates fixtures while the isolated SUT reads
+          # and mutates the workspace. Keep every other runtime directory SUT-private.
+          chown -R "$RUNNER_UID:$SUT_GID" "$workspace"
+          chmod -R u=rwX,g=rwX,o= "$workspace"
+          find "$workspace" -type d -exec chmod g+s {} +
           for path in \
-            "$temp_root/workspace" \
             "${OPENCLAW_HOME:?}" \
             "${OPENCLAW_STATE_DIR:?}" \
             "${XDG_CACHE_HOME:?}" \
@@ -2551,7 +2558,7 @@ jobs:
             ' "$proof_path" >/dev/null
           done
 
-      - name: Finalize trusted Telegram process-boundary evidence
+      - name: Finalize trusted Telegram execution evidence
         id: finalize_boundary
         if: always() && steps.terminate_sut.outputs.quiescent == 'true' && steps.run_lane.outputs.output_dir != ''
         env:
@@ -2574,13 +2581,14 @@ jobs:
           jq -e \
             --arg runId "$GITHUB_RUN_ID" \
             --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg targetSha "$TARGET_SHA" \
             '
               .version == 1 and
               .kind == "telegram-sut-boundary" and
               .runId == $runId and
               .runAttempt == $runAttempt and
               (.workflowSha | test("^[a-f0-9]{40}$")) and
-              (.targetSha | test("^[a-f0-9]{40}$")) and
+              .targetSha == $targetSha and
               (.candidateArtifact.id | test("^[1-9][0-9]*$")) and
               (.candidateArtifact.name | length > 0) and
               (.candidateArtifact.digest | test("^[a-f0-9]{64}$")) and
@@ -2588,15 +2596,24 @@ jobs:
               .candidateArtifact.runAttempt == $runAttempt and
               (.candidateArtifact.fileName | length > 0) and
               (.candidateArtifact.sha256 | test("^[a-f0-9]{64}$")) and
-              (.candidateArtifact.sourceSha | test("^[a-f0-9]{40}$")) and
+              .candidateArtifact.sourceSha == $targetSha and
               (.candidateArtifact.version | length > 0)
             ' "$context_path" >/dev/null
 
-          # This frozen extended-stable candidate predates the boundary protocol.
-          # Every other target fails closed until it emits the required evidence.
-          legacy_process_boundary_target_sha="2dbfe013e511d0c7e0720356f5af5c7bb210db19"
-          if [[ "$TARGET_SHA" == "$legacy_process_boundary_target_sha" ]]; then
-            jq --arg executionMode "legacy-runner" \
+          # The archive and source tree were independently attested before this step.
+          # A tracked contract opts legacy candidates into the pre-boundary evidence shape.
+          legacy_contract_path="${CANDIDATE_ROOT}/qa/contracts/telegram-execution-evidence.json"
+          if [[ -e "$legacy_contract_path" || -L "$legacy_contract_path" ]]; then
+            [[ -f "$legacy_contract_path" && ! -L "$legacy_contract_path" ]]
+            candidate_version="$(jq -er '.candidateArtifact.version' "$context_path")"
+            jq -e --arg candidateVersion "$candidate_version" '
+              (keys | sort) == ["candidateVersion", "kind", "mode", "version"] and
+              .version == 1 and
+              .kind == "openclaw-release-telegram-execution-evidence" and
+              .mode == "legacy-direct-runner-v1" and
+              .candidateVersion == $candidateVersion
+            ' "$legacy_contract_path" >/dev/null
+            jq --arg executionMode "legacy-direct-runner-v1" \
               '. + {executionMode: $executionMode}' "$context_path" >"$aggregate_path"
             chmod 0600 "$aggregate_path"
             echo "aggregate_path=$aggregate_path" >>"$GITHUB_OUTPUT"

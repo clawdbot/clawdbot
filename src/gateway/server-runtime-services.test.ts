@@ -43,8 +43,8 @@ const hoisted = vi.hoisted(() => {
     recoverPendingDeliveries: vi.fn(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
+    settleQueuedSessionDelivery: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
-    removeCronRunContinuationSessionIfIdle: vi.fn(async () => undefined),
   };
 });
 
@@ -78,13 +78,10 @@ vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
   schedulePendingSessionDeliveries: hoisted.schedulePendingSessionDeliveries,
 }));
 
-vi.mock("../tasks/cron-run-continuation-cleanup.js", () => ({
-  removeCronRunContinuationSessionIfIdle: hoisted.removeCronRunContinuationSessionIfIdle,
-}));
-
 vi.mock("./server-restart-sentinel.js", () => ({
   deliverQueuedSessionDelivery: hoisted.deliverQueuedSessionDelivery,
   recoverPendingRestartContinuationDeliveries: hoisted.recoverPendingRestartContinuationDeliveries,
+  settleQueuedSessionDelivery: hoisted.settleQueuedSessionDelivery,
 }));
 
 vi.mock("./channel-health-monitor.js", () => ({
@@ -121,8 +118,8 @@ describe("server-runtime-services", () => {
     hoisted.recoverPendingDeliveries.mockClear();
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
     hoisted.deliverQueuedSessionDelivery.mockClear();
+    hoisted.settleQueuedSessionDelivery.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
-    hoisted.removeCronRunContinuationSessionIfIdle.mockClear();
   });
 
   afterEach(() => {
@@ -348,15 +345,24 @@ describe("server-runtime-services", () => {
       log: sessionDeliveryLog,
     });
     const runtimeParams = hoisted.startSessionDeliveryRuntime.mock.calls[0]?.[0] as
-      | { onSettled?: (entry: { id: string; sessionKey: string }) => Promise<void> }
+      | {
+          onSettled?: (
+            entry: { id: string; sessionKey: string },
+            outcome: "recovered",
+          ) => Promise<void>;
+        }
       | undefined;
-    await runtimeParams?.onSettled?.({
-      id: "settled-delivery-1",
-      sessionKey: "agent:main:cron:job:run:run-1",
-    });
-    expect(hoisted.removeCronRunContinuationSessionIfIdle).toHaveBeenCalledWith(
-      "agent:main:cron:job:run:run-1",
-      "settled-delivery-1",
+    expect(runtimeParams?.onSettled).toBe(hoisted.settleQueuedSessionDelivery);
+    await runtimeParams?.onSettled?.(
+      {
+        id: "settled-delivery-1",
+        sessionKey: "agent:main:cron:job:run:run-1",
+      },
+      "recovered",
+    );
+    expect(hoisted.settleQueuedSessionDelivery).toHaveBeenCalledWith(
+      { id: "settled-delivery-1", sessionKey: "agent:main:cron:job:run:run-1" },
+      "recovered",
     );
     expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledTimes(1);
   });
@@ -498,6 +504,34 @@ describe("server-runtime-services", () => {
     expect(run).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await waitForFast(() => expect(run).toHaveBeenCalledOnce());
+  });
+
+  it("rechecks request work after joining the admitted root set", async () => {
+    vi.useFakeTimers();
+    const run = vi.fn(async () => undefined);
+    const isBusy = vi
+      .fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+
+    scheduleGatewayIdleTask({
+      delayMs: 25,
+      retryDelayMs: 50,
+      isClosing: () => false,
+      isBusy,
+      run,
+      log: createLog(),
+      errorMessage: "idle task failed",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(49);
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await waitForFast(() => expect(run).toHaveBeenCalledOnce());
+    expect(isBusy).toHaveBeenCalledTimes(4);
   });
 
   it("cancels a scheduled idle task before its delay elapses", async () => {

@@ -159,7 +159,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: budgeted root-bounded directory walking.
       // +1: pinned secret reads and first-writer-wins creation.
       // +2: restore the documented session-catalog and tool-results plugin contracts.
-      148,
+      // +1: focused inbound-event delivery correlation for channel plugins.
+      149,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -188,6 +189,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: typed owner-required error for session store path resolution.
       // +1: native approval messaging target resolver.
       // +1: shared plugin SecretRef setup plan helper.
+      // +2: shared low-cardinality diagnostic dimension normalizers.
+      // +1: shared plugin SecretRef setup CLI factory.
       // +1: shared multi-claim ingress lifecycle fan-in.
       // +3: channel prompt-context entry/compat types and channel metadata builder.
       // +4: focused CLI root-option constants and parsers.
@@ -204,9 +207,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
       // +2: shared ingress error factory through channel-outbound and channel-message.
       // +2: shared ingress retention defaults through channel-outbound and channel-message.
+      // +1: standard raw-event ingress profile replacing two channel-local shells.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
-      4819,
+      // +1: forwarding-routed approver-restricted native approval capability factory.
+      // +1: shared inbound-event delivery correlation factory for channel plugins.
+      4825,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -230,6 +236,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: focused media-local-roots helpers.
       // +3: channel DM policy factory and its account/patch callbacks.
       // +1: native approval messaging target resolver.
+      // +2: shared low-cardinality diagnostic dimension normalizers.
+      // +1: shared plugin SecretRef setup CLI factory.
       // +1: shared multi-claim ingress lifecycle fan-in.
       // +1: channel metadata builder.
       // +3: focused CLI root-option parsers.
@@ -243,9 +251,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: watched-sessions prompt block for plugin-owned harness runtimes.
       // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
       // +2: shared ingress error factory through channel-outbound and channel-message.
+      // +1: standard raw-event ingress profile replacing two channel-local shells.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
-      2896,
+      // +1: forwarding-routed approver-restricted native approval capability factory.
+      // +1: shared inbound-event delivery correlation factory for channel plugins.
+      2902,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -262,7 +273,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      82,
+      // -1: text-runtime now names its global-singleton exports explicitly.
+      81,
       env,
     ),
   };

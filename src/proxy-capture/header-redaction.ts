@@ -47,10 +47,14 @@ function isSensitiveCaptureHeaderName(name: string): boolean {
 
 export function redactedCaptureHeaders(
   headers: Headers | Record<string, string | string[] | undefined> | undefined,
+  additionalSensitiveNames?: Iterable<string>,
 ): Record<string, string> | undefined {
   if (!headers) {
     return undefined;
   }
+  const additionalSensitive = new Set(
+    [...(additionalSensitiveNames ?? [])].map((name) => name.trim().toLowerCase()),
+  );
   const entries =
     headers instanceof Headers ? Array.from(headers.entries()) : Object.entries(headers);
   const redacted: Record<string, string> = {};
@@ -59,7 +63,7 @@ export function redactedCaptureHeaders(
     // providers use many token/key naming variants. Names that pass the check
     // still run through value redaction so a registered secret pasted into an
     // innocuous header does not survive.
-    if (isSensitiveCaptureHeaderName(name)) {
+    if (additionalSensitive.has(name.trim().toLowerCase()) || isSensitiveCaptureHeaderName(name)) {
       redacted[name] = REDACTED_CAPTURE_HEADER_VALUE;
       continue;
     }
