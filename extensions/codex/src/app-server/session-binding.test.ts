@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
@@ -1131,6 +1132,75 @@ describe("Codex app-server binding store", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("atomically reclaims a retired stable tombstone and fences a stale same-identity lifecycle", async () => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-race",
+      sessionKey: "agent:main:web:dashboard",
+    };
+
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-initial", cwd: "/repo" },
+    });
+    await store.retireSessionGeneration(identity);
+
+    const aEnteredLease = createDeferred<void>();
+    const releaseA = createDeferred<void>();
+    let bEnteredLease = false;
+
+    const aLease = store.withReclaimedLease(
+      identity,
+      { expectedPreviousSessionId: identity.sessionId },
+      async () => {
+        aEnteredLease.resolve();
+        await releaseA.promise;
+        await store.mutate(identity, {
+          kind: "set",
+          binding: { threadId: "thread-recovered-by-a", cwd: "/repo" },
+        });
+      },
+    );
+
+    await aEnteredLease.promise;
+    const reclaimed = values.get(bindingStoreKey(identity));
+    expect(reclaimed).toMatchObject({
+      state: "cleared",
+      sessionId: identity.sessionId,
+    });
+    expect(reclaimed).not.toHaveProperty("retired");
+
+    const bLease = store.withLease(identity, async () => {
+      bEnteredLease = true;
+      await store.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-stolen-by-b", cwd: "/repo" },
+      });
+    });
+
+    // Give b a chance to attempt the lease; it must stay blocked while a owns it.
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        resolve();
+      }, 50);
+    });
+    expect(bEnteredLease).toBe(false);
+
+    releaseA.resolve();
+    await aLease;
+    await bLease;
+
+    const final = values.get(bindingStoreKey(identity));
+    expect(final).toMatchObject({
+      state: "active",
+      sessionId: identity.sessionId,
+      binding: { threadId: "thread-stolen-by-b" },
+    });
   });
 
   it("drains an in-flight ownership mutation and rejects late attachment during archive", async () => {
