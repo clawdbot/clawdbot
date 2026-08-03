@@ -4,10 +4,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const entryCandidates = ["dist/entry.js", "dist/entry.mjs"];
 const startupMetadataPath = "dist/cli-startup-metadata.json";
 const DEFAULT_BUILD_TIMEOUT_MS = 10 * 60 * 1000;

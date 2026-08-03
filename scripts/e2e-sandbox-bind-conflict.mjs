@@ -12,10 +12,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const engine = process.env.OPENCLAW_SANDBOX_E2E_ENGINE?.trim() || "docker";
 const image = process.env.OPENCLAW_SANDBOX_E2E_IMAGE?.trim() || "e2e-sleep:latest";
 const useSudo = process.env.OPENCLAW_SANDBOX_E2E_SUDO === "1";

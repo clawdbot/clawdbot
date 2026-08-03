@@ -2,10 +2,9 @@
 // Verifies each generated Control UI sidecar encodes the final emitted asset bytes.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const assetsDir = path.join(repoRoot, "dist", "control-ui", "assets");
 const errors = [];
 let checked = 0;

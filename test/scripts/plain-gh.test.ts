@@ -6,6 +6,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   execGhApiRead,
+  execGhJson,
+  execGhRead,
   execPlainGh,
   plainGhEnv,
   PLAIN_GH_SYSTEM_CANDIDATES,
@@ -112,6 +114,35 @@ describe("plain gh helpers", () => {
 
     expect(output).toContain("argv=api repos/openclaw/openclaw/pulls/1 --method GET");
     expect(output).toContain("OPENCLAW_GH_BIN_SET=");
+  });
+
+  it("shares bounded PATH-shim reads and JSON parsing", () => {
+    const calls: unknown[][] = [];
+    const execFileSyncImpl = (...args: unknown[]) => {
+      calls.push(args);
+      return '{"ok":true}';
+    };
+
+    expect(
+      execGhJson(["api", "repos/openclaw/openclaw"], { timeout: 60_000 }, { execFileSyncImpl }),
+    ).toEqual({ ok: true });
+    expect(calls).toEqual([
+      [
+        "gh",
+        ["api", "repos/openclaw/openclaw"],
+        expect.objectContaining({
+          encoding: "utf8",
+          timeout: 60_000,
+        }),
+      ],
+    ]);
+    expect(
+      execGhRead(
+        ["api", "rate_limit"],
+        { encoding: "utf8" },
+        { execFileSyncImpl: () => " result " },
+      ),
+    ).toBe(" result ");
   });
 
   it("runs the shell helper with color disabled", () => {

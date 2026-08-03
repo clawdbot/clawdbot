@@ -23,7 +23,8 @@ import {
 } from "./vitest-process-group.mjs";
 
 const require = createRequire(import.meta.url);
-const repoRoot = resolve(import.meta.dirname, "..");
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const tscBin = require.resolve("typescript/bin/tsc");
 const nativePreviewPackageJsonPath = require.resolve("@typescript/native-preview/package.json");
 const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8"));
