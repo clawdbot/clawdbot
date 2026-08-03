@@ -13,7 +13,7 @@ import { resolveTelegramConversationRoute } from "./conversation-route.js";
 const TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON = "thread-context-unavailable";
 
 /** Only the message-cache lookup this handler needs, so tests can supply it directly. */
-export type TelegramReactionThreadRecovery = Pick<
+type TelegramReactionThreadRecovery = Pick<
   TelegramHandlerMessageRuntime,
   "resolveCachedMessageThreadId"
 >;
