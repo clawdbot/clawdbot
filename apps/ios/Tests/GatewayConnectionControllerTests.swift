@@ -1352,7 +1352,7 @@ private func waitUntil(
             #expect(appModel.gatewayServerName == nil)
             #expect(!appModel._test_hasGatewayLoopTasks().node)
             #expect(!appModel._test_hasGatewayLoopTasks().operator)
-            #expect(!appModel.chatSessionRoutingRestoreTask != nil)
+            #expect(!(appModel.chatSessionRoutingRestoreTask != nil))
             #expect(ShareGatewayRelaySettings.loadConfig() == nil)
 
             let relaunchedModel = NodeAppModel()
