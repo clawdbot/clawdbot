@@ -68,25 +68,16 @@ export function setCurrentPluginMetadataSnapshot(
         workspaceDir: options.workspaceDir ?? snapshot.workspaceDir,
       })
     : undefined;
-  const defaultDiscoveryConfigFingerprint = snapshot
-    ? resolvePluginMetadataControlPlaneFingerprint(
-        {},
-        {
-          env: options.env,
-          index: snapshot.index,
-          policyHash: snapshot.policyHash,
-          workspaceDir: options.workspaceDir ?? snapshot.workspaceDir,
-        },
-      )
-    : undefined;
+  // A full (unscoped) published snapshot IS the process's default discovery
+  // context. The old baseline compared against a literal {} config, which can
+  // never match once the operator sets plugins.load.paths — permanently
+  // disabling manifest model-id normalization and forcing every config-less
+  // lookup into a ~50ms full manifest rescan that returns a snapshot MISSING
+  // the load-path plugins (strictly worse than the one it rejected).
   const defaultDiscoveryCompatible =
-    snapshot &&
-    defaultDiscoveryConfigFingerprint &&
-    (configFingerprint === defaultDiscoveryConfigFingerprint ||
-      snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
-      Boolean(compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint)));
+    Boolean(snapshot) && normalizePluginIdScope(snapshot?.pluginIds) === undefined;
   setCurrentManifestModelIdNormalizationRecords(
-    defaultDiscoveryCompatible ? snapshot.plugins : undefined,
+    snapshot && defaultDiscoveryCompatible ? snapshot.plugins : undefined,
   );
   setCurrentPluginMetadataSnapshotState(
     snapshot,
@@ -94,6 +85,7 @@ export function setCurrentPluginMetadataSnapshot(
     compatiblePolicyHashes,
     compatibleConfigFingerprints,
     compatibleWorkspaceDirs,
+    defaultDiscoveryCompatible,
   );
   if (!snapshot) {
     return;
@@ -124,24 +116,9 @@ export function restoreCurrentPluginMetadataSnapshotState(
 ): void {
   currentPluginMetadataConfigIdentityCache.restore(state.configIdentities);
   const snapshot = state.snapshot as PluginMetadataSnapshot | undefined;
-  const defaultDiscoveryConfigFingerprint = snapshot
-    ? resolvePluginMetadataControlPlaneFingerprint(
-        {},
-        {
-          index: snapshot.index,
-          policyHash: snapshot.policyHash,
-          workspaceDir: snapshot.workspaceDir,
-        },
-      )
-    : undefined;
-  const defaultDiscoveryCompatible =
-    snapshot &&
-    defaultDiscoveryConfigFingerprint &&
-    (state.configFingerprint === defaultDiscoveryConfigFingerprint ||
-      snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
-      Boolean(state.compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint)));
+  const defaultDiscoveryCompatible = state.defaultDiscoveryCompatible;
   setCurrentManifestModelIdNormalizationRecords(
-    defaultDiscoveryCompatible ? snapshot.plugins : undefined,
+    snapshot && defaultDiscoveryCompatible ? snapshot.plugins : undefined,
   );
   setCurrentPluginMetadataSnapshotState(
     state.snapshot,
@@ -149,6 +126,7 @@ export function restoreCurrentPluginMetadataSnapshotState(
     state.compatiblePolicyHashes,
     state.compatibleConfigFingerprints,
     state.compatibleWorkspaceDirs,
+    defaultDiscoveryCompatible,
   );
 }
 
@@ -170,6 +148,7 @@ export function getCurrentPluginMetadataSnapshot(
     compatiblePolicyHashes,
     compatibleConfigFingerprints,
     compatibleWorkspaceDirs,
+    defaultDiscoveryCompatible,
   } = getCurrentPluginMetadataSnapshotState();
   const snapshot = rawSnapshot as PluginMetadataSnapshot | undefined;
   if (!snapshot) {
@@ -236,23 +215,11 @@ export function getCurrentPluginMetadataSnapshot(
       return undefined;
     }
   }
-  if (params.requireDefaultDiscoveryContext === true) {
-    const defaultDiscoveryConfigFingerprint = resolvePluginMetadataControlPlaneFingerprint(
-      {},
-      {
-        env: params.env,
-        index: snapshot.index,
-        policyHash: snapshot.policyHash,
-        workspaceDir: requestedWorkspaceDir,
-      },
-    );
-    const fingerprintMatches =
-      configFingerprint === defaultDiscoveryConfigFingerprint ||
-      snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
-      Boolean(compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint));
-    if (!fingerprintMatches) {
-      return undefined;
-    }
+  if (params.requireDefaultDiscoveryContext === true && !defaultDiscoveryCompatible) {
+    // Scope and workspace rejections already ran above; the stored flag marks
+    // whether the published snapshot is the process's canonical full-context
+    // snapshot (see setCurrentPluginMetadataSnapshot).
+    return undefined;
   }
   return snapshot;
 }

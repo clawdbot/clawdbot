@@ -7,6 +7,7 @@ let currentPluginMetadataSnapshotConfigFingerprint: string | undefined;
 let currentPluginMetadataSnapshotCompatiblePolicyHashes: readonly string[] | undefined;
 let currentPluginMetadataSnapshotCompatibleConfigFingerprints: readonly string[] | undefined;
 let currentPluginMetadataSnapshotCompatibleWorkspaceDirs: readonly string[] | undefined;
+let currentPluginMetadataSnapshotDefaultDiscoveryCompatible = false;
 let currentPluginMetadataConfigIdentities = new WeakSet<OpenClawConfig>();
 
 /** Owns config identity reuse for the current immutable metadata snapshot. */
@@ -35,6 +36,7 @@ export function setCurrentPluginMetadataSnapshotState(
   compatiblePolicyHashes?: readonly string[],
   compatibleConfigFingerprints?: readonly string[],
   compatibleWorkspaceDirs?: readonly string[],
+  defaultDiscoveryCompatible?: boolean,
 ): void {
   currentPluginMetadataSnapshot = snapshot;
   currentPluginMetadataSnapshotConfigFingerprint = snapshot ? configFingerprint : undefined;
@@ -47,6 +49,9 @@ export function setCurrentPluginMetadataSnapshotState(
   currentPluginMetadataSnapshotCompatibleWorkspaceDirs = snapshot
     ? compatibleWorkspaceDirs
     : undefined;
+  currentPluginMetadataSnapshotDefaultDiscoveryCompatible = snapshot
+    ? (defaultDiscoveryCompatible ?? false)
+    : false;
 }
 
 /** Clears the process-current plugin metadata snapshot. */
@@ -56,6 +61,7 @@ function clearCurrentPluginMetadataSnapshotState(): void {
   currentPluginMetadataSnapshotCompatiblePolicyHashes = undefined;
   currentPluginMetadataSnapshotCompatibleConfigFingerprints = undefined;
   currentPluginMetadataSnapshotCompatibleWorkspaceDirs = undefined;
+  currentPluginMetadataSnapshotDefaultDiscoveryCompatible = false;
 }
 
 /** Clears the snapshot, its identity cache, and process-wide model normalization. */
@@ -72,6 +78,7 @@ export function getCurrentPluginMetadataSnapshotState(): {
   compatiblePolicyHashes: readonly string[] | undefined;
   compatibleConfigFingerprints: readonly string[] | undefined;
   compatibleWorkspaceDirs: readonly string[] | undefined;
+  defaultDiscoveryCompatible: boolean;
 } {
   return {
     snapshot: currentPluginMetadataSnapshot,
@@ -79,5 +86,6 @@ export function getCurrentPluginMetadataSnapshotState(): {
     compatiblePolicyHashes: currentPluginMetadataSnapshotCompatiblePolicyHashes,
     compatibleConfigFingerprints: currentPluginMetadataSnapshotCompatibleConfigFingerprints,
     compatibleWorkspaceDirs: currentPluginMetadataSnapshotCompatibleWorkspaceDirs,
+    defaultDiscoveryCompatible: currentPluginMetadataSnapshotDefaultDiscoveryCompatible,
   };
 }

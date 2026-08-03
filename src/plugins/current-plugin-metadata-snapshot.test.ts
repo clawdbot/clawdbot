@@ -163,7 +163,12 @@ describe("current plugin metadata snapshot", () => {
     ).toBeUndefined();
   });
 
-  it("rejects configless default-discovery reuse for snapshots created with load paths", () => {
+  it("reuses load-path snapshots for configless default-discovery callers", () => {
+    // The published full snapshot IS the process's default discovery context.
+    // Requiring a literal-{} fingerprint made this permanently unmatchable for
+    // any operator with plugins.load.paths: every configless lookup paid a
+    // ~50ms rescan that returned a snapshot MISSING the load-path plugins,
+    // and manifest model-id normalization was silently disabled.
     const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
     const snapshot = createSnapshot({ config });
     setCurrentPluginMetadataSnapshot(snapshot, { config });
@@ -173,7 +178,7 @@ describe("current plugin metadata snapshot", () => {
         allowWorkspaceScopedSnapshot: true,
         requireDefaultDiscoveryContext: true,
       }),
-    ).toBeUndefined();
+    ).toBe(snapshot);
   });
 
   it("accepts configless default-discovery reuse for snapshots created without load paths", () => {
