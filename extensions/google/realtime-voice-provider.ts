@@ -419,10 +419,23 @@ function buildBrowserInitialSetup(model: string) {
   };
 }
 
+// Bounds the sample rate parsed from a Google Live audio MIME type. The
+// provider-controlled `rate` parameter drives `resamplePcm`'s output buffer
+// size (`outputSamples = inputSamples / (inputRate / outputRate)`), so an
+// out-of-range value such as `rate=1` inflates the allocation by ~24000x and
+// can exhaust memory before any audio is played. 4 kHz covers telephony
+// floor; 192 kHz covers high-resolution capture ceilings.
+const GOOGLE_REALTIME_PCM_SAMPLE_RATE_MIN_HZ = 4_000;
+const GOOGLE_REALTIME_PCM_SAMPLE_RATE_MAX_HZ = 192_000;
+
 function parsePcmSampleRate(mimeType: string | undefined): number {
   const match = mimeType?.match(/(?:^|[;,\s])rate=(\d+)/i);
   const parsed = match ? Number.parseInt(match[1] ?? "", 10) : Number.NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 24_000;
+  return Number.isFinite(parsed) &&
+    parsed >= GOOGLE_REALTIME_PCM_SAMPLE_RATE_MIN_HZ &&
+    parsed <= GOOGLE_REALTIME_PCM_SAMPLE_RATE_MAX_HZ
+    ? parsed
+    : 24_000;
 }
 
 function isMulawSilence(audio: Buffer): boolean {

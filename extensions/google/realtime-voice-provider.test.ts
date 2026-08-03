@@ -1785,6 +1785,38 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   });
 
   it.each([
+    ["below telephony floor", "audio/L16;codec=pcm;rate=1"],
+    ["above capture ceiling", "audio/pcm;rate=999999999"],
+    ["non-numeric rate", "audio/pcm;rate=wideband"],
+  ])("falls back to 24 kHz for %s sample rate to avoid OOM resample", async (_label, mimeType) => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onClearAudio: vi.fn(),
+    });
+    const pcm24k = Buffer.alloc(480);
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      serverContent: {
+        modelTurn: {
+          parts: [{ inlineData: { mimeType, data: pcm24k.toString("base64") } }],
+        },
+      },
+    });
+
+    // Out-of-range rates collapse to the 24 kHz default, so input and output
+    // sample rates match and resamplePcm returns the buffer unchanged instead
+    // of allocating inputSamples * 24000 samples (gigabyte-scale OOM).
+    expect(onAudio).toHaveBeenCalledTimes(1);
+    expect(requireFirstAudio(onAudio)).toEqual(pcm24k);
+  });
+
+  it.each([
     ["invalid alphabet", "not-base64!"],
     ["non-canonical pad bits", "ZE=="],
   ])("terminates the session for %s in output audio", async (_scenario, data) => {
