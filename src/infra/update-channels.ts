@@ -62,7 +62,7 @@ export function isBetaTag(tag: string): boolean {
 }
 
 /** Returns whether a final monthly release belongs to the extended-stable line. */
-export function isExtendedStableReleaseVersion(version: string): boolean {
+function isExtendedStableReleaseVersion(version: string): boolean {
   const parsed = parseSemver(version.trim());
   return (
     parsed !== null &&

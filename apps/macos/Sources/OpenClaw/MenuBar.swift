@@ -892,7 +892,7 @@ extension SparkleUpdaterController: SPUUpdaterDelegate {
 
     func bestValidUpdate(in appcast: SUAppcast, for _: SPUUpdater) -> SUAppcastItem? {
         guard OpenClawConfigFile.gatewayUpdateChannel() == "extended-stable" else { return nil }
-        let comparator = SUStandardVersionComparator.defaultComparator
+        let comparator = SUStandardVersionComparator.default
         let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         // Sparkle always admits the default channel. Filter it here so an
         // extended-stable Gateway is never prompted to leave its release train.

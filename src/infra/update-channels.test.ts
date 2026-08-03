@@ -4,7 +4,6 @@ import {
   channelToNpmTag,
   formatUpdateChannelLabel,
   isBetaTag,
-  isExtendedStableReleaseVersion,
   isStableTag,
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
@@ -25,18 +24,6 @@ describe("update-channels tag detection", () => {
     { tag: "v2026.2.24", beta: false },
   ])("classifies $tag", ({ tag, beta }) => {
     expect(isBetaTag(tag)).toBe(beta);
-  });
-
-  it.each([
-    { version: "2026.6.32", extendedStable: false },
-    { version: "2026.6.33", extendedStable: true },
-    { version: "2026.6.34", extendedStable: true },
-    { version: "2026.6.33-1", extendedStable: false },
-    { version: "2026.6.33-beta.1", extendedStable: false },
-    { version: "1.33.1", extendedStable: false },
-    { version: "1.6.33", extendedStable: false },
-  ])("recognizes the extended-stable release train for $version", ({ version, extendedStable }) => {
-    expect(isExtendedStableReleaseVersion(version)).toBe(extendedStable);
   });
 
   it.each([
@@ -263,6 +250,20 @@ describe("resolveUpdateChannelDisplay", () => {
 });
 
 describe("resolveRegistryUpdateChannel", () => {
+  it.each([
+    { currentVersion: "2026.6.32", expected: "stable" },
+    { currentVersion: "2026.6.33", expected: "extended-stable" },
+    { currentVersion: "2026.6.34", expected: "extended-stable" },
+    { currentVersion: "2026.6.33-1", expected: "stable" },
+    { currentVersion: "1.33.1", expected: "stable" },
+    { currentVersion: "1.6.33", expected: "stable" },
+  ] as const)(
+    "selects $expected for the installed version $currentVersion",
+    ({ currentVersion, expected }) => {
+      expect(resolveRegistryUpdateChannel({ currentVersion })).toBe(expected);
+    },
+  );
+
   it("queries beta when the installed version is beta even if config is stale stable", () => {
     expect(
       resolveRegistryUpdateChannel({
@@ -277,14 +278,6 @@ describe("resolveRegistryUpdateChannel", () => {
       resolveRegistryUpdateChannel({
         configChannel: "extended-stable",
         currentVersion: "2026.5.2-beta.1",
-      }),
-    ).toBe("extended-stable");
-  });
-
-  it("queries extended-stable for an installed extended-stable package without config", () => {
-    expect(
-      resolveRegistryUpdateChannel({
-        currentVersion: "2026.6.33",
       }),
     ).toBe("extended-stable");
   });
