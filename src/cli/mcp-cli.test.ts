@@ -4,11 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as mcpRuntime from "../agents/agent-bundle-mcp-runtime.js";
 import * as mcpHttpFetch from "../agents/mcp-http-fetch.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { createDeferred } from "../shared/deferred.js";
 import { registerMcpCli } from "./mcp-cli.js";
+
+type CreateSessionMcpRuntime =
+  typeof import("../agents/agent-bundle-mcp-runtime.js").createSessionMcpRuntime;
 
 const mocks = vi.hoisted(() => {
   const runtime = {
@@ -27,6 +29,7 @@ const mocks = vi.hoisted(() => {
     clearMcpOAuthCredentials: vi.fn(),
     readMcpOAuthCredentialsStatus: vi.fn(),
     runMcpOAuthLogin: vi.fn(),
+    createSessionMcpRuntimeOverride: undefined as CreateSessionMcpRuntime | undefined,
   };
 });
 
@@ -51,6 +54,15 @@ vi.mock("../agents/mcp-oauth.js", () => ({
   readMcpOAuthCredentialsStatus: mocks.readMcpOAuthCredentialsStatus,
   runMcpOAuthLogin: mocks.runMcpOAuthLogin,
 }));
+
+vi.mock("../agents/agent-bundle-mcp-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/agent-bundle-mcp-runtime.js")>();
+  return {
+    ...actual,
+    createSessionMcpRuntime: (params: Parameters<CreateSessionMcpRuntime>[0]) =>
+      mocks.createSessionMcpRuntimeOverride?.(params) ?? actual.createSessionMcpRuntime(params),
+  };
+});
 
 const tempDirs: string[] = [];
 
@@ -146,6 +158,7 @@ describe("mcp cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.createSessionMcpRuntimeOverride = undefined;
     readMcpOAuthCredentialsStatus.mockResolvedValue({
       hasTokens: false,
       requiresAuthorization: false,
@@ -343,7 +356,7 @@ describe("mcp cli", () => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
       let probeTimeoutMs: unknown;
-      vi.spyOn(mcpRuntime, "createSessionMcpRuntime").mockImplementation((params) => {
+      mocks.createSessionMcpRuntimeOverride = (params) => {
         probeTimeoutMs = params.cfg?.mcp?.servers?.["hung-default"]?.connectionTimeoutMs;
         return {
           sessionId: params.sessionId,
@@ -371,7 +384,7 @@ describe("mcp cli", () => {
           callTool: async () => ({ content: [] }),
           dispose: async () => {},
         };
-      });
+      };
 
       await expect(
         runMcpCommand(["mcp", "add", "hung-default", "--command", process.execPath]),
