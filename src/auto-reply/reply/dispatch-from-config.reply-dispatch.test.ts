@@ -697,6 +697,13 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     ["aggregate partial envelope", new AggregateError([createPartialDelivery()]), false],
     ["observer-attached delivery evidence", createNoSendFailure(), false],
     ["ambiguous transport failure", new Error("transport failed"), false],
+    [
+      "outbound delivery with no send (listener not ready)",
+      new OutboundDeliveryError("No active WhatsApp Web listener", {
+        cause: new Error("no listener"),
+      }),
+      true,
+    ],
   ] as const)("reconciles pending final delivery after %s", async (name, error, preserve) => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     const pending = pendingFinalDelivery("recoverable final reply");

@@ -8,6 +8,7 @@ import {
   isProvenDeliveryNotSentError,
 } from "../../infra/delivery-recovery.shared.js";
 import { collectErrorGraphCandidates } from "../../infra/errors.js";
+import { isOutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -50,6 +51,13 @@ export type ReplyDispatchDeliveryOutcome =
   | "failed-deliver";
 
 function isRetryableNoSendFailure(error: unknown): boolean {
+  // An OutboundDeliveryError with sentBeforeError === false proves no
+  // recipient-visible send occurred (e.g. channel listener not ready,
+  // reachout timelock active). Such failures are retryable and must not
+  // clear the pendingFinalDelivery marker (#117441).
+  if (isOutboundDeliveryError(error) && !error.sentBeforeError) {
+    return !findPlatformMessageRejectedError(error);
+  }
   return (
     isProvenDeliveryNotSentError(error) &&
     !findPlatformMessageRejectedError(error) &&
