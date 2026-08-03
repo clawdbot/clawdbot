@@ -60,6 +60,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Compaction safeguard identifier scans:** require host/port token boundaries so very long non-identifier text cannot trigger quadratic regex retries while preserving valid endpoint identifiers.
 - **Telegram durable ingress:** preserve pre-identity control-lane ownership during replay and attempt each drain snapshot row only once per pass, preventing targeted commands from spinning the spool and blocking polling shutdown.
 - **Control UI operator session permissions:** honor Gateway-advertised operator scopes for new-thread creation, thread management, checkpoints, and sharing controls while preserving read-only navigation and legacy Gateway compatibility. Fixes #117786. Thanks @shakkernerd.
 - **Control UI archived session deletion:** send archive-gated delete requests from Sessions-page row and mixed-selection actions so write-scoped operators can remove archived threads while active-session deletion remains admin-only. Thanks @shakkernerd.
