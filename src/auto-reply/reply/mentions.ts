@@ -33,11 +33,7 @@ const NAME_IDENTITY_CHARS = String.raw`\p{L}\p{N}\p{Pc}`;
 const NAME_TOKEN_CHARS = String.raw`${NAME_IDENTITY_CHARS}\p{M}`;
 const JOINER_CHARS = String.raw`\u200C\u200D`;
 const UNICODE_WORD_CHAR = String.raw`[${NAME_TOKEN_CHARS}${JOINER_CHARS}]`;
-const JOINER_RUN = /[\u200C\u200D]+/u;
-// Decoration between word runs (emoji, flags, symbols, punctuation) may be
-// typed as shown, replaced by whitespace, or omitted. Only code points the
-// name itself carries are accepted, so matching and stripping never consume
-// unrelated punctuation adjacent to a mention.
+const JOINER_RUN = new RegExp(`[${JOINER_CHARS}]+`, "u");
 // A token has to carry an identity character: marks attach to one, they never
 // stand for one. A run of bare marks is presentation -- the variation selector
 // U+FE0F an emoji identity name carries, the enclosing keycap U+20E3 -- and
@@ -61,15 +57,9 @@ function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
   // checked next to the tokens instead, the class matches nothing and the
   // decoration itself satisfies the boundary, letting the name match while
   // glued to another word.
-  const before = parts.leading
-    ? `(?<!${UNICODE_WORD_CHAR}[${parts.leading}]*)`
-    : `(?<!${UNICODE_WORD_CHAR})`;
-  const after = parts.trailing
-    ? `(?![${parts.trailing}]*${UNICODE_WORD_CHAR})`
-    : `(?!${UNICODE_WORD_CHAR})`;
   const leading = parts.leading ? `[${parts.leading}]*` : "";
   const trailing = parts.trailing ? `[${parts.trailing}]*` : "";
-  return `(?:@|${before})${leading}${parts.core}${after}${trailing}`;
+  return `(?:@|(?<!${UNICODE_WORD_CHAR}${leading}))${leading}${parts.core}(?!${trailing}${UNICODE_WORD_CHAR})${trailing}`;
 }
 
 function escapeJoinerTolerantLiteral(literal: string): string {
@@ -77,9 +67,19 @@ function escapeJoinerTolerantLiteral(literal: string): string {
   // stripping runs on the raw text that still carries them. A literal has to
   // accept both forms or an identity built only from a ZWJ sequence can be
   // stripped but never matched.
-  return literal.split(JOINER_RUN).map(escapeRegExp).join(`[${JOINER_CHARS}]*`);
+  const parts = literal.split(JOINER_RUN);
+  if (parts.every((part) => part === "")) {
+    // Nothing survives normalization. Emitting the optional joiner class alone
+    // would match the empty string, i.e. every message.
+    return "";
+  }
+  return parts.map(escapeRegExp).join(`[${JOINER_CHARS}]*`);
 }
 
+// Decoration between word runs (emoji, flags, symbols, punctuation) may be
+// typed as shown, replaced by whitespace, or omitted. Only code points the
+// name itself carries are accepted, so matching and stripping never consume
+// unrelated punctuation adjacent to a mention.
 function decorationClassBody(gap: string): string {
   const bodies = new Set<string>();
   for (const char of gap) {
@@ -122,12 +122,14 @@ function deriveNameParts(name: string): DerivedNameParts {
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
   const name = normalizeOptionalString(identity?.name);
-  if (name) {
-    patterns.push(wrapDerivedMentionPattern(deriveNameParts(name)));
+  const parts = name ? deriveNameParts(name) : undefined;
+  if (parts?.core) {
+    patterns.push(wrapDerivedMentionPattern(parts));
   }
   const emoji = normalizeOptionalString(identity?.emoji);
-  if (emoji) {
-    patterns.push(escapeJoinerTolerantLiteral(emoji));
+  const emojiPattern = emoji ? escapeJoinerTolerantLiteral(emoji) : "";
+  if (emojiPattern) {
+    patterns.push(emojiPattern);
   }
   return patterns;
 }

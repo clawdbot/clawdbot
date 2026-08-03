@@ -265,6 +265,29 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("clawd status", regexes)).toBe(true);
   });
 
+  it("derives no pattern from an identity that normalization empties", () => {
+    // Joiners do not survive normalization, so an identity made only of them
+    // has nothing left to require: an optional-joiner pattern on its own would
+    // match the empty string, and with it every message.
+    const regexes = buildMentionRegexes(configForName("\u200D"), "decorated-agent");
+
+    expect(regexes).toHaveLength(0);
+    expect(matchesMentionPatterns("hello!", regexes)).toBe(false);
+  });
+
+  it("keeps a joiner-only identity emoji from matching everything", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "decorated-agent", identity: { name: "Clawd", emoji: "\u200D" } }],
+      },
+    } satisfies OpenClawConfig;
+    const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+    expect(regexes).toHaveLength(1);
+    expect(matchesMentionPatterns("hello!", regexes)).toBe(false);
+    expect(matchesMentionPatterns("clawd hello", regexes)).toBe(true);
+  });
+
   it("never requires a bare variation selector as the identity token", () => {
     // "❤️" is U+2764 plus the selector: the selector is a mark, but on its own it
     // is presentation. Deriving it as the required token would match every
