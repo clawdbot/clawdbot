@@ -2688,6 +2688,44 @@ describe("qa mock openai server", () => {
     expect(outputText(payload)).toBe(expected);
   });
 
+  it("holds a runtime terminal worker until the parent post-spawn response is sent", async () => {
+    const server = await startMockServer();
+    const childResponse = postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      instructions: "Runtime: embedded | sessionId=qa-terminal-child",
+      input: [makeUserInput("Subagent terminal reply QA worker: visible.")],
+    });
+    let childSettled = false;
+    void childResponse.then(() => {
+      childSettled = true;
+    });
+
+    await expect
+      .poll(async () => {
+        const inflight = await getJson<unknown[]>(server, "/debug/inflight-requests");
+        return inflight.length;
+      })
+      .toBe(1);
+    expect(childSettled).toBe(false);
+
+    const parent = await expectNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      instructions: "Runtime: embedded | sessionId=qa-terminal-parent",
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput("Subagent terminal reply QA check: visible."),
+        makeToolOutputWithCallId(
+          "call_mock_sessions_spawn_1",
+          JSON.stringify({ status: "accepted", runId: "run-visible" }),
+        ),
+      ],
+    });
+    expect(outputText(parent)).toBe("NO_REPLY");
+
+    const child = await (await expectOk(childResponse)).json();
+    expect(outputText(child)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
+  });
+
   it("keeps the empty terminal worker empty across retry prompts", async () => {
     const server = await startMockServer();
     const payload = await expectNonStreamingResponsesJson(server, {

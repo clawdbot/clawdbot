@@ -64,7 +64,6 @@ import {
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
   QA_SUBAGENT_TERMINAL_MARKERS,
   QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
-  QA_SUBAGENT_TERMINAL_WORKER_DELAY_MS,
   QA_NATIVE_STOP_DELAY_PROMPT_RE,
   QA_NATIVE_STOP_DELAY_MS,
   QA_IMAGE_GENERATION_PROMPT_RE,
@@ -468,9 +467,53 @@ function extractScenarioPlannedTool(events: StreamEvent[]) {
     : { name: wireName, args: wireArgs, wireName };
 }
 
+type TerminalRequesterSettleGate = {
+  markSettled: (caseName: string) => void;
+  waitUntilSettled: (caseName: string) => Promise<void>;
+};
+
+function createTerminalRequesterSettleGate(): TerminalRequesterSettleGate {
+  const settled = new Set<string>();
+  const waiters = new Map<string, Set<() => void>>();
+  return {
+    markSettled(caseName) {
+      settled.add(caseName);
+      for (const resolve of waiters.get(caseName) ?? []) {
+        resolve();
+      }
+      waiters.delete(caseName);
+    },
+    async waitUntilSettled(caseName) {
+      if (settled.has(caseName)) {
+        return;
+      }
+      await new Promise<void>((resolve, reject) => {
+        const listeners = waiters.get(caseName) ?? new Set<() => void>();
+        const timeout = setTimeout(() => {
+          listeners.delete(finish);
+          reject(new Error(`terminal requester did not settle: ${caseName}`));
+        }, 30_000);
+        const finish = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
+        listeners.add(finish);
+        waiters.set(caseName, listeners);
+      });
+    },
+  };
+}
+
+function isQaRuntimeSessionRequest(input: ResponsesInputItem[], body: Record<string, unknown>) {
+  return /\bRuntime:\s*[^\n]*\bsessionId=[^\s|]+/u.test(extractAllRequestTexts(input, body));
+}
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
+  options: {
+    waitForTerminalRequesterSettled?: (caseName: string) => Promise<void>;
+  } = {},
 ) {
   const providerVariant = resolveProviderVariant(
     typeof body.model === "string" ? body.model : undefined,
@@ -778,7 +821,9 @@ async function buildResponsesPayload(
     .at(-1)?.[1]
     ?.toLowerCase();
   if (terminalWorkerCase) {
-    await sleep(QA_SUBAGENT_TERMINAL_WORKER_DELAY_MS);
+    if (options.waitForTerminalRequesterSettled && isQaRuntimeSessionRequest(input, body)) {
+      await options.waitForTerminalRequesterSettled(terminalWorkerCase);
+    }
   }
   if (terminalWorkerCase === "silent") {
     return buildAssistantEvents("NO_REPLY");
@@ -1931,6 +1976,7 @@ export async function startQaMockOpenAiServer(params?: {
 }) {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
+  const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
   const scenarioStates = new Map<string, MockScenarioState>();
   const scenarioStateFor = (body: Record<string, unknown>): MockScenarioState => {
     const input = Array.isArray(body.input)
@@ -1989,12 +2035,26 @@ export async function startQaMockOpenAiServer(params?: {
     inflightRequests.set(inflightRequestId, { prompt, allInputText });
     let events: StreamEvent[];
     try {
-      events = await buildResponsesPayload(request.body, scenarioStateFor(request.body));
+      events = await buildResponsesPayload(request.body, scenarioStateFor(request.body), {
+        waitForTerminalRequesterSettled: terminalRequesterSettleGate.waitUntilSettled,
+      });
     } finally {
       inflightRequests.delete(inflightRequestId);
     }
     const resolvedModel = typeof request.body.model === "string" ? request.body.model : "";
     const plannedTool = extractScenarioPlannedTool(events);
+    const terminalRequesterCase = extractLastMatchingUserTurn(
+      input,
+      QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
+    )
+      ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
+      ?.toLowerCase();
+    const settledTerminalRequesterCase =
+      terminalRequesterCase &&
+      hasToolOutput(input) &&
+      isQaRuntimeSessionRequest(input, request.body)
+        ? terminalRequesterCase
+        : undefined;
     recordRequest({
       raw: request.raw,
       body: request.body,
@@ -2016,6 +2076,12 @@ export async function startQaMockOpenAiServer(params?: {
     });
     return {
       events,
+      ...(settledTerminalRequesterCase
+        ? {
+            onResponseSent: () =>
+              terminalRequesterSettleGate.markSettled(settledTerminalRequesterCase),
+          }
+        : {}),
       ...(QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
         ? {
             failure: {
@@ -2189,6 +2255,7 @@ export async function startQaMockOpenAiServer(params?: {
             return;
           }
           writeJson(res, 200, completion.response);
+          dispatched.onResponseSent?.();
           return;
         }
         if (dispatched.previewPauseMs !== undefined) {
@@ -2196,6 +2263,7 @@ export async function startQaMockOpenAiServer(params?: {
         } else {
           writeSse(res, events);
         }
+        dispatched.onResponseSent?.();
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/messages") {
