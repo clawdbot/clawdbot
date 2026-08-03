@@ -38,6 +38,7 @@ import type {
   ProviderCatalogContext,
   ProviderAuthResult,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderNonInteractiveApiKeyResult,
 } from "./types.js";
 
 export {
@@ -508,14 +509,20 @@ function buildMissingNonInteractiveModelIdMessage(params: {
   ].join("\n");
 }
 
-function isProviderOwnedSyntheticAuthMarker(providerId: string, value: string): boolean {
-  if (!isNonSecretApiKeyMarker(value, { includeEnvVarName: false })) {
+function isProviderOwnedSyntheticAuthMarker(
+  providerId: string,
+  resolved: ProviderNonInteractiveApiKeyResult,
+): boolean {
+  if (
+    resolved.source !== "flag" ||
+    !isNonSecretApiKeyMarker(resolved.key, { includeEnvVarName: false })
+  ) {
     return false;
   }
   const normalizedProvider = normalizeProviderId(providerId);
   const matchesProvider = (provider: string) =>
     normalizeProviderId(provider) === normalizedProvider;
-  const normalizedValue = value.trim();
+  const normalizedValue = resolved.key.trim();
   // A marker is only a keyless capability when its provider's own plugin declares it.
   return listOpenClawPluginManifestMetadata().some(
     ({ origin, manifest }) =>
@@ -566,9 +573,7 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
     return null;
   }
 
-  const usesSyntheticAuthMarker =
-    resolved.source === "flag" &&
-    isProviderOwnedSyntheticAuthMarker(params.providerId, resolved.key);
+  const usesSyntheticAuthMarker = isProviderOwnedSyntheticAuthMarker(params.providerId, resolved);
   const storesCredential = !usesSyntheticAuthMarker && resolved.source !== "profile";
   const configured = buildOpenAICompatibleSelfHostedProviderConfig({
     cfg: params.ctx.config,
