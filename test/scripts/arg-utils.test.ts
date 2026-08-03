@@ -4,11 +4,22 @@ import {
   booleanFlag,
   intFlag,
   parseFlagArgs,
+  readFlagValue,
   stringFlag,
   stringListFlag,
 } from "../../scripts/lib/arg-utils.mjs";
 
 describe("scripts/lib/arg-utils parseFlagArgs", () => {
+  it("uses the last value when a flag is repeated", () => {
+    expect(readFlagValue(["-p", "first.json", "-p", "second.json"], "-p")).toBe("second.json");
+    expect(
+      readFlagValue(
+        ["--tsBuildInfoFile=first.tsbuildinfo", "--tsBuildInfoFile", "second.tsbuildinfo"],
+        "--tsBuildInfoFile",
+      ),
+    ).toBe("second.tsbuildinfo");
+  });
+
   it("ignores the conventional option separator by default", () => {
     const parsed = parseFlagArgs(["--", "--limit", "30"], { limit: 10 }, [
       intFlag("--limit", "limit", { min: 1 }),
