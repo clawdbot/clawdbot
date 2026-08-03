@@ -214,6 +214,20 @@ function assertPluginScopedSessionOwnerTransition(params: {
   }
 }
 
+function assertPluginScopedNewSessionOwner(params: {
+  callerPluginId: string;
+  publicEntry: SessionEntry;
+  sessionKey: string;
+}): void {
+  const nextPluginOwnerId = normalizeOptionalString(params.publicEntry.pluginOwnerId);
+  if (!nextPluginOwnerId || nextPluginOwnerId === params.callerPluginId) {
+    return;
+  }
+  throw new Error(
+    `Plugin "${params.callerPluginId}" cannot add session "${params.sessionKey}" because it declares plugin owner "${nextPluginOwnerId}".`,
+  );
+}
+
 function assertPluginScopedSessionStoreMutationOwners(params: {
   internalStore: Record<string, InternalSessionEntry>;
   publicStore: Record<string, SessionEntry>;
@@ -239,6 +253,12 @@ function assertPluginScopedSessionStoreMutationOwners(params: {
         sessionKey,
       });
     }
+  }
+  for (const [sessionKey, publicEntry] of Object.entries(params.publicStore)) {
+    if (Object.hasOwn(params.internalStore, sessionKey)) {
+      continue;
+    }
+    assertPluginScopedNewSessionOwner({ callerPluginId, publicEntry, sessionKey });
   }
 }
 

@@ -15,6 +15,10 @@ export type ProvisionalSessionDeletionOutcome = "deleted" | "not_deleted" | "ind
 type GatewayCall = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
 type ProvisionalSessionCleanupProof = "missing" | "original" | "replacement";
 type SessionCleanupOutcome = "deleted" | "changed" | "failed";
+type SessionCleanupResult = {
+  deleteDispatchedAt?: number;
+  outcome: SessionCleanupOutcome;
+};
 
 type WaitForSessionDeletionOptions =
   | boolean
@@ -204,13 +208,14 @@ export async function retrySubagentCleanup(
 async function requestProvisionalSessionCleanup(
   childSessionKey: string,
   options?: SessionCleanupOptions,
-): Promise<SessionCleanupOutcome> {
+): Promise<SessionCleanupResult> {
   const expectedIdentity = normalizeCleanupOptionsIdentity(options);
   const expectedSessionId = expectedIdentity?.expectedSessionId;
   const expectedLifecycleRevision = expectedIdentity?.expectedLifecycleRevision;
   if (!expectedSessionId || !expectedLifecycleRevision) {
-    return "failed";
+    return { outcome: "failed" };
   }
+  const deleteDispatchedAt = Date.now();
   try {
     await (options?.callGateway ?? callSubagentGateway)({
       method: "sessions.delete",
@@ -226,12 +231,12 @@ async function requestProvisionalSessionCleanup(
       },
       timeoutMs: options?.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
     });
-    return "deleted";
+    return { deleteDispatchedAt, outcome: "deleted" };
   } catch (error) {
     if (isSessionLifecycleChangedGatewayError(error)) {
-      return "changed";
+      return { deleteDispatchedAt, outcome: "changed" };
     }
-    return "failed";
+    return { deleteDispatchedAt, outcome: "failed" };
   }
 }
 
@@ -239,7 +244,7 @@ export async function cleanupProvisionalSession(
   childSessionKey: string,
   options?: SessionCleanupOptions,
 ): Promise<boolean> {
-  return (await requestProvisionalSessionCleanup(childSessionKey, options)) === "deleted";
+  return (await requestProvisionalSessionCleanup(childSessionKey, options)).outcome === "deleted";
 }
 
 function normalizeSessionDeletionWaitOptions(options?: WaitForSessionDeletionOptions): {
@@ -270,8 +275,12 @@ async function deleteProvisionalSessionWithBound(params: {
   childSessionKey: string;
   cleanupOptions?: SessionCleanupOptions;
   waitOptions: ReturnType<typeof normalizeSessionDeletionWaitOptions>;
-}): Promise<ProvisionalSessionDeletionOutcome> {
+}): Promise<{
+  deleteDispatchedAt?: number;
+  outcome: ProvisionalSessionDeletionOutcome;
+}> {
   const startedAt = Date.now();
+  let deleteDispatchedAt: number | undefined;
   for (let attempts = 1; attempts <= params.waitOptions.maxAttempts; attempts += 1) {
     const elapsedMs = Date.now() - startedAt;
     const remainingElapsedMs = params.waitOptions.maxElapsedMs - elapsedMs;
@@ -282,28 +291,41 @@ async function deleteProvisionalSessionWithBound(params: {
         params.waitOptions.maxElapsedMs === 0 ? 1 : Math.max(1, remainingElapsedMs),
       ),
     );
-    const outcome = await requestProvisionalSessionCleanup(params.childSessionKey, {
+    const result = await requestProvisionalSessionCleanup(params.childSessionKey, {
       ...params.cleanupOptions,
       timeoutMs: attemptTimeoutMs,
     });
-    if (outcome === "deleted") {
-      return "deleted";
+    deleteDispatchedAt ??= result.deleteDispatchedAt;
+    if (result.outcome === "deleted") {
+      return {
+        ...(deleteDispatchedAt !== undefined ? { deleteDispatchedAt } : {}),
+        outcome: "deleted",
+      };
     }
-    if (outcome === "changed") {
-      return "not_deleted";
+    if (result.outcome === "changed") {
+      return {
+        ...(deleteDispatchedAt !== undefined ? { deleteDispatchedAt } : {}),
+        outcome: "not_deleted",
+      };
     }
     if (
       attempts >= params.waitOptions.maxAttempts ||
       Date.now() - startedAt >= params.waitOptions.maxElapsedMs
     ) {
-      return "indeterminate";
+      return {
+        ...(deleteDispatchedAt !== undefined ? { deleteDispatchedAt } : {}),
+        outcome: "indeterminate",
+      };
     }
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, params.waitOptions.retryDelayMs);
       timer.unref?.();
     });
   }
-  return "indeterminate";
+  return {
+    ...(deleteDispatchedAt !== undefined ? { deleteDispatchedAt } : {}),
+    outcome: "indeterminate",
+  };
 }
 
 export async function cleanupFailedSpawnBeforeAgentStart(params: {
@@ -318,6 +340,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   waitForSessionDeletion?: WaitForSessionDeletionOptions;
 }): Promise<{
   attachmentsRemoved: boolean;
+  sessionDeleteDispatchedAt?: number;
   sessionDeleted: boolean;
   sessionDeletion: ProvisionalSessionDeletionOutcome;
 }> {
@@ -345,19 +368,27 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
     attachmentsRemoved = await removeAttachments();
   }
   let sessionDeletion: ProvisionalSessionDeletionOutcome;
+  let sessionDeleteDispatchedAt: number | undefined;
   if (waitOptions.enabled) {
-    sessionDeletion = await deleteProvisionalSessionWithBound({
+    const deletionResult = await deleteProvisionalSessionWithBound({
       childSessionKey: params.childSessionKey,
       cleanupOptions: sessionCleanupOptions,
       waitOptions,
     });
+    sessionDeletion = deletionResult.outcome;
+    sessionDeleteDispatchedAt = deletionResult.deleteDispatchedAt;
   } else {
-    const outcome = await requestProvisionalSessionCleanup(
+    const deletionResult = await requestProvisionalSessionCleanup(
       params.childSessionKey,
       sessionCleanupOptions,
     );
+    sessionDeleteDispatchedAt = deletionResult.deleteDispatchedAt;
     sessionDeletion =
-      outcome === "deleted" ? "deleted" : outcome === "changed" ? "not_deleted" : "not_deleted";
+      deletionResult.outcome === "deleted"
+        ? "deleted"
+        : deletionResult.outcome === "changed"
+          ? "not_deleted"
+          : "not_deleted";
   }
   const sessionDeleted = sessionDeletion === "deleted";
   if (guardedDeletion) {
@@ -365,6 +396,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   }
   return {
     attachmentsRemoved,
+    ...(sessionDeleteDispatchedAt !== undefined ? { sessionDeleteDispatchedAt } : {}),
     sessionDeleted,
     sessionDeletion,
   };
@@ -401,6 +433,6 @@ export async function terminateAcceptedCollectorRun(params: {
       timeoutMs,
     });
     // A changed lifecycle proves the accepted run no longer owns this session.
-    return cleanup !== "failed";
+    return cleanup.outcome !== "failed";
   });
 }

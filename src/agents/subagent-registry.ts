@@ -501,6 +501,7 @@ export function quarantineFailedSubagentSpawn(params: {
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
   createdAt?: number;
+  deleteCleanupDispatchedAt?: number | undefined;
 }): "recorded" | "existing" {
   const runId = params.runId.trim();
   const childSessionKey = params.childSessionKey.trim();
@@ -560,6 +561,9 @@ export function quarantineFailedSubagentSpawn(params: {
     },
     completion: { required: false },
     delivery: { status: "not_required" },
+    ...(params.deleteCleanupDispatchedAt !== undefined
+      ? { deleteCleanupDispatchedAt: params.deleteCleanupDispatchedAt }
+      : {}),
     spawnFailureCleanup: {
       status: "pending",
       reason: params.reason,

@@ -218,4 +218,54 @@ describe("session-store-runtime plugin owner scope", () => {
     });
     expect(getSessionEntry({ sessionKey, storePath })?.pluginOwnerId).toBeUndefined();
   });
+
+  it("allows deprecated whole-store inserts owned by the caller", async () => {
+    const ownedSessionKey = "agent:main:caller-whole-store-insert";
+    const unownedSessionKey = "agent:main:unowned-whole-store-insert";
+
+    await expect(
+      withPluginRuntimePluginIdScope("memory-core", () =>
+        updateSessionStore(storePath, (store) => {
+          store[ownedSessionKey] = {
+            label: "caller-owned insert",
+            pluginOwnerId: "memory-core",
+            sessionId: "caller-owned-insert-session",
+            updatedAt: 20,
+          };
+          store[unownedSessionKey] = {
+            label: "unowned insert",
+            sessionId: "unowned-insert-session",
+            updatedAt: 21,
+          };
+          return {
+            ownedPluginOwnerId: store[ownedSessionKey]?.pluginOwnerId,
+            unownedPluginOwnerId: store[unownedSessionKey]?.pluginOwnerId,
+          };
+        }),
+      ),
+    ).resolves.toEqual({
+      ownedPluginOwnerId: "memory-core",
+      unownedPluginOwnerId: undefined,
+    });
+  });
+
+  it("rejects deprecated whole-store inserts that claim another plugin owner", async () => {
+    const sessionKey = "agent:main:foreign-whole-store-insert";
+
+    await expect(
+      withPluginRuntimePluginIdScope("memory-core", () =>
+        updateSessionStore(storePath, (store) => {
+          store[sessionKey] = {
+            label: "foreign insert",
+            pluginOwnerId: "other-plugin",
+            sessionId: "foreign-insert-session",
+            updatedAt: 20,
+          };
+        }),
+      ),
+    ).rejects.toThrow(
+      `Plugin "memory-core" cannot add session "${sessionKey}" because it declares plugin owner "other-plugin".`,
+    );
+    expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  });
 });

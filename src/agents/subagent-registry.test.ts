@@ -951,6 +951,64 @@ describe("subagent registry seam flow", () => {
     );
   });
 
+  it("preserves failed-spawn lifecycle delete events after an indeterminate committed delete", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-spawn-committed-delete-timeout-child";
+    const runId = "failed-spawn-committed-delete-timeout-run";
+    const sessionIdentity = {
+      expectedSessionId: "committed-delete-timeout-session",
+      expectedLifecycleRevision: "committed-delete-timeout-lifecycle",
+    };
+    const deleteCleanupDispatchedAt = Date.now() - 1_000;
+    mocks.loadSessionStore.mockReturnValue({});
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": new Error("must not re-delete after committed absence proof"),
+    });
+
+    expect(
+      mod.quarantineFailedSubagentSpawn({
+        runId,
+        childSessionKey,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterAgentId: "main",
+        task: "failed spawn with committed delete timeout",
+        cleanup: "delete",
+        agentId: "worker",
+        reason: "ambiguous dispatch failure",
+        sessionIdentity,
+        deleteCleanupDispatchedAt,
+      }),
+    ).toBe("recorded");
+
+    await mod.testing.sweepOnceForTests();
+
+    const entry = expectDefined(mod.getSubagentRunByRunId(runId), "deleted quarantine run");
+    expect(entry).toMatchObject({
+      cleanupHandled: true,
+      deleteCleanupDispatchedAt,
+      spawnFailureCleanup: {
+        status: "deleted",
+        sessionDeletion: "indeterminate",
+        sessionIdentity,
+        attempts: 0,
+        lastError: null,
+      },
+    });
+    expect(entry.execution.endedAt).toBeTypeOf("number");
+    expect(entry.cleanupCompletedAt).toBe(entry.execution.endedAt);
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
+    ).toHaveLength(0);
+    expect(mocks.emitSessionLifecycleEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: childSessionKey,
+        reason: "delete",
+        parentSessionKey: "agent:main:main",
+      }),
+    );
+  });
+
   it("preserves failed-spawn quarantine when session inspection throws before true absence", async () => {
     const childSessionKey = "agent:worker:subagent:failed-spawn-inspection-throws-child";
     const runId = "failed-spawn-inspection-throws-run";

@@ -7,7 +7,6 @@ import {
   quarantineFailedSubagentSpawn,
 } from "./subagent-registry.js";
 import type { SubagentProgressOrigin } from "./subagent-registry.types.js";
-import type { SubagentSpawnAdmissionSlot } from "./subagent-spawn-admission.js";
 import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import {
   cleanupProvisionalSession,
@@ -27,7 +26,10 @@ const RETAINED_FAILED_SPAWN_ADMISSION_RETRY_MS = 1_000;
 const RETAINED_FAILED_SPAWN_ADMISSION_MAX_ATTEMPTS = 30;
 
 type RetainedFailedSpawnAdmissionStatus = "retrying" | "retained";
-type RetainableAdmissionSlot = Pick<SubagentSpawnAdmissionSlot, "id" | "release">;
+type RetainableAdmissionSlot = {
+  id: string;
+  release: () => void;
+};
 
 type RetainedFailedSpawnAdmission = {
   slot: RetainableAdmissionSlot;
@@ -244,6 +246,7 @@ function recordIndeterminateFailedSubagentSpawn(
     attachmentsDir?: string | undefined;
     attachmentsRootDir?: string | undefined;
     retainAttachmentsOnKeep?: boolean | undefined;
+    deleteCleanupDispatchedAt?: number | undefined;
     createdAt?: number | undefined;
   },
 ): boolean {
@@ -288,6 +291,7 @@ export function recordSpawnPipelineIndeterminateFailedSubagentSpawn(
     attachmentsDir?: string;
     attachmentsRootDir?: string;
     retainAttachmentsOnKeep?: boolean;
+    deleteCleanupDispatchedAt?: number | undefined;
     createdAt?: number;
   },
 ): boolean {
@@ -316,6 +320,9 @@ export function recordSpawnPipelineIndeterminateFailedSubagentSpawn(
     ...(params.attachmentsRootDir ? { attachmentsRootDir: params.attachmentsRootDir } : {}),
     ...(params.retainAttachmentsOnKeep !== undefined
       ? { retainAttachmentsOnKeep: params.retainAttachmentsOnKeep }
+      : {}),
+    ...(params.deleteCleanupDispatchedAt !== undefined
+      ? { deleteCleanupDispatchedAt: params.deleteCleanupDispatchedAt }
       : {}),
     ...(params.createdAt !== undefined ? { createdAt: params.createdAt } : {}),
   });

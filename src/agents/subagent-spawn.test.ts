@@ -5,7 +5,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { readReservedSubagentClaimToken } from "./reserved-subagent-admission.js";
-import { resetSubagentSpawnAdmissionForTests } from "./subagent-spawn-admission.js";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
@@ -312,7 +311,6 @@ describe("spawnSubagentDirect seam flow", () => {
   beforeEach(() => {
     swarmSchedulerTesting.reset();
     spawnFailureQuarantine.resetRetainedFailedSpawnAdmissionsForTests();
-    resetSubagentSpawnAdmissionForTests();
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     hoisted.loadSessionStoreMock.mockReset();
@@ -2804,7 +2802,10 @@ describe("spawnSubagentDirect seam flow", () => {
       requireRecord(result.reservedCleanup).sessionIdentity,
     );
     expect(hoisted.quarantineFailedSubagentSpawnMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionIdentity: capturedSessionIdentity }),
+      expect.objectContaining({
+        deleteCleanupDispatchedAt: expect.any(Number),
+        sessionIdentity: capturedSessionIdentity,
+      }),
     );
     const sessionDeleteCalls = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.filter(
       ([method]) => method === "sessions.delete",

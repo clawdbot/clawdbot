@@ -298,6 +298,7 @@ async function persistSqliteParentForkSkipPatch(params: {
   patch: Partial<SessionEntry> | null | undefined;
   resolved: ResolvedSqliteScope;
 }): Promise<SessionEntry> {
+  assertExpectedChildForkIdentity(params.entry, params.params);
   if (!params.patch) {
     return cloneSessionEntry(params.entry);
   }

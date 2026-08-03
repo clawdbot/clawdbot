@@ -109,6 +109,19 @@ function isSameSessionGeneration(
     left &&
     right &&
     left.sessionId === right.sessionId &&
+    Object.hasOwn(left, "lifecycleRevision") === Object.hasOwn(right, "lifecycleRevision") &&
+    left.lifecycleRevision === right.lifecycleRevision,
+  );
+}
+
+function hasSameLifecycleRevisionField(
+  left: SessionEntry | undefined,
+  right: SessionEntry | undefined,
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    Object.hasOwn(left, "lifecycleRevision") === Object.hasOwn(right, "lifecycleRevision") &&
     left.lifecycleRevision === right.lifecycleRevision,
   );
 }
@@ -223,13 +236,14 @@ export async function admitFollowupTurn(params: {
       (admittedEntry === undefined && initialEntry?.sessionId === operation.sessionId
         ? initialEntry
         : undefined);
+    const initialMatchingEntry =
+      initialEntry?.sessionId === operation.sessionId ? initialEntry : undefined;
     const lifecycleRevisionChanged =
       operation.sessionId === params.queued.run.sessionId &&
       activeEntry?.sessionId === operation.sessionId &&
-      activeEntry.lifecycleRevision !==
-        (initialEntry?.sessionId === operation.sessionId
-          ? initialEntry.lifecycleRevision
-          : undefined);
+      (initialMatchingEntry
+        ? !hasSameLifecycleRevisionField(activeEntry, initialMatchingEntry)
+        : Object.hasOwn(activeEntry, "lifecycleRevision"));
     if (activeEntry?.sessionId === operation.sessionId) {
       run = {
         ...run,

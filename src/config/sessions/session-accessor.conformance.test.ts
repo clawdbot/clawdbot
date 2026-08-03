@@ -1454,6 +1454,113 @@ describe("sqlite session normalization", () => {
     expect(result.decision?.parentTokens).toBeGreaterThan(100_000);
   });
 
+  it("validates child identity when skipForkWhen skips without a patch", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const parentKey = "agent:main:parent-skip-identity";
+    const childKey = "agent:main:subagent:child-skip-identity";
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env,
+        sessionKey: parentKey,
+        storePath: paths.sqlitePath,
+      },
+      {
+        sessionId: "parent-skip-identity-session",
+        updatedAt: 10,
+      },
+    );
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env,
+        sessionKey: childKey,
+        storePath: paths.sqlitePath,
+      },
+      {
+        lifecycleRevision: "child-skip-identity-revision",
+        sessionId: "child-skip-identity-session",
+        updatedAt: 20,
+      },
+    );
+
+    await expect(
+      forkSqliteSessionEntryFromParentTarget({
+        expectedLifecycleRevision: "child-skip-identity-revision",
+        expectedSessionId: "replacement-child-session",
+        expectedUpdatedAt: 20,
+        fallbackEntry: { sessionId: "fallback-session", updatedAt: 1 },
+        parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+        sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+        skipForkWhen: () => true,
+        storePath: paths.sqlitePath,
+      }),
+    ).rejects.toThrow("child session identity changed while preparing forked context");
+  });
+
+  it("validates child identity when decision-skip returns without a patch", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const parentKey = "agent:main:parent-decision-skip-identity";
+    const childKey = "agent:main:subagent:child-decision-skip-identity";
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env,
+        sessionKey: parentKey,
+        storePath: paths.sqlitePath,
+      },
+      {
+        sessionId: "parent-decision-skip-identity-session",
+        totalTokens: 1,
+        totalTokensFresh: false,
+        updatedAt: 10,
+      },
+    );
+    await replaceSqliteTranscriptEvents(
+      {
+        agentId: "main",
+        env,
+        sessionId: "parent-decision-skip-identity-session",
+        sessionKey: parentKey,
+        storePath: paths.sqlitePath,
+      },
+      [
+        { type: "session", id: "parent-decision-skip-identity-session", cwd: paths.tempDir },
+        {
+          type: "message",
+          id: "oversized-parent-for-skip-identity",
+          parentId: null,
+          message: { role: "user", content: "x".repeat(420_000) },
+        },
+      ],
+    );
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env,
+        sessionKey: childKey,
+        storePath: paths.sqlitePath,
+      },
+      {
+        lifecycleRevision: "child-decision-skip-identity-revision",
+        sessionId: "child-decision-skip-identity-session",
+        updatedAt: 20,
+      },
+    );
+
+    await expect(
+      forkSqliteSessionEntryFromParentTarget({
+        expectedLifecycleRevision: "child-decision-skip-identity-revision",
+        expectedSessionId: "replacement-decision-skip-child-session",
+        expectedUpdatedAt: 20,
+        fallbackEntry: { sessionId: "fallback-session", updatedAt: 1 },
+        parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+        sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+        storePath: paths.sqlitePath,
+      }),
+    ).rejects.toThrow("child session identity changed while preparing forked context");
+  });
+
   it("does not move current nodes back to stale transcript session ids", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const scope = {

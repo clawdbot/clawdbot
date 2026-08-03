@@ -26,6 +26,11 @@ export function createReplySessionEntryHandle(params: {
   const { generationFence, sessionKey, sessionStore } = params;
   const entries = sessionStore ?? {};
   let ownedSessionId = generationFence?.sessionId;
+  let ownedLifecycleRevisionPresent = Boolean(
+    params.sessionEntry &&
+    params.sessionEntry.sessionId === ownedSessionId &&
+    Object.hasOwn(params.sessionEntry, "lifecycleRevision"),
+  );
   let ownedLifecycleRevision =
     params.sessionEntry && params.sessionEntry.sessionId === ownedSessionId
       ? params.sessionEntry.lifecycleRevision
@@ -33,7 +38,9 @@ export function createReplySessionEntryHandle(params: {
   const matchesGeneration = (entry: SessionEntry | undefined): entry is SessionEntry =>
     entry !== undefined &&
     (!generationFence ||
-      (entry.sessionId === ownedSessionId && entry.lifecycleRevision === ownedLifecycleRevision));
+      (entry.sessionId === ownedSessionId &&
+        Object.hasOwn(entry, "lifecycleRevision") === ownedLifecycleRevisionPresent &&
+        entry.lifecycleRevision === ownedLifecycleRevision));
   let currentEntry = matchesGeneration(params.sessionEntry) ? params.sessionEntry : undefined;
 
   if (sessionKey && currentEntry) {
@@ -76,6 +83,8 @@ export function createReplySessionEntryHandle(params: {
       const storedMatchesAdopted = Boolean(
         storedEntry &&
         storedEntry.sessionId === entry.sessionId &&
+        Object.hasOwn(storedEntry, "lifecycleRevision") ===
+          Object.hasOwn(entry, "lifecycleRevision") &&
         storedEntry.lifecycleRevision === entry.lifecycleRevision,
       );
       if (
@@ -90,6 +99,7 @@ export function createReplySessionEntryHandle(params: {
         nextEntry = storedEntry;
       }
       ownedSessionId = nextEntry.sessionId;
+      ownedLifecycleRevisionPresent = Object.hasOwn(nextEntry, "lifecycleRevision");
       ownedLifecycleRevision = nextEntry.lifecycleRevision;
     } else if (!matchesGeneration(nextEntry)) {
       return;

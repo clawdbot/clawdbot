@@ -274,6 +274,36 @@ describe("admitFollowupTurn", () => {
     }
   });
 
+  it("clears queued generation facts when lifecycle revision field presence changes", async () => {
+    const operation = createOperation();
+    const queuedEntry: SessionEntry = {
+      sessionId: "queued-session",
+      lifecycleRevision: undefined,
+      updatedAt: 1,
+    };
+    const admittedEntry: SessionEntry = {
+      sessionId: "queued-session",
+      updatedAt: 2,
+    };
+    const sessionStore = { main: queuedEntry };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: admittedEntry });
+    state.loadEntry.mockReturnValue(admittedEntry);
+    const queued = createRun();
+    queued.run.cliSessionBindingFacts = { provider: "claude-cli" } as never;
+    queued.run.autoFallbackPrimaryProbe = { provider: "anthropic", model: "claude" } as never;
+
+    const result = await admitFollowupTurn({
+      queued,
+      defaults: createDefaults({ sessionEntry: queuedEntry, sessionStore }),
+    });
+
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      expect(result.turn.queued.run.cliSessionBindingFacts).toBeUndefined();
+      expect(result.turn.queued.run.autoFallbackPrimaryProbe).toBeUndefined();
+    }
+  });
+
   it("does not pass stale enqueue-time state into a rotated session generation", async () => {
     const operation = createOperation("rotated-session");
     const staleEntry: SessionEntry = {
@@ -409,6 +439,30 @@ describe("admitFollowupTurn", () => {
     }
   });
 
+  it("restores the item when persisted lifecycle revision presence changes after admission", async () => {
+    const operation = createOperation();
+    const initialEntry: SessionEntry = {
+      sessionId: "queued-session",
+      updatedAt: 1,
+    };
+    const replacementEntry: SessionEntry = {
+      ...initialEntry,
+      lifecycleRevision: undefined,
+      updatedAt: 2,
+    };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: initialEntry });
+    state.loadEntry.mockReturnValue(replacementEntry);
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun(),
+        defaults: createDefaults({ sessionEntry: initialEntry, storePath: "/tmp/sessions.json" }),
+      }),
+    ).rejects.toThrow("Follow-up session generation changed after reply admission");
+    expect(operation.complete).toHaveBeenCalledOnce();
+    expect(state.preflight).not.toHaveBeenCalled();
+  });
+
   it("does not treat an absent admitted lifecycle revision as a wildcard", async () => {
     const operation = createOperation();
     const initialEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
@@ -427,6 +481,12 @@ describe("admitFollowupTurn", () => {
         ...initialEntry,
         lifecycleRevision: "replacement",
         updatedAt: 2,
+      };
+      expect(result.turn.session.current()).toBe(initialEntry);
+      sessionStore.main = {
+        ...initialEntry,
+        lifecycleRevision: undefined,
+        updatedAt: 3,
       };
       expect(result.turn.session.current()).toBe(initialEntry);
     }

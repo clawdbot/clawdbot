@@ -183,6 +183,7 @@ export async function spawnSubagentDirect(
     }
     let reservedFailureCleanupOutcome: ProvisionalSessionDeletionOutcome | undefined;
     let failureCleanupOutcome: ProvisionalSessionDeletionOutcome | undefined;
+    let failureCleanupDeleteDispatchedAt: number | undefined;
     const recordReservedCleanupOutcome = (outcome: ProvisionalSessionDeletionOutcome) => {
       failureCleanupOutcome = outcome;
       if (ctx.preallocatedRunId) {
@@ -236,6 +237,7 @@ export async function spawnSubagentDirect(
         waitForSessionDeletion: Boolean(admissionReservation),
       });
       recordReservedCleanupOutcome(cleanupResult.sessionDeletion);
+      failureCleanupDeleteDispatchedAt ??= cleanupResult.sessionDeleteDispatchedAt;
       return cleanupResult;
     };
     const withReservedCleanupResult = (result: SpawnSubagentResult): SpawnSubagentResult =>
@@ -546,6 +548,7 @@ export async function spawnSubagentDirect(
           waitForSessionDeletion: Boolean(admissionReservation),
         });
         recordReservedCleanupOutcome(cleanupResult.sessionDeletion);
+        failureCleanupDeleteDispatchedAt ??= cleanupResult.sessionDeleteDispatchedAt;
         retainAdmissionReservationAfterReturn = cleanupResult.sessionDeletion === "indeterminate";
       },
     };
@@ -630,6 +633,7 @@ export async function spawnSubagentDirect(
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
           retainAttachmentsOnKeep: retainOnSessionKeep,
+          deleteCleanupDispatchedAt: failureCleanupDeleteDispatchedAt,
           createdAt: provisionalSessionCreatedAt,
         });
         retainAdmissionReservationAfterReturn = !recorded;

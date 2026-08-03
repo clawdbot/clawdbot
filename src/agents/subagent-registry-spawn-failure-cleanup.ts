@@ -108,7 +108,11 @@ export async function reconcileSpawnFailureCleanup(
       cleanup.sessionIdentity,
     );
     if (cleanupProof === "missing") {
-      markSpawnFailureCleanupGone(params, "missing");
+      if (typeof entry.deleteCleanupDispatchedAt === "number") {
+        markSpawnFailureCleanupDeleted(params);
+      } else {
+        markSpawnFailureCleanupGone(params, "missing");
+      }
       params.warn(
         "failed-spawn cleanup found missing child session; released stale quarantine",
         cleanupWarnMeta,

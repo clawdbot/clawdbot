@@ -374,7 +374,6 @@ const config = {
     "src/agents/harness/registry.ts": ["exports"],
     // Focused reserved-spawn tests consume these reset/inspection seams; production code
     // reaches the lifecycle through the regular admission/quarantine calls.
-    "src/agents/subagent-spawn-admission.ts": ["exports"],
     "src/agents/subagent-spawn-failure-quarantine.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
     "src/plugins/compaction-provider.ts": ["exports"],
