@@ -78,6 +78,10 @@ type BoundedStringLog = string[] & {
 };
 
 type OpenClawTestChildProcess = Pick<OpenClawTestProcess, "kill" | "pid">;
+type OpenClawTestProcessReadiness = Pick<OpenClawTestProcess, "exitCode" | "signalCode"> & {
+  once: (event: "exit", listener: () => void) => unknown;
+  off: (event: "exit", listener: () => void) => unknown;
+};
 
 function createBoundedStringLog(): string[] {
   const log = [] as BoundedStringLog;
@@ -214,7 +218,7 @@ const getFreePort = async () => {
 };
 
 async function waitForGatewayReady(
-  proc: Pick<OpenClawTestProcess, "exitCode" | "signalCode" | "once" | "off">,
+  proc: OpenClawTestProcessReadiness,
   chunksOut: string[],
   chunksErr: string[],
   port: number,
