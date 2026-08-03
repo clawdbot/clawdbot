@@ -137,7 +137,11 @@ async function runGoogleVertexStreamResult(params: {
   return stream.result();
 }
 
-async function useGoogleAuthorizedUserCredentials(label: string, refreshToken: string) {
+async function useGoogleAuthorizedUserCredentials(
+  label: string,
+  refreshToken: string,
+  quotaProjectId?: string,
+) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), `openclaw-google-vertex-${label}-`));
   const credentialsPath = path.join(tempDir, "application_default_credentials.json");
   await writeFile(
@@ -147,6 +151,7 @@ async function useGoogleAuthorizedUserCredentials(label: string, refreshToken: s
       client_id: "client-id",
       client_secret: "client-secret",
       refresh_token: refreshToken,
+      ...(quotaProjectId ? { quota_project_id: quotaProjectId } : {}),
     }),
     "utf8",
   );
@@ -1469,6 +1474,37 @@ describe("google transport stream", () => {
     expect(tokenFetchMock).not.toHaveBeenCalled();
   });
 
+  it("never refreshes stale home ADC when the selected Cloud SDK directory has no credentials", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-stale-home-"));
+    const homeCredentialsDir = path.join(tempDir, "home", ".config", "gcloud");
+    await mkdir(homeCredentialsDir, { recursive: true });
+    await writeFile(
+      path.join(homeCredentialsDir, "application_default_credentials.json"),
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "stale-client",
+        client_secret: "stale-secret",
+        refresh_token: "stale-refresh",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("CLOUDSDK_CONFIG", path.join(tempDir, "missing-cloud-sdk"));
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", "");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("fixture-google-auth-token");
+    const tokenFetchMock = vi.fn();
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer fixture-google-auth-token",
+    });
+    expect(googleAuthMock).toHaveBeenCalledWith({
+      scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+      clientOptions: { transporterOptions: { timeout: 30_000 } },
+    });
+    expect(tokenFetchMock).not.toHaveBeenCalled();
+  });
+
   it("bounds Google Vertex ADC files before google-auth-library reads them", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-file-"));
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");
@@ -1592,6 +1628,97 @@ describe("google transport stream", () => {
     });
     expect(new Headers(guardedInit.headers).has("x-goog-api-key")).toBe(false);
   });
+
+  it.each([
+    {
+      scenario: "authorized-user ADC quota project",
+      credentialType: "authorized_user",
+      credentialQuotaProject: "fixture-json-billing",
+      envQuotaProject: "",
+      expectedQuotaProject: "fixture-json-billing",
+    },
+    {
+      scenario: "environment quota project overriding authorized-user ADC",
+      credentialType: "authorized_user",
+      credentialQuotaProject: "fixture-json-billing",
+      envQuotaProject: "fixture-env-billing",
+      expectedQuotaProject: "fixture-env-billing",
+    },
+    {
+      scenario: "google-auth service-account ADC quota project",
+      credentialType: "service_account",
+      credentialQuotaProject: "fixture-service-billing",
+      envQuotaProject: "",
+      expectedQuotaProject: "fixture-service-billing",
+    },
+    {
+      scenario: "google-auth metadata ADC environment quota project",
+      credentialType: "metadata",
+      credentialQuotaProject: "",
+      envQuotaProject: "fixture-metadata-billing",
+      expectedQuotaProject: "fixture-metadata-billing",
+    },
+  ])(
+    "forwards the $scenario on the actual Vertex request",
+    async ({ credentialType, credentialQuotaProject, envQuotaProject, expectedQuotaProject }) => {
+      const tokenFetchMock = vi.fn();
+      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "fixture-project");
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+      vi.stubEnv("GOOGLE_CLOUD_QUOTA_PROJECT", envQuotaProject);
+      if (credentialType === "authorized_user") {
+        await useGoogleAuthorizedUserCredentials(
+          "quota-authorized-user",
+          "fixture-refresh-token",
+          credentialQuotaProject,
+        );
+        tokenFetchMock.mockResolvedValueOnce(
+          new Response(JSON.stringify({ access_token: "fixture-vertex-token", expires_in: 3600 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      } else if (credentialType === "service_account") {
+        const tempDir = await mkdtemp(
+          path.join(os.tmpdir(), "openclaw-google-vertex-quota-service-"),
+        );
+        const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+        await writeFile(
+          credentialsPath,
+          JSON.stringify({
+            type: "service_account",
+            client_email: "fixture@example.invalid",
+            quota_project_id: credentialQuotaProject,
+          }),
+          "utf8",
+        );
+        vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+        googleAuthGetAccessTokenMock.mockResolvedValueOnce("fixture-vertex-token");
+      } else {
+        const tempDir = await mkdtemp(
+          path.join(os.tmpdir(), "openclaw-google-vertex-quota-metadata-"),
+        );
+        vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+        vi.stubEnv("HOME", path.join(tempDir, "home"));
+        vi.stubEnv("APPDATA", "");
+        googleAuthGetAccessTokenMock.mockResolvedValueOnce("fixture-vertex-token");
+      }
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+          },
+        ]),
+      );
+
+      await runGoogleVertexStreamResult({ fetch: tokenFetchMock });
+
+      const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+      expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
+        Authorization: "Bearer fixture-vertex-token",
+        "x-goog-user-project": expectedQuotaProject,
+      });
+    },
+  );
 
   it("strips redundant google provider prefixes from Google Vertex model paths", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-prefix-"));

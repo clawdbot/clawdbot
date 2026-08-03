@@ -19,17 +19,33 @@ type ResolvedLocalProviderAuthEvidence = {
   source: string;
 };
 
-function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string | undefined {
+function expandAuthEvidencePath(
+  rawPath: string,
+  env: NodeJS.ProcessEnv,
+): { path: string; explicitOverride: boolean } | undefined {
   const trimmed = rawPath.trim();
   if (!trimmed) {
     return undefined;
   }
-  const homeDir = normalizeOptionalPathInput(env.HOME) ?? os.homedir();
-  const appDataDir = normalizeOptionalPathInput(env.APPDATA);
-  if (trimmed.includes("${APPDATA}") && !appDataDir) {
-    return undefined;
-  }
-  return trimmed.replaceAll("${HOME}", homeDir).replaceAll("${APPDATA}", appDataDir ?? "");
+  let unresolvedPlaceholder = false;
+  let explicitOverride = false;
+  const expanded = trimmed.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/gu, (_match, name: string) => {
+    const value =
+      name === "HOME"
+        ? (normalizeOptionalPathInput(env.HOME) ?? os.homedir())
+        : normalizeOptionalPathInput(env[name]);
+    if (!value) {
+      unresolvedPlaceholder = true;
+      return "";
+    }
+    if (name !== "HOME" && name !== "APPDATA") {
+      explicitOverride = true;
+    }
+    return value;
+  });
+  return unresolvedPlaceholder || expanded.includes("${")
+    ? undefined
+    : { path: expanded, explicitOverride };
 }
 
 function hasRequiredAuthEvidenceEnv(
@@ -58,8 +74,15 @@ function hasLocalFileAuthEvidence(
   }
   for (const rawPath of evidence.fallbackPaths ?? []) {
     const expandedPath = expandAuthEvidencePath(rawPath, env);
-    if (expandedPath && fs.existsSync(expandedPath)) {
+    if (!expandedPath) {
+      continue;
+    }
+    if (fs.existsSync(expandedPath.path)) {
       return true;
+    }
+    // An explicit provider directory owns identity; never select stale platform credentials.
+    if (expandedPath.explicitOverride) {
+      return false;
     }
   }
   return false;
