@@ -555,11 +555,17 @@ export async function handleSlackAction(
       SLACK_REACTION_USER_LIMIT,
     );
     await assertReadTargetAllowed(channelId);
-    const reactions = await slackActionRuntime.listSlackReactions(channelId, messageId, {
-      ...readOpts,
-      limit,
+    const reactions = readOpts
+      ? await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts)
+      : await slackActionRuntime.listSlackReactions(channelId, messageId);
+    return jsonResult({
+      ok: true,
+      reactions: reactions?.map((reaction) =>
+        reaction.users
+          ? Object.assign({}, reaction, { users: reaction.users.slice(0, limit) })
+          : reaction,
+      ),
     });
-    return jsonResult({ ok: true, reactions });
   }
 
   if (messagingActions.has(action)) {

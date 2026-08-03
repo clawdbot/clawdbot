@@ -303,7 +303,7 @@ export async function removeOwnSlackReactions(
 export async function listSlackReactions(
   channelId: string,
   messageId: string,
-  opts: SlackActionClientOpts & { limit?: number } = {},
+  opts: SlackActionClientOpts = {},
 ): Promise<SlackMessageSummary["reactions"]> {
   const client = await getClient(opts);
   const result = await client.reactions.get({
@@ -312,17 +312,7 @@ export async function listSlackReactions(
     full: true,
   });
   const message = result.message as SlackMessageSummary | undefined;
-  const reactions = message?.reactions ?? [];
-  const userLimit = opts.limit;
-  // Approval polling and own-reaction cleanup need every user; tool reads alone provide a cap.
-  if (userLimit === undefined) {
-    return reactions;
-  }
-  return reactions.map((reaction) =>
-    reaction.users
-      ? Object.assign({}, reaction, { users: reaction.users.slice(0, userLimit) })
-      : reaction,
-  );
+  return message?.reactions ?? [];
 }
 
 export async function sendSlackMessage(
