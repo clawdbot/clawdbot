@@ -420,8 +420,52 @@ export function isProviderApiKeyConfigured(params: {
   agentDir?: string;
   /** Optional allowed profile credential types. */
   profileTypes?: readonly AuthProfileCredential["type"][];
+  /** Optional provider-owned acceptance predicate for a known selected credential. */
+  acceptsApiKey?: (apiKey: string) => boolean;
 }): boolean {
   const agentDir = params.agentDir?.trim();
+  if (params.acceptsApiKey) {
+    const { acceptsApiKey, ...availability } = params;
+    if (!isProviderApiKeyConfigured(availability)) {
+      return false;
+    }
+
+    const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+    const authoredApiKey = providerConfig?.apiKey;
+    const store = agentDir
+      ? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false })
+      : undefined;
+    let profile =
+      typeof authoredApiKey === "string" ? store?.profiles[authoredApiKey.trim()] : undefined;
+    if (!profile && store && providerConfig?.auth !== "api-key") {
+      const [profileId] = listUsableProviderAuthProfileIds(availability).profileIds;
+      profile = profileId ? store.profiles[profileId] : undefined;
+    }
+    if (profile) {
+      const credential =
+        profile.type === "oauth"
+          ? profile.access
+          : profile.type === "token"
+            ? (profile.token ??
+              (profile.tokenRef?.source === "env" ? process.env[profile.tokenRef.id] : undefined))
+            : (profile.key ??
+              (profile.keyRef?.source === "env" ? process.env[profile.keyRef.id] : undefined));
+      // Opaque managed profile refs are validated after canonical async auth resolution.
+      return credential === undefined || acceptsApiKey(credential);
+    }
+
+    const configParams = { cfg: params.cfg, provider: params.provider };
+    const configKey =
+      resolveManagedSecretRefRuntimeProviderAuth(configParams)?.apiKey ??
+      resolveUsableCustomProviderApiKey(configParams)?.apiKey;
+    const selectedKey =
+      providerConfig?.auth === "api-key" && authoredApiKey !== undefined
+        ? configKey
+        : (resolveEnvApiKey(params.provider, process.env, { config: params.cfg })?.apiKey ??
+          configKey);
+    return selectedKey === undefined || acceptsApiKey(selectedKey);
+  }
+
   if (params.cfg) {
     // Capability discovery must reject synthetic auth markers and unresolved
     // SecretRefs that the provider's runtime cannot actually authenticate with.

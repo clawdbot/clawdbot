@@ -217,6 +217,84 @@ describe("provider API-key readiness", () => {
     expect(isProviderApiKeyConfigured({ provider })).toBe(false);
   });
 
+  it("applies provider-owned credential acceptance only when explicitly requested", () => {
+    const cfg = configuredProvider("blocked-provider-key");
+
+    expect(isProviderApiKeyConfigured({ provider, cfg })).toBe(true);
+    expect(
+      isProviderApiKeyConfigured({
+        provider,
+        cfg,
+        acceptsApiKey: (apiKey) => !apiKey.startsWith("blocked-"),
+      }),
+    ).toBe(false);
+    expect(
+      isProviderApiKeyConfigured({
+        provider,
+        cfg: configuredProvider("allowed-provider-key"),
+        acceptsApiKey: (apiKey) => !apiKey.startsWith("blocked-"),
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["allowed-profile-key", "blocked-environment-key", true],
+    ["blocked-profile-key", "allowed-environment-key", false],
+  ])(
+    "applies credential acceptance to the higher-priority auth profile %s",
+    async (profileKey, envKey, expected) => {
+      vi.stubEnv("GOOGLE_API_KEY", envKey);
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-key-policy-"));
+
+      try {
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: {
+              "google:selected": {
+                type: "api_key",
+                provider: "google",
+                key: profileKey,
+              },
+            },
+          },
+          agentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
+        );
+
+        expect(
+          isProviderApiKeyConfigured({
+            provider: "google",
+            agentDir,
+            profileTypes: ["api_key"],
+            acceptsApiKey: (apiKey) => !apiKey.startsWith("blocked-"),
+          }),
+        ).toBe(expected);
+      } finally {
+        clearRuntimeAuthProfileStoreSnapshots();
+        await fs.rm(agentDir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("keeps an explicit config credential above rejected environment credentials", () => {
+    vi.stubEnv("GOOGLE_API_KEY", "blocked-environment-key");
+    const cfg = configuredProvider("allowed-config-key", "google");
+    const google = cfg.models?.providers?.google;
+    if (!google) {
+      throw new Error("missing configured Google provider");
+    }
+    google.auth = "api-key";
+
+    expect(
+      isProviderApiKeyConfigured({
+        provider: "google",
+        cfg,
+        acceptsApiKey: (apiKey) => !apiKey.startsWith("blocked-"),
+      }),
+    ).toBe(true);
+  });
+
   it.each([
     ["oauth", ["api_key"], false],
     ["token", ["api_key"], false],
