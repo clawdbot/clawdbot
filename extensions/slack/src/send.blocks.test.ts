@@ -404,9 +404,9 @@ describe("sendMessageSlack blocks", () => {
       { type: "section", text: { type: "mrkdwn", text: "Private displayed question" } },
     ]);
     expect(Object.keys(result.meta ?? {})).toEqual(["slackQuestionActionIds"]);
-    expect(JSON.parse(JSON.stringify(result.meta))).toEqual({
-      slackQuestionActionIds: [questionActionId],
-    });
+    expect(JSON.stringify(result.meta)).toBe(
+      JSON.stringify({ slackQuestionActionIds: [questionActionId] }),
+    );
     expect(onDeliveryResult).toHaveBeenCalledWith(
       expect.objectContaining({
         messageId: "171234.567",
@@ -452,10 +452,12 @@ describe("sendMessageSlack blocks", () => {
     ).toBe(true);
     const questionDelivery = delivered.find((delivery) => delivery.meta);
     expect(questionDelivery?.messageId).not.toBe(aggregateResult.messageId);
-    expect(JSON.parse(JSON.stringify(aggregateResult.meta))).toEqual({
-      slackQuestionActionIds: [questionActionId],
-      slackQuestionMessageId: questionDelivery?.messageId,
-    });
+    expect(JSON.stringify(aggregateResult.meta)).toBe(
+      JSON.stringify({
+        slackQuestionActionIds: [questionActionId],
+        slackQuestionMessageId: questionDelivery?.messageId,
+      }),
+    );
     expect(aggregateResult.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]).toBe(
       questionDelivery?.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS],
     );
