@@ -105,6 +105,30 @@ describe("synology-chat core", () => {
     expect(SynologyChatChannelConfigSchema.schema.additionalProperties).toEqual({});
   });
 
+  it("rejects malformed per-account NAS fetch opt-ins", () => {
+    const parsed = SynologyChatChannelConfigSchema.runtime?.safeParse({
+      accounts: {
+        work: { dangerouslyAllowNasUrlFetches: "false" },
+      },
+    });
+
+    expect(parsed?.success).toBe(false);
+    expect(
+      resolveAccount(
+        {
+          channels: {
+            "synology-chat": {
+              accounts: {
+                work: { dangerouslyAllowNasUrlFetches: "false" },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        "work",
+      ).dangerouslyAllowNasUrlFetches,
+    ).toBe(false);
+  });
+
   it("isolates direct-message sessions by account and user", () => {
     const alpha = buildSynologyChatInboundSessionKey({
       agentId: "main",
