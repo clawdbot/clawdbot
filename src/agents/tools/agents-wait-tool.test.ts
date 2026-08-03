@@ -82,6 +82,24 @@ describe("agents_wait", () => {
     expect(registryEvents.listeners.size).toBe(0);
   });
 
+  it("returns retained visible output when a successful collector ends with NO_REPLY", async () => {
+    const entry = collectorRun("retained", "agent:main:main", { status: "done" });
+    entry.execution = { status: "terminal", outcome: { status: "ok" } };
+    entry.completion = {
+      required: false,
+      resultText: "NO_REPLY",
+      fallbackResultText: "retained collector result",
+    };
+    records.set(entry.runId, entry);
+
+    await expect(
+      waitForCollectorCompletion({
+        runId: entry.runId,
+        currentSessionKeys: new Set(["agent:main:main"]),
+      }),
+    ).resolves.toMatchObject({ result: "retained collector result" });
+  });
+
   it("rejects when abort wins the listener-registration race", async () => {
     const entry = collectorRun("abort-race", "agent:main:main");
     records.set(entry.runId, entry);

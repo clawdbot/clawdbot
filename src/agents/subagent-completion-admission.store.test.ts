@@ -19,6 +19,7 @@ import {
 } from "./subagent-completion-admission.store.js";
 import {
   dismissSubagentCompletionDelivery,
+  resolveCorrelatedSubagentDelivery,
   retrySubagentCompletionDelivery,
 } from "./subagent-completion-delivery.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -240,10 +241,36 @@ describe("atomic subagent completion admission store", () => {
       input.task.error = "requester unavailable";
       input.task.terminalSummary = "Task completed, but result delivery is blocked.";
       input.task.cleanupAfter = now + 7 * 24 * 60 * 60_000;
+      input.subagent.completion = {
+        required: true,
+        resultText: "NO_REPLY",
+        fallbackResultText: "canonical result",
+        capturedAt: now,
+      };
       settleSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
+
+      const legacyRow = database.db
+        .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+        .get(input.subagent.runId) as { payload_json: string };
+      const legacyPayload = JSON.parse(legacyRow.payload_json) as SubagentRunRecord;
+      legacyPayload.delivery!.payload = {
+        ...legacyPayload.delivery!.payload!,
+        frozenResultText: legacyPayload.completion?.resultText,
+        fallbackFrozenResultText: legacyPayload.completion?.fallbackResultText,
+      } as NonNullable<SubagentRunRecord["delivery"]>["payload"] & {
+        frozenResultText: string | null | undefined;
+        fallbackFrozenResultText: string | null | undefined;
+      };
+      delete legacyPayload.completion!.fallbackResultText;
+      database.db
+        .prepare(
+          "UPDATE subagent_runs SET payload_json = ?, fallback_frozen_result_text = NULL WHERE run_id = ?",
+        )
+        .run(JSON.stringify(legacyPayload), input.subagent.runId);
 
       resetTaskRegistryForTests({ persist: false });
       subagentRuns.clear();
+      closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase();
       for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
         subagentRuns.set(runId, entry);
@@ -255,10 +282,18 @@ describe("atomic subagent completion admission store", () => {
         generation: 1,
         suspendedReason: "expiry",
       });
+      expect(subagentRuns.get(input.subagent.runId)?.completion).toMatchObject({
+        resultText: "NO_REPLY",
+        fallbackResultText: "canonical result",
+      });
+      expect(subagentRuns.get(input.subagent.runId)?.delivery?.payload).not.toHaveProperty(
+        "frozenResultText",
+      );
       expect(getTaskById(input.task.taskId)).toMatchObject({
         deliveryStatus: "failed",
         terminalOutcome: "blocked",
         cleanupAfter: input.task.cleanupAfter,
+        progressSummary: "canonical result",
       });
 
       const result = await retrySubagentCompletionDelivery(input.task.taskId, { database });
@@ -279,6 +314,30 @@ describe("atomic subagent completion admission store", () => {
       });
       expect(result.task?.error).toBeUndefined();
       expect(result.task?.terminalSummary).toBeUndefined();
+      const redriven = subagentRuns.get(input.subagent.runId)!;
+      redriven.delivery!.queueId = "queue-proof";
+      const resolvedQueueEntry = resolveCorrelatedSubagentDelivery({
+        id: "queue-proof",
+        kind: "agentTurn",
+        sessionKey: input.task.requesterSessionKey,
+        message: "placeholder",
+        messageId: "queue-proof",
+        enqueuedAt: now,
+        retryCount: 0,
+        owner: {
+          kind: "subagent_completion",
+          runId: redriven.runId,
+          taskId: input.task.taskId,
+          generation: redriven.delivery!.generation!,
+          deadlineAt: redriven.delivery!.deadlineAt!,
+        },
+      });
+      expect(resolvedQueueEntry.kind).toBe("agentTurn");
+      if (resolvedQueueEntry.kind !== "agentTurn") {
+        throw new Error("correlated completion changed queue entry kind");
+      }
+      expect(resolvedQueueEntry.message).toContain("canonical result");
+      redriven.delivery!.queueId = undefined;
       const persisted = database.db
         .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
         .get(input.subagent.runId) as { payload_json: string };

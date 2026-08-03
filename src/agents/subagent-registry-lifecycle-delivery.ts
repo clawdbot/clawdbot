@@ -21,6 +21,7 @@ import {
 import { isSilentAgentReplyText } from "./embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -247,7 +248,7 @@ export function createSubagentRegistryLifecycleDelivery(
         sessionKey: target.sessionKey,
         endedAt,
         lastEventAt: Date.now(),
-        progressSummary: ensureCompletionState(args.entry).resultText ?? undefined,
+        progressSummary: resolveSubagentCompletionResultText(args.entry),
         terminalSummary: terminalResult.terminalSummary,
         terminalOutcome: terminalResult.terminalOutcome,
       });

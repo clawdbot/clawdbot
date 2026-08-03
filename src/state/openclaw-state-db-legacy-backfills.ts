@@ -120,6 +120,143 @@ export function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
   `);
 }
 
+type LegacyRetainedResultRow = {
+  run_id: string;
+  payload_json: string;
+  pending_final_delivery_payload_json: string | null;
+  frozen_result_text: string | null;
+  fallback_frozen_result_text: string | null;
+};
+
+function nullableTextValue(record: Record<string, unknown> | null, key: string) {
+  if (!record || !Object.hasOwn(record, key)) {
+    return undefined;
+  }
+  const value = record[key];
+  return typeof value === "string" || value === null ? value : undefined;
+}
+
+function selectLegacyRetainedTaskResult(
+  primary: string | null | undefined,
+  fallback: string | null | undefined,
+): string | null {
+  const primaryText = primary?.trim();
+  if (primaryText && primaryText !== "NO_REPLY") {
+    return ["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"].includes(primaryText)
+      ? null
+      : primaryText;
+  }
+  const fallbackText = fallback?.trim();
+  return fallbackText &&
+    !["ANNOUNCE_SKIP", "REPLY_SKIP", "NO_REPLY", "HEARTBEAT_OK"].includes(fallbackText)
+    ? fallbackText
+    : null;
+}
+
+/** Promote shipped retained results before runtime hydrates canonical subagent/task state. */
+export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
+  if (
+    !tableExists(db, "subagent_runs") ||
+    !tableHasColumn(db, "subagent_runs", "pending_final_delivery_payload_json") ||
+    !tableHasColumn(db, "subagent_runs", "frozen_result_text") ||
+    !tableHasColumn(db, "subagent_runs", "fallback_frozen_result_text")
+  ) {
+    return;
+  }
+  const repair = () => {
+    const rows = db
+      .prepare(
+        `SELECT run_id, payload_json, pending_final_delivery_payload_json,
+                frozen_result_text, fallback_frozen_result_text
+           FROM subagent_runs`,
+      )
+      .all() as LegacyRetainedResultRow[];
+    const updateRun = db.prepare(
+      `UPDATE subagent_runs
+          SET payload_json = ?,
+              pending_final_delivery_payload_json = ?,
+              frozen_result_text = ?,
+              fallback_frozen_result_text = ?
+        WHERE run_id = ?`,
+    );
+    const canProjectTasks =
+      tableExists(db, "task_runs") && tableHasColumn(db, "task_runs", "progress_summary");
+    const updateTask = canProjectTasks
+      ? db.prepare(
+          `UPDATE task_runs
+              SET progress_summary = ?
+            WHERE runtime = 'subagent'
+              AND run_id = ?
+              AND (progress_summary IS NULL
+                OR trim(progress_summary) = ''
+                OR (? = 1 AND trim(progress_summary) = 'NO_REPLY'))`,
+        )
+      : undefined;
+
+    for (const row of rows) {
+      const payload = parseJsonRecord(row.payload_json);
+      const completion = payload ? recordField(payload, "completion") : null;
+      if (!payload || !completion) {
+        continue;
+      }
+      const delivery = recordField(payload, "delivery");
+      const deliveryPayload = delivery ? recordField(delivery, "payload") : null;
+      const pendingPayload = row.pending_final_delivery_payload_json
+        ? parseJsonRecord(row.pending_final_delivery_payload_json)
+        : null;
+      const hasLegacyResult = Boolean(
+        (deliveryPayload &&
+          (Object.hasOwn(deliveryPayload, "frozenResultText") ||
+            Object.hasOwn(deliveryPayload, "fallbackFrozenResultText"))) ||
+        (pendingPayload &&
+          (Object.hasOwn(pendingPayload, "frozenResultText") ||
+            Object.hasOwn(pendingPayload, "fallbackFrozenResultText"))),
+      );
+      if (!hasLegacyResult) {
+        continue;
+      }
+      const legacyPrimary =
+        nullableTextValue(deliveryPayload, "frozenResultText") ??
+        nullableTextValue(pendingPayload, "frozenResultText");
+      const legacyFallback =
+        nullableTextValue(deliveryPayload, "fallbackFrozenResultText") ??
+        nullableTextValue(pendingPayload, "fallbackFrozenResultText");
+      if (nullableTextValue(completion, "resultText") == null && legacyPrimary !== undefined) {
+        completion.resultText = legacyPrimary;
+      }
+      if (
+        nullableTextValue(completion, "fallbackResultText") == null &&
+        legacyFallback !== undefined
+      ) {
+        completion.fallbackResultText = legacyFallback;
+      }
+      delete deliveryPayload?.frozenResultText;
+      delete deliveryPayload?.fallbackFrozenResultText;
+      delete pendingPayload?.frozenResultText;
+      delete pendingPayload?.fallbackFrozenResultText;
+      const primary = nullableTextValue(completion, "resultText");
+      const fallback = nullableTextValue(completion, "fallbackResultText");
+      updateRun.run(
+        JSON.stringify(payload),
+        pendingPayload ? JSON.stringify(pendingPayload) : row.pending_final_delivery_payload_json,
+        typeof primary === "string" ? primary : null,
+        typeof fallback === "string" ? fallback : null,
+        row.run_id,
+      );
+      const taskRunId = textField(payload, "taskRunId") ?? row.run_id;
+      const taskResult = selectLegacyRetainedTaskResult(primary, fallback);
+      if (updateTask && taskResult) {
+        updateTask.run(taskResult, taskRunId, primary?.trim() === "NO_REPLY" ? 1 : 0);
+      }
+    }
+  };
+  if (db.isTransaction) {
+    repair();
+    return;
+  }
+  runSqliteImmediateTransactionSync(db, repair);
+}
+
 /** Canonicalize shipped subagent rows whose pause/kill owner only wrote root terminal fields. */
 export function repairLegacySubagentExecutionPayloads(db: DatabaseSync): void {
   if (!tableExists(db, "subagent_runs")) {

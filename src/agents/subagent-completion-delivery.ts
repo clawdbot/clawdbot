@@ -24,7 +24,8 @@ import {
   admitSubagentCompletionDelivery,
   settleSubagentCompletionDelivery,
 } from "./subagent-completion-admission.store.js";
-import { ensureCompletionState, ensureDeliveryState } from "./subagent-delivery-state.js";
+import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
+import { ensureDeliveryState } from "./subagent-delivery-state.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -77,7 +78,7 @@ function projectRedrivenTask(
     deliveryStatus,
     terminalOutcome: "succeeded",
     lastEventAt: now,
-    progressSummary: ensureCompletionState(subagent).resultText ?? task.progressSummary,
+    progressSummary: resolveSubagentCompletionResultText(subagent) ?? task.progressSummary,
     error: undefined,
     terminalSummary: undefined,
     cleanupAfter: undefined,
@@ -144,7 +145,7 @@ export function admitCorrelatedSubagentSessionDelivery(params: {
 }
 
 function canonicalResultMessage(entry: SubagentRunRecord): string {
-  const result = ensureCompletionState(entry).resultText?.trim() || "(no output)";
+  const result = resolveSubagentCompletionResultText(entry) ?? "(no output)";
   return `${CANONICAL_RESULT_PROMPT}\n\n${result}`;
 }
 
@@ -221,6 +222,8 @@ export async function settleCorrelatedSubagentDelivery(
     projectedTask.terminalSummary = "Task completed, but result delivery is blocked.";
     projectedTask.cleanupAfter = now + SUSPENDED_RETENTION_MS;
   }
+  projectedTask.progressSummary =
+    resolveSubagentCompletionResultText(subagent) ?? projectedTask.progressSummary;
   projectedTask.lastEventAt = now;
   settleSubagentCompletionDelivery({ subagent, task: projectedTask });
   publishCommittedRecords(subagent, projectedTask);
@@ -329,6 +332,7 @@ export function dismissSubagentCompletionDelivery(taskId: string): {
     deliveryStatus: "dismissed",
     terminalOutcome: "blocked",
     terminalSummary: "Task completed; result delivery was dismissed by the operator.",
+    progressSummary: resolveSubagentCompletionResultText(subagent) ?? task.progressSummary,
     cleanupAfter: Math.max(task.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),
     lastEventAt: now,
   };

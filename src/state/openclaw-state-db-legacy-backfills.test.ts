@@ -1,6 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { repairLegacySubagentExecutionPayloads } from "./openclaw-state-db-legacy-backfills.js";
+import {
+  repairLegacySubagentExecutionPayloads,
+  repairLegacySubagentRetainedResults,
+} from "./openclaw-state-db-legacy-backfills.js";
 
 type StoredRun = {
   run_id: string;
@@ -179,5 +182,150 @@ describe("repairLegacySubagentExecutionPayloads", () => {
     repairLegacySubagentExecutionPayloads(store.db);
 
     expect(store.read("malformed").payload_json).toBe("{not-json");
+  });
+});
+
+describe("repairLegacySubagentRetainedResults", () => {
+  it("promotes shipped payload results, projects tasks, and is idempotent", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      CREATE TABLE subagent_runs (
+        run_id TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        pending_final_delivery_payload_json TEXT,
+        frozen_result_text TEXT,
+        fallback_frozen_result_text TEXT
+      ) STRICT;
+      CREATE TABLE task_runs (
+        task_id TEXT PRIMARY KEY,
+        runtime TEXT NOT NULL,
+        run_id TEXT,
+        progress_summary TEXT
+      ) STRICT;
+    `);
+    const legacyPayload = {
+      frozenResultText: "NO_REPLY",
+      fallbackFrozenResultText: "findings captured before wake",
+      requesterSessionKey: "agent:main:main",
+    };
+    db.prepare(
+      `INSERT INTO subagent_runs (
+        run_id, payload_json, pending_final_delivery_payload_json,
+        frozen_result_text, fallback_frozen_result_text
+      ) VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      "completion-run",
+      JSON.stringify({
+        runId: "completion-run",
+        taskRunId: "task-run",
+        completion: { required: true, resultText: "NO_REPLY" },
+        delivery: { status: "suspended", payload: legacyPayload },
+      }),
+      JSON.stringify(legacyPayload),
+      "NO_REPLY",
+      null,
+    );
+    db.prepare(
+      "INSERT INTO task_runs (task_id, runtime, run_id, progress_summary) VALUES (?, ?, ?, ?)",
+    ).run("task-id", "subagent", "task-run", "NO_REPLY");
+
+    repairLegacySubagentRetainedResults(db);
+    const firstPass = db
+      .prepare(
+        `SELECT payload_json, pending_final_delivery_payload_json,
+                frozen_result_text, fallback_frozen_result_text
+           FROM subagent_runs WHERE run_id = ?`,
+      )
+      .get("completion-run") as {
+      payload_json: string;
+      pending_final_delivery_payload_json: string;
+      frozen_result_text: string | null;
+      fallback_frozen_result_text: string | null;
+    };
+    repairLegacySubagentRetainedResults(db);
+    const secondPass = db
+      .prepare(
+        `SELECT payload_json, pending_final_delivery_payload_json,
+                frozen_result_text, fallback_frozen_result_text
+           FROM subagent_runs WHERE run_id = ?`,
+      )
+      .get("completion-run");
+
+    expect(secondPass).toEqual(firstPass);
+    const payload = JSON.parse(firstPass.payload_json);
+    expect(payload.completion).toEqual({
+      required: true,
+      resultText: "NO_REPLY",
+      fallbackResultText: "findings captured before wake",
+    });
+    expect(payload.delivery.payload).toEqual({ requesterSessionKey: "agent:main:main" });
+    expect(JSON.parse(firstPass.pending_final_delivery_payload_json)).toEqual({
+      requesterSessionKey: "agent:main:main",
+    });
+    expect(firstPass.frozen_result_text).toBe("NO_REPLY");
+    expect(firstPass.fallback_frozen_result_text).toBe("findings captured before wake");
+    expect(
+      db.prepare("SELECT progress_summary FROM task_runs WHERE task_id = ?").get("task-id"),
+    ).toEqual({ progress_summary: "findings captured before wake" });
+  });
+
+  it("preserves newer canonical results over legacy payload copies", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      CREATE TABLE subagent_runs (
+        run_id TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        pending_final_delivery_payload_json TEXT,
+        frozen_result_text TEXT,
+        fallback_frozen_result_text TEXT
+      ) STRICT;
+    `);
+    db.prepare(
+      `INSERT INTO subagent_runs (
+        run_id, payload_json, pending_final_delivery_payload_json,
+        frozen_result_text, fallback_frozen_result_text
+      ) VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      "canonical-run",
+      JSON.stringify({
+        completion: {
+          required: true,
+          resultText: "canonical result",
+          fallbackResultText: "canonical fallback",
+        },
+        delivery: {
+          status: "suspended",
+          payload: {
+            frozenResultText: "legacy result",
+            fallbackFrozenResultText: "legacy fallback",
+          },
+        },
+      }),
+      JSON.stringify({
+        frozenResultText: "legacy result",
+        fallbackFrozenResultText: "legacy fallback",
+      }),
+      "legacy result",
+      "legacy fallback",
+    );
+
+    repairLegacySubagentRetainedResults(db);
+
+    const row = db.prepare("SELECT * FROM subagent_runs WHERE run_id = ?").get("canonical-run") as {
+      payload_json: string;
+      pending_final_delivery_payload_json: string;
+      frozen_result_text: string | null;
+      fallback_frozen_result_text: string | null;
+    };
+    const payload = JSON.parse(row.payload_json);
+    expect(payload.completion).toEqual({
+      required: true,
+      resultText: "canonical result",
+      fallbackResultText: "canonical fallback",
+    });
+    expect(payload.delivery.payload).toEqual({});
+    expect(JSON.parse(row.pending_final_delivery_payload_json)).toEqual({});
+    expect(row.frozen_result_text).toBe("canonical result");
+    expect(row.fallback_frozen_result_text).toBe("canonical fallback");
   });
 });
