@@ -26,6 +26,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -508,6 +509,7 @@ function firstEmbeddedAgentArg(callIndex = 0) {
 }
 
 describe("CLI attempt execution", () => {
+  const fixtureRoot = createSuiteTempRootTracker({ prefix: "openclaw-cli-attempt-suite-" });
   let suiteRoot: string;
   let agentDir: string;
   let tmpDir: string;
@@ -515,7 +517,7 @@ describe("CLI attempt execution", () => {
   let homeEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   beforeAll(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-attempt-suite-"));
+    suiteRoot = await fixtureRoot.setup();
     agentDir = path.join(suiteRoot, "agents", "main", "agent");
     storePath = path.join(suiteRoot, "sessions.json");
     await fs.mkdir(agentDir, { recursive: true });
@@ -616,7 +618,7 @@ describe("CLI attempt execution", () => {
   beforeEach(async () => {
     homeEnvSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", suiteRoot);
-    tmpDir = await fs.mkdtemp(path.join(suiteRoot, "case-"));
+    tmpDir = await fixtureRoot.make();
     runCliAgentMock.mockReset();
     runEmbeddedAgentMock.mockReset();
     resetGeneratedMediaTaskActivityForTests();
@@ -719,7 +721,7 @@ describe("CLI attempt execution", () => {
         });
       }
     }
-    await fs.rm(suiteRoot, { recursive: true, force: true });
+    await fixtureRoot.cleanup();
   });
 
   it("forwards explicit local-agent timeouts while preserving the default when omitted", async () => {
