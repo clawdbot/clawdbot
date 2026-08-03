@@ -145,14 +145,15 @@ describe("Codex trajectory recorder", () => {
       storePath,
       entry: { sessionId: "session-1", updatedAt: 10 },
     });
+    const attempt = {
+      sessionFile: "agent:main:session-1",
+      sessionKey: "agent:main:session-1",
+      sessionId: "session-1",
+      model: { api: "responses" },
+    } as never;
     const recorder = createCodexTrajectoryRecorder({
       cwd: tmpDir,
-      attempt: {
-        sessionFile: "agent:main:session-1",
-        sessionKey: "agent:main:session-1",
-        sessionId: "session-1",
-        model: { api: "responses" },
-      } as never,
+      attempt,
       trajectoryRecorder: createSqliteHostTrajectoryRecorder({
         agentId: "main",
         sessionId: "session-1",
@@ -163,6 +164,18 @@ describe("Codex trajectory recorder", () => {
 
     const trajectoryRecorder = expectTrajectoryRecorder(recorder);
     trajectoryRecorder.recordEvent("session.started");
+    recordCodexTrajectoryCompletion(trajectoryRecorder, {
+      attempt,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      timedOut: false,
+      result: {
+        terminal: { kind: "ok" },
+        assistantTexts: ["truncated"],
+        lastAssistant: { stopReason: "length" },
+        messagesSnapshot: [],
+      } as never,
+    });
     await trajectoryRecorder.flush();
 
     expect(fs.readdirSync(path.join(tmpDir, "sessions"))).not.toEqual(
@@ -170,7 +183,15 @@ describe("Codex trajectory recorder", () => {
     );
     await expect(
       loadSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-1", storePath }),
-    ).resolves.toEqual([expect.objectContaining({ type: "session.started" })]);
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "session.started" }),
+        expect.objectContaining({
+          type: "model.completed",
+          data: expect.objectContaining({ stopReason: "length" }),
+        }),
+      ]),
+    );
   });
 
   it("redacts secrets and keeps recorded strings UTF-16 safe", async () => {
