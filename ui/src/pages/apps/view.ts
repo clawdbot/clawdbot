@@ -164,9 +164,15 @@ const APP_SECTIONS: readonly AppSection[] = [
         icon: appsBrandIcons.chrome,
         title: () => t("appsPage.cards.chrome.title"),
         desc: () => t("appsPage.cards.chrome.desc"),
-        // Installs unpacked via `openclaw browser extension path`; there is no
-        // Chrome Web Store listing, so the only CTA is the setup guide.
+        // Store listing is submitted but not yet approved; keep the badge as
+        // "coming soon" until the listing is live, then drop it.
+        badge: () => t("appsPage.badgeStoreComingSoon"),
         ctas: [
+          {
+            kind: "external",
+            href: "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
+            label: () => t("appsPage.ctaChromeWebStore"),
+          },
           {
             kind: "external",
             href: "https://docs.openclaw.ai/tools/chrome-extension",
