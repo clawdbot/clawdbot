@@ -10,6 +10,7 @@ import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-rec
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -111,6 +112,18 @@ export async function runReplyAgent(
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
 
   const isHeartbeat = opts?.isHeartbeat === true;
+  let didDeliverVisiblePartialReply = false;
+  const runOpts = opts?.onPartialReply
+    ? {
+        ...opts,
+        onPartialReply: async (payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0]) => {
+          await opts.onPartialReply?.(payload);
+          if (hasOutboundReplyContent(payload, { trimText: true })) {
+            didDeliverVisiblePartialReply = true;
+          }
+        },
+      }
+    : opts;
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   const traceAttributes = {
     provider: followupRun.run.provider,
@@ -654,7 +667,7 @@ export async function runReplyAgent(
       getActiveSessionEntry: () => activeSessionEntry,
       isHeartbeat,
       isRestartRecoveryArmed,
-      opts,
+      opts: runOpts,
       pendingToolTasks,
       performSessionReset: resetSession,
       queueKey,
@@ -694,7 +707,10 @@ export async function runReplyAgent(
     });
   } catch (error) {
     return await handleReplyAgentRunError(error, {
+      blockReplyPipeline,
       cfg,
+      didDeliverVisiblePartialReply: () => didDeliverVisiblePartialReply,
+      isHeartbeat,
       isRestartRecoveryArmed,
       replyOperation,
       resolvedVerboseLevel,

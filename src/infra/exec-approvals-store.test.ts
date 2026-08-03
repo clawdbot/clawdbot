@@ -382,19 +382,36 @@ describe("exec approvals SQLite store", () => {
     }
   });
 
-  it("blocks runtime reads while the retired JSON or claim exists", () => {
-    closeOpenClawStateDatabaseForTest();
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("missing test state dir");
-    }
-    fs.writeFileSync(
-      path.join(stateDir, "exec-approvals.json"),
-      serializeExecApprovals({ version: 1, agents: {} }),
-    );
-    execApprovalsStoreTesting.reset();
-    expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
-  });
+  it.each([
+    ["source", ""],
+    ["Doctor claim", ".doctor-importing"],
+  ])(
+    "blocks runtime reads while the retired %s exists, then rechecks after removal",
+    (_, suffix) => {
+      closeOpenClawStateDatabaseForTest();
+      const stateDir = process.env.OPENCLAW_STATE_DIR;
+      if (!stateDir) {
+        throw new Error("missing test state dir");
+      }
+      const sourcePath = path.join(stateDir, "exec-approvals.json");
+      const legacyPath = `${sourcePath}${suffix}`;
+      fs.writeFileSync(legacyPath, serializeExecApprovals({ version: 1, agents: {} }));
+      execApprovalsStoreTesting.reset();
+      let caught: unknown;
+      try {
+        loadExecApprovals();
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ExecApprovalsMigrationRequiredError);
+      expect(caught).toMatchObject({
+        message: `Legacy exec approvals exist at ${sourcePath}. Run \`openclaw doctor --fix\` with OPENCLAW_STATE_DIR set to ${stateDir} before using exec approvals.`,
+      });
+
+      fs.rmSync(legacyPath);
+      expect(loadExecApprovals()).toMatchObject({ version: 1, agents: {} });
+    },
+  );
 
   it("scopes the doctor command to the blocked state directory", () => {
     // A bare `openclaw doctor --fix` repairs the default root, leaving a scoped
