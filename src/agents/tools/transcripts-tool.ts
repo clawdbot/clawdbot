@@ -81,10 +81,15 @@ function ownsTranscriptSession(
     if (ownerAgentId !== ctx.agentId) {
       return false;
     }
+    const sourceAccountId = session.source.accountId?.trim();
+    if (providerUsesAccountOwnership && !sourceAccountId) {
+      // An account-bound legacy row without an account has no channel claim to verify.
+      // Keep recovery local to its recorded agent instead of trusting another surface.
+      return !channel;
+    }
     if (channel && accountBindingChannels.includes(channel)) {
       // Shipped rows can still prove same-channel ownership from their persisted
       // source account while other surfaces retain the existing agent boundary.
-      const sourceAccountId = session.source.accountId?.trim();
       return Boolean(sourceAccountId && ctx.agentAccountId?.trim() === sourceAccountId);
     }
     return true;

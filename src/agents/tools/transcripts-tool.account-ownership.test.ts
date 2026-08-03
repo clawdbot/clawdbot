@@ -505,6 +505,14 @@ describe("transcripts tool account ownership", () => {
       ),
     ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
     await expect(
+      createTool(stateDir, "main", { channel: "webchat", accountId: "operator" }).execute(
+        "call-other-channel",
+        { action: "summarize", sessionId: session.sessionId },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
+    await expect(
       createTool(stateDir, "main").execute(
         "call-local",
         { action: "summarize", sessionId: session.sessionId },
