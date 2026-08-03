@@ -32,6 +32,7 @@ scenario:
       - --scenario-id
       - ${scenarioId}
     config:
+      requireBuiltCli: true
       tuiPtyCases:
         - coverageId: tui.gateway-tui-launch
           testFile: src/tui/tui-pty-local.e2e.test.ts
