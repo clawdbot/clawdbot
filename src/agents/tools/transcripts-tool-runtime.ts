@@ -128,14 +128,12 @@ function bindSourceToTurnAccount(params: {
   if (providerChannels.length === 0) {
     return { source: params.source };
   }
-  const isTrustedUnchanneledOwner =
-    !channel && (!params.ctx.agentId || params.ctx.agentId === "main");
-  if (isTrustedUnchanneledOwner) {
+  if (!channel || !providerChannels.includes(channel)) {
     return { source: params.source };
   }
-  if (!channel || !providerChannels.includes(channel) || !accountId) {
+  if (!accountId) {
     throw new Error(
-      `transcripts provider ${params.provider.id} requires trusted account context from ${providerChannels.join(", ")}; retry from that channel or the host-local main agent`,
+      `transcripts provider ${params.provider.id} requires trusted account context from ${channel}`,
     );
   }
   // Same-channel capture stays on the trusted inbound account; model input

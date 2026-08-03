@@ -127,7 +127,9 @@ describe("transcripts tool account ownership", () => {
         undefined,
         vi.fn(),
       ),
-    ).resolves.toMatchObject({ details: { active: [] } });
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "account-bound" })] },
+    });
     await expect(
       ownerTool.execute("call-provider-missing-owner", { action: "status" }, undefined, vi.fn()),
     ).resolves.toMatchObject({
@@ -181,7 +183,7 @@ describe("transcripts tool account ownership", () => {
     );
   });
 
-  it("rejects channel starts without the provider's trusted account context", async () => {
+  it("requires trusted accounts only for starts from a provider's binding channel", async () => {
     const stateDir = await makeStateDir();
     const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
     getTranscriptSourceProviderMock.mockReturnValue({
@@ -200,7 +202,7 @@ describe("transcripts tool account ownership", () => {
       channelId: "voice-a",
     };
     const expectedError =
-      "transcripts provider discord-voice requires trusted account context from discord; retry from that channel or the host-local main agent";
+      "transcripts provider discord-voice requires trusted account context from discord";
 
     await expect(
       createTool(stateDir, "main", { channel: "webchat", accountId: "operator" }).execute(
@@ -209,7 +211,7 @@ describe("transcripts tool account ownership", () => {
         undefined,
         vi.fn(),
       ),
-    ).rejects.toThrow(expectedError);
+    ).resolves.toMatchObject({ details: { sessionId: "webchat-start" } });
     await expect(
       createTool(stateDir, "main", { channel: "discord" }).execute(
         "call-missing-account",
@@ -225,8 +227,7 @@ describe("transcripts tool account ownership", () => {
         undefined,
         vi.fn(),
       ),
-    ).rejects.toThrow(expectedError);
-    expect(start).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ details: { sessionId: "unchanneled-non-main" } });
 
     await expect(
       createTool(stateDir, "main").execute(
@@ -236,7 +237,7 @@ describe("transcripts tool account ownership", () => {
         vi.fn(),
       ),
     ).resolves.toMatchObject({ details: { sessionId: "local-start" } });
-    expect(start).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledTimes(3);
   });
 
   it("does not treat provider lookup aliases as account binding channels", async () => {
@@ -276,7 +277,7 @@ describe("transcripts tool account ownership", () => {
     expect(result.details).toMatchObject({ accountId: "meeting-account" });
   });
 
-  it("fails closed for shipped account-bound rows except local main-agent recovery", async () => {
+  it("preserves shipped agent ownership while binding matching legacy channel accounts", async () => {
     const stateDir = await makeStateDir();
     const store = storeFor(stateDir);
     getTranscriptSourceProviderMock.mockReturnValue({
@@ -322,36 +323,67 @@ describe("transcripts tool account ownership", () => {
     });
     const localMainTool = createTool(stateDir, "main");
 
-    for (const session of sessions.slice(0, 2)) {
-      for (const channelTool of [discordTool, webchatTool]) {
-        await expect(
-          channelTool.execute(
-            `call-channel-${session.sessionId}`,
-            { action: "summarize", sessionId: session.sessionId },
-            undefined,
-            vi.fn(),
-          ),
-        ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
-      }
+    for (const channelTool of [discordTool, webchatTool]) {
       await expect(
-        localMainTool.execute(
-          `call-local-${session.sessionId}`,
-          { action: "summarize", sessionId: session.sessionId },
+        channelTool.execute(
+          "call-ownerless-channel",
+          { action: "summarize", sessionId: "stable-ownerless" },
           undefined,
           vi.fn(),
         ),
-      ).resolves.toMatchObject({ details: { sessionId: session.sessionId } });
+      ).rejects.toThrow("transcripts session not found: stable-ownerless");
     }
+    await expect(
+      localMainTool.execute(
+        "call-ownerless-local",
+        { action: "summarize", sessionId: "stable-ownerless" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: "stable-ownerless" } });
+
     for (const tool of [discordTool, webchatTool, localMainTool]) {
       await expect(
         tool.execute(
-          "call-named-agent-boundary",
+          "call-main-owned-legacy",
+          { action: "summarize", sessionId: "beta-agent-only" },
+          undefined,
+          vi.fn(),
+        ),
+      ).resolves.toMatchObject({ details: { sessionId: "beta-agent-only" } });
+    }
+    await expect(
+      createTool(stateDir, "main", { channel: "discord", accountId: "account-b" }).execute(
+        "call-main-owned-wrong-account",
+        { action: "summarize", sessionId: "beta-agent-only" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: beta-agent-only");
+
+    const researchTools = [
+      createTool(stateDir, "research", { channel: "discord", accountId: "account-a" }),
+      createTool(stateDir, "research", { channel: "webchat", accountId: "operator" }),
+      createTool(stateDir, "research"),
+    ];
+    for (const tool of researchTools) {
+      await expect(
+        tool.execute(
+          "call-named-agent-legacy",
           { action: "summarize", sessionId: "beta-named-agent" },
           undefined,
           vi.fn(),
         ),
-      ).rejects.toThrow("transcripts session not found: beta-named-agent");
+      ).resolves.toMatchObject({ details: { sessionId: "beta-named-agent" } });
     }
+    await expect(
+      localMainTool.execute(
+        "call-named-agent-boundary",
+        { action: "summarize", sessionId: "beta-named-agent" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: beta-named-agent");
 
     getTranscriptSourceProviderMock.mockReturnValue(undefined);
     await expect(
@@ -361,7 +393,7 @@ describe("transcripts tool account ownership", () => {
         undefined,
         vi.fn(),
       ),
-    ).rejects.toThrow("transcripts session not found: stable-ownerless");
+    ).resolves.toMatchObject({ details: { sessionId: "stable-ownerless" } });
     await expect(
       localMainTool.execute(
         "call-provider-missing-local",
@@ -370,6 +402,14 @@ describe("transcripts tool account ownership", () => {
         vi.fn(),
       ),
     ).resolves.toMatchObject({ details: { sessionId: "stable-ownerless" } });
+    await expect(
+      webchatTool.execute(
+        "call-provider-missing-owned",
+        { action: "summarize", sessionId: "beta-agent-only" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: "beta-agent-only" } });
   });
 
   it("preserves main-agent access to ownerless non-binding sessions", async () => {

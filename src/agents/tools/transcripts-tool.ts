@@ -51,9 +51,10 @@ function ownsTranscriptSession(
   const channel = ctx.agentChannel?.trim().toLowerCase();
   const isLocalMainOperator = ctx.agentId === "main" && !channel;
   const provider = resolveSourceProvider(session.source.providerId, ctx);
-  const providerUsesAccountOwnership = Boolean(
-    !provider || provider.accountBindingChannels?.some((entry) => entry.trim()),
-  );
+  const accountBindingChannels = (provider?.accountBindingChannels ?? [])
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  const providerUsesAccountOwnership = accountBindingChannels.length > 0;
   const ownerAgentId = session.metadata?.agentId;
   const ownerChannel = session.metadata?.ownerChannel;
   const ownerAccountId = session.metadata?.ownerAccountId;
@@ -63,8 +64,8 @@ function ownsTranscriptSession(
     if (typeof ownerAgentId === "string" && ownerAgentId !== ctx.agentId) {
       return false;
     }
-    if (hasOwnerChannel && hasOwnerAccount && channel === ownerChannel) {
-      return ctx.agentAccountId?.trim() === ownerAccountId;
+    if (hasOwnerChannel && hasOwnerAccount) {
+      return channel === ownerChannel ? ctx.agentAccountId?.trim() === ownerAccountId : true;
     }
     // Persisted ingress ownership remains authoritative if provider discovery
     // later changes; only the channel-less local main agent may recover it.
@@ -77,11 +78,11 @@ function ownsTranscriptSession(
     if (ownerAgentId !== ctx.agentId) {
       return false;
     }
-    if (providerUsesAccountOwnership) {
-      // Account-binding providers require trusted owner facts recorded at ingress.
-      // Only a channel-less local main-agent turn can recover its own older row;
-      // treating another agent or any channel as trusted would cross ownership.
-      return isLocalMainOperator;
+    if (channel && accountBindingChannels.includes(channel)) {
+      // Shipped rows can still prove same-channel ownership from their persisted
+      // source account while other surfaces retain the existing agent boundary.
+      const sourceAccountId = session.source.accountId?.trim();
+      return Boolean(sourceAccountId && ctx.agentAccountId?.trim() === sourceAccountId);
     }
     return true;
   }

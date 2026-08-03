@@ -112,9 +112,10 @@ Use `path <session> --transcript` to inspect the raw append-only transcript,
 or run the `transcripts` tool's `summarize` action to regenerate the Markdown
 summary.
 
-Sessions created before account ownership was recorded are intentionally hidden
-from channel-originated agent turns. A host operator can recover one without
-granting a channel account ownership by running a local main-agent turn:
+Sessions created before account ownership was recorded retain their stored
+agent ownership. Older rows with no agent attribution cannot be claimed by a
+channel account while its account-binding provider is available. A host
+operator can recover one by running a local main-agent turn:
 
 ```bash
 openclaw agent --agent main --local --message \
