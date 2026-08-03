@@ -382,7 +382,7 @@ describe("sendFileReference", () => {
 
   it("rejects malformed file URLs before making a request", async () => {
     const result = await settleTimers(
-      sendFileReference("https://nas.example.com/incoming", "not-a-url"),
+      sendFileReference("https://nas.example.com/incoming", "not-a-url", undefined, false, true),
     );
     expect(result).toBe(false);
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
@@ -390,7 +390,13 @@ describe("sendFileReference", () => {
 
   it("rejects non-http file URLs before making a request", async () => {
     const result = await settleTimers(
-      sendFileReference("https://nas.example.com/incoming", "file:///tmp/secret.txt"),
+      sendFileReference(
+        "https://nas.example.com/incoming",
+        "file:///tmp/secret.txt",
+        undefined,
+        false,
+        true,
+      ),
     );
     expect(result).toBe(false);
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();

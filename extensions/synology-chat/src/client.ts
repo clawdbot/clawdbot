@@ -172,12 +172,9 @@ export async function sendFileReference(
   dangerouslyAllowNasUrlFetches = false,
 ): Promise<boolean> {
   try {
-    const safeFileUrl = dangerouslyAllowNasUrlFetches
-      ? await assertSafeWebhookFileUrl(fileUrl)
-      : normalizeWebhookFileLink(fileUrl);
     const body = buildWebhookBody(
       dangerouslyAllowNasUrlFetches
-        ? { file_url: safeFileUrl }
+        ? { file_url: await assertSafeWebhookFileUrl(fileUrl) }
         : { text: SYNOLOGY_CHAT_REMOTE_MEDIA_NOTICE },
       userId,
     );

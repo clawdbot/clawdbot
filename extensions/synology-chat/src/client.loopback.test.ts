@@ -235,7 +235,7 @@ describe("Synology Chat user_list loopback", () => {
       },
     };
 
-    const mediaUrl = "http://127.0.0.1/private-proof.png";
+    const mediaUrl = "file:///tmp/private-proof.png";
     await expect(
       synologyChatPlugin.outbound.sendMedia({ cfg, mediaUrl, to: "42" }),
     ).resolves.toMatchObject({ channel: "synology-chat", chatId: "42" });
