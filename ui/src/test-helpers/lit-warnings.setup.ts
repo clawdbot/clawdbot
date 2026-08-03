@@ -1,5 +1,6 @@
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { setSessionPathBuilder } from "../app-session-path-builder.ts";
+import { installSafeLocalStorageForTesting } from "./storage.ts";
 
 setSessionPathBuilder(buildControlUiSessionPath);
 
@@ -83,13 +84,9 @@ if (typeof HTMLDialogElement !== "undefined" && !("close" in HTMLDialogElement.p
   });
 }
 
-// Node 25+ enables WebStorage by default with a global localStorage getter
-// that is dead without --localstorage-file (undefined on 26.5, reported to
-// throw or return an inert proxy on other 25/26 releases). During jsdom
-// global population it shadows the DOM Storage (globalThis is the window),
-// so storage-touching tests crash on newer local Node while Linux CI
-// (Node 24, no default WebStorage) passes. Capability-probe instead of
-// trusting any one shape, then install an in-memory Storage.
+// Node 25+ exposes accessor-backed WebStorage that can be disabled or inert.
+// Vitest intentionally rejects all storage accessors, so jsdom needs an owned
+// value descriptor even when invoking the original getter appears to work.
 function globalLocalStorageIsUsable(): boolean {
   try {
     const existing = globalThis.localStorage;
@@ -105,47 +102,10 @@ function globalLocalStorageIsUsable(): boolean {
   }
 }
 
-function usableWindowLocalStorage(): Storage | null {
-  try {
-    const candidate = window.localStorage;
-    if (!candidate) {
-      return null;
-    }
-    candidate.setItem("__openclaw_probe__", "1");
-    const roundTrips = candidate.getItem("__openclaw_probe__") === "1";
-    candidate.removeItem("__openclaw_probe__");
-    return roundTrips ? candidate : null;
-  } catch {
-    return null;
-  }
-}
-
-if (typeof window !== "undefined" && !globalLocalStorageIsUsable()) {
-  const backing = new Map<string, string>();
-  // Prefer jsdom's own Storage when only the global alias is dead so
-  // `localStorage` and `window.localStorage` stay the same object.
-  const storage: Storage = usableWindowLocalStorage() ?? {
-    get length() {
-      return backing.size;
-    },
-    clear: () => backing.clear(),
-    getItem: (key: string) => backing.get(key) ?? null,
-    key: (index: number) => [...backing.keys()][index] ?? null,
-    removeItem: (key: string) => {
-      backing.delete(key);
-    },
-    setItem: (key: string, value: string) => {
-      backing.set(key, value);
-    },
-  };
-  const install = (target: object) =>
-    Object.defineProperty(target, "localStorage", {
-      configurable: true,
-      enumerable: false,
-      get: () => storage,
-    });
-  install(globalThis);
-  if ((window as unknown) !== globalThis) {
-    install(window);
-  }
+if (
+  typeof window !== "undefined" &&
+  ((typeof process !== "undefined" && Boolean(process.env?.VITEST)) ||
+    !globalLocalStorageIsUsable())
+) {
+  installSafeLocalStorageForTesting(window);
 }

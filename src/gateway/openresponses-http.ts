@@ -902,6 +902,7 @@ export async function handleOpenResponsesHttpRequest(
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
   let finalizeScheduled = false;
   let finalizeErrorMessage: string | undefined;
+  let terminalLifecyclePhase: "end" | "error" = "end";
 
   const maybeFinalize = () => {
     if (closed || finalizeScheduled) {
@@ -1368,6 +1369,7 @@ export async function handleOpenResponsesHttpRequest(
       if (closed || abortController.signal.aborted) {
         return;
       }
+      terminalLifecyclePhase = "error";
       logWarn(`openresponses: streaming response failed: ${String(err)}`);
 
       finalUsage = finalUsage ?? createEmptyUsage();
@@ -1382,11 +1384,6 @@ export async function handleOpenResponsesHttpRequest(
         });
 
         finalizeFailedResponse(errorResponse);
-        emitAgentEvent({
-          runId: responseId,
-          stream: "lifecycle",
-          data: { phase: "error" },
-        });
         return;
       }
       const errorResponse = createResponseResource({
@@ -1413,28 +1410,18 @@ export async function handleOpenResponsesHttpRequest(
         });
         rememberResponseSession();
         finalizeFailedResponse(mappedResponse);
-        emitAgentEvent({
-          runId: responseId,
-          stream: "lifecycle",
-          data: { phase: "error" },
-        });
         return;
       }
       rememberResponseSession();
       finalizeFailedResponse(errorResponse);
-      emitAgentEvent({
-        runId: responseId,
-        stream: "lifecycle",
-        data: { phase: "error" },
-      });
     } finally {
       releaseAgentRootWork?.();
-      if (!closed) {
-        // Emit lifecycle end to trigger completion
+      // Existing provider terminals must not be replaced or emitted twice.
+      if (finalizeStatus === null && (terminalLifecyclePhase === "error" || !closed)) {
         emitAgentEvent({
           runId: responseId,
           stream: "lifecycle",
-          data: { phase: "end" },
+          data: { phase: terminalLifecyclePhase },
         });
       }
     }

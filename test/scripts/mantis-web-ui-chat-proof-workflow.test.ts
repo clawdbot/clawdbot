@@ -45,7 +45,12 @@ function candidateOverridePattern(): RegExp {
   if (!match) {
     throw new Error("Missing candidate override regex");
   }
-  return Function(`"use strict"; return ${match[1]};`)() as RegExp;
+  const literal = match[1];
+  if (!literal) {
+    throw new Error("Missing candidate override regex literal");
+  }
+  const flagsStart = literal.lastIndexOf("/");
+  return new RegExp(literal.slice(1, flagsStart), literal.slice(flagsStart + 1));
 }
 
 describe("Mantis Web UI chat proof workflow", () => {

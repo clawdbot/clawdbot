@@ -2,14 +2,18 @@
 import "../infra/fs-safe-defaults.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import type { request as httpRequest } from "node:http";
 import path from "node:path";
 import {
   basenameFromAnyPath,
   extnameFromAnyPath,
   nameFromAnyPath,
 } from "@openclaw/media-core/file-name";
-import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import {
+  detectMime,
+  extensionForMime,
+  getFileExtension,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fileStore } from "../infra/file-store.js";
@@ -19,7 +23,6 @@ import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
-import { downloadMediaToFile, setMediaStoreDownloadDepsForTest } from "./store.download.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 import { formatMediaLimitMb, MEDIA_FILE_MODE } from "./store.shared.js";
 
@@ -34,20 +37,17 @@ const PLAYBACK_TRANSCODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 let playbackCacheOperationTail = Promise.resolve();
-type RequestImpl = typeof httpRequest;
-type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
+let resolvePinnedHostnameForTest: typeof resolvePinnedHostname | undefined;
 type CleanOldMediaOptions = {
   recursive?: boolean;
   pruneEmptyDirs?: boolean;
 };
 
-/** Overrides network dependencies for media-store tests. */
+/** Overrides the canonical remote resolver for loopback integration tests. */
 function setMediaStoreNetworkDepsForTest(deps?: {
-  httpRequest?: RequestImpl;
-  httpsRequest?: RequestImpl;
-  resolvePinnedHostname?: ResolvePinnedHostnameImpl;
+  resolvePinnedHostname?: typeof resolvePinnedHostname;
 }): void {
-  setMediaStoreDownloadDepsForTest(deps);
+  resolvePinnedHostnameForTest = deps?.resolvePinnedHostname;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -374,6 +374,7 @@ function resolveSavedMediaExtension(params: {
   headerExt?: string;
   contentType?: string;
   originalFilename?: string;
+  detectionFilePathHint?: string;
 }): string {
   const trustedHeaderExt =
     params.headerExt &&
@@ -385,6 +386,7 @@ function resolveSavedMediaExtension(params: {
     trustedHeaderExt ??
     extensionForMime(params.detectedMime) ??
     safeOriginalFilenameExtension(params.originalFilename) ??
+    getFileExtension(params.detectionFilePathHint) ??
     ""
   );
 }
@@ -543,29 +545,17 @@ export async function saveMediaSource(
 ): Promise<SavedMedia> {
   const dir = resolveMediaScopedDir(subdir, "saveMediaSource");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
-    return await saveMediaSiblingTempFile({
-      dir,
-      tempPrefix: `.${baseId}`,
-      writeTemp: async (tempPath) => {
-        const { headerMime, sniffBuffer, size } = await downloadMediaToFile({
-          url: source,
-          dest: tempPath,
-          headers,
-          maxBytes,
-        });
-        const mime = await detectMime({
-          buffer: sniffBuffer,
-          headerMime,
-          filePath: source,
-        });
-        const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
-        const id = buildSavedMediaId({ baseId, ext });
-        return { id, size, contentType: mime };
-      },
+    const { saveRemoteMediaForStore } = await import("./store.remote.runtime.js");
+    return await saveRemoteMediaForStore({
+      source,
+      headers,
+      subdir,
+      maxBytes,
+      resolvePinnedHostnameForTest,
     });
   }
+  const baseId = crypto.randomUUID();
   try {
     const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes });
     const mime = await detectMime({ buffer, filePath: source });
@@ -607,6 +597,7 @@ export async function saveMediaBuffer(
     headerExt,
     contentType,
     originalFilename,
+    detectionFilePathHint,
   });
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
   await writeSavedMediaBuffer({ subdir, id, buffer });
@@ -645,6 +636,7 @@ export async function saveMediaStream(
         headerExt,
         contentType,
         originalFilename,
+        detectionFilePathHint,
       });
       const id = buildSavedMediaId({ baseId, ext, originalFilename });
       return { id, size, contentType: mime };

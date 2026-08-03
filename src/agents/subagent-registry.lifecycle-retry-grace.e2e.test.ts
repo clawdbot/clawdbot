@@ -159,6 +159,7 @@ describe("subagent registry lifecycle error grace", () => {
     mod.testing.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      loadAgentRuntimePluginRegistryHandle: () => undefined,
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../infra/agent-events.js").onAgentEvent,
     });

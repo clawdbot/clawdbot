@@ -53,6 +53,12 @@ const connectParams = {
     handshake,
   },
 };
+const connectRequest = (params: unknown, id = "connect-1") => ({
+  type: "req",
+  id,
+  method: "connect",
+  params,
+});
 const workerHello = {
   type: "worker-hello-ok" as const,
   environmentId: "worker-1",
@@ -103,6 +109,24 @@ const transcriptMessages = [
     timestamp: 3,
   },
 ];
+const transcriptCommit = (overrides: Record<string, unknown> = {}) => ({
+  runEpoch: 2,
+  seq: 1,
+  baseLeafId: null,
+  messages: transcriptMessages,
+  ...overrides,
+});
+const commitResponse = (value: Record<string, unknown>) =>
+  Value.Check(WorkerTranscriptCommitResponseFrameSchema, {
+    type: "res",
+    id: "commit-1",
+    ...value,
+  });
+const commitError = (message: string, reason: string) =>
+  commitResponse({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message, details: { reason } },
+  });
 const liveBase = { runEpoch: 2, lastAckedSeq: 0, seq: 1, runId: "r" };
 const models = {
   selectedProvider: "p",
@@ -184,35 +208,20 @@ describe("worker admission handshake schema", () => {
 
 describe("worker protocol schemas", () => {
   it("accepts a dedicated connect and explicit unattached session", () => {
-    expect(
-      validateWorkerConnectRequestFrame({
-        type: "req",
-        id: "connect-1",
-        method: "connect",
-        params: connectParams,
-      }),
-    ).toBe(true);
+    expect(validateWorkerConnectRequestFrame(connectRequest(connectParams))).toBe(true);
     const missingRunId = structuredClone(connectParams);
     Reflect.deleteProperty(missingRunId.admission, "runId");
     expect(
-      validateWorkerConnectRequestFrame({
-        type: "req",
-        id: "connect-missing-run",
-        method: "connect",
-        params: missingRunId,
-      }),
+      validateWorkerConnectRequestFrame(connectRequest(missingRunId, "connect-missing-run")),
     ).toBe(false);
     for (const admission of [
       { ...connectParams.admission, sessionId: null, runId: "run-1" },
       { ...connectParams.admission, sessionId: "session-1", runId: null },
     ]) {
       expect(
-        validateWorkerConnectRequestFrame({
-          type: "req",
-          id: "connect-mismatched-session-run",
-          method: "connect",
-          params: { ...connectParams, admission },
-        }),
+        validateWorkerConnectRequestFrame(
+          connectRequest({ ...connectParams, admission }, "connect-mismatched-session-run"),
+        ),
       ).toBe(false);
     }
     expect(
@@ -245,12 +254,7 @@ describe("worker protocol schemas", () => {
   });
 
   it("accepts semantic transcript commits and generated-id responses", () => {
-    const commitParams = {
-      runEpoch: 2,
-      seq: 1,
-      baseLeafId: null,
-      messages: transcriptMessages,
-    };
+    const commitParams = transcriptCommit();
     expect(validateWorkerTranscriptCommitParams(commitParams)).toBe(true);
     expect(
       Value.Check(WorkerTranscriptCommitRequestFrameSchema, {
@@ -261,37 +265,13 @@ describe("worker protocol schemas", () => {
       }),
     ).toBe(true);
     expect(
-      Value.Check(WorkerTranscriptCommitResponseFrameSchema, {
-        type: "res",
-        id: "commit-1",
+      commitResponse({
         ok: true,
         payload: { entryIds: ["entry-1", "entry-2", "entry-3"], newLeafId: "entry-3" },
       }),
     ).toBe(true);
-    expect(
-      Value.Check(WorkerTranscriptCommitResponseFrameSchema, {
-        type: "res",
-        id: "commit-1",
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "worker request rejected",
-          details: { reason: "credential-replaced" },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(WorkerTranscriptCommitResponseFrameSchema, {
-        type: "res",
-        id: "commit-1",
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "transcript commit rejected",
-          details: { reason: "stale-base-leaf" },
-        },
-      }),
-    ).toBe(true);
+    expect(commitError("worker request rejected", "credential-replaced")).toBe(true);
+    expect(commitError("transcript commit rejected", "stale-base-leaf")).toBe(true);
   });
 
   it("validates the additive live-event protocol", () => {
@@ -391,27 +371,14 @@ describe("worker protocol schemas", () => {
   });
 
   it.each([
-    { runEpoch: 2, seq: 1, baseLeafId: null, messages: [] },
-    { runEpoch: 2, seq: 0, baseLeafId: null, messages: transcriptMessages },
-    { runEpoch: 2, seq: 1, baseLeafId: null, messages: transcriptMessages, sessionId: "other" },
-    {
-      runEpoch: 2,
-      seq: 1,
-      baseLeafId: null,
-      messages: [{ ...transcriptMessages[0], id: "entry-from-worker" }],
-    },
-    {
-      runEpoch: 2,
-      seq: 1,
-      baseLeafId: null,
-      messages: [{ ...transcriptMessages[0], parentId: "parent-from-worker" }],
-    },
-    {
-      runEpoch: 2,
-      seq: 1,
-      baseLeafId: null,
+    transcriptCommit({ messages: [] }),
+    transcriptCommit({ seq: 0 }),
+    transcriptCommit({ sessionId: "other" }),
+    transcriptCommit({ messages: [{ ...transcriptMessages[0], id: "entry-from-worker" }] }),
+    transcriptCommit({ messages: [{ ...transcriptMessages[0], parentId: "parent-from-worker" }] }),
+    transcriptCommit({
       messages: [{ ...transcriptMessages[0], sessionId: "foreign-session" }],
-    },
+    }),
   ])("rejects raw transcript identity or invalid batch fields %#", (candidate) => {
     expect(validateWorkerTranscriptCommitParams(candidate)).toBe(false);
   });
@@ -425,10 +392,7 @@ describe("worker protocol schemas", () => {
     if (!transcriptAssistant || transcriptAssistant.role !== "assistant") {
       throw new Error("expected assistant transcript fixture");
     }
-    const candidate = {
-      runEpoch: 2,
-      seq: 1,
-      baseLeafId: null,
+    const candidate = transcriptCommit({
       messages: [
         {
           ...transcriptAssistant,
@@ -442,7 +406,7 @@ describe("worker protocol schemas", () => {
           ],
         },
       ],
-    };
+    });
 
     expect(validateWorkerTranscriptCommitParams(candidate)).toBe(false);
     expect(validateWorkerTranscriptCommitParams.errors?.[0]).toMatchObject({

@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getRuntimeConfig,
@@ -44,7 +45,6 @@ import {
   resolvePluginModelCatalogOwnerPluginId,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
-import { stableStringify } from "./stable-stringify.js";
 
 type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
   fingerprint: string;

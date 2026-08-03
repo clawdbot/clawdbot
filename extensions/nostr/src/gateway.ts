@@ -37,6 +37,10 @@ const activeBuses = new Map<string, NostrBusHandle>();
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
 const ACCESS_GROUP_PREFIX = "accessGroup:";
 
+function normalizeRelayLifecycleKey(relay: string): string {
+  return new URL(relay).toString();
+}
+
 function parseNostrAccessGroupAllowFromEntry(entry: string): string | null {
   const trimmed = entry.trim();
   if (!trimmed.startsWith(ACCESS_GROUP_PREFIX)) {
@@ -86,6 +90,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
   ctx.setStatus({
     accountId: account.accountId,
     publicKey: account.publicKey,
+    lifecycle: "starting",
   });
   ctx.log?.info?.(`[${account.accountId}] starting Nostr provider (pubkey: ${account.publicKey})`);
 
@@ -121,6 +126,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     });
 
   let busHandle: NostrBusHandle | null = null;
+  const connectedRelays = new Set<string>();
 
   const authorizeSender = async (input: {
     senderId: string;
@@ -233,9 +239,28 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
           ctx.log?.error?.(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
         },
         onConnect: (relay) => {
+          connectedRelays.add(normalizeRelayLifecycleKey(relay));
+          // Treat >=1 connected relay as ready. This favors partial availability over quorum
+          // fidelity; circuit-breaker health stays private to nostr-bus, so ready is not all-relays.
+          ctx.setStatus({
+            accountId: account.accountId,
+            connected: true,
+            lifecycle: "ready",
+            lastConnectedAt: Date.now(),
+            lastError: null,
+            terminalDisconnect: undefined,
+          });
           ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
         },
         onDisconnect: (relay) => {
+          connectedRelays.delete(normalizeRelayLifecycleKey(relay));
+          if (connectedRelays.size === 0) {
+            ctx.setStatus({
+              accountId: account.accountId,
+              connected: false,
+              lifecycle: "recovering",
+            });
+          }
           ctx.log?.debug?.(`[${account.accountId}] Disconnected from relay: ${relay}`);
         },
         onEose: (relays) => {

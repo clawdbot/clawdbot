@@ -7,7 +7,10 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginBundleFormat } from "../../plugins/manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
-import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
+import {
+  auditOpenClawPeerDependencyLink,
+  resolveOpenClawHostDependency,
+} from "../../plugins/plugin-peer-link.js";
 import type { PluginVerificationFailureReason } from "../../plugins/runtime-degraded-state.js";
 import { resolveUserPath } from "../../utils.js";
 
@@ -40,6 +43,7 @@ const TRACKED_SOURCES: ReadonlySet<string> = new Set(["npm", "clawhub", "git", "
 export async function runPluginPayloadSmokeCheck(params: {
   records: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
+  installSourceProvenance?: "authoritative" | "manifest-only";
 }): Promise<PluginPayloadSmokeResult> {
   const checked: string[] = [];
   const failures: PluginPayloadSmokeFailure[] = [];
@@ -85,6 +89,8 @@ export async function runPluginPayloadSmokeCheck(params: {
             pluginId,
             installPath,
             manifest: packagePayload.manifest,
+            installSource: record.source,
+            installSourceIsAuthoritative: params.installSourceProvenance !== "manifest-only",
           })),
         );
         continue;
@@ -123,7 +129,12 @@ export async function runPluginPayloadSmokeCheckForManifestRecords(params: {
       } satisfies PluginInstallRecord,
     ]),
   );
-  return await runPluginPayloadSmokeCheck({ records, env: params.env });
+  // Manifest snapshots do not carry install ownership; their synthetic npm source is not a ledger.
+  return await runPluginPayloadSmokeCheck({
+    records,
+    env: params.env,
+    installSourceProvenance: "manifest-only",
+  });
 }
 
 type PackagePayloadManifest = PackageManifest & { main?: unknown; exports?: unknown };
@@ -201,10 +212,18 @@ async function validatePackagePayload(params: {
   pluginId: string;
   installPath: string;
   manifest: PackagePayloadManifest;
+  installSource: PluginInstallRecord["source"];
+  installSourceIsAuthoritative: boolean;
 }): Promise<PluginPayloadSmokeFailure[]> {
   const failures: PluginPayloadSmokeFailure[] = [];
 
-  if (manifestDeclaresOpenClawPeer(params.manifest)) {
+  const hostDependency = resolveOpenClawHostDependency(params.manifest);
+  // Older non-npm installs never guaranteed direct host links; only npm ownership can repair them.
+  if (
+    hostDependency &&
+    (hostDependency.declaration === "peerDependencies" ||
+      (params.installSourceIsAuthoritative && params.installSource === "npm"))
+  ) {
     const peerIssue = await auditOpenClawPeerDependencyLink({
       packageDir: params.installPath,
       packageName: params.manifest.name ?? params.pluginId,
@@ -214,7 +233,11 @@ async function validatePackagePayload(params: {
         pluginId: params.pluginId,
         installPath: params.installPath,
         reason: "missing-openclaw-peer-link",
-        detail: `Plugin declares peerDependency "openclaw" but peer link audit failed: ${peerIssue.reason}.`,
+        detail: `Plugin declares ${
+          hostDependency.declaration === "peerDependencies" ? "peerDependency" : "dependency"
+        } "openclaw" but ${
+          hostDependency.declaration === "peerDependencies" ? "peer" : "host"
+        } link audit failed: ${peerIssue.reason}.`,
       });
     }
   }
@@ -329,16 +352,6 @@ export function validateBundleInstallRecordPayload(params: {
       : "invalid-bundle-manifest",
     detail: `Bundle manifest validation failed: ${bundleManifest.error}`,
   };
-}
-
-function manifestDeclaresOpenClawPeer(manifest: PackageManifest): boolean {
-  const peerDependencies = (manifest as { peerDependencies?: unknown }).peerDependencies;
-  return (
-    typeof peerDependencies === "object" &&
-    peerDependencies !== null &&
-    !Array.isArray(peerDependencies) &&
-    typeof (peerDependencies as Record<string, unknown>).openclaw === "string"
-  );
 }
 
 async function safeStat(target: string): Promise<import("node:fs").Stats | null> {

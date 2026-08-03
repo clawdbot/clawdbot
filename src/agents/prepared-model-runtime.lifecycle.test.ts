@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 
 type LoadStaticCatalog =
   typeof import("./embedded-agent-runner/model.static-catalog.js").loadBundledProviderStaticCatalogContextModels;
@@ -29,7 +30,7 @@ const mocks = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
-  ensureRuntimePluginsLoaded: vi.fn(),
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
   loadStaticCatalog: vi.fn<LoadStaticCatalog>(async () => []),
   prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({ entries: [] })),
   resolveStaticCatalogModel: vi.fn(() => undefined),
@@ -71,6 +72,7 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
+  listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
   listAgentIds: () => mocks.configuredAgentIds,
   resolveAgentDir: (_config: unknown, agentId: string) =>
     mocks.configuredAgentDirs.get(agentId) ??
@@ -80,6 +82,12 @@ vi.mock("./agent-scope.js", () => ({
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
+  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveRunModelFallbacksOverride: () => undefined,
+  resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
+    defaultAgentId: "default",
+    sessionAgentId: agentId ?? "default",
+  }),
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
@@ -105,7 +113,8 @@ vi.mock("./models-config.providers.implicit.js", () => ({
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: (...args: unknown[]) => mocks.ensureRuntimePluginsLoaded(...args),
+  loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
+    mocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
@@ -152,7 +161,9 @@ describe("prepared model runtime snapshots", () => {
       pluginCatalogs: [],
     }));
     mocks.buildPreparedModelCatalogSnapshot.mockClear();
-    mocks.ensureRuntimePluginsLoaded.mockClear();
+    mocks.loadAgentRuntimePluginRegistryHandle
+      .mockReset()
+      .mockReturnValue(createEmptyPluginRegistry());
     mocks.loadStaticCatalog.mockClear();
     mocks.prepareStaticCatalog.mockClear();
     mocks.resolveStaticCatalogModel.mockClear();
@@ -256,7 +267,7 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
   });
 
-  it("publishes an exact dynamic workspace owner at gateway run admission", async () => {
+  it("retains an exact dynamic workspace owner after gateway run admission", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
     await refreshPreparedModelRuntimeSnapshots(config, {
@@ -282,25 +293,16 @@ describe("prepared model runtime snapshots", () => {
     expect(firstLease.snapshot.workspaceDir).toBe("/tmp/spawned-workspace");
     expect(secondLease.snapshot).toBe(firstLease.snapshot);
     firstLease.release();
-    await expect(
-      prepareModelRuntimeSnapshot({
-        agentId: "default",
-        config,
-        agentDir: "/tmp/unused-agent",
-        inheritedAuthDir: "/tmp/unused-agent",
-        workspaceDir: "/tmp/spawned-workspace",
-      }),
-    ).resolves.toBe(firstLease.snapshot);
     secondLease.release();
-    await expect(
-      prepareModelRuntimeSnapshot({
-        agentId: "default",
-        config,
-        agentDir: "/tmp/unused-agent",
-        inheritedAuthDir: "/tmp/unused-agent",
-        workspaceDir: "/tmp/spawned-workspace",
-      }),
-    ).rejects.toThrow("prepared model runtime owner was not published");
+    const retainedLease = await acquireAgentRunPreparedModelRuntime({
+      agentId: "default",
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/spawned-workspace",
+    });
+    expect(retainedLease.snapshot).toBe(firstLease.snapshot);
+    retainedLease.release();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
   });
 
@@ -811,7 +813,7 @@ describe("prepared model runtime snapshots", () => {
       refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" }),
     ).resolves.toBeUndefined();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
     expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
   });

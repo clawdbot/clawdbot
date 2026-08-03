@@ -255,6 +255,12 @@ async function runOllamaWebSearch(params: {
       }
       throw lastError;
     } finally {
+      // The 401/403 branches throw before the stream is touched, leaving release
+      // to force-close the active dispatcher. Start cancellation first; awaiting
+      // it can deadlock when capture tees the stream.
+      if (!response.bodyUsed) {
+        void response.body?.cancel().catch(() => undefined);
+      }
       await release();
     }
   }

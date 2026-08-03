@@ -323,6 +323,9 @@ export async function prepareGatewayRuntimeState(params: {
     deferStartupAccountStartsUntil: startupAccountStartsReady,
     getNativeApprovalRuntime: () => gatewayInstanceRuntimeRef.current?.nativeApprovals,
     ambientAutostartSuppressedChannelIds,
+    ...(opts.tryRecoverChannelAutostartSuppression
+      ? { tryRecoverAutostartSuppression: opts.tryRecoverChannelAutostartSuppression }
+      : {}),
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
@@ -346,7 +349,6 @@ export async function prepareGatewayRuntimeState(params: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   } = {};
   const {
-    releasePluginRouteRegistry,
     httpServer,
     httpServers,
     httpBindHosts,
@@ -395,8 +397,8 @@ export async function prepareGatewayRuntimeState(params: {
         runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
       pluginRegistry: pluginRuntime.registry,
       getPluginRouteRegistry: () => pluginRuntime.registry,
+      isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
       getGatewayRequestContext: () => pluginGatewayContext.current,
-      pinChannelRegistry: !minimalTestGateway,
       deps,
       log,
       logHooks,
@@ -463,7 +465,6 @@ export async function prepareGatewayRuntimeState(params: {
     isGatewayStartupPending,
     pluginGatewayContext,
     watchNodeRequestHandler,
-    releasePluginRouteRegistry,
     httpServer,
     httpServers,
     httpBindHosts,

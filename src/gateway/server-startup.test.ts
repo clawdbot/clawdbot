@@ -12,6 +12,7 @@ const refreshPreparedModelRuntimeSnapshotsMock = vi.fn(
       gatewayLifecycle?: boolean;
       defaultWorkspaceDir?: string;
       catalogMode?: "live" | "static";
+      allowGatewaySubagentBinding?: boolean;
     },
   ) => {},
 );
@@ -30,6 +31,7 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
       gatewayLifecycle?: boolean;
       defaultWorkspaceDir?: string;
       catalogMode?: "live" | "static";
+      allowGatewaySubagentBinding?: boolean;
     },
   ) => refreshPreparedModelRuntimeSnapshotsMock(cfg, options),
 }));
@@ -71,6 +73,7 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
+      allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
       catalogMode: "static",
     });
@@ -84,6 +87,7 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
+      allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
       catalogMode: "static",
     });
@@ -119,7 +123,10 @@ describe("gateway startup primary model warmup", () => {
       expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledOnce();
       expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(
         expect.any(Object),
-        expect.objectContaining({ defaultWorkspaceDir: "/tmp/skip-explicit-workspace" }),
+        expect.objectContaining({
+          allowGatewaySubagentBinding: true,
+          defaultWorkspaceDir: "/tmp/skip-explicit-workspace",
+        }),
       );
       expect(optionalPrewarm).not.toHaveBeenCalled();
     } finally {
@@ -140,6 +147,7 @@ describe("gateway startup primary model warmup", () => {
     await prewarmConfiguredPrimaryModel({ cfg, log: { warn: vi.fn() } });
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
+      allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
       catalogMode: "static",
     });
@@ -154,6 +162,7 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
+      allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
       catalogMode: "static",
       defaultWorkspaceDir: "/tmp/explicit-workspace",

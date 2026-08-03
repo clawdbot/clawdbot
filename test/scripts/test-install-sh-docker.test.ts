@@ -296,7 +296,7 @@ function normalizeInstallE2eAgentOutput(output: string) {
 function extractInstallSmokeUpdateJsonParser(): string {
   const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
   const match = script.match(
-    /UPDATE_JSON="\$UPDATE_JSON" \\\n[\s\S]*?node - <<'NODE'\n([\s\S]*?)\nNODE\n\n  echo "==> Verify updated version"/u,
+    /UPDATE_JSON="\$UPDATE_JSON" \\\n[\s\S]*?node - <<'NODE'\n([\s\S]*?)\nNODE\n\n {2}echo "==> Verify updated version"/u,
   );
   if (!match) {
     throw new Error("install smoke update JSON parser was not found");
@@ -463,7 +463,9 @@ async function waitForCondition(
     if (predicate()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }
@@ -1121,6 +1123,9 @@ printf 'status=%s\\n' "$status"
     expect(script).toContain("print_pack_delta_audit");
     expect(script).toContain("==> Pack audit");
     expect(script).toContain("==> Pack audit delta");
+    expect(script).toContain("normalize_npm_pack_json_file");
+    expect(script).toContain('normalize_npm_pack_json_file "$pack_json_file"');
+    expect(script).toContain('normalize_npm_pack_json_file "$baseline_pack_json_file"');
   });
 
   it("fails the update smoke when the candidate npm pack exceeds the release budget", () => {

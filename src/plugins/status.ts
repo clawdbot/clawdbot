@@ -20,10 +20,14 @@ import {
   type PluginCapabilityEntry,
   type PluginInspectShape,
 } from "./inspect-shape.js";
-import { loadOpenClawPlugins, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
+import { loadPluginRegistryHandle, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
@@ -203,6 +207,7 @@ type PluginReportParams = {
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
+  metadataSnapshot?: PluginMetadataSnapshot;
   resolvedConfig?: OpenClawConfig;
 };
 
@@ -214,20 +219,25 @@ function buildPluginReport(
   const initialWorkspaceDir =
     params?.workspaceDir ??
     resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig), params?.env);
-  const metadataSnapshot = !loadModules
-    ? loadPluginMetadataSnapshot({
-        config: rawConfig,
-        env: params?.env ?? process.env,
-        workspaceDir: initialWorkspaceDir,
-      })
-    : undefined;
-  const baseContext = resolvePluginRuntimeLoadContext({
-    config: rawConfig,
-    env: params?.env,
-    logger: params?.logger,
-    workspaceDir: initialWorkspaceDir,
-    manifestRegistry: metadataSnapshot?.manifestRegistry,
-  });
+  const metadataSnapshot =
+    params?.metadataSnapshot ??
+    loadPluginMetadataSnapshot({
+      config: rawConfig,
+      env: params?.env ?? process.env,
+      workspaceDir: initialWorkspaceDir,
+      ...(params?.onlyPluginIds !== undefined ? { pluginIds: params.onlyPluginIds } : {}),
+    });
+  const baseContext = {
+    ...resolvePluginRuntimeLoadContext({
+      config: rawConfig,
+      env: params?.env,
+      logger: params?.logger,
+      workspaceDir: initialWorkspaceDir,
+      onlyPluginIds: params?.onlyPluginIds,
+      manifestRegistry: metadataSnapshot.manifestRegistry,
+    }),
+    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
+  };
   const workspaceDir =
     baseContext.workspaceDir ?? initialWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const context =
@@ -237,9 +247,7 @@ function buildPluginReport(
           ...baseContext,
           workspaceDir,
         };
-  const manifestByPluginId =
-    metadataSnapshot?.byPluginId ??
-    new Map(context.manifestRegistry?.plugins.map((manifest) => [manifest.id, manifest]) ?? []);
+  const manifestByPluginId = metadataSnapshot.byPluginId;
   const config = context.config;
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
@@ -248,7 +256,7 @@ function buildPluginReport(
     config,
     workspaceDir,
     env: params?.env,
-    manifestRegistry: metadataSnapshot?.manifestRegistry,
+    manifestRegistry: metadataSnapshot.manifestRegistry,
   });
   const runtimeCompatConfig = withBundledPluginEnablementCompat({
     config,
@@ -269,14 +277,13 @@ function buildPluginReport(
     ? tracePluginLifecyclePhase(
         "runtime plugin registry load",
         () =>
-          loadOpenClawPlugins(
+          loadPluginRegistryHandle(
             buildPluginRuntimeLoadOptions(context, {
               config: runtimeCompatConfig,
               activationSourceConfig: rawConfig,
               workspaceDir,
               env: params?.env,
               loadModules,
-              activate: false,
               cache: false,
               onlyPluginIds,
             }),
@@ -294,7 +301,7 @@ function buildPluginReport(
             logger: params?.logger,
             loadModules: false,
             onlyPluginIds,
-            manifestRegistry: metadataSnapshot?.manifestRegistry,
+            manifestRegistry: metadataSnapshot.manifestRegistry,
             runtimeContext: context,
           }),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },
@@ -558,7 +565,7 @@ export function buildPluginCompatibilitySnapshotNotices(params?: {
   const report = buildPluginSnapshotReport(params);
   const context = resolvePluginRuntimeLoadContext(params);
   const runtimeRegistry = resolveCompatibleRuntimePluginRegistry(
-    buildPluginRuntimeLoadOptions(context, { activate: false }),
+    buildPluginRuntimeLoadOptions(context),
   );
   const registeredPlugins = new Map(runtimeRegistry?.plugins.map((plugin) => [plugin.id, plugin]));
   // Hook shape is a runtime registration fact. Reuse compatible live registrations without

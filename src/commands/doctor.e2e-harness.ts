@@ -61,13 +61,13 @@ function createLegacyConfigSnapshot() {
   } as const;
 }
 
-const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
+export const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
 export const confirm = vi.fn().mockResolvedValue(true) as unknown as MockFn;
 const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
 const note = vi.fn() as unknown as MockFn;
 export const writeConfigFile = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
-const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
-const runGatewayUpdate = vi
+export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
+export const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
 const collectRelevantDoctorPluginIds = vi.fn(() => []) as unknown as MockFn;
@@ -87,7 +87,7 @@ const runExec = vi.fn().mockResolvedValue({
   stdout: "",
   stderr: "",
 }) as unknown as MockFn;
-const runCommandWithTimeout = vi
+export const runCommandWithTimeout = vi
   .fn()
   .mockResolvedValue(createCommandWithTimeoutResult()) as unknown as MockFn;
 
@@ -133,7 +133,7 @@ export const callGateway = vi
   .fn()
   .mockRejectedValue(new Error("gateway closed")) as unknown as MockFn;
 
-const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
+export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   migrated: false,
   skipped: false,
   changes: [],
@@ -387,6 +387,7 @@ vi.mock("../plugins/loader.js", () => ({
   getRuntimePluginRegistryForLoadOptions: () => null,
   isPluginRegistryLoadInFlight: () => false,
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
+  loadPluginRegistryHandle: () => createEmptyPluginRegistry(),
   resolveCompatibleRuntimePluginRegistry: () => null,
   resolveRuntimePluginRegistry: () => null,
 }));
@@ -495,6 +496,24 @@ vi.mock("../infra/update-runner.js", () => ({
 
 vi.mock("../flows/doctor-health-contributions.js", () => ({
   runDoctorHealthContributions,
+}));
+
+vi.mock("../flows/doctor-core-checks.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/doctor-core-checks.runtime.js")>()),
+  collectRuntimeToolSchemaFindings: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
+  collectActiveToolSchemaProjectionWarnings: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("./doctor-browser.js", () => ({
+  detectLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue(null),
+  maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
+  noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-memory-search.js", () => ({

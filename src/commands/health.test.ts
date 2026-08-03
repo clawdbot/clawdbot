@@ -203,6 +203,29 @@ describe("healthCommand", () => {
     expect(output).toContain("Gateway probe duration: 5ms");
   });
 
+  it("prints persistent event-loop degradation duration in text output", async () => {
+    const snapshot = {
+      ...createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} }),
+      eventLoop: {
+        degraded: true,
+        degradedSinceMs: 180_000,
+        reasons: ["event_loop_delay" as const],
+        intervalMs: 30_000,
+        delayP99Ms: 1_200,
+        delayMaxMs: 1_500,
+        utilization: 0.75,
+        cpuCoreRatio: 0.5,
+      },
+    };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain("Gateway event loop: degraded for 3m");
+    expect(output).toContain("p99=1200ms");
+  });
+
   it("omits the probe duration for legacy gateway snapshots", async () => {
     const { durationMs, ...legacySnapshot } = createHealthSummary({
       channels: {},

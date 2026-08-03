@@ -62,6 +62,7 @@ import {
   resolveTargetAcpAgentId,
 } from "./acp-spawn-target.js";
 import { resolveDefaultAgentId } from "./agent-scope.js";
+import { reserveChildAdmissionSlot } from "./child-admission.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -349,24 +350,25 @@ export async function spawnAcpDirect(
     cfg,
     store: subagentStore,
   });
-  const admission = resolveSpawnAdmission({
-    cfg,
-    enabled: hasSubagentEnvelope,
-    requesterSessionKey: requesterInternalKey,
-    requesterAgentId,
-    targetAgentId,
-    requestedAgentId: params.agentId,
-    configuredAgentIds: resolveConfiguredAcpSubagentTargetIds(cfg),
-    additionalActiveChildren: hasSubagentEnvelope
-      ? countUntrackedActiveAcpRunsForOwner(requesterInternalKey)
-      : 0,
-  });
-  if (!admission.ok) {
-    return createAcpSpawnFailure({
-      status: "forbidden",
-      errorCode: "subagent_policy",
-      error: admission.error,
+  const resolveAdmission = (pendingChildren = 0, pendingChildSessionKeys?: ReadonlySet<string>) =>
+    resolveSpawnAdmission({
+      cfg,
+      enabled: hasSubagentEnvelope,
+      requesterSessionKey: requesterInternalKey,
+      requesterAgentId,
+      targetAgentId,
+      requestedAgentId: params.agentId,
+      configuredAgentIds: resolveConfiguredAcpSubagentTargetIds(cfg),
+      additionalActiveChildren: hasSubagentEnvelope
+        ? countUntrackedActiveAcpRunsForOwner(requesterInternalKey, pendingChildSessionKeys) +
+          pendingChildren
+        : 0,
     });
+  const rejectSubagentPolicy = (error: string) =>
+    createAcpSpawnFailure({ status: "forbidden", errorCode: "subagent_policy", error });
+  const admission = resolveAdmission();
+  if (!admission.ok) {
+    return rejectSubagentPolicy(admission.error);
   }
   const resumeAuthorization = validateAcpResumeSessionOwnership({
     cfg,
@@ -642,8 +644,20 @@ export async function spawnAcpDirect(
       });
     },
   };
+  const { controllerSessionKey } = ownership;
+  const admissionReservation = hasSubagentEnvelope
+    ? reserveChildAdmissionSlot({
+        controllerSessionKey,
+        childSessionKey: sessionKey,
+        resolveAdmission,
+      })
+    : undefined;
+  if (admissionReservation && !admissionReservation.ok) {
+    return rejectSubagentPolicy(admissionReservation.error);
+  }
   const pipelineResult = await runSpawnPipeline({
     adapter,
+    admissionReservation,
     hookRunner: getGlobalHookRunner(),
     progressOrigin,
     progressSessionKey: ownership.completionRequesterSessionKey,
@@ -653,7 +667,7 @@ export async function spawnAcpDirect(
         runId,
         requesterTurnRunId: ctx.requesterTurnRunId,
         childSessionKey: sessionKey,
-        controllerSessionKey: ownership.controllerSessionKey,
+        controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,
         requesterOrigin,
         progressOrigin,

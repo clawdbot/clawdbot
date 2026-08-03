@@ -337,6 +337,7 @@ export function renderSettingsEmpty(message: unknown): TemplateResult {
 /** Secret text input with an inset reveal toggle — one field, no trailing
  * button, so secret rows line up with plain input rows in the same group. */
 export function renderSettingsSecretInput(props: {
+  ariaLabel: string;
   value: string;
   placeholder?: string;
   visible: boolean;
@@ -351,6 +352,7 @@ export function renderSettingsSecretInput(props: {
       <input
         class="settings-input"
         type=${props.visible ? "text" : "password"}
+        aria-label=${props.ariaLabel}
         autocomplete="off"
         spellcheck="false"
         .value=${props.value}

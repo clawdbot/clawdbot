@@ -1,8 +1,10 @@
 // Control UI controller manages skill workshop gateway state.
-import { formatByteSize } from "@openclaw/normalization-core";
+import { formatErrorMessage } from "@openclaw/normalization-core";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { formatBytes } from "../../lib/agents/display.ts";
+import { redactToolDetail } from "../../lib/browser-redact.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -100,10 +102,6 @@ export type SkillWorkshopContext = {
   agentSelection: Pick<AgentSelectionCapability, "state">;
 };
 
-function getErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 function skillWorkshopAgentParams(context: SkillWorkshopContext): { agentId: string } {
   const snapshot = context.gateway.snapshot;
   const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
@@ -190,18 +188,6 @@ function proposedVersionNumber(value: string | undefined): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "0 B";
-  }
-  return formatByteSize(bytes, {
-    style: "legacy-binary",
-    maxUnit: "kilo",
-    separator: " ",
-    fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
-  });
-}
-
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).length;
 }
@@ -218,7 +204,11 @@ function supportFilesFromInspect(
   );
   return (result.supportFiles ?? []).map((file) => ({
     path: file.path,
-    size: formatBytes(sizes.get(file.path) ?? byteLength(file.content)),
+    size: formatBytes(Math.max(0, sizes.get(file.path) ?? byteLength(file.content)), {
+      fallback: "0 B",
+      maxUnit: "kilo",
+      fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
+    }),
     contents: file.content,
   }));
 }
@@ -415,7 +405,7 @@ export async function loadSkillWorkshopProposals(
       await loadSkillWorkshopProposalDetail(state, context, state.skillWorkshopSelectedKey);
     }
   } catch (err) {
-    state.skillWorkshopError = getErrorMessage(err);
+    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
   } finally {
     state.skillWorkshopLoading = false;
     if (skillWorkshopAgentParams(context).agentId !== requestAgentId) {
@@ -465,7 +455,7 @@ async function loadSkillWorkshopProposalDetail(
     return true;
   } catch (err) {
     if (state.skillWorkshopAgentId === requestAgentId) {
-      state.skillWorkshopError = getErrorMessage(err);
+      state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
     }
     return false;
   } finally {
@@ -530,7 +520,7 @@ export async function runSkillWorkshopLifecycleAction(
       t(action === "apply" ? "skillWorkshop.notices.applied" : "skillWorkshop.notices.rejected"),
     );
   } catch (err) {
-    state.skillWorkshopError = getErrorMessage(err);
+    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
   } finally {
     if (
       state.skillWorkshopActionBusy?.key === proposalId &&
@@ -594,7 +584,7 @@ export async function runSkillWorkshopEvaluation(
     return true;
   } catch (err) {
     if (state.skillWorkshopAgentId === requestAgentId) {
-      state.skillWorkshopError = getErrorMessage(err);
+      state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
     }
     return false;
   } finally {
@@ -645,7 +635,7 @@ export async function requestSkillWorkshopRevision(
     showActionNotice(state, proposal, t("skillWorkshop.notices.revisionRequested"));
     return true;
   } catch (err) {
-    state.skillWorkshopError = getErrorMessage(err);
+    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
     return false;
   } finally {
     if (

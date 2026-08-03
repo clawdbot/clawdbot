@@ -27,8 +27,12 @@ function runScript(
     return { ok: true, stdout, stderr: "" };
   } catch (error) {
     const e = error as { stdout?: unknown; stderr?: unknown };
-    const stdout = Buffer.isBuffer(e.stdout) ? e.stdout.toString("utf8") : String(e.stdout ?? "");
-    const stderr = Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf8") : String(e.stderr ?? "");
+    const stdout = Buffer.isBuffer(e.stdout)
+      ? e.stdout.toString("utf8")
+      : ((e.stdout ?? "") as string);
+    const stderr = Buffer.isBuffer(e.stderr)
+      ? e.stderr.toString("utf8")
+      : ((e.stderr ?? "") as string);
     return { ok: false, stdout, stderr };
   }
 }

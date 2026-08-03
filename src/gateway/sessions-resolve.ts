@@ -199,6 +199,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     cfg,
     storePath,
     store,
+    lightweightListRows: true,
     opts: {
       includeGlobal: p.includeGlobal === true,
       includeUnknown: p.includeUnknown === true,
@@ -215,7 +216,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     });
   }
   if (list.sessions.length > 1) {
-    const keys = list.sessions.map((s) => s.key).join(", ");
+    const keys = list.sessions.map((session) => session.key).join(", ");
     return {
       ok: false,
       error: errorShape(
@@ -232,6 +233,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
   return {
     ok: true,
-    key: expectDefined(list.sessions[0], "sessions entry at 0").key,
+    key: labelKey,
   };
 }

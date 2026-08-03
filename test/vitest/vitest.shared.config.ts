@@ -22,6 +22,7 @@ import {
 } from "./vitest.bundled-plugin-paths.ts";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
+import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
 
 export type OpenClawVitestPool = "forks" | "threads";
 
@@ -201,6 +202,10 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/matrix/test-api.js",
         replacement: path.join(repoRoot, "extensions", "matrix", "test-api.ts"),
+      },
+      {
+        find: "@openclaw/memory-core/api.js",
+        replacement: path.join(repoRoot, "extensions", "memory-core", "api.ts"),
       },
       {
         find: "@openclaw/slack/api.js",
@@ -555,7 +560,7 @@ export const sharedVitestConfig = {
   },
   test: {
     dir: repoRoot,
-    testTimeout: 120_000,
+    testTimeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
     hookTimeout: isWindows ? 180_000 : 120_000,
     unstubEnvs: true,
     unstubGlobals: true,

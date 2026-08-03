@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -273,6 +273,48 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       },
     ]);
     expect(trajectoryCleanupReferencedIds).toEqual(new Set(["shared-session", "active-session"]));
+  });
+
+  it("reports archive retention failure without aborting file-backed maintenance", async () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
+      ["fresh", { sessionId: "fresh-session", updatedAt: now }],
+    ]);
+    const cleanupError = new Error("archive cleanup denied");
+    const warn = vi.fn();
+    const onMaintenanceApplied = vi.fn();
+
+    const result = await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/sessions.json",
+      store,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 7 * DAY_MS,
+        maxEntries: 500,
+        modelRunPruneAfterMs: DAY_MS,
+        resetArchiveRetentionMs: 0,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      onMaintenanceApplied,
+      log: { warn, info: () => {} },
+      artifacts: {
+        archiveRemovedSessionTranscripts: async () => new Set(),
+        removeRemovedSessionTrajectoryArtifacts: async () => {},
+        cleanupArchivedSessionTranscripts: async () => {
+          throw cleanupError;
+        },
+      },
+    });
+
+    expect(result.changedStore).toBe(true);
+    expect(store.stale).toBeUndefined();
+    expect(store).toHaveProperty("fresh");
+    expect(onMaintenanceApplied).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith("session transcript archive retention cleanup failed", {
+      error: String(cleanupError),
+    });
   });
 
   it("forced cleanup prunes stale model-run probes before the cap evicts real sessions", async () => {

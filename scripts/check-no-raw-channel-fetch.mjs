@@ -94,7 +94,7 @@ function findRawFetchCallLines(content, fileName = "source.ts") {
 /**
  * Runs the raw channel/plugin fetch guard.
  */
-export async function main() {
+async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,
     sourceRoots,
