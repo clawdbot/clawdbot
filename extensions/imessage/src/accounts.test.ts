@@ -14,6 +14,96 @@ import {
 } from "./accounts.js";
 
 describe("resolveIMessageAccount", () => {
+  it.each([
+    ["absent channel", {}, undefined, "default", true, false],
+    ["empty channel", { channels: { imessage: {} } }, undefined, "default", true, false],
+    [
+      "explicitly enabled channel with default paths",
+      { channels: { imessage: { enabled: true } } },
+      undefined,
+      "default",
+      true,
+      true,
+    ],
+    [
+      "explicitly disabled channel",
+      { channels: { imessage: { enabled: false } } },
+      undefined,
+      "default",
+      false,
+      false,
+    ],
+    [
+      "explicitly enabled channel with an existing CLI path",
+      { channels: { imessage: { enabled: true, cliPath: "imsg" } } },
+      undefined,
+      "default",
+      true,
+      true,
+    ],
+    [
+      "explicitly enabled named account",
+      { channels: { imessage: { accounts: { work: { enabled: true } } } } },
+      "work",
+      "work",
+      true,
+      true,
+    ],
+    [
+      "explicitly disabled named account",
+      { channels: { imessage: { accounts: { work: { enabled: false } } } } },
+      "work",
+      "work",
+      false,
+      false,
+    ],
+    [
+      "empty named account",
+      { channels: { imessage: { accounts: { work: {} } } } },
+      "work",
+      "work",
+      true,
+      false,
+    ],
+    [
+      "named account inheriting explicit channel enablement",
+      { channels: { imessage: { enabled: true, accounts: { work: {} } } } },
+      "work",
+      "work",
+      true,
+      true,
+    ],
+    [
+      "configured named account under a disabled channel",
+      { channels: { imessage: { enabled: false, accounts: { work: { enabled: true } } } } },
+      "work",
+      "work",
+      false,
+      true,
+    ],
+    [
+      "explicitly enabled configured default account",
+      {
+        channels: {
+          imessage: { defaultAccount: "work", accounts: { work: { enabled: true } } },
+        },
+      },
+      undefined,
+      "work",
+      true,
+      true,
+    ],
+  ] as const)(
+    "resolves independent enabled and configured state for %s",
+    (_scenario, cfg, accountId, expectedAccountId, enabled, configured) => {
+      expect(resolveIMessageAccount({ cfg: cfg as never, accountId })).toMatchObject({
+        accountId: expectedAccountId,
+        enabled,
+        configured,
+      });
+    },
+  );
+
   it("preserves top-level default account when named accounts are configured", () => {
     const cfg = {
       channels: {
