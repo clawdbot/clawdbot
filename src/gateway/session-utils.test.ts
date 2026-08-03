@@ -1682,6 +1682,52 @@ describe("gateway session utils", () => {
     expect(row.effectiveResponseUsage).toBe("tokens");
   });
 
+  test("buildGatewaySessionRow projects effective reasoning without replacing its override", () => {
+    const cfg = {
+      agents: {
+        defaults: { reasoningDefault: "on" },
+        list: [
+          { id: "main", default: true },
+          { id: "work", reasoningDefault: "stream" },
+        ],
+      },
+    } as OpenClawConfig;
+    const inherited = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:work:main",
+      entry: { sessionId: "work-inherited", updatedAt: 1 } as SessionEntry,
+    });
+    const explicit = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:work:override",
+      entry: {
+        sessionId: "work-override",
+        updatedAt: 1,
+        reasoningLevel: "off",
+      } as SessionEntry,
+    });
+    const globalDefault = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: { sessionId: "main-inherited", updatedAt: 1 } as SessionEntry,
+    });
+
+    expect(inherited.reasoningLevel).toBeUndefined();
+    expect(inherited.effectiveReasoningLevel).toBe("stream");
+    expect(buildGatewaySessionEventFields({ sessionRow: inherited }).effectiveReasoningLevel).toBe(
+      "stream",
+    );
+    expect(explicit.reasoningLevel).toBe("off");
+    expect(explicit.effectiveReasoningLevel).toBe("off");
+    expect(globalDefault.effectiveReasoningLevel).toBe("on");
+  });
+
   test("buildGatewaySessionRow effectiveResponseUsage respects a per-channel responseUsage map", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }] },

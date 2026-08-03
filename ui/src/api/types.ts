@@ -450,6 +450,7 @@ export type GatewaySessionRow = SessionRow & {
   fastAutoOnSeconds?: number;
   verboseLevel?: string;
   reasoningLevel?: string;
+  effectiveReasoningLevel?: string;
   elevatedLevel?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
