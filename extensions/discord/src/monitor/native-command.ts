@@ -298,7 +298,8 @@ async function dispatchDiscordCommandInteraction(params: {
     allowNameMatching,
   });
   const commandOwnerAllowAll = commandOwnerAllowFrom?.includes("*") === true;
-  const senderIsCommandOwner = commandOwnerOk || commandOwnerAllowAll;
+  const senderIsCommandOwner = commandOwnerOk;
+  const commandOwnerAccessAllowed = senderIsCommandOwner || commandOwnerAllowAll;
   const ownerAllowListConfigured = discordOwnerAllowList != null;
   const ownerOk = discordOwnerOk;
   const { commandsAllowFromAccess, guildInfo, channelConfig } =
@@ -462,7 +463,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const pluginMatch = nativeCommandRuntime.matchPluginCommand(prompt);
   if (
     commandOwnerAllowFrom &&
-    !senderIsCommandOwner &&
+    !commandOwnerAccessAllowed &&
     !commandsAllowFromAccess.allowed &&
     commandName !== "status" &&
     !pluginMatch

@@ -109,6 +109,7 @@ async function registerSmsWebhookRoute(params: {
       pluginId: CHANNEL_ID,
       accountId: params.account.accountId,
       log: (msg) => params.log?.info?.(msg),
+      throwOnFailure: true,
       handler: createSmsWebhookHandler({ ...params, ingress }),
     });
   } catch (error) {
