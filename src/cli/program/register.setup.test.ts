@@ -378,6 +378,13 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
+  it("forwards --skip-ui through the canonical onboarding path", async () => {
+    await runCli(["setup", "--skip-ui"]);
+
+    expect(lastWizardOptions()?.skipUi).toBe(true);
+    expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
   it("rejects conflicting custom model input capabilities", async () => {
     await runCli(["setup", "--custom-image-input", "--custom-text-input"]);
 
