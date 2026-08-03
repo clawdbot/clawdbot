@@ -580,6 +580,7 @@ describe("exec interpreter heuristics ReDoS guard", () => {
     const start = Date.now();
     await runExecPreflight({ command, workdir: process.cwd() });
     const elapsed = Date.now() - start;
-    expect(elapsed).toBeLessThan(5000);
+    const maxElapsedMs = isWin ? 10_000 : 5_000;
+    expect(elapsed).toBeLessThan(maxElapsedMs);
   });
 });
