@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 2026.7.23
+
+- Kept chat attachments ready to retry when delivery is temporarily unavailable so unfinished messages remain safely intact, restored Return-key sending with a Magic Keyboard, and preserved reasoning details after history reloads.
+- Completed Calendar and Reminders permission grants without requiring a relaunch, prevented duplicate links in shared drafts, kept forced realtime consultations on the configured Gateway relay, and updated direct Apple Watch connections for timestamped Gateway challenges.
+
 ## 2026.7.22
 
 - Prevented stale Watch reconnect recovery from disconnecting a newly selected Gateway, kept delivered Watch messages from reappearing after a crash, and preserved attachments when retrying uncertain offline sends.
