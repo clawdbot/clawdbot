@@ -1121,16 +1121,51 @@ describe("package acceptance workflow", () => {
     expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(hydratePnpm.run).toContain("COREPACK_HOME");
-    expect(workflowText).toContain('PNPM_CONFIG_STORE_DIR: "/var/cache/crabbox/pnpm/store"');
-    expect(hydratePnpm.run).toContain("prepare_crabbox_pnpm_dirs");
-    expect(hydratePnpm.run).toContain('case "${PNPM_CONFIG_MODULES_DIR:?}" in "$volatile_root"/*)');
+    expect(workflowText).not.toContain('PNPM_CONFIG_STORE_DIR: "/var/cache/crabbox/pnpm/store"');
+    expect(hydratePnpm.run).toContain('preferred_pnpm_store="/var/cache/crabbox/pnpm/store"');
+    expect(hydratePnpm.run).toContain('mkdir -p "$preferred_pnpm_store" 2>/dev/null');
+    expect(hydratePnpm.run).toContain('[ -w "$preferred_pnpm_store" ]');
     expect(hydratePnpm.run).toContain(
-      'case "${PNPM_CONFIG_VIRTUAL_STORE_DIR:?}" in "$volatile_root"/*)',
+      'pnpm_cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/openclaw/pnpm"',
     );
-    expect(hydratePnpm.run).toContain('rm -rf -- "$volatile_root"');
-    expect(hydratePnpm.run).toContain('mkdir -p "$volatile_root" "$PNPM_CONFIG_STORE_DIR"');
+    expect(hydratePnpm.run).toContain('pnpm_install_root="$pnpm_cache_root/install"');
+    expect(hydratePnpm.run).toContain('export PNPM_CONFIG_STORE_DIR="$pnpm_cache_root/store"');
+    expect(hydratePnpm.run).toContain(
+      'export PNPM_CONFIG_MODULES_DIR="$pnpm_install_root/node_modules"',
+    );
+    expect(hydratePnpm.run).toContain('export PNPM_CONFIG_PACKAGE_IMPORT_METHOD="hardlink"');
+    expect(hydratePnpm.run).toContain(
+      'export PNPM_CONFIG_VIRTUAL_STORE_DIR="$pnpm_install_root/virtual-store"',
+    );
+    expect(hydratePnpm.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$PNPM_CONFIG_STORE_DIR"');
+    expect(hydratePnpm.run).toContain('echo "PNPM_CONFIG_MODULES_DIR=$PNPM_CONFIG_MODULES_DIR"');
+    expect(hydratePnpm.run).toContain(
+      'echo "PNPM_CONFIG_PACKAGE_IMPORT_METHOD=${PNPM_CONFIG_PACKAGE_IMPORT_METHOD:-}"',
+    );
+    expect(hydratePnpm.run).toContain(
+      'echo "PNPM_CONFIG_VIRTUAL_STORE_DIR=$PNPM_CONFIG_VIRTUAL_STORE_DIR"',
+    );
+    expect(hydratePnpm.run).toContain('} >> "$GITHUB_ENV"');
+    expect(hydratePnpm.run).toContain("prepare_crabbox_pnpm_dirs");
+    expect(hydratePnpm.run).toContain(
+      'case "${PNPM_CONFIG_MODULES_DIR:?}" in "$pnpm_install_root"/*)',
+    );
+    expect(hydratePnpm.run).toContain(
+      'case "${PNPM_CONFIG_VIRTUAL_STORE_DIR:?}" in "$pnpm_install_root"/*)',
+    );
+    expect(hydratePnpm.run).toContain('rm -rf -- "$pnpm_install_root"');
+    expect(hydratePnpm.run).toContain('mkdir -p "$pnpm_install_root" "$PNPM_CONFIG_STORE_DIR"');
     expect(hydratePnpm.run).toContain(
       'mkdir -p "$PNPM_CONFIG_MODULES_DIR" "$PNPM_CONFIG_VIRTUAL_STORE_DIR"',
+    );
+    expect(hydratePnpm.run).toContain(
+      '"$(stat -c %d "$PNPM_CONFIG_STORE_DIR")" != "$(stat -c %d "$PNPM_CONFIG_MODULES_DIR")"',
+    );
+    expect(hydratePnpm.run).toContain(
+      "Fallback pnpm store and modules directories must share a filesystem",
+    );
+    expect(hydratePnpm.run).toContain(
+      "append_pnpm_option_arg PNPM_CONFIG_PACKAGE_IMPORT_METHOD package-import-method",
     );
     expect(hydratePnpm.run).toContain("Refusing unsafe pnpm directory");
     expect(hydratePnpm.run).not.toContain('rm -rf -- "${PNPM_CONFIG_MODULES_DIR:?}"');
@@ -1162,10 +1197,33 @@ describe("package acceptance workflow", () => {
     expect(prepareCrabboxShell).toContain('readlink -f "$source"');
     expect(prepareCrabboxShell).toContain('readlink -f "$target"');
     expect(prepareCrabboxShell).toContain("link_node_tool corepack");
-    expect(workflowStep(hydrate, "Ensure Docker is running").if).toBeUndefined();
+    const ensureDocker = workflowStep(hydrate, "Ensure Docker is running");
+    expect(ensureDocker.if).toBeUndefined();
+    expect(ensureDocker.env).toEqual({
+      CRABBOX_JOB: "${{ inputs.crabbox_job }}",
+    });
+    expect(ensureDocker.run).toContain("docker_required=false");
+    expect(ensureDocker.run).toContain('if [ "${CRABBOX_JOB:-hydrate}" = "hydrate-docker" ]; then');
+    expect(ensureDocker.run).toContain("other marker names do not");
+    expect(ensureDocker.run).toContain('if [ "$docker_required" = true ]; then');
+    expect(ensureDocker.run).toContain(
+      "Docker is unavailable for ${CRABBOX_JOB:-hydrate}; route this workload to a Docker-capable provider",
+    );
+    expect(ensureDocker.run).toContain(
+      "Docker is unavailable; standard hydration will continue without Docker",
+    );
+    expect(ensureDocker.run).toContain(
+      'echo "OPENCLAW_CRABBOX_DOCKER_AVAILABLE=0" >> "$GITHUB_ENV"',
+    );
+    expect(ensureDocker.run).toContain(
+      'echo "OPENCLAW_CRABBOX_DOCKER_AVAILABLE=1" >> "$GITHUB_ENV"',
+    );
     expect(workflowStep(hydrate, "Ensure SSH is available").if).toBeUndefined();
     expect(workflowStep(hydrate, "Hydrate provider env helper").if).toBeUndefined();
-    expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("COREPACK_HOME");
+    const markCrabboxReady = workflowStep(hydrate, "Mark Crabbox ready").run;
+    expect(markCrabboxReady).toContain("COREPACK_HOME");
+    expect(markCrabboxReady).toContain("OPENCLAW_CRABBOX_DOCKER_AVAILABLE");
+    expect(markCrabboxReady).toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
     expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
 
     expect(hydrateWindowsDaemon.if).toBe("${{ inputs.crabbox_job == 'hydrate-windows-daemon' }}");
@@ -1243,6 +1301,9 @@ describe("package acceptance workflow", () => {
     expect(hydrateGithubCrabboxShell).toContain('readlink -f "$source"');
     expect(hydrateGithubCrabboxShell).toContain('readlink -f "$target"');
     expect(hydrateGithubCrabboxShell).toContain("link_node_tool corepack");
+    const markHydrateGithubReady = workflowStep(hydrateGithub, "Mark Crabbox ready").run;
+    expect(markHydrateGithubReady).toContain("OPENCLAW_CRABBOX_DOCKER_AVAILABLE");
+    expect(markHydrateGithubReady).toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
     expect(workflowStep(hydrateGithub, "Hydrate provider env helper").env?.FACTORY_API_KEY).toBe(
       "${{ secrets.FACTORY_API_KEY }}",
     );
