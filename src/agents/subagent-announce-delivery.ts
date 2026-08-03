@@ -1485,7 +1485,7 @@ export async function deliverSubagentAnnouncement(params: {
         params.expectsCompletionMessage &&
         normalizeOptionalLowercaseString(params.sourceTool) === "subagent_announce" &&
         params.sourceRunId &&
-        direct.delivered === false &&
+        !direct.delivered &&
         direct.disposition === "permanent_failure" &&
         direct.reason === "session_file_changed"
       ) {
