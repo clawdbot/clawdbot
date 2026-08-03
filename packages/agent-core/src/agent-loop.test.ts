@@ -1563,8 +1563,7 @@ describe("agentLoop tool termination", () => {
     ).toEqual(["ask_user", "side_effect"]);
     expect(
       events.find(
-        (event) =>
-          event.type === "tool_execution_end" && event.toolName === "side_effect",
+        (event) => event.type === "tool_execution_end" && event.toolName === "side_effect",
       ),
     ).toMatchObject({ executionStarted: false, isError: true });
   });
