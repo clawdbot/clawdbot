@@ -611,6 +611,7 @@ export async function projectSessionsPatchEntry(params: {
       if (!resolved.ok) {
         return invalid(resolved.error);
       }
+      const overrideSource = isAgentSessionModelPatchOrigin() ? "auto" : "user";
       applyModelOverrideWithAuthProfileCompatibility({
         cfg,
         agentDir: resolveAgentDir(cfg, sessionAgentId),
@@ -622,6 +623,8 @@ export async function projectSessionsPatchEntry(params: {
           isDefault: resolved.isDefault,
         },
         profileOverride: resolved.profile,
+        profileOverrideSource: overrideSource,
+        selectionSource: overrideSource,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
           : {}),

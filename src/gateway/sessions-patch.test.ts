@@ -980,7 +980,7 @@ describe("gateway sessions patch", () => {
         await applyMainModelPatch({
           store,
           cfg: createAllowlistedAnthropicModelCfg(),
-          model: ANTHROPIC_SONNET_MODEL,
+          model: `${ANTHROPIC_SONNET_MODEL}@agent-profile`,
           catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
         }),
     );
@@ -995,6 +995,8 @@ describe("gateway sessions patch", () => {
       prevThinkingLevel: "high",
       source: "agent-patch",
     });
+    expect(entry.modelOverrideSource).toBe("auto");
+    expectAuthOverride(entry, { profile: "agent-profile", source: "auto" });
   });
 
   test("keeps the last validated model across consecutive agent patches", async () => {
