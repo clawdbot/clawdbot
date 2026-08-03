@@ -425,6 +425,8 @@ export class AcpSessionManager {
     sessionKey: string;
     meta: SessionAcpMeta;
   }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
+    const actorKey = normalizeActorKey(params.sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
     return await ensureManagerRuntimeHandle({
       ...params,
       deps: this.deps,
@@ -432,6 +434,7 @@ export class AcpSessionManager {
       enforceConcurrentSessionLimit: (limitParams) =>
         this.enforceConcurrentSessionLimit(limitParams),
       writeSessionMeta: async (writeParams) => await this.writeSessionMeta(writeParams),
+      isCurrentActor: () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch),
     });
   }
 
