@@ -3517,6 +3517,49 @@ describe("OpenClaw chat wizard step payload", () => {
     expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Cancel" });
   });
 
+  it("cancels the local hosted wizard after its inference binding drifts", async () => {
+    useTempStateDir();
+    const baseConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const changedConfig = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    } satisfies OpenClawConfig;
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    let currentConfig: OpenClawConfig = baseConfig;
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      verifiedInference,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+        loadOverview: fakeOverviewLoader(),
+      },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    currentConfig = changedConfig;
+    const cancelled = await engine.cancelWizard({ stepId });
+
+    expect(cancelled.text).toContain("cancelled");
+    expect(cancelled.step).toBeUndefined();
+  });
+
   it("rejects a stale typed cancel without changing the active step", async () => {
     useTempStateDir();
     const engine = new SystemAgentChatEngine({

@@ -841,7 +841,6 @@ export class SystemAgentChatEngine {
   private async cancelWizardSerialized(
     cancel: SystemAgentWizardCancel,
   ): Promise<SystemAgentChatReply> {
-    await this.requireVerifiedInference();
     const bridge = this.wizardBridge;
     const step = bridge?.step;
     if (!bridge || !step) {
