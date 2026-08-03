@@ -812,9 +812,10 @@ compatibility fallback when the shared
     | Base URL     | `tts.providers.openai.baseUrl`                | `https://api.openai.com/v1`      |
     | Extra body   | `tts.providers.openai.extraBody` / `extra_body` | (unset)                        |
 
-    Available models: `gpt-4o-mini-tts`, `tts-1`, `tts-1-hd`. Available voices:
-    `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `fable`, `juniper`,
-    `marin`, `onyx`, `nova`, `sage`, `shimmer`, `verse`.
+    Available models: `gpt-4o-mini-tts`, `gpt-4o-mini-tts-2025-12-15`, `tts-1`,
+    `tts-1-hd`. Available voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`,
+    `echo`, `fable`, `juniper`, `marin`, `onyx`, `nova`, `sage`, `shimmer`,
+    `verse`.
 
     `extraBody` is merged into `/audio/speech` request JSON after OpenClaw's
     generated fields, so use it for OpenAI-compatible endpoints that require
