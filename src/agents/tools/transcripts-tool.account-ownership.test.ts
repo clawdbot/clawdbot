@@ -145,6 +145,33 @@ describe("transcripts tool account ownership", () => {
     ).resolves.toMatchObject({
       details: { active: [expect.objectContaining({ sessionId: "account-bound" })] },
     });
+
+    const ownerOnlySession = {
+      sessionId: "owner-only",
+      source: { providerId: "discord-voice", accountId: "account-a" },
+      startedAt: "2026-08-03T12:00:00.000Z",
+      stoppedAt: "2026-08-03T12:05:00.000Z",
+      metadata: { ownerChannel: "discord", ownerAccountId: "account-a" },
+    };
+    const store = storeFor(stateDir);
+    await store.writeSession(ownerOnlySession);
+    await store.appendUtteranceForSession(ownerOnlySession, { text: "owner-only notes" });
+    await expect(
+      createTool(stateDir, "research", { channel: "webchat", accountId: "operator" }).execute(
+        "call-owner-only-other-channel",
+        { action: "summarize", sessionId: ownerOnlySession.sessionId },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(`transcripts session not found: ${ownerOnlySession.sessionId}`);
+    await expect(
+      createTool(stateDir, "main").execute(
+        "call-owner-only-local",
+        { action: "summarize", sessionId: ownerOnlySession.sessionId },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: ownerOnlySession.sessionId } });
   });
 
   it("preserves explicit accounts for providers outside the turn channel namespace", async () => {

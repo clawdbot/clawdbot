@@ -65,7 +65,10 @@ function ownsTranscriptSession(
       return false;
     }
     if (hasOwnerChannel && hasOwnerAccount) {
-      return channel === ownerChannel ? ctx.agentAccountId?.trim() === ownerAccountId : true;
+      if (channel === ownerChannel) {
+        return ctx.agentAccountId?.trim() === ownerAccountId;
+      }
+      return typeof ownerAgentId === "string" || isLocalMainOperator;
     }
     // Persisted ingress ownership remains authoritative if provider discovery
     // later changes; only the channel-less local main agent may recover it.
