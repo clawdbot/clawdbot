@@ -763,6 +763,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
       ],
+      "scripts/e2e/cli-installer-distribution-docker.sh": [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+      ],
       "scripts/e2e/update-channel-switch-docker.sh": [
         "test/scripts/docker-build-helper.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",

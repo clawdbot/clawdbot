@@ -384,6 +384,14 @@ function createOpenAIRealtimeTranscriptionSession(
     const partialBytes = pendingTranscripts.get(key)?.bytes ?? 0;
     pendingTranscripts.delete(key);
     retainedTranscriptBytes -= partialBytes;
+    const transcriptBytes = transcript ? Buffer.byteLength(transcript, "utf8") : 0;
+    if (
+      transcriptBytes >
+      OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES - retainedTranscriptBytes
+    ) {
+      failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_TEXT_OVERFLOW_MESSAGE), transport);
+      return false;
+    }
     if (!itemId || !committedItems.has(itemId)) {
       if (itemId) {
         if (!settleItem(itemId, transport)) {
@@ -396,14 +404,6 @@ function createOpenAIRealtimeTranscriptionSession(
         config.onTranscript?.(transcript);
       }
       return true;
-    }
-    const transcriptBytes = transcript ? Buffer.byteLength(transcript, "utf8") : 0;
-    if (
-      transcriptBytes >
-      OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES - retainedTranscriptBytes
-    ) {
-      failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_TEXT_OVERFLOW_MESSAGE), transport);
-      return false;
     }
     completedTranscripts.set(itemId, transcript);
     retainedTranscriptBytes += transcriptBytes;
