@@ -49,13 +49,13 @@ function ownsTranscriptSession(
   session: TranscriptSessionDescriptor,
 ): boolean {
   const channel = ctx.agentChannel?.trim().toLowerCase();
+  const isLocalMainOperator = ctx.agentId === "main" && !channel;
   const provider = resolveSourceProvider(session.source.providerId, ctx);
-  const requiresTrustedAccountOwner = Boolean(
-    channel &&
-    provider?.accountBindingChannels?.some((entry) => entry.trim().toLowerCase() === channel),
+  const providerUsesAccountOwnership = Boolean(
+    provider?.accountBindingChannels?.some((entry) => entry.trim()),
   );
   if (!ctx.agentId) {
-    return !requiresTrustedAccountOwner;
+    return !providerUsesAccountOwnership;
   }
   const ownerAgentId = session.metadata?.agentId;
   if (typeof ownerAgentId === "string") {
@@ -71,13 +71,17 @@ function ownsTranscriptSession(
     ) {
       return ctx.agentAccountId?.trim() === ownerAccountId;
     }
-    // Account-binding channels require trusted owner facts recorded at ingress.
-    // Older rows lack them, so only a different operator surface may recover them.
-    return !requiresTrustedAccountOwner;
+    if (providerUsesAccountOwnership) {
+      // Account-binding providers require trusted owner facts recorded at ingress.
+      // Only a channel-less local main-agent turn can recover older rows; treating
+      // any other channel as trusted would recreate the cross-account boundary.
+      return isLocalMainOperator;
+    }
+    return true;
   }
   // Shipped rows predate agent attribution. Treat them as operator-owned legacy
   // state: main can curate them off-channel, but no channel account can claim them.
-  return ctx.agentId === "main" && !requiresTrustedAccountOwner;
+  return ctx.agentId === "main" && (!providerUsesAccountOwnership || isLocalMainOperator);
 }
 
 const TranscriptsSchema = Type.Object(

@@ -112,6 +112,15 @@ Use `path <session> --transcript` to inspect the raw append-only transcript,
 or run the `transcripts` tool's `summarize` action to regenerate the Markdown
 summary.
 
+Sessions created before account ownership was recorded are intentionally hidden
+from channel-originated agent turns. A host operator can recover one without
+granting a channel account ownership by running a local main-agent turn:
+
+```bash
+openclaw agent --agent main --local --message \
+  "Use transcripts summarize for session <session>."
+```
+
 ## Upgrading the legacy file store
 
 OpenClaw releases that predate the SQLite store wrote canonical runtime state
