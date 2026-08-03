@@ -8,7 +8,7 @@ title: "Synology Chat"
 
 Synology Chat connects to OpenClaw through a webhook pair: a Synology Chat outgoing webhook posts inbound direct messages to the Gateway, and replies go back through a Synology Chat incoming webhook.
 
-Status: official plugin, installed separately. Direct messages only; text and URL-based file sends are supported.
+Status: official plugin, installed separately. Direct messages only; text and URL-based media links are supported.
 
 ## Install
 
@@ -111,7 +111,7 @@ openclaw message send --channel synology-chat --target synology-chat:123456 --me
 openclaw message send --channel synology-chat --target synology:123456 --message "Short prefix"
 ```
 
-Outbound text is chunked at 2000 characters. Media sends are supported by URL-based file delivery: the NAS downloads and attaches the file (max 32 MB). Outbound file URLs must use `http` or `https`, and private or otherwise blocked network targets are rejected before OpenClaw forwards the URL to the NAS webhook.
+Outbound text is chunked at 2000 characters. Media sends post an `http` or `https` URL as a clickable link. OpenClaw does not ask the NAS to download and attach the remote file because that later NAS-side fetch cannot retain OpenClaw's network-destination checks.
 
 ## Multi-account
 

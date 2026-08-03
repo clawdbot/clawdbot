@@ -41,7 +41,7 @@ function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
 const clientModule = await import("./client.js");
 const gatewayRuntimeModule = await import("./gateway-runtime.js");
 const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
-const mockSendFileUrl = vi.spyOn(clientModule, "sendFileUrl").mockResolvedValue(true);
+const mockSendFileLink = vi.spyOn(clientModule, "sendFileLink").mockResolvedValue(true);
 const registerSynologyWebhookRouteMock = vi
   .spyOn(gatewayRuntimeModule, "registerSynologyWebhookRoute")
   .mockImplementation(async () => vi.fn(async () => undefined));
@@ -58,10 +58,10 @@ describe("createSynologyChatPlugin", () => {
     vi.stubEnv("SYNOLOGY_CHAT_TOKEN", "");
     vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", "");
     mockSendMessage.mockClear();
-    mockSendFileUrl.mockClear();
+    mockSendFileLink.mockClear();
     registerSynologyWebhookRouteMock.mockClear();
     mockSendMessage.mockResolvedValue(true);
-    mockSendFileUrl.mockResolvedValue(true);
+    mockSendFileLink.mockResolvedValue(true);
     registerSynologyWebhookRouteMock.mockImplementation(async () => vi.fn(async () => undefined));
   });
 
@@ -606,7 +606,7 @@ describe("createSynologyChatPlugin", () => {
       expect(result.receipt.platformMessageIds).toHaveLength(0);
       expect(result.receipt.parts).toHaveLength(0);
       expect(result.receipt.threadId).toBe("user1");
-      expect(mockSendFileUrl).toHaveBeenLastCalledWith(
+      expect(mockSendFileLink).toHaveBeenLastCalledWith(
         "https://nas/incoming",
         "https://example.com/img.png",
         "user1",

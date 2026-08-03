@@ -104,9 +104,9 @@ describe("Synology Chat user_list loopback", () => {
 
     expect(receivedPayloads).toEqual([
       { text: "native outbound text", user_ids: [42] },
-      { file_url: mediaUrl, user_ids: [42] },
+      { text: mediaUrl, user_ids: [42] },
       { text: "durable adapter text", user_ids: [42] },
-      { file_url: mediaUrl, user_ids: [42] },
+      { text: mediaUrl, user_ids: [42] },
     ]);
     expect(durableText).toBeDefined();
     expect(durableMedia).toBeDefined();
@@ -200,12 +200,22 @@ describe("Synology Chat user_list loopback", () => {
     expect(rejectedRequests).toBe(4);
   });
 
-  it("rejects private file URLs before contacting the authenticated webhook", async () => {
+  it("sends private media references as text without asking the NAS to fetch them", async () => {
+    const receivedPayloads: Array<Record<string, unknown>> = [];
     let webhookRequests = 0;
-    const port = await listenLoopback((_req, res) => {
+    const port = await listenLoopback((req, res) => {
       webhookRequests += 1;
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ success: true }));
+      let formBody = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk: string) => {
+        formBody += chunk;
+      });
+      req.on("end", () => {
+        const payload = new URLSearchParams(formBody).get("payload");
+        receivedPayloads.push(JSON.parse(payload ?? "{}") as Record<string, unknown>);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+      });
     });
     const cfg = {
       channels: {
@@ -219,14 +229,12 @@ describe("Synology Chat user_list loopback", () => {
       },
     };
 
+    const mediaUrl = "http://127.0.0.1/private-proof.png";
     await expect(
-      synologyChatPlugin.outbound.sendMedia({
-        cfg,
-        mediaUrl: `http://127.0.0.1:${port}/private-proof.png`,
-        to: "42",
-      }),
-    ).rejects.toThrow("Failed to send media to Synology Chat");
-    expect(webhookRequests).toBe(0);
+      synologyChatPlugin.outbound.sendMedia({ cfg, mediaUrl, to: "42" }),
+    ).resolves.toMatchObject({ channel: "synology-chat", chatId: "42" });
+    expect(webhookRequests).toBe(1);
+    expect(receivedPayloads).toEqual([{ text: mediaUrl, user_ids: [42] }]);
   });
 
   it("aborts a streamed overflow and returns the stale cached identity", async () => {

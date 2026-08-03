@@ -46,7 +46,7 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
-import { SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT, sendFileUrl, sendMessage } from "./client.js";
+import { SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT, sendFileLink, sendMessage } from "./client.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
   collectSynologyGatewayRoutingWarnings,
@@ -292,7 +292,7 @@ async function sendSynologyChatMedia(
 ): Promise<SynologyChatOutboundResult> {
   const account = resolveOutboundAccount(ctx.cfg ?? {}, ctx.accountId);
   const incomingUrl = requireIncomingUrl(account);
-  const ok = await sendFileUrl(incomingUrl, ctx.mediaUrl, ctx.to, account.allowInsecureSsl);
+  const ok = await sendFileLink(incomingUrl, ctx.mediaUrl, ctx.to, account.allowInsecureSsl);
   if (!ok) {
     throw new Error("Failed to send media to Synology Chat");
   }
@@ -456,8 +456,8 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
           "**Links**: Use `<URL|display text>` to create clickable links.",
           "  Example: `<https://example.com|Click here>` renders as a clickable link.",
           "",
-          "**File sharing**: Include a publicly accessible URL to share files or images.",
-          "  The NAS will download and attach the file (max 32 MB).",
+          "**File sharing**: Include an HTTP or HTTPS URL to share files or images.",
+          "  OpenClaw sends the URL as a clickable link; the NAS does not download it automatically.",
           "",
           "**Limitations**:",
           "- No markdown, bold, italic, or code blocks",
