@@ -2259,7 +2259,7 @@
           "label": "WeCom",
           "selectionLabel": "WeCom（企业微信）",
           "detailLabel": "WeCom",
-          "docsPath": "/plugins/community#wecom",
+          "docsPath": "/channels/wecom",
           "docsLabel": "wecom",
           "blurb": "Enterprise messaging and documents, scheduling, task tools.",
           "aliases": [
@@ -2357,7 +2357,7 @@
           "label": "Yuanbao",
           "selectionLabel": "Yuanbao (元宝)",
           "detailLabel": "Yuanbao",
-          "docsPath": "/plugins/community#yuanbao",
+          "docsPath": "/channels/yuanbao",
           "docsLabel": "yuanbao",
           "blurb": "Tencent Yuanbao AI assistant conversation channel.",
           "aliases": [
