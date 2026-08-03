@@ -18,14 +18,15 @@ export default async function setup(project: TestProject) {
   const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
   if (!canRunPlaywrightChromium(executablePath)) {
     project.provide("controlUiE2eServerBaseUrl", null);
-    return;
+    // No-op teardown keeps both paths value-returning for Vitest's setup contract.
+    return () => {};
   }
 
   // Local full-suite runs can fan shards into separate processes in one checkout.
   // Keep every build out of canonical dist so those processes cannot clobber it.
   const tempDirs = createTempDirTracker();
   const outDir = tempDirs.make("openclaw-ui-e2e-");
-  const server = await startBundledControlUiE2eServer(outDir).catch(async (error) => {
+  const server = await startBundledControlUiE2eServer(outDir).catch(async (error: unknown) => {
     try {
       tempDirs.cleanup();
     } catch {}
