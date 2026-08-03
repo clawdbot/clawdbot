@@ -58,11 +58,12 @@ function ownsTranscriptSession(
     }
     const ownerChannel = session.metadata?.ownerChannel;
     const ownerAccountId = session.metadata?.ownerAccountId;
-    if (typeof ownerChannel === "string" && typeof ownerAccountId === "string") {
-      return (
-        ctx.agentChannel?.trim().toLowerCase() === ownerChannel &&
-        ctx.agentAccountId?.trim() === ownerAccountId
-      );
+    if (
+      typeof ownerChannel === "string" &&
+      typeof ownerAccountId === "string" &&
+      ctx.agentChannel?.trim().toLowerCase() === ownerChannel
+    ) {
+      return ctx.agentAccountId?.trim() === ownerAccountId;
     }
     return true;
   }

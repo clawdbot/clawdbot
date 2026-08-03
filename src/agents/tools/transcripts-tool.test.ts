@@ -196,6 +196,16 @@ describe("transcripts tool", () => {
       ),
     ).rejects.toThrow("transcripts session not found: account-bound");
     expect(stop).not.toHaveBeenCalled();
+
+    const { tool: operatorTool } = await createHarness(stateDir, {}, "main", {
+      channel: "webchat",
+      accountId: "operator",
+    });
+    await expect(
+      operatorTool.execute("call-operator-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "account-bound" })] },
+    });
   });
 
   it("preserves an explicit account for a different provider channel", async () => {
