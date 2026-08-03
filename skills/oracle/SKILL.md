@@ -114,6 +114,7 @@ Oracle starts with **zero** project knowledge. Assume the model cannot infer you
 ## Safety
 
 - Don't attach secrets by default (`.env`, key files, auth tokens). Redact aggressively; share only what's required.
+- Before any real browser/API run or upload, run `--dry-run summary --files-report` and inspect the exact resolved file list. If a sensitive file is required, redact it into a temporary file and attach only the redacted copy.
 
 ## "Exhaustive prompt" restoration pattern
 

@@ -109,8 +109,9 @@ Email Formatting
 Notes
 
 - Set `GOG_ACCOUNT=you@gmail.com` to avoid repeating `--account`.
-- For scripting, prefer `--json` plus `--no-input`.
+- For read-only scripting, prefer `--json` plus `--no-input`.
+- Do not use `--no-input` with commands that send or mutate data, including `gmail send`, `gmail drafts send`, and `calendar create`.
 - Sheets values can be passed via `--values-json` (recommended) or as inline rows.
 - Docs supports export/cat/copy. In-place edits require a Docs API client (not in gog).
-- Confirm before sending mail or creating events.
+- Confirm before sending mail or creating events. For email, create or present a draft first and show recipients/subject/body/attachments. For calendar events, show calendar, title, time, location, and attendees.
 - `gog gmail search` returns one row per thread; use `gog gmail messages search` when you need every individual email returned separately.

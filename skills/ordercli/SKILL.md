@@ -51,9 +51,13 @@ Orders
 
 Reorder (adds to cart)
 
-- Preview: `ordercli foodora reorder <orderCode>`
-- Confirm: `ordercli foodora reorder <orderCode> --confirm`
-- Address: `ordercli foodora reorder <orderCode> --confirm --address-id <id>`
+- Preview only: `ordercli foodora reorder <orderCode>`
+- Confirm after showing restaurant, items, address, fees, and total:
+  `ordercli foodora reorder <orderCode> --confirm`
+- Address override (confirm the resolved address ID first):
+  `ordercli foodora reorder <orderCode> --confirm --address-id <id>`
+- Never treat `--confirm` as user consent. Run the preview first and wait for
+  explicit approval of that exact order/address before changing the cart.
 
 Cloudflare / bot protection
 
@@ -75,4 +79,4 @@ Deliveroo (WIP, not working yet)
 Notes
 
 - Use `--config /tmp/ordercli.json` for testing.
-- Confirm before any reorder or cart-changing action.
+- Confirm the resolved preview before any reorder or cart-changing action.

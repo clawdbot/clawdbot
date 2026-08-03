@@ -38,7 +38,9 @@ If the user is chatting with you on WhatsApp, you should not reach for this tool
 Safety
 
 - Require explicit recipient + message text.
-- Confirm recipient + message before sending.
+- Resolve the recipient to an exact JID or phone number before sending.
+- Show destination, message, and attachment/caption; send only after approval of
+  that exact preview.
 - If anything is ambiguous, ask a clarifying question.
 
 Auth + sync

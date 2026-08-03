@@ -34,7 +34,9 @@ Do not use this skill for Telegram, Signal, WhatsApp, Discord, Slack, or for rep
 1. Resolve the conversation first.
 2. Choose DM, existing group, or new group.
 3. Pick the lowest-capability command that can do the requested action.
-4. Confirm any send or visible state change unless the user already gave exact recipient, content, and action.
+4. Show the exact resolved destination, service, content, attachments, and action.
+   Wait for explicit approval of that preview before any send or visible state change;
+   the original request is not approval of the eventual command.
 5. Execute with stable identifiers: prefer `--chat-id` for normal sends/watch/history and `--chat` chat GUID for bridge actions.
 
 Never infer a recipient from a casual name alone when several chats or handles could match. Show the matched display name, handle(s), group participants, and message text/action before sending.
