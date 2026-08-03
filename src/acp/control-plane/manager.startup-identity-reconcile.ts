@@ -23,6 +23,7 @@ export async function runManagerStartupIdentityReconcile(params: {
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
+  getSessionActorGuard: (sessionKey: string) => () => boolean;
 }): Promise<AcpStartupIdentityReconcileResult> {
   let checked = 0;
   let resolved = 0;
@@ -56,6 +57,7 @@ export async function runManagerStartupIdentityReconcile(params: {
     checked += 1;
     try {
       const becameResolved = await params.withSessionActor(session.sessionKey, async () => {
+        const isCurrentActor = params.getSessionActorGuard(session.sessionKey);
         const resolution = params.resolveSession({
           cfg: params.cfg,
           sessionKey: session.sessionKey,
@@ -67,6 +69,7 @@ export async function runManagerStartupIdentityReconcile(params: {
           cfg: params.cfg,
           sessionKey: session.sessionKey,
           meta: resolution.meta,
+          isCurrentActor,
         });
         const reconciled = await params.reconcileRuntimeSessionIdentifiers({
           cfg: params.cfg,
@@ -75,6 +78,7 @@ export async function runManagerStartupIdentityReconcile(params: {
           handle,
           meta,
           failOnStatusError: false,
+          isCurrentActor,
         });
         return !isSessionIdentityPending(resolveSessionIdentityFromMeta(reconciled.meta));
       });

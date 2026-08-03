@@ -74,7 +74,11 @@ export async function ensureManagerRuntimeHandle(params: {
         sessionKey: params.sessionKey,
         runtime: cached.runtime,
         handle: cached.handle,
+        isCurrentActor,
       }));
+    if (!isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
     if (reusable) {
       if (!isCurrentActor()) {
         throw createSupersededActorError(params.sessionKey);
@@ -230,6 +234,7 @@ export async function ensureManagerRuntimeHandle(params: {
     await params.writeSessionMeta({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      isCurrentActor,
       mutate: (_current, entry) => {
         if (!isCurrentActor()) {
           return undefined;

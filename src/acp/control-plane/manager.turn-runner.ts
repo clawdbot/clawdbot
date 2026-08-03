@@ -439,6 +439,7 @@ export async function runManagerTurn(params: {
               handle,
               meta,
               failOnStatusError: false,
+              isCurrentActor: params.isCurrentActor,
             }));
           }
           if (
@@ -460,7 +461,7 @@ export async function runManagerTurn(params: {
                 `acp-manager: ACP oneshot close failed for ${sessionKey}: ${String(error)}`,
               );
             } finally {
-              params.runtimeHandles.clear(sessionKey);
+              params.runtimeHandles.clearIfHandleMatches({ sessionKey, handle });
             }
           }
         }

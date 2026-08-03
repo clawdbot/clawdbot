@@ -183,6 +183,7 @@ async function persistInitializedSessionMeta(params: {
     const persisted = await params.writeSessionMeta({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      isCurrentActor: params.isCurrentActor,
       // A reset can rotate the actor while the storage operation is pending. Do not let the
       // superseded initializer republish metadata after the reset has moved to a new lane.
       mutate: () => (params.isCurrentActor() ? params.meta : undefined),

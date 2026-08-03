@@ -125,6 +125,7 @@ async function clearPersistedRuntimeResumeState(params: {
   const updated = await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    isCurrentActor: params.isCurrentActor,
     mutate: (current, entry) => {
       if (!params.isCurrentActor()) {
         return undefined;
@@ -174,12 +175,17 @@ export async function discardPersistedManagerRuntimeState(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<void> {
   const now = Date.now();
   await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    isCurrentActor: params.isCurrentActor,
     mutate: (current, entry) => {
+      if (!params.isCurrentActor()) {
+        return undefined;
+      }
       if (!entry) {
         return null;
       }

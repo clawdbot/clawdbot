@@ -63,6 +63,12 @@ export async function runManagerCloseSession(params: {
       sessionKey,
       logPrefix: "acp close fast-reset",
     });
+    if (!params.isCurrentActor()) {
+      return {
+        runtimeClosed: false,
+        metaCleared: false,
+      };
+    }
     params.runtimeHandles.clear(sessionKey);
   } else {
     try {
@@ -123,6 +129,9 @@ export async function runManagerCloseSession(params: {
             logPrefix: "acp close recovery",
             missingBackendError: acpError,
           });
+          if (!params.isCurrentActor()) {
+            throw acpError;
+          }
         }
         // Treat unavailable backends as terminal for this cached handle so it
         // cannot continue counting against maxConcurrentSessions.
@@ -148,6 +157,7 @@ export async function runManagerCloseSession(params: {
       cfg: input.cfg,
       sessionKey,
       writeSessionMeta: params.writeSessionMeta,
+      isCurrentActor: params.isCurrentActor,
     });
   }
 
@@ -155,7 +165,11 @@ export async function runManagerCloseSession(params: {
     await params.writeSessionMeta({
       cfg: input.cfg,
       sessionKey,
+      isCurrentActor: params.isCurrentActor,
       mutate: (_current, entry) => {
+        if (!params.isCurrentActor()) {
+          return undefined;
+        }
         if (!entry) {
           return null;
         }
@@ -163,6 +177,13 @@ export async function runManagerCloseSession(params: {
       },
       failOnError: true,
     });
+    if (!params.isCurrentActor()) {
+      return {
+        runtimeClosed,
+        ...(runtimeNotice ? { runtimeNotice } : {}),
+        metaCleared: false,
+      };
+    }
     metaCleared = true;
   }
 

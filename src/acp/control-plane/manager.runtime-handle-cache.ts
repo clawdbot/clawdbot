@@ -68,7 +68,7 @@ export class ManagerRuntimeHandleCache {
         `acp-manager: cached runtime close failed for ${params.sessionKey}: ${String(error)}`,
       );
     } finally {
-      this.clear(params.sessionKey);
+      this.clearIfHandleMatches({ sessionKey: params.sessionKey, handle: cached.handle });
     }
   }
 
@@ -144,6 +144,7 @@ export class ManagerRuntimeHandleCache {
     sessionKey: string;
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
+    isCurrentActor?: () => boolean;
   }): Promise<boolean> {
     if (!params.runtime.getStatus) {
       return true;
@@ -153,7 +154,9 @@ export class ManagerRuntimeHandleCache {
         handle: params.handle,
       });
       if (isRuntimeStatusUnavailable(status)) {
-        this.clear(params.sessionKey);
+        if (!params.isCurrentActor || params.isCurrentActor()) {
+          this.clearIfHandleMatches({ sessionKey: params.sessionKey, handle: params.handle });
+        }
         logVerbose(
           `acp-manager: evicting cached runtime handle for ${params.sessionKey} after unhealthy status probe: ${status.summary ?? "status unavailable"}`,
         );
@@ -161,7 +164,9 @@ export class ManagerRuntimeHandleCache {
       }
       return true;
     } catch (error) {
-      this.clear(params.sessionKey);
+      if (!params.isCurrentActor || params.isCurrentActor()) {
+        this.clearIfHandleMatches({ sessionKey: params.sessionKey, handle: params.handle });
+      }
       logVerbose(
         `acp-manager: evicting cached runtime handle for ${params.sessionKey} after status probe failed: ${String(error)}`,
       );

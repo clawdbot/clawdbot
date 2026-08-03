@@ -164,6 +164,7 @@ export type WriteManagerSessionMeta = (params: {
     current: SessionAcpMeta | undefined,
     entry: SessionEntry | undefined,
   ) => SessionAcpMeta | null | undefined;
+  isCurrentActor?: () => boolean;
   failOnError?: boolean;
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
@@ -189,6 +190,7 @@ export type ReconcileManagerRuntimeSessionIdentifiers = (params: {
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
+  isCurrentActor?: () => boolean;
 }) => Promise<{
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
