@@ -55,6 +55,7 @@ import {
   buildProviderModelAuthSourcePlan,
   fromProviderModelAuthReadiness,
   toProviderModelAuthReadiness,
+  type ProviderModelAuthAuthorization,
   type ProviderModelAuthEvidence,
   type ProviderModelAuthProfileSource,
 } from "./provider-model-auth-source-plan.js";
@@ -611,11 +612,15 @@ export function createModelAuthAvailabilityResolver(
       selectedAuthMode: configured?.auth,
     };
   };
-  const directSource = (evaluation: AuthSourceEvaluation) =>
+  const directSource = (
+    evaluation: AuthSourceEvaluation,
+    authorization: ProviderModelAuthAuthorization = "declared",
+  ) =>
     buildProviderModelAuthDirectSource({
       mode: evaluation.selectedAuthMode,
       availability: evaluation.availability,
       evidence: evaluation.evidence ?? "none",
+      authorization,
     });
   const automaticProfileSource = (
     provider: string,
@@ -677,14 +682,28 @@ export function createModelAuthAvailabilityResolver(
       (hasDirectMaterial && shouldPreferExplicitConfigApiKeyAuth(params.cfg, provider));
     const environment = envAuth(provider);
     const environmentMode = environment ? (configured?.auth ?? environment.mode) : undefined;
+    // Mirrors the runtime classification in runtime-plan/prepare-auth.ts: a
+    // credential is ambient only when it came from the environment and the
+    // provider entry declares no apiKey material pointing at it. Availability
+    // and runtime must agree, or status advertises a credential the run will
+    // refuse (or the reverse).
+    const ambientEnvironmentCredential =
+      !required && environmentMode !== undefined && environmentMode !== "aws-sdk"
+        ? !hasDirectMaterial
+        : false;
     const direct =
       !required && environmentMode
         ? buildProviderModelAuthDirectSource({
             mode: environmentMode,
             availability: modeAllowed(provider, target, environmentMode),
             evidence: environmentMode === "aws-sdk" ? "aws-sdk" : "environment",
+            authorization: ambientEnvironmentCredential ? "ambient" : "declared",
           })
-        : directSource(unprofiledEvaluation(provider, target));
+        : ((evaluation) =>
+            directSource(
+              evaluation,
+              evaluation.evidence === "environment" && !hasDirectMaterial ? "ambient" : "declared",
+            ))(unprofiledEvaluation(provider, target));
     const hasDirectFallback = hasDirectMaterial || direct.evidence !== "none";
     return {
       binding,

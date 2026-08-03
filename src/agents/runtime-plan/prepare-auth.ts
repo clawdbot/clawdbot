@@ -339,7 +339,8 @@ export function prepareAgentRuntimeAuth(
       ? "runtime"
       : "provider-config",
     availability?: boolean,
-  ) => buildProviderModelAuthDirectSource({ mode, evidence, availability });
+    authorization: ProviderModelAuthDirectSource["authorization"] = "declared",
+  ) => buildProviderModelAuthDirectSource({ mode, evidence, availability, authorization });
   const directPlanningCandidate = harnessAllowsAuthProfileForwarding
     ? resolveProviderDirectAuthPlanningEvidence(
         authProfileSelectionProvider,
@@ -360,11 +361,19 @@ export function prepareAgentRuntimeAuth(
   const directPlanningMode = directPlanningEvidence
     ? (configuredAuthMode ?? directPlanningEvidence.mode)
     : undefined;
+  // Provenance ("where was it found") is not authorization ("may it be used
+  // here"). A credential found in the environment is still *declared* when the
+  // provider entry points at it — a literal apiKey, a `${VAR}` marker, or a
+  // SecretRef naming a canonical variable. Only a credential that nothing in
+  // config references is ambient, and only ambient credentials are restricted.
+  const fallbackIsAmbientCredential =
+    directPlanningEvidence?.kind === "environment" && !providerHasDirectMaterial;
   const fallbackDirectSource = directPlanningMode
     ? directSource(
         directPlanningMode,
         directPlanningEvidence?.kind === "environment" ? "environment" : "runtime",
         directPlanningEvidence?.kind === "environment" ? true : undefined,
+        fallbackIsAmbientCredential ? "ambient" : "declared",
       )
     : providerBindingNeedsNonProfileFallback
       ? directSource(selectedConfiguredAuthMode)
