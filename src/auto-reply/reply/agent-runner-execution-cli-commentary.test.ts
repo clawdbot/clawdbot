@@ -7,6 +7,7 @@ import {
   createFollowupRun,
   createMockTypingSignaler,
   getExecuteAgentTurnForTest,
+  loadActualRunCliAgentForTest,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
@@ -82,10 +83,9 @@ function useScriptedClaudeCliBackend() {
     resolveRuntimeCliBackends: () => [backend],
   });
   state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
-    if (!state.runCliAgentActual) {
-      throw new Error("real CLI runner was not initialized");
-    }
-    return await state.runCliAgentActual(params);
+    return await (
+      await loadActualRunCliAgentForTest()
+    )(params);
   });
 }
 

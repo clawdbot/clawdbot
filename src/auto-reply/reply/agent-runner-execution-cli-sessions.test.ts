@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -23,52 +21,6 @@ import type { FallbackRunnerParams } from "./agent-runner-execution.test-support
 
 const state = setupAgentRunnerExecutionTestState();
 afterEach(resetGeneratedMediaTaskActivityForTests);
-
-const expiredClaudeSessionProgram = String.raw`
-let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => { input += chunk; });
-process.stdin.on("end", () => {
-  if (!input.trim()) process.exit(2);
-  process.stdout.write(JSON.stringify({
-    type: "result",
-    subtype: "error_during_execution",
-    is_error: true,
-    session_id: "stale-cli-session",
-    result: "No conversation found with session ID stale-cli-session",
-  }) + "\n");
-});
-`;
-
-function useScriptedExpiredClaudeBackend() {
-  const backend = {
-    id: "claude-cli",
-    modelProvider: "anthropic",
-    pluginId: "anthropic",
-    bundleMcp: false,
-    config: {
-      command: process.execPath,
-      args: ["-e", expiredClaudeSessionProgram],
-      resumeArgs: ["-e", expiredClaudeSessionProgram, "--resume", "{sessionId}"],
-      input: "stdin" as const,
-      output: "jsonl" as const,
-      jsonlDialect: "claude-stream-json" as const,
-      sessionMode: "existing" as const,
-      systemPromptWhen: "never" as const,
-    },
-  };
-  cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupCliBackend: ({ backend: id }) =>
-      id === backend.id ? { pluginId: backend.pluginId, backend } : undefined,
-    resolveRuntimeCliBackends: () => [backend],
-  });
-  state.runCliAgentMock.mockImplementationOnce((params: RunCliAgentParams) => {
-    if (!state.runCliAgentActual) {
-      throw new Error("real CLI runner was not initialized");
-    }
-    return state.runCliAgentActual(params);
-  });
-}
 
 describe("executeAgentTurn: CLI session routing", () => {
   it("forwards the static extra system prompt to CLI backends", async () => {
@@ -668,7 +620,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     }
   });
 
-  it("clears a reused binding after a real CLI subprocess reports an expired session", async () => {
+  it("clears a reused binding after the CLI reports an expired session", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-8"),
@@ -676,7 +628,13 @@ describe("executeAgentTurn: CLI session routing", () => {
       model: "claude-opus-4-8",
       attempts: [],
     }));
-    useScriptedExpiredClaudeBackend();
+    state.runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("No conversation found with session ID stale-cli-session", {
+        reason: "session_expired",
+        provider: "claude-cli",
+        model: "claude-opus-4-8",
+      }),
+    );
 
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
