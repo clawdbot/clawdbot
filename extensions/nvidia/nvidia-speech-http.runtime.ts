@@ -223,6 +223,7 @@ async function transcribeAtEndpoint(
     mime: req.mime,
     fields: {
       language: req.language?.trim() || "en-US",
+      ...(endpoint.hosted ? {} : { model: endpoint.model }),
       response_format: "json",
     },
   });
@@ -281,6 +282,7 @@ type MagpieSynthesizeParams = {
   text: string;
   apiKey?: string;
   baseUrl: string;
+  model: string;
   voice: string;
   language: string;
   sampleRateHz: number;
@@ -292,6 +294,7 @@ type MagpieSynthesizeParams = {
 
 export async function magpieSynthesize(params: MagpieSynthesizeParams): Promise<Buffer> {
   const form = new FormData();
+  form.append("model", params.model);
   form.append("text", params.text);
   form.append("language", params.language);
   form.append("voice", params.voice);

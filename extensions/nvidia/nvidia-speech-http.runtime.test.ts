@@ -145,7 +145,7 @@ describe("NVIDIA speech HTTP runtime", () => {
       allowedOrigins: ["http://10.0.0.5:9000"],
     });
     const form = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.body as FormData;
-    expect(form.get("model")).toBeNull();
+    expect(form.get("model")).toBe("nvidia/parakeet-tdt-0.6b-v2");
     const headers = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.headers as Headers;
     expect(headers.has("authorization")).toBe(false);
   });
@@ -289,6 +289,7 @@ describe("NVIDIA speech HTTP runtime", () => {
       text: "<speak>Hello</speak>",
       apiKey: "nvapi-test",
       baseUrl: "http://10.0.0.5:9000/v1/",
+      model: "magpie-tts-multilingual",
       voice: "Magpie-Multilingual.EN-US.Aria",
       language: "en-US",
       sampleRateHz: 44_100,
@@ -302,6 +303,7 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(request.url).toBe("http://10.0.0.5:9000/v1/audio/synthesize");
     expect(request.ssrfPolicy).toEqual({ allowedOrigins: ["http://10.0.0.5:9000"] });
     const form = request.body as FormData;
+    expect(form.get("model")).toBe("magpie-tts-multilingual");
     expect(form.get("custom_dictionary")).toBe("tomato  pronunciation");
     expect(form.get("custom_configuration")).toBe("key:value");
     expect(form.get("encoding")).toBe("LINEAR_PCM");
@@ -323,7 +325,10 @@ describe("NVIDIA speech HTTP runtime", () => {
       },
       tts: {
         providers: {
-          nvidia: { baseUrl: "http://127.0.0.1:9001" },
+          nvidia: {
+            baseUrl: "http://127.0.0.1:9001",
+            model: "magpie-tts-multilingual",
+          },
         },
       },
     };
@@ -351,6 +356,7 @@ describe("NVIDIA speech HTTP runtime", () => {
     await magpieSynthesize({
       text: "hello",
       baseUrl: config.tts.providers.nvidia.baseUrl,
+      model: config.tts.providers.nvidia.model,
       voice: "Magpie-Multilingual.EN-US.Aria",
       language: "en-US",
       sampleRateHz: 44_100,
@@ -384,6 +390,7 @@ describe("NVIDIA speech HTTP runtime", () => {
       magpieSynthesize({
         text: "hello",
         baseUrl: "http://10.0.0.5:9000/v1",
+        model: "magpie-tts-multilingual",
         voice: "Magpie-Multilingual.EN-US.Aria",
         language: "en-US",
         sampleRateHz: 44_100,

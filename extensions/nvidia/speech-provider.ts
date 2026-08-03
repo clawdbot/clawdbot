@@ -70,6 +70,7 @@ export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
         text: req.text,
         apiKey,
         baseUrl: config.baseUrl,
+        model: config.model,
         voice,
         language,
         sampleRateHz: config.sampleRateHz,
