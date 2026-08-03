@@ -1,6 +1,5 @@
 import type { AnyMessage } from "@agentclientprotocol/sdk";
-
-type JsonObject = Record<string, unknown>;
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** Keeps initial session updates behind the response that introduces their session ID. */
 export class AcpSessionNewOrdering {
@@ -8,7 +7,7 @@ export class AcpSessionNewOrdering {
   private readonly pendingSessionUpdates = new Map<string, AnyMessage[]>();
 
   observeInbound(message: AnyMessage): void {
-    const sessionId = readSessionId(readObject(message)?.params);
+    const sessionId = readSessionId(asOptionalRecord(message)?.params);
     if (sessionId) {
       this.knownSessionIds.add(sessionId);
     }
@@ -18,7 +17,7 @@ export class AcpSessionNewOrdering {
     message: AnyMessage,
     controller: TransformStreamDefaultController<AnyMessage>,
   ): void {
-    const sessionIdFromResult = readSessionId(readObject(message)?.result);
+    const sessionIdFromResult = readSessionId(asOptionalRecord(message)?.result);
     if (sessionIdFromResult) {
       controller.enqueue(message);
       this.knownSessionIds.add(sessionIdFromResult);
@@ -26,7 +25,7 @@ export class AcpSessionNewOrdering {
       return;
     }
 
-    const messageObject = readObject(message);
+    const messageObject = asOptionalRecord(message);
     const sessionId = readSessionId(messageObject?.params);
     if (
       messageObject?.method === "session/update" &&
@@ -57,13 +56,7 @@ export class AcpSessionNewOrdering {
   }
 }
 
-function readObject(value: unknown): JsonObject | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as JsonObject)
-    : undefined;
-}
-
 function readSessionId(value: unknown): string | undefined {
-  const sessionId = readObject(value)?.sessionId;
+  const sessionId = asOptionalRecord(value)?.sessionId;
   return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : undefined;
 }
