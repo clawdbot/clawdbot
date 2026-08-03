@@ -1,18 +1,17 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { searchSkillsFromClawHub } from "../skills/lifecycle/clawhub.js";
 import { runPluginsSearchCommand } from "./plugins-search-command.js";
 
 const SCRIPT_PATH = "scripts/e2e/lib/clawhub-fixture-server.cjs";
 const servers: Array<ChildProcessByStdio<null, Readable, Readable>> = [];
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const previousClawHubUrl = process.env.OPENCLAW_CLAWHUB_URL;
 const previousClawHubConfigPath = process.env.CLAWHUB_CONFIG_PATH;
 const previousClawHubToken = process.env.CLAWHUB_TOKEN;
@@ -20,7 +19,6 @@ const previousClawHubAuthToken = process.env.CLAWHUB_AUTH_TOKEN;
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(stopServer));
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   if (previousClawHubUrl === undefined) {
     delete process.env.OPENCLAW_CLAWHUB_URL;
   } else {
@@ -59,8 +57,7 @@ async function stopServer(child: ChildProcessByStdio<null, Readable, Readable>) 
 }
 
 async function startFixtureServer() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawhub-search-e2e-"));
-  tempDirs.push(root);
+  const root = tempDirs.make("clawhub-search-e2e-");
   const portFile = path.join(root, "port");
   const child = spawn(process.execPath, [SCRIPT_PATH, "catalog-search", portFile], {
     cwd: process.cwd(),
@@ -78,7 +75,7 @@ async function startFixtureServer() {
     if (existsSync(portFile)) {
       const port = Number(readFileSync(portFile, "utf8"));
       if (Number.isInteger(port) && port > 0) {
-        return `http://127.0.0.1:${port}`;
+        return { baseUrl: `http://127.0.0.1:${port}`, root };
       }
     }
     if (child.exitCode !== null) {
@@ -119,9 +116,9 @@ async function readRequestLog(baseUrl: string): Promise<string[]> {
 
 describe("openclaw plugins search ClawHub E2E", () => {
   it("keeps plugin discovery separate from skills and surfaces empty and failed lookups", async () => {
-    const baseUrl = await startFixtureServer();
+    const { baseUrl, root } = await startFixtureServer();
     process.env.OPENCLAW_CLAWHUB_URL = baseUrl;
-    process.env.CLAWHUB_CONFIG_PATH = path.join(tempDirs[0] ?? os.tmpdir(), "missing-config.json");
+    process.env.CLAWHUB_CONFIG_PATH = path.join(root, "missing-config.json");
     delete process.env.CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_AUTH_TOKEN;
 
