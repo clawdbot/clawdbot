@@ -30,6 +30,7 @@ const artifactDir = path.resolve(
 );
 const viewport = { height: 900, width: 1280 };
 const trustedProxyUser = "qa-operator";
+const controlUiSettleTimeoutMs = 60_000;
 
 type ProxyRoute = "trusted" | "untrusted";
 
@@ -541,7 +542,9 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     const connected = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
     const connectedErrors: string[] = [];
     connected.page.on("pageerror", (error) => connectedErrors.push(String(error)));
-    await connected.page.locator("openclaw-app-shell").waitFor();
+    await connected.page
+      .locator("openclaw-app-shell")
+      .waitFor({ timeout: controlUiSettleTimeoutMs });
     const trustedEvidence = await waitForConnectionEvidence(
       (entry) =>
         entry.route === "trusted" &&
@@ -603,7 +606,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     const allowed = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
     const allowedErrors: string[] = [];
     allowed.page.on("pageerror", (error) => allowedErrors.push(String(error)));
-    await allowed.page.locator("openclaw-app-shell").waitFor();
+    await allowed.page.locator("openclaw-app-shell").waitFor({ timeout: controlUiSettleTimeoutMs });
     const allowedOrigin = new URL(allowedUi.baseUrl).origin;
     const allowedEvidence = await waitForConnectionEvidence(
       (entry) =>
