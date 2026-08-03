@@ -155,13 +155,12 @@ export function assertDelegateArtifactPolicyPrepared(
 
 /**
  * Whether a completion has been recorded for the managed child bound to this
- * flow under the expected producer session. A live subagent registry cannot
- * answer this once the child has ended (or the process restarted), so this
- * durable binding is the acceptance evidence that keeps a re-drive from
- * reporting a genuinely completed child as a spawn failure. `completed_at` is
- * written by the same statement that leaves a policy `completed`, `failed`, or
- * (finalization deferred by a runtime disable) `staged`, so it covers every
- * post-completion state without enumerating them; an `active` policy has none.
+ * flow under the expected producer session. The live subagent registry cannot
+ * answer once the child has ended or the process restarted, so this durable
+ * binding is what keeps a re-drive from reporting a genuinely completed child
+ * as a spawn failure. `completed_at` is written by the same statement that
+ * leaves a policy `completed`, `failed`, or (finalization deferred by a runtime
+ * disable) `staged`, and an `active` policy has none.
  */
 export function hasRecordedDelegateArtifactCompletionForProducer(
   params: { flowId: string; producerSessionKey: string },
