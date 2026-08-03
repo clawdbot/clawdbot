@@ -74,26 +74,37 @@ describe("Reef configuration boundary", () => {
     });
 
     const flowSend = vi.fn();
+    const mintCode = vi.fn();
+    const requestFriend = vi.fn();
+    const removeFriend = vi.fn();
     const setAutonomy = vi.fn();
     const decide = vi.fn().mockResolvedValue(true);
     const listFriends = vi.fn().mockResolvedValue([]);
     setActiveReef({
       flow: { send: flowSend },
       friends: {
-        mintCode: vi.fn(),
-        request: vi.fn(),
+        mintCode,
+        request: requestFriend,
         list: listFriends,
-        remove: vi.fn(),
+        remove: removeFriend,
         setAutonomy,
       },
       reviews: { list: vi.fn(), decide },
     } as never);
     await expect(
       command.handler({ args: "friend autonomy peer extended", senderIsOwner: false }),
-    ).resolves.toEqual({ text: "Only an owner can change Reef autonomy or decide reviews." });
+    ).resolves.toEqual({ text: "Only an owner can change Reef friends or decide reviews." });
     await expect(
       command.handler({ args: `review approve ${"a".repeat(64)}`, senderIsOwner: false }),
-    ).resolves.toEqual({ text: "Only an owner can change Reef autonomy or decide reviews." });
+    ).resolves.toEqual({ text: "Only an owner can change Reef friends or decide reviews." });
+    for (const args of ["friend code", "friend request peer code", "friend remove peer"]) {
+      await expect(command.handler({ args, senderIsOwner: false })).resolves.toEqual({
+        text: "Only an owner can change Reef friends or decide reviews.",
+      });
+    }
+    expect(mintCode).not.toHaveBeenCalled();
+    expect(requestFriend).not.toHaveBeenCalled();
+    expect(removeFriend).not.toHaveBeenCalled();
     expect(setAutonomy).not.toHaveBeenCalled();
     expect(decide).not.toHaveBeenCalled();
 

@@ -9,10 +9,11 @@ export async function handleReefCommand({
   senderIsOwner?: boolean;
 }): Promise<{ text: string }> {
   const words = (args ?? "").trim().split(/\s+/).filter(Boolean);
-  const changesAutonomy = words[0] === "friend" && words[1] === "autonomy";
+  const changesFriendship =
+    words[0] === "friend" && /^(code|request|remove|block|autonomy)$/.test(words[1] ?? "");
   const decidesReview = words[0] === "review" && /^(approve|deny)$/.test(words[1] ?? "");
-  if ((changesAutonomy || decidesReview) && senderIsOwner !== true) {
-    return { text: "Only an owner can change Reef autonomy or decide reviews." };
+  if ((changesFriendship || decidesReview) && senderIsOwner !== true) {
+    return { text: "Only an owner can change Reef friends or decide reviews." };
   }
   const active = getActiveReef();
   if (words[0] === "friend" && words[1] === "code") {
