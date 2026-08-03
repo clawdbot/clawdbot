@@ -18,6 +18,7 @@ import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove, removeStaleJobFamily, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
+import { inspectManualRunDisposition } from "./ops-run-preparation.js";
 import { run } from "./ops-run.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
 import { tryCreateCronTaskRun, tryFinishCronTaskRun } from "./task-runs.js";
@@ -1737,6 +1738,42 @@ describe("cron service ops persist rollback", () => {
     expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(requestHeartbeat).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not auto-disable a job during manual-run preflight", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const job = await add(state, {
+      ...makeCreateInput("preflight schedule failure"),
+      schedule: { kind: "cron", expr: "0 1 * * *" },
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+    job.state.nextRunAtMs = undefined;
+    job.state.scheduleErrorCount = 2;
+    const enqueueSystemEvent = vi.mocked(state.deps.enqueueSystemEvent);
+    const requestHeartbeat = vi.mocked(state.deps.requestHeartbeat);
+    enqueueSystemEvent.mockClear();
+    requestHeartbeat.mockClear();
+    const computeSpy = vi.spyOn(cronSchedule, "computeNextRunAtMs").mockImplementation(() => {
+      throw new Error("simulated preflight schedule failure");
+    });
+
+    try {
+      await expect(inspectManualRunDisposition(state, job.id)).resolves.toEqual({
+        ok: true,
+        ran: false,
+        reason: "not-due",
+      });
+      expect(job.enabled).toBe(true);
+      expect(job.state.scheduleErrorCount).toBe(2);
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+    } finally {
+      computeSpy.mockRestore();
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

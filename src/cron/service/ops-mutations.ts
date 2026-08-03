@@ -504,8 +504,9 @@ export async function removeAgentJobsTransactional<T>(
     state.store.jobs = state.store.jobs.filter(
       (job) => resolveEffectiveJobAgentId(job, defaultAgentId) !== id,
     );
-    recomputeNextRunsForMaintenance(state);
-    await persistOrRestore(state, snapshot);
+    const postPersistNotifications: DeferredCronNotifications = [];
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: postPersistNotifications });
+    await persistOrRestore(state, snapshot, { postPersistNotifications });
     let result: T;
     try {
       result = await commit();
