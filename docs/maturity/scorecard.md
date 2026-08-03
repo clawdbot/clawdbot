@@ -12,8 +12,6 @@ summary: "OpenClaw release readiness scores for product areas, integrations, and
   <p className="maturity-jump-links"><a href="#surface-explorer">Browse surfaces</a> / <a href="#qa-evidence-summary">Inspect QA evidence</a> / <a href="/maturity/taxonomy">Read the taxonomy</a></p>
 </div>
 
-> **Incomplete QA evidence accepted.** Failed, blocked, and skipped checks provided no Coverage; only passing evidence fulfilled Coverage.
-
 ## What this page is for
 
 Use this page to answer one question: which OpenClaw surfaces are credible choices for a release, and what evidence supports that judgment? Coverage comes from deterministic QA evidence; quality and completeness are maintained as reviewed maturity scores.
