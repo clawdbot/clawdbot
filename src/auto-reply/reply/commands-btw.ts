@@ -14,7 +14,7 @@ import { extractBtwQuestion } from "./btw-command.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
-const BTW_USAGE = "Usage: /btw <side question>";
+const BTW_USAGE = "Usage: /btw [side question]";
 
 /** Command handler for /btw side questions. */
 export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
