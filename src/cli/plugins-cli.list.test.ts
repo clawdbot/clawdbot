@@ -673,6 +673,7 @@ describe("plugins cli list", () => {
       capabilities: [],
       typedHooks: [{ name: "agent_end" }],
       customHooks: [],
+      blockedHooks: [],
       tools: [],
       commands: [],
       cliCommands: [],
@@ -721,6 +722,7 @@ describe("plugins cli list", () => {
       capabilities: [],
       typedHooks: [],
       customHooks: [],
+      blockedHooks: [],
       tools: [],
       commands: [],
       cliCommands: [],
@@ -745,6 +747,59 @@ describe("plugins cli list", () => {
       config: {},
       onlyPluginIds: ["openclaw-mem0"],
     });
+  });
+
+  it("renders refused hook registrations in the inspect Blocked hooks section", async () => {
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [createPluginRecord({ id: "openclaw-beads", name: "Beads" })],
+      diagnostics: [],
+    });
+    buildPluginInspectReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      plugin: createPluginRecord({ id: "openclaw-beads", name: "Beads" }),
+      shape: "hook-only",
+      capabilityMode: "plain",
+      capabilityCount: 0,
+      capabilities: [],
+      typedHooks: [],
+      customHooks: [],
+      blockedHooks: [
+        {
+          pluginId: "openclaw-beads",
+          hookName: "before_prompt_build",
+          reason: "conversation-access-missing",
+          severity: "error",
+          configPath: "plugins.entries.openclaw-beads.hooks.allowConversationAccess",
+          message:
+            'typed hook "before_prompt_build" was NOT registered: set plugins.entries.openclaw-beads.hooks.allowConversationAccess to true',
+          source: "/plugins/openclaw-beads/index.js",
+        },
+      ],
+      tools: [],
+      commands: [],
+      cliCommands: [],
+      services: [],
+      gatewayDiscoveryServices: [],
+      mcpServers: [],
+      lspServers: [],
+      httpRouteCount: 0,
+      bundleCapabilities: [],
+      diagnostics: [],
+      policy: {
+        allowedModels: [],
+        hasAllowedModelsConfig: false,
+      },
+      usesLegacyBeforeAgentStart: false,
+      compatibility: [],
+    });
+
+    await runPluginsCommand(["plugins", "inspect", "openclaw-beads", "--runtime"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("Blocked hooks");
+    expect(output).toContain(
+      'ERROR before_prompt_build: typed hook "before_prompt_build" was NOT registered: set plugins.entries.openclaw-beads.hooks.allowConversationAccess to true',
+    );
   });
 
   it("does not runtime-load plugins when inspect target is missing", async () => {

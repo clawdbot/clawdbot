@@ -24,6 +24,7 @@ import {
 } from "./registry-state.js";
 import type {
   PluginAgentToolResultMiddlewareRegistration,
+  PluginBlockedHookReason,
   PluginRecord,
 } from "./registry-types.js";
 import {
@@ -88,6 +89,30 @@ function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string |
     `typed hook "${hookName}" is deprecated (${code}); ` +
     `${deprecation.reason} Use ${deprecation.replacement}. ` +
     `This compatibility hook will be removed after ${removeAfter}.`
+  );
+}
+
+/**
+ * The implicit conversation-access refusal is the only one the operator did not
+ * ask for: a non-bundled plugin registers a conversation hook, nobody ever set
+ * `allowConversationAccess`, and the default deny silently disables the handler
+ * while `api.on()` reports nothing back. That combination has shipped
+ * multi-day silent degradation, so the message must carry the config path, the
+ * remedy, and how to verify — and it is emitted at `error`, unlike the two
+ * deliberate denials below.
+ */
+function formatImplicitConversationAccessBlockDiagnostic(params: {
+  pluginId: string;
+  hookName: PluginHookName;
+  configPath: string;
+}): string {
+  return (
+    `typed hook "${params.hookName}" from non-bundled plugin "${params.pluginId}" was NOT registered: ` +
+    `conversation hooks need an explicit grant and ${params.configPath} is unset, so the plugin's ` +
+    `handler is inactive even though api.on() reported no error. ` +
+    `Fix: set "${params.configPath}": true in openclaw.json and restart the Gateway. ` +
+    `To keep the hook blocked without this error, set it to false. ` +
+    `Verify with \`openclaw plugins inspect ${params.pluginId} --runtime\` or \`/status plugins\`.`
   );
 }
 
@@ -429,34 +454,66 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       }
     }
     const effectiveHandler = handler;
-    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
+    // Records the refusal on the registry as well as emitting the diagnostic, so
+    // "is any hook of mine refused?" stays answerable after the startup scroll.
+    const blockTypedHook = (params: {
+      reason: PluginBlockedHookReason;
+      severity: "warn" | "error";
+      configPath: string;
+      message: string;
+    }) => {
       pushDiagnostic({
-        level: "warn",
+        level: params.severity,
         pluginId: record.id,
         source: record.source,
-        message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        code: "hook-blocked",
+        message: params.message,
+      });
+      registry.blockedHooks.push({
+        pluginId: record.id,
+        hookName: effectiveHookName,
+        reason: params.reason,
+        severity: params.severity,
+        configPath: params.configPath,
+        message: params.message,
+        source: record.source,
+      });
+    };
+    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
+      // Deliberate operator configuration: stays a warning.
+      const configPath = `plugins.entries.${record.id}.hooks.allowPromptInjection`;
+      blockTypedHook({
+        reason: "prompt-injection-denied",
+        severity: "warn",
+        configPath,
+        message: `typed hook "${effectiveHookName}" blocked by ${configPath}=false`,
       });
       return;
     }
     if (isConversationHookName(effectiveHookName)) {
       const explicitConversationAccess = policy?.allowConversationAccess;
+      const configPath = `plugins.entries.${record.id}.hooks.allowConversationAccess`;
       if (record.origin !== "bundled" && explicitConversationAccess !== true) {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message:
-            `typed hook "${effectiveHookName}" blocked because non-bundled plugins must set ` +
-            `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
+        // Implicit deny — nobody chose this. See the formatter's note.
+        blockTypedHook({
+          reason: "conversation-access-missing",
+          severity: "error",
+          configPath,
+          message: formatImplicitConversationAccessBlockDiagnostic({
+            pluginId: record.id,
+            hookName: effectiveHookName,
+            configPath,
+          }),
         });
         return;
       }
       if (record.origin === "bundled" && explicitConversationAccess === false) {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+        // Deliberate operator configuration: stays a warning.
+        blockTypedHook({
+          reason: "conversation-access-denied",
+          severity: "warn",
+          configPath,
+          message: `typed hook "${effectiveHookName}" blocked by ${configPath}=false`,
         });
         return;
       }

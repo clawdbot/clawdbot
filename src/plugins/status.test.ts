@@ -678,6 +678,15 @@ describe("plugin status reports", () => {
   });
 
   it("builds an inspect report with capability shape and policy", () => {
+    const blockedHook = {
+      pluginId: "google",
+      hookName: "before_prompt_build",
+      reason: "conversation-access-missing",
+      severity: "error",
+      configPath: "plugins.entries.google.hooks.allowConversationAccess",
+      message: 'typed hook "before_prompt_build" was NOT registered',
+      source: "/tmp/google/index.js",
+    } as const;
     loadConfigMock.mockReturnValue({
       plugins: {
         entries: {
@@ -705,6 +714,7 @@ describe("plugin status reports", () => {
         }),
       ],
       diagnostics: [{ level: "warn", pluginId: "google", message: "watch this surface" }],
+      blockedHooks: [blockedHook, { ...blockedHook, pluginId: "other" }],
     });
 
     const inspect = expectInspectReport("google");
@@ -727,6 +737,8 @@ describe("plugin status reports", () => {
     expect(inspect.diagnostics).toEqual([
       { level: "warn", pluginId: "google", message: "watch this surface" },
     ]);
+    // Refused registrations are scoped to the inspected plugin, like diagnostics.
+    expect(inspect.blockedHooks).toStrictEqual([blockedHook]);
   });
 
   it("builds inspect reports for every loaded plugin", () => {

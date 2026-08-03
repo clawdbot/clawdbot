@@ -271,6 +271,16 @@ startup; normal plugin policy still applies. After changing manifest or hook
 policy, restart the Gateway and verify the registration with
 `openclaw plugins inspect <id> --runtime --json`.
 
+`api.on()` returns `void`, so a plugin cannot tell that the host refused one of
+its hook registrations. Refusals are recorded instead: they appear as
+`Blocked hooks` in `openclaw plugins inspect <id> --runtime` and as
+`Blocked plugin hooks` in `/status plugins`, and they stay there for the life of
+the Gateway process rather than only in the startup log. A refusal the operator
+never asked for — a non-bundled plugin registering a conversation hook with no
+`allowConversationAccess` setting at all — is logged at `error`, because it
+silently disables a handler nobody chose to disable. Refusals that follow an
+explicit `false` are logged at `warn`.
+
 ## Verify the active Gateway
 
 `openclaw plugins list` and plain `openclaw plugins inspect` read cold config,
@@ -292,15 +302,16 @@ serves your channels, not only a wrapper or supervisor.
 
 ## Troubleshooting
 
-| Symptom                                                        | Check                                                                                                                                      | Fix                                                                                                     |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Plugin appears in `plugins list` but runtime hooks do not run  | Use `openclaw plugins inspect <id> --runtime --json` and confirm the active Gateway with `gateway status --deep --require-rpc`             | Restart the live Gateway after install, update, config, or source changes                               |
-| Duplicate channel or tool ownership diagnostics appear         | Run `openclaw plugins list --enabled --verbose`, inspect each suspected plugin with `--runtime --json`, and compare channel/tool ownership | Disable one owner, remove stale installs, or use manifest `preferOver` for intentional replacement      |
-| Config says a plugin is missing                                | Check [Plugin inventory](/plugins/plugin-inventory) for whether it is bundled, official external, or source-only                           | Install the external package, enable the bundled plugin, or remove stale config                         |
-| Config is invalid during install                               | Read the validation message and run `openclaw doctor --fix` if it points to stale plugin state                                             | Doctor can quarantine invalid plugin config by disabling the entry and removing the invalid payload     |
-| Plugin path is blocked for suspicious ownership or permissions | Inspect the diagnostic before the config error                                                                                             | Fix filesystem ownership/permissions, then run `openclaw plugins registry --refresh`                    |
-| `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                      |
-| Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself |
+| Symptom                                                         | Check                                                                                                                                      | Fix                                                                                                                     |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Plugin appears in `plugins list` but runtime hooks do not run   | Use `openclaw plugins inspect <id> --runtime --json` and confirm the active Gateway with `gateway status --deep --require-rpc`             | Restart the live Gateway after install, update, config, or source changes                                               |
+| A registered typed hook never fires and the plugin logs nothing | Read the `Blocked hooks` section of `openclaw plugins inspect <id> --runtime`, or `Blocked plugin hooks` in `/status plugins`              | Grant the named policy key (usually `plugins.entries.<id>.hooks.allowConversationAccess: true`) and restart the Gateway |
+| Duplicate channel or tool ownership diagnostics appear          | Run `openclaw plugins list --enabled --verbose`, inspect each suspected plugin with `--runtime --json`, and compare channel/tool ownership | Disable one owner, remove stale installs, or use manifest `preferOver` for intentional replacement                      |
+| Config says a plugin is missing                                 | Check [Plugin inventory](/plugins/plugin-inventory) for whether it is bundled, official external, or source-only                           | Install the external package, enable the bundled plugin, or remove stale config                                         |
+| Config is invalid during install                                | Read the validation message and run `openclaw doctor --fix` if it points to stale plugin state                                             | Doctor can quarantine invalid plugin config by disabling the entry and removing the invalid payload                     |
+| Plugin path is blocked for suspicious ownership or permissions  | Inspect the diagnostic before the config error                                                                                             | Fix filesystem ownership/permissions, then run `openclaw plugins registry --refresh`                                    |
+| `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                 | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                                      |
+| Dependency import fails at runtime                              | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself                 |
 
 When an enabled managed plugin fails payload verification during Gateway
 startup, OpenClaw quarantines that exact installed plugin root for the boot and

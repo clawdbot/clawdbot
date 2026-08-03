@@ -122,6 +122,107 @@ describe("plugin health status formatting", () => {
     ).toBeUndefined();
   });
 
+  it("counts implicitly blocked hooks in the compact line but not operator-chosen ones", () => {
+    expect(
+      formatCompactPluginHealthLine({
+        ...emptySnapshot,
+        blockedHooks: [
+          {
+            pluginId: "openclaw-beads",
+            hookName: "before_prompt_build",
+            reason: "conversation-access-missing",
+            severity: "error",
+            message: "was NOT registered",
+          },
+        ],
+      }),
+    ).toBe("⚠️ Plugins: 1 blocked hook");
+
+    // A hook the operator deliberately denied is steady state, not a problem.
+    expect(
+      formatCompactPluginHealthLine({
+        ...emptySnapshot,
+        blockedHooks: [
+          {
+            pluginId: "chatty-plugin",
+            hookName: "before_prompt_build",
+            reason: "prompt-injection-denied",
+            severity: "warn",
+            message: "blocked by plugins.entries.chatty-plugin.hooks.allowPromptInjection=false",
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("lists blocked hooks in detailed health without double-reporting their diagnostic", () => {
+    const message =
+      'typed hook "before_prompt_build" from non-bundled plugin "openclaw-beads" was NOT registered: ' +
+      "set plugins.entries.openclaw-beads.hooks.allowConversationAccess to true";
+    const detailed = formatDetailedPluginHealth({
+      ...emptySnapshot,
+      diagnostics: [
+        {
+          level: "error",
+          pluginId: "openclaw-beads",
+          code: "hook-blocked",
+          message,
+        },
+      ],
+      blockedHooks: [
+        {
+          pluginId: "openclaw-beads",
+          hookName: "before_prompt_build",
+          reason: "conversation-access-missing",
+          severity: "error",
+          message,
+        },
+      ],
+    });
+
+    expect(detailed).toContain("Blocked plugin hooks: 1");
+    expect(detailed).toContain(
+      `- ERROR openclaw-beads before_prompt_build [conversation-access-missing]: ${message}`,
+    );
+    // The diagnostic is the same fact; it must not also appear in Diagnostics.
+    expect(detailed).not.toContain("Diagnostics:");
+    expect(detailed).toContain("⚠️ Plugins: 1 blocked hook");
+  });
+
+  it("still reports a hook-blocked diagnostic that has no matching blocked-hook record", () => {
+    const detailed = formatDetailedPluginHealth({
+      ...emptySnapshot,
+      diagnostics: [
+        {
+          level: "error",
+          pluginId: "ghost-plugin",
+          code: "hook-blocked",
+          message: "orphaned blocked-hook diagnostic",
+        },
+      ],
+    });
+
+    expect(detailed).toContain("Diagnostics: 1 errors · 0 warnings");
+    expect(detailed).toContain("- ERROR ghost-plugin: orphaned blocked-hook diagnostic");
+    expect(detailed).not.toContain("Blocked plugin hooks:");
+  });
+
+  it("caps the blocked hook list and reports the overflow", () => {
+    const detailed = formatDetailedPluginHealth({
+      ...emptySnapshot,
+      blockedHooks: Array.from({ length: 10 }, (_unused, index) => ({
+        pluginId: `plugin-${index}`,
+        hookName: "agent_end",
+        reason: "conversation-access-missing",
+        severity: "error" as const,
+        message: `blocked ${index}`,
+      })),
+    });
+
+    expect(detailed).toContain("Blocked plugin hooks: 10");
+    expect(detailed).toContain("- +2 more blocked hooks");
+  });
+
   it("merges runtime health into installed plugin snapshots for detailed status", () => {
     const snapshot = mergeStatusPluginHealthSnapshots(
       {
@@ -172,6 +273,15 @@ describe("plugin health status formatting", () => {
             source: "diagnostic",
           },
         ],
+        blockedHooks: [
+          {
+            pluginId: "openclaw-beads",
+            hookName: "before_prompt_build",
+            reason: "conversation-access-missing",
+            severity: "error",
+            message: "was NOT registered",
+          },
+        ],
       },
     );
 
@@ -195,6 +305,16 @@ describe("plugin health status formatting", () => {
       code: "hook-only",
       message: "is hook-only",
     });
+    // Runtime-only fact: the installed disk scan never attempts registration.
+    expect(snapshot.blockedHooks).toStrictEqual([
+      {
+        pluginId: "openclaw-beads",
+        hookName: "before_prompt_build",
+        reason: "conversation-access-missing",
+        severity: "error",
+        message: "was NOT registered",
+      },
+    ]);
   });
 
   it("includes detailed plugin state without dumping the full plugin registry", () => {

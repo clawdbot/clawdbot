@@ -20,6 +20,7 @@ import {
   globalAfterEach0,
   globalAfterAll1,
   updatePluginManifest,
+  writeBundledPlugin,
 } from "./loader.test-harness.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
@@ -1075,6 +1076,21 @@ ${channelPluginSource({
       ),
     );
     expect(blockedDiagnostics).toHaveLength(1);
+    // Explicit operator denial: stays a warning, never escalated to error.
+    expect(blockedDiagnostics[0]?.level).toBe("warn");
+    expect(blockedDiagnostics[0]?.code).toBe("hook-blocked");
+    expect(registry.blockedHooks).toStrictEqual([
+      {
+        pluginId: "hook-policy",
+        hookName: "before_prompt_build",
+        reason: "prompt-injection-denied",
+        severity: "warn",
+        configPath: "plugins.entries.hook-policy.hooks.allowPromptInjection",
+        message:
+          'typed hook "before_prompt_build" blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false',
+        source: expect.any(String),
+      },
+    ]);
   });
 
   it("blocks next-turn injections when prompt injection is disabled", () => {
@@ -1357,12 +1373,97 @@ ${channelPluginSource({
     });
 
     expect(registry.typedHooks).toStrictEqual([]);
-    const blockedDiagnostics = registry.diagnostics.filter((diag) =>
-      diag.message.includes(
-        "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
-      ),
+    const blockedDiagnostics = registry.diagnostics.filter(
+      (diag) => diag.code === "hook-blocked" && diag.pluginId === "conversation-hooks",
     );
     expect(blockedDiagnostics).toHaveLength(9);
+    // Implicit deny: the operator never expressed an opinion, so the plugin is
+    // silently degraded. That is an error, and the message has to be actionable.
+    expect(blockedDiagnostics.every((diag) => diag.level === "error")).toBe(true);
+    const promptBuildDiagnostic = blockedDiagnostics.find((diag) =>
+      diag.message.includes('"before_prompt_build"'),
+    );
+    expect(promptBuildDiagnostic?.message).toContain("was NOT registered");
+    // Exact config path, remedy, and how to verify.
+    expect(promptBuildDiagnostic?.message).toContain(
+      "plugins.entries.conversation-hooks.hooks.allowConversationAccess",
+    );
+    expect(promptBuildDiagnostic?.message).toContain("restart the Gateway");
+    expect(promptBuildDiagnostic?.message).toContain(
+      "openclaw plugins inspect conversation-hooks --runtime",
+    );
+    expect(promptBuildDiagnostic?.message).toContain("/status plugins");
+    // And the refusal is queryable off the registry, not just in the log scroll.
+    expect(registry.blockedHooks.map((entry) => entry.hookName).toSorted()).toStrictEqual(
+      [
+        "agent_end",
+        "agent_turn_prepare",
+        "before_agent_finalize",
+        "before_agent_reply",
+        "before_agent_run",
+        "before_model_resolve",
+        "before_prompt_build",
+        "llm_input",
+        "llm_output",
+      ].toSorted(),
+    );
+    expect(
+      registry.blockedHooks.every(
+        (entry) =>
+          entry.pluginId === "conversation-hooks" &&
+          entry.reason === "conversation-access-missing" &&
+          entry.severity === "error" &&
+          entry.configPath === "plugins.entries.conversation-hooks.hooks.allowConversationAccess",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps an explicit bundled conversation-access denial at warn", () => {
+    writeBundledPlugin({
+      id: "bundled-conversation-denied",
+      filename: "bundled-conversation-denied.cjs",
+      body: `module.exports = { id: "bundled-conversation-denied", register(api) {
+    api.on("before_prompt_build", () => undefined);
+  } };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          allow: ["bundled-conversation-denied"],
+          entries: {
+            "bundled-conversation-denied": {
+              enabled: true,
+              hooks: {
+                allowConversationAccess: false,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "bundled-conversation-denied")?.origin,
+    ).toBe("bundled");
+    expect(registry.typedHooks).toStrictEqual([]);
+    expect(registry.blockedHooks).toStrictEqual([
+      {
+        pluginId: "bundled-conversation-denied",
+        hookName: "before_prompt_build",
+        reason: "conversation-access-denied",
+        severity: "warn",
+        configPath: "plugins.entries.bundled-conversation-denied.hooks.allowConversationAccess",
+        message:
+          'typed hook "before_prompt_build" blocked by plugins.entries.bundled-conversation-denied.hooks.allowConversationAccess=false',
+        source: expect.any(String),
+      },
+    ]);
+    const blockedDiagnostics = registry.diagnostics.filter((diag) => diag.code === "hook-blocked");
+    expect(blockedDiagnostics).toHaveLength(1);
+    // Deliberate configuration is not an error.
+    expect(blockedDiagnostics[0]?.level).toBe("warn");
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
