@@ -556,6 +556,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         authMethod: "token",
         sharedAuthOk: false,
         sharedAuthProvided: false,
+        pendingSharedAuthFailure: false,
         ...(bootstrapToken ? { bootstrapTokenCandidate: bootstrapToken } : {}),
         ...(deviceToken
           ? {

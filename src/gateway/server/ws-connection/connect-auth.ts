@@ -11,6 +11,10 @@ import {
 import { verifyDeviceToken } from "../../../infra/device-pairing.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import type { GatewayAuthResult } from "../../auth.js";
+import {
+  AUTH_CREDENTIAL_FALLBACK_SERIALIZATION_SCOPE,
+  withSerializedRateLimitAttempt,
+} from "../../rate-limit-attempt-serialization.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -47,6 +51,23 @@ import type {
 const unauthorizedHandshakeLogLimiter = new HandshakeAuthLogLimiter();
 
 export async function authenticateGatewayConnect(
+  context: GatewayConnectPhaseContext,
+): Promise<AuthenticatedGatewayConnect | undefined> {
+  const hasCredentialFallback = Boolean(
+    context.connectParams.auth?.deviceToken ||
+    (context.connectParams.device && context.connectParams.auth?.token),
+  );
+  if (!context.authRateLimiter || !hasCredentialFallback) {
+    return await authenticateGatewayConnectCore(context);
+  }
+  return await withSerializedRateLimitAttempt({
+    ip: context.browserRateLimitClientIp,
+    scope: AUTH_CREDENTIAL_FALLBACK_SERIALIZATION_SCOPE,
+    run: async () => await authenticateGatewayConnectCore(context),
+  });
+}
+
+async function authenticateGatewayConnectCore(
   context: GatewayConnectPhaseContext,
 ): Promise<AuthenticatedGatewayConnect | undefined> {
   const {
@@ -129,6 +150,7 @@ export async function authenticateGatewayConnect(
   });
   const {
     sharedAuthOk,
+    pendingSharedAuthFailure,
     bootstrapTokenCandidate,
     deviceTokenCandidate,
     deviceTokenCandidateSource,
@@ -346,6 +368,7 @@ export async function authenticateGatewayConnect(
       authMethod,
       sharedAuthOk,
       sharedAuthProvided: hasSharedAuth,
+      pendingSharedAuthFailure,
       bootstrapTokenCandidate,
       deviceTokenCandidate,
       deviceTokenCandidateSource,

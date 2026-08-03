@@ -5,6 +5,9 @@ import { AUTH_RATE_LIMIT_SCOPE_DEFAULT, normalizeRateLimitClientIp } from "./aut
 
 const pendingAttempts = new KeyedAsyncQueue();
 
+/** Shared queue scope for auth attempts that evaluate shared and device credentials together. */
+export const AUTH_CREDENTIAL_FALLBACK_SERIALIZATION_SCOPE = "credential-fallback";
+
 function normalizeScope(scope: string | undefined): string {
   return (scope ?? AUTH_RATE_LIMIT_SCOPE_DEFAULT).trim() || AUTH_RATE_LIMIT_SCOPE_DEFAULT;
 }

@@ -2093,6 +2093,41 @@ describe("handleControlUiHttpRequest", () => {
     }
   });
 
+  it("serializes concurrent proxy-shaped device-token fallback failures", async () => {
+    const rateLimiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+    });
+
+    try {
+      await withPairedOperatorDeviceToken({
+        fn: async () => {
+          await withControlUiRoot({
+            fn: async (tmp) => {
+              const sendBootstrap = async () =>
+                await runBootstrapConfigRequest({
+                  rootPath: tmp,
+                  auth: { mode: "token", token: "shared-token", allowTailscale: false },
+                  headers: {
+                    authorization: "Bearer wrong-token",
+                    forwarded: "for=203.0.113.10",
+                  },
+                  rateLimiter,
+                });
+
+              const results = await Promise.all([sendBootstrap(), sendBootstrap()]);
+              expect(results.map(({ res }) => res.statusCode).toSorted()).toEqual([401, 429]);
+            },
+          });
+        },
+      });
+    } finally {
+      rateLimiter.dispose();
+    }
+  });
+
   it("selects higher-scope frame tabs using paired device-token scopes", async () => {
     await withScopedPairedOperatorDevice({
       scopes: ["operator.read", "operator.admin"],
