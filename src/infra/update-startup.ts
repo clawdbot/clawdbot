@@ -47,6 +47,7 @@ import { gatewayUpdateCampaign, type UpdateCampaignController } from "./update-c
 import {
   channelToNpmTag,
   normalizeUpdateChannel,
+  resolveRegistryUpdateChannel,
   DEFAULT_PACKAGE_CHANNEL,
   type UpdateChannel,
 } from "./update-channels.js";

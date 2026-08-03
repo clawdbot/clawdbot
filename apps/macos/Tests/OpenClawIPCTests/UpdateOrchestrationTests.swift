@@ -313,9 +313,14 @@ struct UpdateOrchestrationTests {
             OpenClawConfigFile.normalizedGatewayUpdateChannel("  BETA \n")) == ["beta"])
         #expect(OpenClawConfigFile.normalizedGatewayUpdateChannel(" \n") == nil)
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "stable").isEmpty)
-        #expect(allowedSparkleChannels(forGatewayUpdateChannel: "extended-stable").isEmpty)
+        #expect(allowedSparkleChannels(forGatewayUpdateChannel: "extended-stable") == ["extended-stable"])
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "future").isEmpty)
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: nil).isEmpty)
+        #expect(isSparkleUpdateAllowed(itemChannel: nil, forGatewayUpdateChannel: "stable"))
+        #expect(!isSparkleUpdateAllowed(itemChannel: nil, forGatewayUpdateChannel: "extended-stable"))
+        #expect(isSparkleUpdateAllowed(
+            itemChannel: "extended-stable",
+            forGatewayUpdateChannel: "extended-stable"))
     }
 
     #if canImport(Sparkle)

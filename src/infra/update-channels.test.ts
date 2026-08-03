@@ -4,6 +4,7 @@ import {
   channelToNpmTag,
   formatUpdateChannelLabel,
   isBetaTag,
+  isExtendedStableReleaseVersion,
   isStableTag,
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
@@ -24,6 +25,18 @@ describe("update-channels tag detection", () => {
     { tag: "v2026.2.24", beta: false },
   ])("classifies $tag", ({ tag, beta }) => {
     expect(isBetaTag(tag)).toBe(beta);
+  });
+
+  it.each([
+    { version: "2026.6.32", extendedStable: false },
+    { version: "2026.6.33", extendedStable: true },
+    { version: "2026.6.34", extendedStable: true },
+    { version: "2026.6.33-1", extendedStable: false },
+    { version: "2026.6.33-beta.1", extendedStable: false },
+    { version: "1.33.1", extendedStable: false },
+    { version: "1.6.33", extendedStable: false },
+  ])("recognizes the extended-stable release train for $version", ({ version, extendedStable }) => {
+    expect(isExtendedStableReleaseVersion(version)).toBe(extendedStable);
   });
 
   it.each([
@@ -101,6 +114,14 @@ describe("resolveEffectiveUpdateChannel", () => {
         installKind: "package" as const,
       },
       expected: { channel: "extended-stable", source: "config" },
+    },
+    {
+      name: "uses installed extended-stable version without config",
+      params: {
+        currentVersion: "2026.6.33",
+        installKind: "package" as const,
+      },
+      expected: { channel: "extended-stable", source: "installed-version" },
     },
     {
       name: "uses beta git tag",
@@ -256,6 +277,14 @@ describe("resolveRegistryUpdateChannel", () => {
       resolveRegistryUpdateChannel({
         configChannel: "extended-stable",
         currentVersion: "2026.5.2-beta.1",
+      }),
+    ).toBe("extended-stable");
+  });
+
+  it("queries extended-stable for an installed extended-stable package without config", () => {
+    expect(
+      resolveRegistryUpdateChannel({
+        currentVersion: "2026.6.33",
       }),
     ).toBe("extended-stable");
   });

@@ -61,6 +61,21 @@ export function isBetaTag(tag: string): boolean {
   return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
 }
 
+/** Returns whether a final monthly release belongs to the extended-stable line. */
+export function isExtendedStableReleaseVersion(version: string): boolean {
+  const parsed = parseSemver(version.trim());
+  return (
+    parsed !== null &&
+    parsed.build.length === 0 &&
+    parsed.prerelease.length === 0 &&
+    parsed.major >= 1000 &&
+    parsed.major <= 9999 &&
+    parsed.minor >= 1 &&
+    parsed.minor <= 12 &&
+    parsed.patch >= 33
+  );
+}
+
 /** Detects prerelease tags, including legacy dot-beta tags and named prerelease channels. */
 function isPrereleaseTag(tag: string): boolean {
   const parsed = parseSemver(normalizeLegacyDotBetaVersion(tag));
@@ -91,6 +106,13 @@ export function resolveRegistryUpdateChannel(params: {
   ) {
     return "beta";
   }
+  if (
+    !params.configChannel &&
+    params.currentVersion &&
+    isExtendedStableReleaseVersion(params.currentVersion)
+  ) {
+    return "extended-stable";
+  }
   return params.configChannel ?? DEFAULT_PACKAGE_CHANNEL;
 }
 
@@ -113,6 +135,12 @@ export function resolveEffectiveUpdateChannel(params: {
 
   if (params.configChannel) {
     return { channel: params.configChannel, source: "config" };
+  }
+
+  if (params.installKind === "package" && params.currentVersion) {
+    if (isExtendedStableReleaseVersion(params.currentVersion)) {
+      return { channel: "extended-stable", source: "installed-version" };
+    }
   }
 
   if (params.installKind === "git") {
@@ -156,7 +184,7 @@ export function formatUpdateChannelLabel(params: {
       : `${params.channel} (branch)`;
   }
   if (params.source === "installed-version") {
-    return "beta (installed version)";
+    return `${params.channel} (installed version)`;
   }
   return `${params.channel} (default)`;
 }

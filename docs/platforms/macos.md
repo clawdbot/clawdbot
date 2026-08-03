@@ -78,8 +78,9 @@ updates only the local Mac node runtime and skips the notification when the
 remote Gateway is older than the app.
 
 Sparkle follows the Gateway's `update.channel` setting. `beta` and `dev` opt in
-to beta app builds; `stable`, `extended-stable`, and missing or unknown values
-stay on stable app builds.
+to beta app builds; `extended-stable` accepts only extended-stable app releases,
+so it stays quiet when no matching app release exists. `stable`, missing, and
+unknown values stay on stable app builds.
 
 ## Open dashboard links
 

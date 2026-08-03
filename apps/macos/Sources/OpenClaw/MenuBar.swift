@@ -874,14 +874,41 @@ func allowedSparkleChannels(forGatewayUpdateChannel channel: String?) -> Set<Str
     switch channel {
     case "beta", "dev":
         ["beta"]
+    case "extended-stable":
+        ["extended-stable"]
     default:
         []
     }
 }
 
+func isSparkleUpdateAllowed(itemChannel: String?, forGatewayUpdateChannel channel: String?) -> Bool {
+    channel != "extended-stable" || itemChannel == "extended-stable"
+}
+
 extension SparkleUpdaterController: SPUUpdaterDelegate {
     func allowedChannels(for _: SPUUpdater) -> Set<String> {
         allowedSparkleChannels(forGatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel())
+    }
+
+    func bestValidUpdate(in appcast: SUAppcast, for _: SPUUpdater) -> SUAppcastItem? {
+        guard OpenClawConfigFile.gatewayUpdateChannel() == "extended-stable" else { return nil }
+        let comparator = SUStandardVersionComparator.defaultComparator
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        // Sparkle always admits the default channel. Filter it here so an
+        // extended-stable Gateway is never prompted to leave its release train.
+        let eligibleItems = appcast.items.filter {
+            guard isSparkleUpdateAllowed(
+                itemChannel: $0.channel,
+                forGatewayUpdateChannel: "extended-stable")
+            else { return false }
+            guard let currentVersion else { return true }
+            return comparator.compareVersion(
+                $0.versionString,
+                toVersion: currentVersion) == .orderedDescending
+        }
+        return eligibleItems.max { left, right in
+            comparator.compareVersion(left.versionString, toVersion: right.versionString) == .orderedAscending
+        }
     }
 
     func updater(_: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
