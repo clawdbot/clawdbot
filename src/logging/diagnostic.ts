@@ -1327,6 +1327,13 @@ export function startDiagnosticHeartbeat(
         // value, so letting an older session clock win there would release a lane
         // before its no-progress safety window and re-run work still in flight.
         const attentionAgeMs = idleQueuedRecoverableStall ? progressAgeMs : observedAgeMs;
+        // Recovery keeps receiving the session clock. Only what the operator is
+        // told changes here; the runtime's ownerless-lane release window
+        // (diagnostic-stuck-session-recovery.runtime.ts) stays on the age it has
+        // always been given, so this widening cannot shorten it. Abort eligibility
+        // is unaffected either way: that path reads activity.lastProgressAgeMs
+        // directly whenever a run-activity row exists.
+        const recoveryAgeMs = idleQueuedRecoverableStall ? progressAgeMs : ageMs;
         const classification = logSessionAttention({
           sessionId: state.sessionId,
           sessionKey: state.sessionKey,
@@ -1355,7 +1362,7 @@ export function startDiagnosticHeartbeat(
             sessionId: state.sessionId,
             sessionKey: state.sessionKey,
             sessionFile: state.sessionFile,
-            ageMs: attentionAgeMs,
+            ageMs: recoveryAgeMs,
             queueDepth: resolveDiagnosticQueuedBacklog(state),
             expectedState: state.state,
             stateGeneration: state.generation,

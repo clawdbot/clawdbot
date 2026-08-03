@@ -935,15 +935,23 @@ describe("stuck session diagnostics threshold", () => {
         activeWorkKind: "embedded_run",
       },
     );
+    // What the operator is told is the progress clock (>= the 60s abort
+    // threshold), not the 5s session-touch clock inbound traffic keeps resetting.
+    const stalled = requireRecord(
+      events.findLast((event) => event.type === "session.stalled"),
+      "stalled event",
+    );
+    expect(stalled.ageMs).toBeGreaterThanOrEqual(60_000);
+
     expectRecoveryCall(
       recoverStuckSession,
       { sessionId: "s1", sessionKey: "main", allowActiveAbort: true },
       ["ageMs", "stateGeneration", "queueDepth"],
     );
     const request = requireFirstMockCallArg(recoverStuckSession, "recoverStuckSession");
-    // The reported age is the progress clock (>= the 60s abort threshold), not
-    // the 5s session-touch clock the inbound traffic keeps resetting.
-    expect(request.ageMs).toBeGreaterThanOrEqual(60_000);
+    // The recovery request still carries the session clock, so the runtime's
+    // ownerless-lane release window keeps the age it has always been given.
+    expect(request.ageMs).toBeLessThan(30_000);
     expect(request.queueDepth).toBeGreaterThan(0);
   });
 
