@@ -5816,14 +5816,15 @@ describe("DiscordVoiceManager", () => {
       toolNames: { include: ["gateway", "nodes", "openclaw"], exclude: [] },
     },
     {
-      name: "supports the Discord command-owner wildcard for voice speakers",
+      name: "admits the Discord command-owner wildcard without owner voice authority",
       userId: "u-owner",
       client: () => createClientWithMember("u-owner", "Owner", "1234"),
       manager: (client: ReturnType<typeof createClient>) =>
         createManager({ groupPolicy: "open", dmPolicy: "disabled" }, client, {
           commands: { ownerAllowFrom: ["discord:*"] },
         }),
-      expectedOwner: true,
+      expectedOwner: false,
+      toolNames: { include: ["exec"], exclude: ["gateway", "nodes", "openclaw"] },
     },
     {
       name: "does not use another provider's command owners for Discord voice",
