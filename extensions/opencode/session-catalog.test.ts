@@ -246,7 +246,11 @@ function captureOpenCodeContinuationCatalog() {
     }
   });
   const session = { createSessionEntry, listSessionEntries: vi.fn(() => entries) };
-  const runtime = { config: { current: () => ({}) }, agent: { session } };
+  const runtime = {
+    config: { current: () => ({}) },
+    nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) },
+    agent: { session },
+  };
   const { provider } = captureOpenCodeSessionRegistrations(
     {},
     { id: "opencode", config: {}, runtime },
