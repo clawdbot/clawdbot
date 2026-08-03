@@ -17,9 +17,34 @@ cleanup() {
   docker_e2e_docker_cmd rm -f "$CLI_NAME" >/dev/null 2>&1 || true
   "${COMPOSE[@]}" down --remove-orphans --volumes >/dev/null 2>&1 || true
   docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  docker_e2e_docker_cmd run --rm --user 0:0 \
+    -v "$PROJECT_DIR:/target" \
+    "$IMAGE_NAME" \
+    sh -c 'rm -rf /target/* /target/.[!.]* /target/..?*' >/dev/null 2>&1 || true
   rm -rf "$PROJECT_DIR"
 }
 trap cleanup EXIT
+
+assert_gateway_health_json() {
+  local label="$1"
+  local health_path="$2"
+  node - "$label" "$health_path" <<'NODE'
+const fs = require("node:fs");
+const label = process.argv[2];
+const healthPath = process.argv[3];
+const health = JSON.parse(fs.readFileSync(healthPath, "utf8"));
+if (
+  health?.ok !== true ||
+  !Number.isFinite(health.ts) ||
+  !Number.isFinite(health.durationMs) ||
+  !health.channels ||
+  typeof health.channels !== "object" ||
+  Array.isArray(health.channels)
+) {
+  throw new Error(`${label} gateway health JSON is incomplete`);
+}
+NODE
+}
 
 mkdir -p "$PROJECT_DIR/config/workspace" "$PROJECT_DIR/auth-profile"
 chmod -R 0777 "$PROJECT_DIR/config" "$PROJECT_DIR/auth-profile"
@@ -71,8 +96,10 @@ if [ "$(docker inspect --format '{{.State.Health.Status}}' "$GATEWAY_ID")" != "h
   exit 1
 fi
 
-"${COMPOSE[@]}" exec -T openclaw-gateway node dist/index.js health --token "$TOKEN"
-"${COMPOSE[@]}" run -T --no-deps --name "$CLI_NAME" openclaw-cli health --token "$TOKEN"
+"${COMPOSE[@]}" exec -T openclaw-gateway node dist/index.js gateway health --token "$TOKEN" --json >"$PROJECT_DIR/gateway-health.json"
+assert_gateway_health_json "gateway service" "$PROJECT_DIR/gateway-health.json"
+"${COMPOSE[@]}" run -T --no-deps --name "$CLI_NAME" openclaw-cli gateway health --token "$TOKEN" --json >"$PROJECT_DIR/cli-health.json"
+assert_gateway_health_json "CLI sidecar" "$PROJECT_DIR/cli-health.json"
 GATEWAY_VERSION="$("${COMPOSE[@]}" exec -T openclaw-gateway node -p "require('./package.json').version")"
 
 node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts" \
@@ -84,6 +111,7 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --container "cli=$CLI_NAME" \
   --detail "gateway:openclawVersion=$GATEWAY_VERSION" \
   --detail "gateway:health=healthy" \
+  --detail "gateway:healthCommand=passed" \
   --detail "cli:healthCommand=passed"
 
 echo "Docker Compose setup proof passed."
