@@ -44,6 +44,7 @@ import {
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 
 const normalizeRepoPath = toRepoPath;
+const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 
 type VitestTestConfig = {
   dir?: string;
@@ -72,6 +73,11 @@ function findVitestConfigFactory(mod: Record<string, unknown>): VitestConfigFact
     }
   }
   return null;
+}
+
+function expectedMatrixTestProcessCount() {
+  const testFileCount = listExtensionTestFilesForRoots(["extensions/matrix"]).length;
+  return Math.max(1, Math.ceil(testFileCount / MATRIX_TEST_PROCESS_FILE_LIMIT));
 }
 
 async function loadRawVitestConfig(configPath: string): Promise<VitestConfig> {
@@ -3235,8 +3241,12 @@ describe("scripts/test-projects changed-target routing", () => {
           watchMode: false,
         })),
     );
-    expect(matrixPlans).toHaveLength(3);
-    expect(matrixPlans.every((plan) => (plan.includePatterns?.length ?? 0) <= 40)).toBe(true);
+    expect(matrixPlans).toHaveLength(expectedMatrixTestProcessCount());
+    expect(
+      matrixPlans.every(
+        (plan) => (plan.includePatterns?.length ?? 0) <= MATRIX_TEST_PROCESS_FILE_LIMIT,
+      ),
+    ).toBe(true);
     expect(matrixPlans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
@@ -3246,11 +3256,13 @@ describe("scripts/test-projects changed-target routing", () => {
   it("bounds an explicit Matrix directory target across process lifetimes", () => {
     const plans = buildVitestRunPlans(["extensions/matrix"], process.cwd());
 
-    expect(plans).toHaveLength(3);
+    expect(plans).toHaveLength(expectedMatrixTestProcessCount());
     expect(
       plans.every((plan) => plan.config === "test/vitest/vitest.extension-matrix.config.ts"),
     ).toBe(true);
-    expect(plans.every((plan) => (plan.includePatterns?.length ?? 0) <= 40)).toBe(true);
+    expect(
+      plans.every((plan) => (plan.includePatterns?.length ?? 0) <= MATRIX_TEST_PROCESS_FILE_LIMIT),
+    ).toBe(true);
     expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
@@ -3264,7 +3276,10 @@ describe("scripts/test-projects changed-target routing", () => {
 
     const plans = buildVitestRunPlans(["extensions/matrix", testFile], process.cwd());
 
-    expect(plans).toHaveLength(3);
+    expect(plans).toHaveLength(expectedMatrixTestProcessCount());
+    expect(
+      plans.every((plan) => (plan.includePatterns?.length ?? 0) <= MATRIX_TEST_PROCESS_FILE_LIMIT),
+    ).toBe(true);
     expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
@@ -4652,8 +4667,10 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
     const matrixTargets = matrixPlans.flatMap((plan) => plan.forwardedArgs);
-    expect(matrixPlans).toHaveLength(3);
-    expect(matrixPlans.every((plan) => plan.forwardedArgs.length <= 40)).toBe(true);
+    expect(matrixPlans).toHaveLength(expectedMatrixTestProcessCount());
+    expect(
+      matrixPlans.every((plan) => plan.forwardedArgs.length <= MATRIX_TEST_PROCESS_FILE_LIMIT),
+    ).toBe(true);
     expect(matrixTargets).toEqual(listExtensionTestFilesForRoots(["extensions/matrix"]));
     expect(
       plans.filter(

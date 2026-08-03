@@ -208,7 +208,6 @@ type PluginReportParams = {
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
   metadataSnapshot?: PluginMetadataSnapshot;
-  resolvedConfig?: OpenClawConfig;
 };
 
 function buildPluginReport(
