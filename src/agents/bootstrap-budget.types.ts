@@ -10,7 +10,7 @@ export type BootstrapInjectionStat = {
   truncated: boolean;
 };
 
-export type BootstrapAnalyzedFile = BootstrapInjectionStat & {
+type BootstrapAnalyzedFile = BootstrapInjectionStat & {
   effectiveFileLimit: number;
   nearLimit: boolean;
   causes: BootstrapTruncationCause[];
