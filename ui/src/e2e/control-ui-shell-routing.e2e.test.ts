@@ -74,6 +74,8 @@ async function startBasePathProxy(upstreamBaseUrl: string): Promise<BasePathProx
       const upstream = await fetch(upstreamUrl, {
         headers: { Accept: request.headers.accept ?? "*/*" },
         method: request.method,
+        // Let Chromium observe redirects so the proxy cannot hide a root-mount regression.
+        redirect: "manual",
       });
       response.statusCode = upstream.status;
       for (const [name, value] of upstream.headers) {
