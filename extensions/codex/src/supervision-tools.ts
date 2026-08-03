@@ -1062,7 +1062,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
             if (error instanceof CodexSupervisionPolicyError) {
               throw error;
             }
-            health.push({ endpointId: endpoint.id, ok: false });
+            health.push({ endpointId: endpoint.id, ok: false, detail: error instanceof Error ? error.message : String(error) });
           }
         }
         requireCurrentEndpointSet(options, endpoints);

@@ -146,6 +146,26 @@ describe("Codex supervision compatibility tools", () => {
     );
   });
 
+  it("preserves the endpoint failure detail in probe health results", async () => {
+    const failureDetail = "ECONNREFUSED /tmp/codex-app-server.sock";
+    requestCodexAppServerJsonMock.mockRejectedValue(new Error(failureDetail));
+    const tools = createCodexSupervisionTools({
+      getPluginConfig: () => ({
+        supervision: { enabled: true, endpoints: [{ id: "local", transport: "stdio-proxy" }] },
+      }),
+      senderIsOwner: true,
+      env: {},
+    });
+
+    const result = await toolByName(tools, "codex_endpoint_probe").execute("probe", {});
+
+    expect(result).toMatchObject({
+      details: {
+        health: [{ endpointId: "local", ok: false, detail: failureDetail }],
+      },
+    });
+  });
+
   it("rejects unauthenticated remote compatibility endpoints before connecting", async () => {
     const tools = createCodexSupervisionTools({
       getPluginConfig: () => ({
