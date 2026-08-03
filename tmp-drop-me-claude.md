@@ -311,3 +311,42 @@ first per the wrapper discipline; it materialised `node_modules` itself as part 
 its own delegation, and only then were wrapper-based validations run. The control
 worktree install (`/tmp/oc-bw-18c9f27e`) happened only after
 `node scripts/run-vitest.mjs` there failed **solely** with `ERR_MODULE_NOT_FOUND`.
+
+---
+
+## §Final — candidate shape and residue
+
+### Branch-specific commit chain (first parent from `47c4169`)
+
+```
+75e1fdb71ae journal: §Gate 2.5 … and §Gate 3 …
+af164ed52af test(gateway): reclassify two reload paths upstream made hot
+737ec36b3ec journal: §2 merge + manual resolutions; Gate 2 … Gate 2.7 …
+cafe55e4075 fix(gateway): drop the compaction session-queue clear upstream removed
+b5bc4347c0d Merge upstream 18c9f27e into #1219 F1 accepted head
+```
+
+Exactly one two-parent merge. No rebase, squash, amend, force-push, or history
+rewrite. `#1218` behaviour untouched: no change to reset/new, gateway-restart
+active-timer recovery, or durable session-key migration.
+
+### Counts (candidate excluding this journal)
+
+- vs exact upstream `18c9f27e`: **717 paths**
+- vs current fork main `origin/main` (== `18c9f27e`): **717 paths**
+- vs current upstream/main `d9669ce7`: 738 paths
+- 718 → 717 reconciliation: `run.overflow-compaction.loop.test.ts` now matches
+  upstream byte-for-byte; **zero newly-appearing paths**
+
+### Later upstream movement (recorded, not chased)
+
+`18c9f27e` → `d9669ce72cbe31ff8e1ae66de03f34f2014a4f1e` = **3 commits / 22 paths**.
+Reserved for the eventual tiny post-proof drift correction.
+
+### Residue
+
+Build/temp outputs (`dist/`, `dist-runtime/`, `.artifacts/`, `node_modules/`) are
+all gitignored; the Codex protocol check's `.tmp-codex-app-server-protocol-*`
+scratch dir cleaned itself up. `git status` shows no untracked or modified
+tracked files. This journal is removed in the next commit; after that the only
+`check.mjs` failure (oxfmt on this file) disappears.
