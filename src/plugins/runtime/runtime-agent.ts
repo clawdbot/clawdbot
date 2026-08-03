@@ -203,7 +203,7 @@ async function createSessionEntry(
       : undefined;
   if (
     (harnessInitial?.providerOverride || harnessInitial?.modelOverride) &&
-    (!initialHarnessRoute || harnessInitial.modelSelectionLocked !== true)
+    (!initialHarnessRoute || !harnessInitial.modelSelectionLocked)
   ) {
     throw new Error("initial harness model route requires a locked provider and model");
   }
