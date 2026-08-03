@@ -139,8 +139,21 @@ export function createDiscordMessageReplyRuntime(params: {
           // logInfo is the always-on console emitter (journald-visible). NOT the
           // runtime-env `info`, which is a theme FORMATTER that discards its
           // output — that identifier mixup silenced this metric once already.
+          // Discord stamps the message on its own clock, we read ours, and the
+          // two are not synchronised. A raw negative therefore means "typing
+          // fired before the message existed", which is impossible: the true
+          // gap was smaller than the local/remote clock drift. Clamp to 0 and
+          // say so, so a reader treats it as sub-drift rather than as a real
+          // measurement or a bug. Unclamped this also silently under-reports
+          // every sample by the drift amount.
+          const rawSinceMessageMs = messageTimestampMs > 0 ? now - messageTimestampMs : undefined;
           const sinceMessage =
-            messageTimestampMs > 0 ? ` sinceMessageMs=${now - messageTimestampMs}` : "";
+            rawSinceMessageMs === undefined
+              ? ""
+              : rawSinceMessageMs < 0
+                ? ` sinceMessageMs=0 sinceMessageClamped=true rawSinceMessageMs=${rawSinceMessageMs}` +
+                  ` (negative: gap within local/remote clock drift)`
+                : ` sinceMessageMs=${rawSinceMessageMs}`;
           logInfo(
             `[discord] inbound→typing latency channel=${typingChannelId}${sinceMessage} ` +
               `sinceDispatchMs=${now - params.dispatchStartedAt}`,
