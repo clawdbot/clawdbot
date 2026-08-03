@@ -562,6 +562,49 @@ describe("cron service ops seam coverage", () => {
     stop(state);
   });
 
+  it("start persists an interrupted-run auto-disable before notifying", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const job = createInterruptedMainJob(now);
+    job.state.consecutiveErrors = 9;
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+
+    const order: string[] = [];
+    const enqueueSystemEvent = vi.fn(() => {
+      expect(order.at(-1)).toBe("persist");
+      order.push("notify");
+    });
+    const requestHeartbeat = vi.fn(() => {
+      expect(order.at(-1)).toBe("notify");
+      order.push("heartbeat");
+    });
+    const saveCronJobsStore = cronStoreModule.saveCronJobsStore;
+    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockImplementation(async (...args) => {
+      await saveCronJobsStore(...args);
+      order.push("persist");
+    });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await start(state);
+
+    expect(order.slice(0, 3)).toEqual(["persist", "notify", "heartbeat"]);
+    expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+      enabled: false,
+      state: {
+        autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 },
+      },
+    });
+    stop(state);
+  });
+
   it.each([
     { identity: "canonical", reservationOffsetMs: undefined },
     { identity: "shipped reservation-keyed", reservationOffsetMs: 250 },
@@ -1704,48 +1747,71 @@ describe("cron service ops persist rollback", () => {
     expect(loaded.jobs.map((entry) => entry.id)).toEqual([job.id]);
   });
 
-  it("notifies about schedule auto-disable only after the mutation persists", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
+  it.each(["mutation", "read maintenance"] as const)(
+    "notifies about schedule auto-disable only after %s persists",
+    async (triggerPath) => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-06-09T00:00:00.000Z");
+      const state = createOkIsolatedCronState({ storePath, now });
 
-    const malformed = await add(state, {
-      ...makeCreateInput("malformed sibling"),
-      schedule: { kind: "cron", expr: "0 1 * * *" },
-    });
-    if (state.timer) {
-      clearTimeout(state.timer);
-    }
-    malformed.state.nextRunAtMs = undefined;
-    malformed.state.scheduleErrorCount = 2;
-    const enqueueSystemEvent = vi.mocked(state.deps.enqueueSystemEvent);
-    const requestHeartbeat = vi.mocked(state.deps.requestHeartbeat);
-    enqueueSystemEvent.mockClear();
-    requestHeartbeat.mockClear();
-    const computeNextRunAtMs = cronSchedule.computeNextRunAtMs;
-    vi.spyOn(cronSchedule, "computeNextRunAtMs").mockImplementation((schedule, nowMs) => {
-      if (schedule.kind === "cron" && schedule.expr === "0 1 * * *") {
-        throw new Error("simulated schedule failure");
+      const malformed = await add(state, {
+        ...makeCreateInput("malformed sibling"),
+        schedule: { kind: "cron", expr: "0 1 * * *" },
+      });
+      if (state.timer) {
+        clearTimeout(state.timer);
       }
-      return computeNextRunAtMs(schedule, nowMs);
-    });
+      malformed.state.nextRunAtMs = undefined;
+      malformed.state.scheduleErrorCount = 2;
+      const enqueueSystemEvent = vi.mocked(state.deps.enqueueSystemEvent);
+      const requestHeartbeat = vi.mocked(state.deps.requestHeartbeat);
+      const order: string[] = [];
+      enqueueSystemEvent.mockClear();
+      requestHeartbeat.mockClear();
+      enqueueSystemEvent.mockImplementation(() => {
+        order.push("notify");
+      });
+      requestHeartbeat.mockImplementation(() => {
+        order.push("heartbeat");
+      });
+      const computeNextRunAtMs = cronSchedule.computeNextRunAtMs;
+      vi.spyOn(cronSchedule, "computeNextRunAtMs").mockImplementation((schedule, nowMs) => {
+        if (schedule.kind === "cron" && schedule.expr === "0 1 * * *") {
+          throw new Error("simulated schedule failure");
+        }
+        return computeNextRunAtMs(schedule, nowMs);
+      });
 
-    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
-    await expect(add(state, makeCreateInput("failed mutation"))).rejects.toThrow("disk full");
+      const saveCronJobsStore = cronStoreModule.saveCronJobsStore;
+      vi.spyOn(cronStoreModule, "saveCronJobsStore")
+        .mockRejectedValueOnce(new Error("disk full"))
+        .mockImplementationOnce(async (...args) => {
+          expect(enqueueSystemEvent).not.toHaveBeenCalled();
+          expect(requestHeartbeat).not.toHaveBeenCalled();
+          await saveCronJobsStore(...args);
+          order.push("persist");
+        });
+      const trigger = () =>
+        triggerPath === "mutation"
+          ? add(state, makeCreateInput("trigger mutation"))
+          : list(state, { includeDisabled: true });
+      await expect(trigger()).rejects.toThrow("disk full");
 
-    expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(true);
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+      expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(true);
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
 
-    await add(state, makeCreateInput("successful mutation"));
-    if (state.timer) {
-      clearTimeout(state.timer);
-    }
+      await trigger();
+      if (state.timer) {
+        clearTimeout(state.timer);
+      }
 
-    expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
-    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeat).toHaveBeenCalledTimes(1);
-  });
+      expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
+      expect(order).toEqual(["persist", "notify", "heartbeat"]);
+      expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+      expect(requestHeartbeat).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each(["failed", "committed", "uncertain"] as const)(
     "publishes agent-removal auto-disable notifications only after a %s roster outcome",
@@ -1831,6 +1897,10 @@ describe("cron service ops persist rollback", () => {
     }
     job.state.nextRunAtMs = undefined;
     job.state.scheduleErrorCount = 2;
+    const before = structuredClone(job);
+    const persistedBefore = structuredClone(
+      (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id),
+    );
     const enqueueSystemEvent = vi.mocked(state.deps.enqueueSystemEvent);
     const requestHeartbeat = vi.mocked(state.deps.requestHeartbeat);
     enqueueSystemEvent.mockClear();
@@ -1845,8 +1915,10 @@ describe("cron service ops persist rollback", () => {
         ran: false,
         reason: "not-due",
       });
-      expect(job.enabled).toBe(true);
-      expect(job.state.scheduleErrorCount).toBe(2);
+      expect(job).toEqual(before);
+      expect((await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)).toEqual(
+        persistedBefore,
+      );
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
       expect(requestHeartbeat).not.toHaveBeenCalled();
     } finally {

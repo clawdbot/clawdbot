@@ -180,6 +180,59 @@ describe("runDoctorConfigPreflight", () => {
     });
   });
 
+  it("reports persisted literal and interpolated OTel grpc as legacy config", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        diagnostics: { otel: { enabled: false, protocol: "grpc" } },
+      });
+
+      const literal = await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+      });
+      expect(literal.snapshot.legacyIssues).toContainEqual(
+        expect.objectContaining({ path: "diagnostics.otel.protocol" }),
+      );
+
+      const configPath = literal.snapshot.path;
+      await fs.writeFile(
+        configPath,
+        '{ diagnostics: { otel: { enabled: false, protocol: "${OTEL_PROTOCOL}" } } }\n',
+        "utf-8",
+      );
+      await withEnvOverride({ OTEL_PROTOCOL: "grpc" }, async () => {
+        const interpolated = await runDoctorConfigPreflight({
+          migrateState: false,
+          migrateLegacyConfig: false,
+          invalidConfigNote: false,
+        });
+        expect(interpolated.snapshot.legacyIssues).toContainEqual(
+          expect.objectContaining({ path: "diagnostics.otel.protocol" }),
+        );
+      });
+    });
+  });
+
+  it("does not treat the process-only OTel protocol fallback as persisted config", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        diagnostics: { otel: { enabled: false } },
+      });
+
+      await withEnvOverride({ OTEL_EXPORTER_OTLP_PROTOCOL: "grpc" }, async () => {
+        const preflight = await runDoctorConfigPreflight({
+          migrateState: false,
+          migrateLegacyConfig: false,
+          invalidConfigNote: false,
+        });
+        expect(preflight.snapshot.legacyIssues).not.toContainEqual(
+          expect.objectContaining({ path: "diagnostics.otel.protocol" }),
+        );
+      });
+    });
+  });
+
   it("restores invalid config from last-known-good only during repair preflight", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {

@@ -29,6 +29,11 @@ import {
   projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import {
+  channelBlockedPatch,
+  channelReadyPatch,
+  channelStoppedPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   createComputedAccountStatusAdapter,
@@ -396,13 +401,12 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
           const { cfg, accountId, log, abortSignal } = ctx;
           const account = resolveAccount(cfg, accountId);
           if (!validateSynologyGatewayAccountStartup({ cfg, account, accountId, log }).ok) {
-            ctx.setStatus?.({
-              accountId,
-              running: true,
-              lifecycle: "blocked",
-              terminalDisconnect: true,
-              lastError: "Synology Chat account failed startup validation",
-            });
+            ctx.setStatus?.(
+              channelBlockedPatch("Synology Chat account failed startup validation", {
+                accountId,
+                running: true,
+              }),
+            );
             return waitUntilAbort(abortSignal);
           }
 
@@ -418,15 +422,7 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
           });
 
           log?.info?.(`Registered HTTP route: ${account.webhookPath} for Synology Chat`);
-          ctx.setStatus?.({
-            accountId,
-            running: true,
-            connected: true,
-            lifecycle: "ready",
-            lastConnectedAt: Date.now(),
-            lastError: null,
-            terminalDisconnect: undefined,
-          });
+          ctx.setStatus?.(channelReadyPatch({ accountId }));
 
           // Keep alive until abort signal fires.
           // The gateway expects a Promise that stays pending while the channel is running.
@@ -434,12 +430,7 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
           return waitUntilAbort(abortSignal, async () => {
             log?.info?.(`Stopping Synology Chat channel (account: ${accountId})`);
             await cleanup();
-            ctx.setStatus?.({
-              accountId,
-              running: false,
-              connected: false,
-              lifecycle: "stopped",
-            });
+            ctx.setStatus?.(channelStoppedPatch({ accountId }));
           });
         },
 

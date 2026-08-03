@@ -119,6 +119,7 @@ describe("qqbot channel gateway status", () => {
     expect(getStatus().connected).toBe(true);
     expect(getStatus().lastError).toBeNull();
     expect(getStatus().lifecycle).toBe("ready");
+    expect(getStatus().terminalDisconnect).toBeUndefined();
 
     options.onDisconnected?.({ reason: "offline/sandbox-only", fatal: true });
     options.onReady?.({});
@@ -126,5 +127,6 @@ describe("qqbot channel gateway status", () => {
     expect(getStatus().connected).toBe(true);
     expect(getStatus().lastError).toBeNull();
     expect(getStatus().lifecycle).toBe("ready");
+    expect(getStatus().terminalDisconnect).toBeUndefined();
   });
 });
