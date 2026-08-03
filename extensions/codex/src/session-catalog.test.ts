@@ -1990,6 +1990,8 @@ describe("Codex supervision actions", () => {
         afterCreate: expect.any(Function),
         initialEntry: {
           agentHarnessId: "codex",
+          providerOverride: "codex",
+          modelOverride: "codex-native",
           modelSelectionLocked: true,
           pluginExtensions: {
             codex: {

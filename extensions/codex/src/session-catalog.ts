@@ -1086,6 +1086,10 @@ async function createOrReuseAdoptedSession(params: {
       recoverMatchingInitialEntry: true,
       initialEntry: {
         agentHarnessId: "codex",
+        // thread/read cannot attest the native model; this virtual route reaches
+        // the Codex harness until its first fork returns the authoritative pair.
+        providerOverride: "codex",
+        modelOverride: "codex-native",
         modelSelectionLocked: true,
         pluginExtensions: {
           codex: {

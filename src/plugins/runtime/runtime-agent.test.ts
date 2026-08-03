@@ -64,6 +64,8 @@ describe("plugin runtime session creation", () => {
         label: "Native Codex thread",
         initialEntry: {
           agentHarnessId: "codex",
+          providerOverride: "codex",
+          modelOverride: "codex-native",
           modelSelectionLocked: true,
           pluginExtensions: initialPluginExtensions,
         },
@@ -85,6 +87,9 @@ describe("plugin runtime session creation", () => {
         entry: {
           agentHarnessId: "codex",
           delivery: { kind: "none" },
+          providerOverride: "codex",
+          modelOverride: "codex-native",
+          modelOverrideRouteResolution: "resolved",
           modelSelectionLocked: true,
           label: "Native Codex thread",
           pluginExtensions: {

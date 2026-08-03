@@ -7,6 +7,10 @@ import { importCodexThreadHistoryToTranscript } from "./transcript-mirror.js";
 type CreatedCodexImportedSession = Awaited<
   ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>
 >;
+type CodexImportedSessionInitialEntry = Extract<
+  Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0]["initialEntry"],
+  { agentHarnessId: string }
+>;
 
 /** Creates a session whose transcript is derived from one verified Codex thread snapshot. */
 export async function createImportedCodexSession(params: {
@@ -17,11 +21,7 @@ export async function createImportedCodexSession(params: {
   thread: CodexThread;
   throughTurnId: string | null;
   recoverMatchingInitialEntry?: true;
-  initialEntry: {
-    agentHarnessId: string;
-    modelSelectionLocked?: true;
-    pluginExtensions?: CreatedCodexImportedSession["entry"]["pluginExtensions"];
-  };
+  initialEntry: CodexImportedSessionInitialEntry;
   afterImport: (
     created: CreatedCodexImportedSession,
   ) => Promise<{ pluginExtensions: CreatedCodexImportedSession["entry"]["pluginExtensions"] }>;

@@ -193,6 +193,20 @@ async function createSessionEntry(
   const acpInitial = "acpSessionBinding" in params.initialEntry ? params.initialEntry : undefined;
   const harnessInitial = "agentHarnessId" in params.initialEntry ? params.initialEntry : undefined;
   const pluginInitial = cliInitial ?? acpInitial;
+  const initialHarnessRoute =
+    harnessInitial?.providerOverride && harnessInitial.modelOverride
+      ? {
+          providerOverride: harnessInitial.providerOverride,
+          modelOverride: harnessInitial.modelOverride,
+          modelOverrideRouteResolution: "resolved" as const,
+        }
+      : undefined;
+  if (
+    (harnessInitial?.providerOverride || harnessInitial?.modelOverride) &&
+    (!initialHarnessRoute || harnessInitial.modelSelectionLocked !== true)
+  ) {
+    throw new Error("initial harness model route requires a locked provider and model");
+  }
   const acpBackendId = acpInitial?.acpBackendId.trim();
   const acpAgentId = acpInitial?.acpSessionBinding.acpAgentId.trim();
   const agentSessionId = acpInitial?.acpSessionBinding.agentSessionId.trim();
@@ -323,6 +337,10 @@ async function createSessionEntry(
             matchingEntry.agentHarnessId === harnessInitial?.agentHarnessId &&
             matchingEntry.pluginOwnerId === pluginInitial?.pluginOwnerId &&
             matchingEntry.modelSelectionLocked === params.initialEntry.modelSelectionLocked &&
+            matchingEntry.providerOverride === initialHarnessRoute?.providerOverride &&
+            matchingEntry.modelOverride === initialHarnessRoute?.modelOverride &&
+            matchingEntry.modelOverrideRouteResolution ===
+              initialHarnessRoute?.modelOverrideRouteResolution &&
             (!cliInitial ||
               (matchingEntry.providerOverride === cliInitial.cliBackendId &&
                 matchingEntry.modelOverride === cliInitial.model &&
@@ -366,6 +384,7 @@ async function createSessionEntry(
             ...(params.execCwd !== undefined ? { execCwd: params.execCwd } : {}),
             initialEntry: {
               ...(harnessInitial ? { agentHarnessId: harnessInitial.agentHarnessId } : {}),
+              ...initialHarnessRoute,
               ...(cliInitial
                 ? {
                     pluginOwnerId: cliInitial.pluginOwnerId,

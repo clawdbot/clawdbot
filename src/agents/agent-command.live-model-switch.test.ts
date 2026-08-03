@@ -1153,6 +1153,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       sessionId: "session-1",
       updatedAt: 1,
       agentHarnessId: "codex",
+      providerOverride: "codex",
+      modelOverride: "codex-native",
       modelSelectionLocked: true,
       pluginExtensions: {
         codex: {
@@ -1175,11 +1177,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
     expect(fallbackParams.fallbacksOverride).toEqual([]);
     expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
-      providerOverride: "anthropic",
-      modelOverride: "claude",
+      providerOverride: "codex",
+      modelOverride: "codex-native",
       agentHarnessRuntimeOverride: "codex",
       sessionEntry: expect.objectContaining({
         agentHarnessId: "codex",
+        providerOverride: "codex",
+        modelOverride: "codex-native",
         modelSelectionLocked: true,
       }),
     });

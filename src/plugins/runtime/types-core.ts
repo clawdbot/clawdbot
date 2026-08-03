@@ -89,6 +89,21 @@ type RuntimeCreateSessionEntryResult = {
 type RuntimeCreateSessionEntryFinalPatch = {
   pluginExtensions: RuntimeSessionPluginExtensions;
 };
+type RuntimeHarnessSessionInitialEntry =
+  | {
+      agentHarnessId: string;
+      modelSelectionLocked?: true;
+      pluginExtensions?: RuntimeSessionPluginExtensions;
+      providerOverride?: never;
+      modelOverride?: never;
+    }
+  | {
+      agentHarnessId: string;
+      providerOverride: string;
+      modelOverride: string;
+      modelSelectionLocked: true;
+      pluginExtensions?: RuntimeSessionPluginExtensions;
+    };
 type RuntimeCreateSessionEntryBaseParams = {
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   key: string;
@@ -100,11 +115,7 @@ type RuntimeCreateSessionEntryBaseParams = {
   /** Working directory interpreted only by execNode. */
   execCwd?: string;
   initialEntry:
-    | {
-        agentHarnessId: string;
-        modelSelectionLocked?: true;
-        pluginExtensions?: RuntimeSessionPluginExtensions;
-      }
+    | RuntimeHarnessSessionInitialEntry
     | {
         cliBackendId: string;
         model: string;

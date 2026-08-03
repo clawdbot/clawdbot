@@ -403,6 +403,34 @@ export async function createGatewaySession(params: {
     params.initialEntry?.pluginOwnerId &&
     params.authorizedPluginId === params.initialEntry.pluginOwnerId,
   );
+  const authorizedInitialModelRoute = authorizedHarnessCreation || authorizedPluginCreation;
+  const initialModelRoute = params.initialEntry
+    ? {
+        provider: normalizeOptionalString(params.initialEntry.providerOverride),
+        model: normalizeOptionalString(params.initialEntry.modelOverride),
+        resolution: params.initialEntry.modelOverrideRouteResolution,
+      }
+    : undefined;
+  const hasInitialModelRoute = Boolean(
+    params.initialEntry?.providerOverride ||
+    params.initialEntry?.modelOverride ||
+    params.initialEntry?.modelOverrideRouteResolution,
+  );
+  if (
+    hasInitialModelRoute &&
+    (!authorizedInitialModelRoute ||
+      !initialModelRoute?.provider ||
+      !initialModelRoute?.model ||
+      initialModelRoute?.resolution !== "resolved")
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "trusted initial model route requires an authorized resolved provider and model",
+      ),
+    };
+  }
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
     return {
       ok: false,
@@ -981,13 +1009,13 @@ export async function createGatewaySession(params: {
           ...(createdNewEntry && params.authorizedPluginId && !params.catalogTarget
             ? { pluginOwnerId: params.authorizedPluginId }
             : {}),
-          ...(authorizedPluginCreation && params.initialEntry?.providerOverride
+          ...(authorizedInitialModelRoute && params.initialEntry?.providerOverride
             ? { providerOverride: params.initialEntry.providerOverride }
             : {}),
-          ...(authorizedPluginCreation && params.initialEntry?.modelOverride
+          ...(authorizedInitialModelRoute && params.initialEntry?.modelOverride
             ? { modelOverride: params.initialEntry.modelOverride }
             : {}),
-          ...(authorizedPluginCreation && params.initialEntry?.modelOverrideRouteResolution
+          ...(authorizedInitialModelRoute && params.initialEntry?.modelOverrideRouteResolution
             ? { modelOverrideRouteResolution: params.initialEntry.modelOverrideRouteResolution }
             : {}),
           // Seeded CLI bindings ride only the plugin-authorized creation path;
