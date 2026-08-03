@@ -9,11 +9,11 @@ import {
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import {
+  activateQueuedCronRun,
   isQueuedCronRunReservationCurrent,
   releaseQueuedCronRun,
   reserveQueuedCronRun,
   runWithCronAdmission,
-  updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
 import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
 import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
@@ -322,29 +322,15 @@ async function executeStartupCatchupPlan(
             releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
             return undefined;
           }
-          const startedAt = state.deps.nowMs();
-          const previousLastError = job.state.lastError;
-          const activationRollbackSnapshot = snapshotStoreForRollback(state);
-          delete job.state.queuedAtMs;
-          job.state.runningAtMs = startedAt;
-          job.state.lastError = undefined;
-          await persistOrRestore(state, activationRollbackSnapshot);
-          updateQueuedCronRunReservationMarker(
+          const activation = await activateQueuedCronRun({
             state,
-            candidate.jobId,
-            candidate.reservationIdentity,
-            startedAt,
-            previousLastError,
-          );
-          if (state.stopped || state.restartRecoveryPending) {
-            job.state.lastError = previousLastError;
-            const rollbackSnapshot = snapshotStoreForRollback(state);
-            delete job.state.runningAtMs;
-            await persistOrRestore(state, rollbackSnapshot);
-            releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
+            job,
+            reservationIdentity: candidate.reservationIdentity,
+          });
+          if (activation.kind === "unavailable") {
             return undefined;
           }
-          return { ...candidate, job, startedAt };
+          return { ...candidate, job, startedAt: activation.startedAt };
         });
         if (!startedCandidate) {
           return undefined;

@@ -18,6 +18,7 @@ import {
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import {
+  activateQueuedCronRun,
   clearQueuedCronRunReservationMarker,
   isQueuedCronRunReservationCurrent,
   isQueuedCronRunReservationMarkerCurrent,
@@ -26,7 +27,6 @@ import {
   resolveRunConcurrency,
   restoreQueuedCronRunReservationLastError,
   runWithCronAdmission,
-  updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
 import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
@@ -457,30 +457,18 @@ async function onAdmittedTimer(state: CronServiceState) {
                   releaseQueuedCronRun(state, due.id, due.reservationIdentity);
                   return undefined;
                 }
-                const startedAt = state.deps.nowMs();
-                const previousLastError = job.state.lastError;
-                const activationRollbackSnapshot = snapshotStoreForRollback(state);
-                delete job.state.queuedAtMs;
-                job.state.runningAtMs = startedAt;
-                job.state.lastError = undefined;
-                await persistOrRestore(state, activationRollbackSnapshot);
-                updateQueuedCronRunReservationMarker(
+                const activation = await activateQueuedCronRun({
                   state,
-                  due.id,
-                  due.reservationIdentity,
-                  startedAt,
-                  previousLastError,
-                );
-                if (state.stopped || state.restartRecoveryPending) {
-                  stopAdmittingDueJobs = true;
-                  job.state.lastError = previousLastError;
-                  const rollbackSnapshot = snapshotStoreForRollback(state);
-                  delete job.state.runningAtMs;
-                  await persistOrRestore(state, rollbackSnapshot);
-                  releaseQueuedCronRun(state, due.id, due.reservationIdentity);
+                  job,
+                  reservationIdentity: due.reservationIdentity,
+                  onUnavailable: () => {
+                    stopAdmittingDueJobs = true;
+                  },
+                });
+                if (activation.kind === "unavailable") {
                   return undefined;
                 }
-                return { ...due, job, startedAt };
+                return { ...due, job, startedAt: activation.startedAt };
               });
               if (!currentDueJob) {
                 return pMapSkip;
