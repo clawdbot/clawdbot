@@ -172,7 +172,7 @@ describe("GPT-Live sideband protocol", () => {
   });
 
   it("wraps delegated input and appends the raw speakable result", async () => {
-    const runAgentConsult = vi.fn(async ({ prompt }: { prompt: string }) => ({
+    const runAgentConsult = vi.fn<ConsultRunner>(async ({ prompt }) => ({
       text: `Result for ${prompt}`,
     }));
     const { controller, socket } = createDelegationHarness({ runAgentConsult });
@@ -201,7 +201,7 @@ describe("GPT-Live sideband protocol", () => {
   });
 
   it("bounds and chunks delegation output before sideband sends", async () => {
-    const runAgentConsult = vi.fn(async () => ({ text: "x".repeat(10_000) }));
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "x".repeat(10_000) }));
     const { controller, socket } = createDelegationHarness({ runAgentConsult });
 
     delegate(controller, "delegation-large", "summarize everything");
@@ -222,7 +222,7 @@ describe("GPT-Live sideband protocol", () => {
   });
 
   it("consumes bounded transcript context once and in event order", async () => {
-    const runAgentConsult = vi.fn(async () => ({ text: "Done" }));
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
     const { controller } = createDelegationHarness({ runAgentConsult });
     controller.handleEvent({ kind: "transcript-delta", role: "user", text: "hel" });
     controller.handleEvent({ kind: "transcript-done", role: "user", text: "hello" });
@@ -244,8 +244,8 @@ describe("GPT-Live sideband protocol", () => {
 
   it("aborts stale work and retains only the latest pending delegation", async () => {
     const signals: AbortSignal[] = [];
-    const runAgentConsult = vi.fn(
-      async ({ signal }: { signal?: AbortSignal }) =>
+    const runAgentConsult = vi.fn<ConsultRunner>(
+      async ({ signal }) =>
         await new Promise<{ text: string }>((_resolve, reject) => {
           signals.push(signal as AbortSignal);
           signal?.addEventListener(
@@ -269,7 +269,7 @@ describe("GPT-Live sideband protocol", () => {
   });
 
   it("keeps transcript context when it skips an empty delegation", async () => {
-    const runAgentConsult = vi.fn(async () => ({ text: "Done" }));
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
     const { controller } = createDelegationHarness({ runAgentConsult });
     controller.handleEvent({ kind: "transcript-done", role: "user", text: "hello" });
 
@@ -284,7 +284,7 @@ describe("GPT-Live sideband protocol", () => {
   });
 
   it("returns only a fixed speakable failure when the delegated agent fails", async () => {
-    const runAgentConsult = vi.fn(async () => {
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => {
       throw new Error("workspace unavailable");
     });
     const { controller, logger, socket } = createDelegationHarness({ runAgentConsult });
@@ -321,7 +321,7 @@ describe("GPT-Live sideband protocol", () => {
   it("suppresses host cancellation and stops accepting work after teardown", async () => {
     const abortError = new Error("The operation was aborted");
     abortError.name = "AbortError";
-    const runAgentConsult = vi.fn(async () => {
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => {
       throw abortError;
     });
     const { controller, logger, socket } = createDelegationHarness({
