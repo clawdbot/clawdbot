@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   reserveChildAdmissionSlot,
   resolveChildAdmission,
@@ -146,5 +146,32 @@ describe("resolveChildAdmission", () => {
       throw new Error("Expected rejected child reservation");
     }
     expect(rejected.activeChildren).toBe(1);
+  });
+
+  it("uses process-global fallback reservation ids across controllers", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_234_567);
+    try {
+      const first = reserveChildAdmissionSlot({
+        controllerSessionKey: "agent:main:first-controller",
+        resolveAdmission: () => ({ ok: true as const }),
+      });
+      const second = reserveChildAdmissionSlot({
+        controllerSessionKey: "agent:main:second-controller",
+        resolveAdmission: () => ({ ok: true as const }),
+      });
+      if (!first.ok || !second.ok) {
+        throw new Error("Expected both controller reservations to be accepted");
+      }
+      try {
+        expect(first.id).toMatch(/^pending-child-admission-/);
+        expect(second.id).toMatch(/^pending-child-admission-/);
+        expect(first.id).not.toBe(second.id);
+      } finally {
+        first.release();
+        second.release();
+      }
+    } finally {
+      now.mockRestore();
+    }
   });
 });

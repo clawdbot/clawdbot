@@ -44,9 +44,11 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
-let handleCollectorLaunchStartFailure: typeof import("./subagent-collector-launch-failure.js").handleCollectorLaunchStartFailure;
+let activateCollectorLaunch: typeof import("./subagent-collector-launch-failure.js").activateCollectorLaunch;
+let retryRetainedContextEnginePreparationRollback: typeof import("./subagent-spawn-context.js").retryRetainedContextEnginePreparationRollback;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 let spawnFailureQuarantine: typeof import("./subagent-spawn-failure-quarantine.js");
+let reserveSwarmRun: typeof import("./swarm-scheduler.js").reserveSwarmRun;
 
 function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig(os.tmpdir(), {
@@ -95,6 +97,33 @@ function deferred<T>() {
     reject = promiseReject;
   });
   return { promise, resolve, reject };
+}
+
+function activateFailingCollectorLaunchForTest(params: {
+  childRunId: string;
+  childSessionKey: string;
+  contextEnginePreparation?: { rollback: () => Promise<void> | void };
+  error?: Error;
+}) {
+  const groupId = `swarm:${params.childRunId}`;
+  reserveSwarmRun({
+    activeRunIds: [],
+    groupId,
+    maxConcurrent: 1,
+    runId: params.childRunId,
+  });
+  activateCollectorLaunch({
+    childRunId: params.childRunId,
+    childSessionKey: params.childSessionKey,
+    contextEnginePreparation: params.contextEnginePreparation,
+    emitSpawnLifecycleHooks: async () => {},
+    groupId,
+    launchChildRun: async () => {
+      throw params.error ?? new Error("launch failed");
+    },
+    requesterInternalKey: "agent:main:main",
+    threadBindingReady: true,
+  });
 }
 
 function installActiveCountFromRegisteredRuns(extraRuns: Record<string, unknown>[] = []) {
@@ -273,8 +302,10 @@ describe("spawnSubagentDirect seam flow", () => {
       },
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
-    ({ handleCollectorLaunchStartFailure } =
-      await import("./subagent-collector-launch-failure.js"));
+    ({ activateCollectorLaunch } = await import("./subagent-collector-launch-failure.js"));
+    ({ retryRetainedContextEnginePreparationRollback } =
+      await import("./subagent-spawn-context.js"));
+    ({ reserveSwarmRun } = await import("./swarm-scheduler.js"));
     spawnFailureQuarantine = await import("./subagent-spawn-failure-quarantine.js");
   });
 
@@ -1999,6 +2030,37 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.completeCollectorLaunchCleanupMock).not.toHaveBeenCalled();
   });
 
+  it("retains the actual context preparation rollback for failed collector launch retry", async () => {
+    let rollbackAttempts = 0;
+    const preparation = {
+      rollback: vi.fn(async () => {
+        rollbackAttempts += 1;
+        if (rollbackAttempts === 1) {
+          throw new Error("transient rollback failure");
+        }
+      }),
+    };
+
+    activateFailingCollectorLaunchForTest({
+      childRunId: "failed-collector-rollback-retry-run",
+      childSessionKey: "agent:main:subagent:failed-collector-rollback-retry",
+      contextEnginePreparation: preparation,
+    });
+
+    await vi.waitFor(() => {
+      expect(preparation.rollback).toHaveBeenCalledTimes(1);
+      expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledWith(
+        "failed-collector-rollback-retry-run",
+        expect.any(String),
+        { contextEnginePreparationRollbackPending: true },
+      );
+    });
+    await expect(
+      retryRetainedContextEnginePreparationRollback("failed-collector-rollback-retry-run"),
+    ).resolves.toBe("completed");
+    expect(preparation.rollback).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds collector launch settlement retries when registry persistence keeps failing", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.useFakeTimers();
@@ -2006,18 +2068,15 @@ describe("spawnSubagentDirect seam flow", () => {
       throw new Error("registry busy");
     });
 
-    const settled = handleCollectorLaunchStartFailure({
-      error: new Error("launch failed"),
-      childSessionKey: "agent:main:subagent:failed-collector-settlement",
+    activateFailingCollectorLaunchForTest({
       childRunId: "failed-collector-settlement-run",
-      threadBindingReady: true,
-      launchTerminationConfirmed: false,
-      requesterInternalKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:failed-collector-settlement",
     });
 
     await vi.advanceTimersByTimeAsync(10);
-    await expect(settled).resolves.toBe("hold");
-    expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledTimes(3);
+    await vi.waitFor(() =>
+      expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledTimes(3),
+    );
     expect(hoisted.completeCollectorLaunchCleanupMock).not.toHaveBeenCalled();
     expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalledWith(
       expect.objectContaining({

@@ -1,4 +1,4 @@
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type ChildAdmissionCap =
   | "subagents.maxSpawnDepth"
@@ -23,6 +23,15 @@ const pendingChildAdmissions = resolveGlobalMap<string, Set<string | symbol>>(
   "close-only",
 );
 
+const fallbackReservationIdState = resolveGlobalSingleton(
+  Symbol.for("openclaw.childAdmissionFallbackReservationIdState"),
+  () => ({ sequence: 0 }),
+  (state) => {
+    state.sequence = 0;
+  },
+  "close-only",
+);
+
 type ReservableChildAdmission = { ok: true } | { ok: false };
 
 type ChildAdmissionReservation<TAdmission extends ReservableChildAdmission> =
@@ -37,6 +46,12 @@ type ChildAdmissionReservationParams<TAdmission extends ReservableChildAdmission
     pendingChildSessionKeys: ReadonlySet<string>,
   ) => TAdmission;
 };
+
+function nextFallbackReservationId(): string {
+  fallbackReservationIdState.sequence =
+    (fallbackReservationIdState.sequence % Number.MAX_SAFE_INTEGER) + 1;
+  return `pending-child-admission-${Date.now().toString(36)}-${fallbackReservationIdState.sequence.toString(36)}`;
+}
 
 // Infer the complete decision once so native, ACP, and visible payloads survive narrowing.
 export function reserveChildAdmissionSlot<TAdmission extends ReservableChildAdmission>(
@@ -56,8 +71,7 @@ export function reserveChildAdmissionSlot(
   const reservation = params.childSessionKey ?? Symbol("pending child admission");
   pending.add(reservation);
   pendingChildAdmissions.set(params.controllerSessionKey, pending);
-  const reservationId =
-    params.childSessionKey ?? `pending-child-admission-${Date.now().toString(36)}-${pending.size}`;
+  const reservationId = params.childSessionKey ?? nextFallbackReservationId();
   return {
     ...admission,
     id: reservationId,

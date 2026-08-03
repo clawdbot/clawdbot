@@ -21,6 +21,10 @@ import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
+import {
+  clearRetainedContextEnginePreparationRollback,
+  retryRetainedContextEnginePreparationRollback,
+} from "./subagent-spawn-context.js";
 
 export function createSubagentRegistryContextCleanup(config: {
   deps: () => SubagentRegistryDeps;
@@ -71,6 +75,27 @@ export function createSubagentRegistryContextCleanup(config: {
   }
 
   async function cleanupCollectorLaunchResources(entry: SubagentRunRecord): Promise<boolean> {
+    let preparationRollbackComplete = true;
+    if (entry.contextEnginePreparationRollbackPending === true) {
+      const rollback = await retryRetainedContextEnginePreparationRollback(entry.runId);
+      if (rollback === "pending") {
+        preparationRollbackComplete = false;
+        warn("context-engine preparation rollback still pending", {
+          runId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+        });
+      } else {
+        if (rollback === "missing") {
+          warn("context-engine preparation rollback handle unavailable; using cleanup hook", {
+            runId: entry.runId,
+            childSessionKey: entry.childSessionKey,
+          });
+        }
+        entry.contextEnginePreparationRollbackPending = false;
+        clearRetainedContextEnginePreparationRollback(entry.runId);
+        persist(entry.runId);
+      }
+    }
     let internalEffectsRemoved = true;
     try {
       await removeInternalSessionEffectsSession(entry.execution.transcriptTarget);
@@ -98,7 +123,9 @@ export function createSubagentRegistryContextCleanup(config: {
       entry.contextEngineCleanupCompletedAt = Date.now();
       persist(entry.runId);
     }
-    return internalEffectsRemoved && attachmentsRemoved && contextEnded;
+    return (
+      internalEffectsRemoved && attachmentsRemoved && preparationRollbackComplete && contextEnded
+    );
   }
 
   async function terminateAcceptedRestoredCollectorRun(params: {

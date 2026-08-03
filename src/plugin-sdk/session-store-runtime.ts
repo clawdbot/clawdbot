@@ -2,6 +2,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   readAmbientTranscriptWatermark as readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
@@ -39,6 +41,7 @@ import type {
   SessionEntry,
 } from "../config/sessions/types.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   activeRecoveryFieldsForSameSession,
@@ -157,6 +160,43 @@ function preserveCoreRecoveryState(
   return recoveryState
     ? { ...publicPatch, ...recoveryState }
     : clearRecoveryStateForRotatedSessionPatch(persistedEntry, publicPatch);
+}
+
+function assertPluginScopedSessionMutationOwner(params: {
+  entry: InternalSessionEntry;
+  sessionKey: string;
+}): void {
+  const callerPluginId = normalizeOptionalString(getPluginRuntimeGatewayRequestScope()?.pluginId);
+  const existingPluginOwnerId = normalizeOptionalString(params.entry.pluginOwnerId);
+  if (!callerPluginId || !existingPluginOwnerId || existingPluginOwnerId === callerPluginId) {
+    return;
+  }
+  throw new Error(
+    `Plugin "${callerPluginId}" cannot mutate session "${params.sessionKey}" because it is owned by plugin "${existingPluginOwnerId}".`,
+  );
+}
+
+function assertPluginScopedSessionStoreMutationOwners(params: {
+  internalStore: Record<string, InternalSessionEntry>;
+  publicStore: Record<string, SessionEntry>;
+}): void {
+  const callerPluginId = normalizeOptionalString(getPluginRuntimeGatewayRequestScope()?.pluginId);
+  if (!callerPluginId) {
+    return;
+  }
+  for (const [sessionKey, internalEntry] of Object.entries(params.internalStore)) {
+    const existingPluginOwnerId = normalizeOptionalString(internalEntry.pluginOwnerId);
+    if (!existingPluginOwnerId || existingPluginOwnerId === callerPluginId) {
+      continue;
+    }
+    const publicEntry = params.publicStore[sessionKey];
+    if (
+      publicEntry === undefined ||
+      !isDeepStrictEqual(publicEntry, projectPluginSessionEntry(internalEntry))
+    ) {
+      assertPluginScopedSessionMutationOwner({ entry: internalEntry, sessionKey });
+    }
+  }
 }
 
 function resolveLegacySessionStoreTarget(storePath: string): {
@@ -304,6 +344,7 @@ export async function updateSessionStore<T>(
       const result = await mutator(publicStore);
       const persist = !options.skipSaveWhenResult?.(result);
       if (persist) {
+        assertPluginScopedSessionStoreMutationOwners({ internalStore, publicStore });
         // The deprecated callback owns public row changes and deletions, but
         // core recovery coordination remains invisible and non-overwritable.
         reconcilePluginSessionStore({ internalStore, publicStore });
@@ -435,6 +476,10 @@ export async function patchSessionEntry(
     toSessionAccessScope(params),
     async (internalEntry, context) => {
       const persistedEntry = internalEntry as InternalSessionEntry;
+      assertPluginScopedSessionMutationOwner({
+        entry: persistedEntry,
+        sessionKey: params.sessionKey,
+      });
       const patch = await params.update(projectPluginSessionEntry(internalEntry), {
         existingEntry: context.existingEntry
           ? projectPluginSessionEntry(context.existingEntry)
@@ -483,6 +528,10 @@ export async function updateSessionStoreEntry(
   const entry = await updateSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     async (internalEntry) => {
+      assertPluginScopedSessionMutationOwner({
+        entry: internalEntry as InternalSessionEntry,
+        sessionKey: params.sessionKey,
+      });
       const patch = await params.update(projectPluginSessionEntry(internalEntry));
       if (!patch) {
         return null;
@@ -506,6 +555,10 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
     toSessionAccessScope(params),
     (internalEntry) => {
       const persistedEntry = internalEntry as InternalSessionEntry;
+      assertPluginScopedSessionMutationOwner({
+        entry: persistedEntry,
+        sessionKey: params.sessionKey,
+      });
       return preserveCoreRecoveryState(persistedEntry, publicEntry);
     },
     { fallbackEntry: publicEntry, replaceEntry: true },

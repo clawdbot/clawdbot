@@ -3,6 +3,7 @@ import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-pol
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { summarizeSpawnError } from "./spawn-pipeline.js";
 import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
@@ -26,6 +27,11 @@ type PreparedSpawnContext =
       forkFallbackNote?: never;
     }
   | { status: "error"; error: string };
+
+const retainedContextEnginePreparationRollbacks = resolveGlobalMap<
+  string,
+  SubagentSpawnPreparation
+>(Symbol.for("openclaw.retainedContextEnginePreparationRollbacks"), "close-only");
 
 export async function prepareSubagentSessionContext(params: {
   cfg: OpenClawConfig;
@@ -185,6 +191,37 @@ export async function rollbackPreparedContextEngine(
     // Best-effort cleanup only.
     return false;
   }
+}
+
+export function retainContextEnginePreparationRollback(params: {
+  runId: string;
+  preparation?: SubagentSpawnPreparation;
+}): boolean {
+  const runId = params.runId.trim();
+  if (!runId || !params.preparation) {
+    return false;
+  }
+  retainedContextEnginePreparationRollbacks.set(runId, params.preparation);
+  return true;
+}
+
+export function clearRetainedContextEnginePreparationRollback(runId: string): void {
+  retainedContextEnginePreparationRollbacks.delete(runId.trim());
+}
+
+export async function retryRetainedContextEnginePreparationRollback(
+  runId: string,
+): Promise<"completed" | "missing" | "pending"> {
+  const key = runId.trim();
+  const preparation = retainedContextEnginePreparationRollbacks.get(key);
+  if (!preparation) {
+    return "missing";
+  }
+  if (!(await rollbackPreparedContextEngine(preparation))) {
+    return "pending";
+  }
+  retainedContextEnginePreparationRollbacks.delete(key);
+  return "completed";
 }
 
 export function resolveSubagentContextMode(params: {

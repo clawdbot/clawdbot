@@ -1067,7 +1067,11 @@ export function createSubagentRunManager(params: {
     return true;
   };
 
-  const failQueuedSubagentRun = (runId: string, error: string) => {
+  const failQueuedSubagentRun = (
+    runId: string,
+    error: string,
+    options?: { contextEnginePreparationRollbackPending?: boolean },
+  ) => {
     const key = runId.trim();
     const entry = findRunByIdentity(key);
     if (!entry || entry.execution.status !== "queued") {
@@ -1084,6 +1088,9 @@ export function createSubagentRunManager(params: {
     };
     entry.queuedLaunch = undefined;
     entry.collectorLaunchCleanupPending = true;
+    if (options?.contextEnginePreparationRollbackPending === true) {
+      entry.contextEnginePreparationRollbackPending = true;
+    }
     entry.completion = { required: false, resultText: error, capturedAt: endedAt };
     updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
     try {
@@ -1114,13 +1121,17 @@ export function createSubagentRunManager(params: {
     return true;
   };
 
-  const settleFailedQueuedSubagentLaunch = (runId: string, error: string) => {
+  const settleFailedQueuedSubagentLaunch = (
+    runId: string,
+    error: string,
+    options?: { contextEnginePreparationRollbackPending?: boolean },
+  ) => {
     const entry = findRunByIdentity(runId);
     if (!entry?.collect) {
       return false;
     }
     if (typeof entry.execution.endedAt !== "number") {
-      return failQueuedSubagentRun(runId, error);
+      return failQueuedSubagentRun(runId, error, options);
     }
     if (entry.collectorCompletion) {
       return true;
@@ -1128,6 +1139,9 @@ export function createSubagentRunManager(params: {
     const snapshot = structuredClone(entry);
     entry.swarmLaunchPending = false;
     entry.collectorLaunchCleanupPending = true;
+    if (options?.contextEnginePreparationRollbackPending === true) {
+      entry.contextEnginePreparationRollbackPending = true;
+    }
     entry.queuedLaunch = undefined;
     entry.execution = {
       ...entry.execution,

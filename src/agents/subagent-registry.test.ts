@@ -289,6 +289,7 @@ describe("subagent registry seam flow", () => {
     registerSubagentRun(params: SubagentRunParamsOverrides): void;
   };
   let mod: RegistryHarness;
+  let retainContextEnginePreparationRollback: typeof import("./subagent-spawn-context.js").retainContextEnginePreparationRollback;
   const findRequesterRun = (runId: string) =>
     mod.listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId);
   const quarantineFailedSpawn = (overrides: Partial<SubagentRunRecord> = {}) =>
@@ -328,6 +329,7 @@ describe("subagent registry seam flow", () => {
 
   beforeAll(async () => {
     const registry = await import("./subagent-registry.test-helpers.js");
+    ({ retainContextEnginePreparationRollback } = await import("./subagent-spawn-context.js"));
     mod = {
       ...registry,
       addSubagentRunForTests: (entry) =>
@@ -1463,6 +1465,62 @@ describe("subagent registry seam flow", () => {
     expect(mod.getSubagentRunByRunId("run-collector-clean")).toBeDefined();
     expect(mod.getSubagentRunByRunId("run-collector-cleanup-pending")).toMatchObject({
       collectorLaunchCleanupPending: true,
+    });
+  });
+
+  it("retries retained context preparation rollback before completing collector launch cleanup", async () => {
+    const now = Date.now();
+    const runId = "run-collector-retained-rollback";
+    const childSessionKey = "agent:main:subagent:collector-retained-rollback";
+    let rollbackAttempts = 0;
+    const rollback = vi.fn(async () => {
+      rollbackAttempts += 1;
+      if (rollbackAttempts === 1) {
+        throw new Error("rollback still busy");
+      }
+    });
+    retainContextEnginePreparationRollback({ runId, preparation: { rollback } });
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey,
+      swarmRequesterSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      task: "failed launch retained rollback",
+      createdAt: now - 9_000,
+      endedAt: now - 4_000,
+      collect: true,
+      groupId: "swarm:retained-rollback",
+      collectorLaunchCleanupPending: true,
+      contextEnginePreparationRollbackPending: true,
+      collectorCompletion: { status: "failed" },
+    });
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": {},
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(rollback).toHaveBeenCalledTimes(1);
+    expect(mocks.emitSessionLifecycleEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: childSessionKey, reason: "delete" }),
+    );
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      collectorLaunchCleanupPending: true,
+      contextEnginePreparationRollbackPending: true,
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(rollback).toHaveBeenCalledTimes(2);
+    expect(mocks.emitSessionLifecycleEvent).toHaveBeenCalledWith({
+      sessionKey: childSessionKey,
+      reason: "delete",
+      parentSessionKey: "agent:main:main",
+    });
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      collectorLaunchCleanupPending: false,
+      contextEnginePreparationRollbackPending: false,
+      cleanupCompletedAt: expect.any(Number),
     });
   });
 

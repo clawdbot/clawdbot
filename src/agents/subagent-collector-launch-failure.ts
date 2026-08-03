@@ -16,7 +16,10 @@ import {
   cleanupFailedSpawnBeforeAgentStart,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
-import { rollbackPreparedContextEngine } from "./subagent-spawn-context.js";
+import {
+  retainContextEnginePreparationRollback,
+  rollbackPreparedContextEngine,
+} from "./subagent-spawn-context.js";
 import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { emitSessionLifecycleEvent } from "./subagent-spawn.runtime.js";
 import { activateSwarmRun, type SwarmStartFailureDisposition } from "./swarm-scheduler.js";
@@ -100,11 +103,23 @@ async function handleCollectorLaunchStartFailure(params: {
       waitForSessionDeletion: !params.launchTerminationConfirmed,
     }),
   ]);
+  const contextEnginePreparationRollbackPending =
+    contextRollback.status !== "fulfilled" || !contextRollback.value;
+  const retainedContextEnginePreparationRollback =
+    contextEnginePreparationRollbackPending &&
+    retainContextEnginePreparationRollback({
+      runId: params.childRunId,
+      preparation: params.contextEnginePreparation,
+    });
   let settledLaunch = false;
   let lastSettlementError: unknown;
   for (let attempt = 1; attempt <= COLLECTOR_LAUNCH_SETTLEMENT_MAX_ATTEMPTS; attempt += 1) {
     try {
-      settledLaunch = settleFailedQueuedSubagentLaunch(params.childRunId, launchError);
+      settledLaunch = retainedContextEnginePreparationRollback
+        ? settleFailedQueuedSubagentLaunch(params.childRunId, launchError, {
+            contextEnginePreparationRollbackPending: true,
+          })
+        : settleFailedQueuedSubagentLaunch(params.childRunId, launchError);
       if (!settledLaunch) {
         lastSettlementError = new Error("collector launch failure had no durable queued owner");
       }
