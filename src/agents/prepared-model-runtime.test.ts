@@ -128,6 +128,7 @@ describe("prepared model runtime snapshots", () => {
 
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
       config: {},
+      env: process.env,
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
       selections: undefined,
     });

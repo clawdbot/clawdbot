@@ -20,10 +20,12 @@ type StartupScopedPluginSnapshot = NonNullable<
 
 function resolveStartupPluginIdsFromCurrentSnapshot(params: {
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
 }): string[] | undefined {
   const snapshot = getCurrentPluginMetadataSnapshot({
     config: params.config,
+    env: params.env,
     workspaceDir: params.workspaceDir,
   }) as StartupScopedPluginSnapshot | undefined;
   const pluginIds = snapshot?.startup?.pluginIds;
@@ -35,6 +37,7 @@ function resolveStartupPluginIdsFromCurrentSnapshot(params: {
 
 type AgentRuntimePluginRegistryParams = {
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
   selections?: readonly AgentHarnessPluginSelection[];
@@ -51,6 +54,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
       loadOptions: {
         config: params.config,
         activationSourceConfig: params.config,
+        ...(params.env ? { env: params.env } : {}),
         workspaceDir,
         onlyPluginIds: [],
         runtimeOptions: params.allowGatewaySubagentBinding
@@ -61,6 +65,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
   }
   const startupPluginIds = resolveStartupPluginIdsFromCurrentSnapshot({
     config: params.config,
+    env: params.env,
     workspaceDir,
   });
   const plan = resolveAgentRuntimePluginLoadPlan({
@@ -81,6 +86,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
     loadOptions: {
       config: plan.config,
       ...(plan.config ? { activationSourceConfig: plan.config } : {}),
+      ...(params.env ? { env: params.env } : {}),
       workspaceDir,
       ...(startupPluginIds === undefined || plan.pluginIds === undefined
         ? {}

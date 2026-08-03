@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
@@ -161,12 +165,17 @@ describe("createOpenClawTools browser plugin integration", () => {
     hoisted.resolvePluginTools.mockReturnValue([]);
     const config = { plugins: { enabled: true } } as OpenClawConfig;
     const pluginRegistry = { tools: [] } as never;
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: makeRegistry([]),
+      workspaceDir: "/tmp",
+    });
     const loadContext = preparePluginLoadContext(
       { agentDir: "/tmp/agent", config, workspaceDir: "/tmp" },
       process.env,
       pluginRegistry,
+      metadataSnapshot,
     );
-    const { metadataSnapshot } = loadContext;
 
     resolveOpenClawPluginToolsForOptions({
       options: {
