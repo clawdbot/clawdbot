@@ -218,8 +218,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
     expectsCompletionMessage: params.requester !== undefined,
     ...(params.requester !== undefined
       ? {
-          expectedRequesterLifecycleRevision:
-            loadRequesterLifecycleRevision(requesterSessionKey),
+          expectedRequesterLifecycleRevision: loadRequesterLifecycleRevision(requesterSessionKey),
         }
       : {}),
     spawnMode: "run",
