@@ -382,6 +382,7 @@ set -eu
 ${mount} --bind "$1" "$2"
 ${mount} --bind "$3" "$1"
 export ${SSH_NAMESPACE_MARKER}=1
+export OPENCLAW_TESTBOX=1
 export OPENCLAW_QA_REAL_SSH="$2"
 export OPENCLAW_QA_PRODUCER_PATH="$4"
 export OPENCLAW_QA_PRODUCER_OPTIONS="$5"
@@ -510,6 +511,9 @@ function sanitizeDiagnostic(text: string, roots: readonly string[]) {
 export async function runGatewaySshTunnels(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
+  if (process.env.OPENCLAW_TESTBOX !== "1") {
+    throw new Error("Gateway SSH tunnel QA requires OPENCLAW_TESTBOX=1 before privileged setup");
+  }
   if (process.env[SSH_NAMESPACE_MARKER] !== "1") {
     return await runInSshNamespace(options);
   }

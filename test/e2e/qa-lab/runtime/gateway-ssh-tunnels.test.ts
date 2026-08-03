@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { waitForFile } from "../../../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { runGatewaySshTunnels } from "./gateway-ssh-tunnels.js";
@@ -153,6 +154,21 @@ async function readOptionalFile(filePath: string) {
 }
 
 describeOnTestbox("Gateway SSH tunnel QA producer", () => {
+  it("rejects privileged setup outside Testbox", async () => {
+    const artifactBase = tempDirs.make("openclaw-gateway-ssh-guard-");
+    await withEnvAsync({ OPENCLAW_TESTBOX: undefined }, async () => {
+      await expect(
+        runGatewaySshTunnels({
+          artifactBase,
+          repoRoot: process.cwd(),
+        }),
+      ).rejects.toThrow("requires OPENCLAW_TESTBOX=1 before privileged setup");
+    });
+    await expect(fs.access(path.join(artifactBase, ".ssh-namespace"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("proves real forwarding, cleanup, and operator diagnostics", async () => {
     const artifactBase = tempDirs.make("openclaw-gateway-ssh-evidence-");
     const evidence = await runGatewaySshTunnels({
