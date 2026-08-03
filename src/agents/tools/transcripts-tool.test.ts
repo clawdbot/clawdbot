@@ -1,5 +1,6 @@
 // Transcripts tool tests cover manual imports, live provider lifecycle, summary
 // artifacts, and date-qualified session selectors.
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,7 +23,6 @@ vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
     listTranscriptSourceProviders: listTranscriptSourceProvidersMock,
   };
 });
-
 const tempDirs = createTempDirTracker();
 
 function currentDateDir(): string {
@@ -313,6 +313,65 @@ describe("transcripts tool", () => {
         vi.fn(),
       ),
     ).rejects.toThrow(`transcripts session not found: ${legacySession.sessionId}`);
+  });
+
+  it("fails closed for shipped account-bound sessions without trusted owner metadata", async () => {
+    const stateDir = await makeStateDir();
+    const store = storeFor(stateDir);
+    const provider = {
+      id: "discord-voice",
+      aliases: ["discord"],
+      accountBindingChannels: ["discord"],
+      name: "Discord Voice",
+      sourceKinds: ["live-audio" as const],
+    };
+    getTranscriptSourceProviderMock.mockReturnValue(provider);
+    const sessions = [
+      {
+        sessionId: "stable-ownerless",
+        source: { providerId: "discord-voice", accountId: "account-a" },
+        startedAt: "2026-07-01T12:00:00.000Z",
+        stoppedAt: "2026-07-01T12:05:00.000Z",
+      },
+      {
+        sessionId: "beta-agent-only",
+        source: { providerId: "discord-voice", accountId: "account-a" },
+        startedAt: "2026-07-02T12:00:00.000Z",
+        stoppedAt: "2026-07-02T12:05:00.000Z",
+        metadata: { agentId: "main" },
+      },
+    ];
+    for (const session of sessions) {
+      await store.writeSession(session);
+      await store.appendUtteranceForSession(session, { text: "shipped notes" });
+    }
+    const { tool: channelTool } = await createHarness(stateDir, {}, "main", {
+      channel: "discord",
+      accountId: "account-a",
+    });
+    const { tool: operatorTool } = await createHarness(stateDir, {}, "main", {
+      channel: "webchat",
+      accountId: "operator",
+    });
+
+    for (const session of sessions) {
+      await expect(
+        channelTool.execute(
+          `call-channel-${session.sessionId}`,
+          { action: "summarize", sessionId: session.sessionId },
+          undefined,
+          vi.fn(),
+        ),
+      ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
+      await expect(
+        operatorTool.execute(
+          `call-operator-${session.sessionId}`,
+          { action: "summarize", sessionId: session.sessionId },
+          undefined,
+          vi.fn(),
+        ),
+      ).resolves.toMatchObject({ details: { sessionId: session.sessionId } });
+    }
   });
 
   it("requires explicit enablement before execution", async () => {

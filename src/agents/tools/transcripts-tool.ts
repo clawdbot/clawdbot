@@ -48,8 +48,14 @@ function ownsTranscriptSession(
   ctx: TranscriptsRuntimeContext,
   session: TranscriptSessionDescriptor,
 ): boolean {
+  const channel = ctx.agentChannel?.trim().toLowerCase();
+  const provider = resolveSourceProvider(session.source.providerId, ctx);
+  const requiresTrustedAccountOwner = Boolean(
+    channel &&
+    provider?.accountBindingChannels?.some((entry) => entry.trim().toLowerCase() === channel),
+  );
   if (!ctx.agentId) {
-    return true;
+    return !requiresTrustedAccountOwner;
   }
   const ownerAgentId = session.metadata?.agentId;
   if (typeof ownerAgentId === "string") {
@@ -61,15 +67,17 @@ function ownsTranscriptSession(
     if (
       typeof ownerChannel === "string" &&
       typeof ownerAccountId === "string" &&
-      ctx.agentChannel?.trim().toLowerCase() === ownerChannel
+      channel === ownerChannel
     ) {
       return ctx.agentAccountId?.trim() === ownerAccountId;
     }
-    return true;
+    // Account-binding channels require trusted owner facts recorded at ingress.
+    // Older rows lack them, so only a different operator surface may recover them.
+    return !requiresTrustedAccountOwner;
   }
   // Shipped rows predate agent attribution. Treat them as operator-owned legacy
-  // state: main can curate them, but isolated agents cannot claim them.
-  return ctx.agentId === "main";
+  // state: main can curate them off-channel, but no channel account can claim them.
+  return ctx.agentId === "main" && !requiresTrustedAccountOwner;
 }
 
 const TranscriptsSchema = Type.Object(
