@@ -12,11 +12,15 @@ const loggerRecords: Array<{ level: string; message: string }> = [];
 // Observable persisted session entries for recovery persist assertions.
 const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
-const { assertDelegateArtifactPolicyPreparedMock, removeUnacceptedDelegateArtifactPolicyMock } =
-  vi.hoisted(() => ({
-    assertDelegateArtifactPolicyPreparedMock: vi.fn(),
-    removeUnacceptedDelegateArtifactPolicyMock: vi.fn(),
-  }));
+const {
+  assertDelegateArtifactPolicyPreparedMock,
+  hasRecordedDelegateArtifactCompletionForProducerMock,
+  removeUnacceptedDelegateArtifactPolicyMock,
+} = vi.hoisted(() => ({
+  assertDelegateArtifactPolicyPreparedMock: vi.fn(),
+  hasRecordedDelegateArtifactCompletionForProducerMock: vi.fn(() => false),
+  removeUnacceptedDelegateArtifactPolicyMock: vi.fn(),
+}));
 let flowIdCounter = 0;
 let listTaskFlowsShouldThrow = false;
 const activeRegistryChildSessionKeys = new Set<string>();
@@ -42,6 +46,8 @@ vi.mock("../../agents/subagent-spawn.js", () => ({
 vi.mock("../../agents/delegate-artifacts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/delegate-artifacts.js")>()),
   assertDelegateArtifactPolicyPrepared: assertDelegateArtifactPolicyPreparedMock,
+  hasRecordedDelegateArtifactCompletionForProducer:
+    hasRecordedDelegateArtifactCompletionForProducerMock,
   removeUnacceptedDelegateArtifactPolicy: removeUnacceptedDelegateArtifactPolicyMock,
 }));
 
@@ -213,6 +219,7 @@ import {
   MissingDelegateArtifactPolicyError,
   UnavailableDelegateArtifactPolicyError,
 } from "../../agents/delegate-artifacts.js";
+import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   noopTracer,
@@ -309,6 +316,7 @@ beforeEach(() => {
   loggerRecords.length = 0;
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
   assertDelegateArtifactPolicyPreparedMock.mockClear();
+  hasRecordedDelegateArtifactCompletionForProducerMock.mockClear().mockReturnValue(false);
   removeUnacceptedDelegateArtifactPolicyMock.mockClear();
   loadSessionStoreForRecoveryMock.mockReset().mockReturnValue({});
   flowIdCounter = 0;
@@ -647,6 +655,43 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
     expect(mockFlows.get(flowId as string)).toMatchObject({ status: "failed" });
     expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith(flowId);
     expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
+  });
+
+  it("accepts a crash-orphaned artifact row whose terminal policy proves its child ran", async () => {
+    // Sibling surface for the dispatch-side reconcile: after a restart the
+    // registry cannot vouch for an ended child, so the durable terminal policy
+    // bound to this producer must keep recovery from re-spawning it or
+    // reporting a false spawn failure.
+    const sessionKey = "agent:main:subagent:pc-recover-policy-terminal";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
+      task: "already produced artifact return before the crash",
+      stagedAt: Date.now(),
+      returnOptions: { artifacts: "required" },
+    });
+    const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
+    const flowId = claimed[0]?.flowId;
+    expect(flowId).toBeDefined();
+    hasRecordedDelegateArtifactCompletionForProducerMock.mockReturnValue(true);
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 1, dispatched: 1, failed: 0 });
+    expect(hasRecordedDelegateArtifactCompletionForProducerMock).toHaveBeenCalledWith({
+      flowId,
+      producerSessionKey: deriveContinuationDelegateChildSessionKeyFromParent(
+        sessionKey,
+        flowId as string,
+      ),
+    });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(assertDelegateArtifactPolicyPreparedMock).not.toHaveBeenCalled();
+    expect(removeUnacceptedDelegateArtifactPolicyMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId as string)).toMatchObject({ status: "succeeded" });
   });
 
   it("defers TaskFlow recovery while a queued delivery still owns the same source flow", async () => {

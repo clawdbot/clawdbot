@@ -153,6 +153,31 @@ export function assertDelegateArtifactPolicyPrepared(
   }
 }
 
+/**
+ * Whether a completion has been recorded for the managed child bound to this
+ * flow under the expected producer session. The live subagent registry cannot
+ * answer once the child has ended or the process restarted, so this durable
+ * binding is what keeps a re-drive from reporting a genuinely completed child
+ * as a spawn failure. `completed_at` is written by the same statement that
+ * leaves a policy `completed`, `failed`, or (finalization deferred by a runtime
+ * disable) `staged`, and an `active` policy has none.
+ */
+export function hasRecordedDelegateArtifactCompletionForProducer(
+  params: { flowId: string; producerSessionKey: string },
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  ensureDelegateArtifactsSchema(options);
+  const { db } = openOpenClawStateDatabase(options);
+  const policy = executeSqliteQueryTakeFirstSync(
+    db,
+    artifactDb(db)
+      .selectFrom("delegate_artifact_policies")
+      .select(["completed_at", "producer_session_key"])
+      .where("flow_id", "=", params.flowId),
+  );
+  return policy?.completed_at != null && policy.producer_session_key === params.producerSessionKey;
+}
+
 export function removeUnacceptedDelegateArtifactPolicy(
   flowId: string,
   options: OpenClawStateDatabaseOptions = {},

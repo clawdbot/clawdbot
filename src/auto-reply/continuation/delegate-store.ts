@@ -470,13 +470,18 @@ export function clearRecoverableDelegatesChainTokensFold(sessionKey: string): nu
 export function annotateQueuedDelegatesInheritedPolicy(
   sessionKey: string,
   policy: { inheritedSilent?: boolean; inheritedWake?: boolean },
+  queuedCreatedAtOrBefore?: number,
 ): number {
   if (policy.inheritedSilent !== true && policy.inheritedWake !== true) {
     return 0;
   }
   let annotated = 0;
   for (const flow of listQueuedPendingFlows(sessionKey)) {
+    if (queuedCreatedAtOrBefore !== undefined && flow.createdAt > queuedCreatedAtOrBefore) {
+      continue;
+    }
     const delegate = decodeDelegateFlow(flow);
+    // Persisted normal/default mode is represented by an omitted `mode`.
     if (!delegate || delegate.mode !== undefined) {
       continue;
     }

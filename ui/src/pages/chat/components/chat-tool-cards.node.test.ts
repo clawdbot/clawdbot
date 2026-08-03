@@ -65,6 +65,32 @@ describe("tool-card extraction", () => {
 }`);
   });
 
+  it("never exposes redacted tool arguments to any card renderer", () => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        toolCallId: "call-publish",
+        content: [
+          {
+            type: "toolcall",
+            id: "call-publish",
+            name: "delegate_artifacts_publish",
+            arguments: { paths: ["reports/private-quarterly-summary.pdf", "notes/secret.md"] },
+          },
+        ],
+      },
+      "msg:redact",
+    );
+
+    expect(cards).toHaveLength(1);
+    // `args` feeds the key-value list and the collapsed preview; `inputText`
+    // feeds the sidebar and the expanded raw block. Neither may carry paths.
+    expect(cards[0]?.args).toBeUndefined();
+    expect(cards[0]?.inputText).toBe("artifact paths redacted");
+    expect(JSON.stringify(cards[0])).not.toContain("private-quarterly-summary");
+    expect(JSON.stringify(cards[0])).not.toContain("secret.md");
+  });
+
   it("preserves string args verbatim and keeps empty-output cards", () => {
     const cards = extractToolCards(
       {

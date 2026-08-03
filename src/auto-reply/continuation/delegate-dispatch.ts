@@ -84,6 +84,9 @@ export async function dispatchToolDelegates(
 ): Promise<DelegateDispatchResult> {
   const { sessionKey, chainState, ctx } = params;
   const config = params.config ?? resolveContinuationRuntimeConfig();
+  // A hedge may consume only rows this dispatch could have annotated with its
+  // inherited policy. Rows queued later belong to their own turn's dispatch.
+  const hedgeQueuedCreatedAtOrBefore = params.queuedCreatedAtOrBefore ?? Date.now();
   const armManagedSpawnRetry = () => {
     armDelegateDispatchHedge(
       sessionKey,
@@ -98,12 +101,8 @@ export async function dispatchToolDelegates(
         persistChainState: params.persistChainState,
         ...(params.persistBeforeTerminalCommit ? { persistBeforeTerminalCommit: true } : {}),
         recoverRunningDelegates: true,
-        ...(params.queuedCreatedAtOrBefore !== undefined
-          ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
-          : {}),
+        queuedCreatedAtOrBefore: hedgeQueuedCreatedAtOrBefore,
         includeRunningUpdatedAtOrBefore: Date.now(),
-        ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
-        ...(params.inheritedWake ? { inheritedWake: true } : {}),
       },
       dispatchToolDelegates,
     );
@@ -141,13 +140,20 @@ export async function dispatchToolDelegates(
   // still fire in fully-quiet channels where no further response-finalize
   // arrives. The hedge re-invokes this function; idempotent per sessionKey.
   const soonestUnmaturedDueAt = peekSoonestUnmaturedDelegateDueAt(sessionKey, {
-    queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore,
+    queuedCreatedAtOrBefore: hedgeQueuedCreatedAtOrBefore,
   });
   if (soonestUnmaturedDueAt !== undefined) {
-    annotateQueuedDelegatesInheritedPolicy(sessionKey, {
-      ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
-      ...(params.inheritedWake ? { inheritedWake: true } : {}),
-    });
+    // Inherited silent/wake policy is recorded on each still-queued delegate
+    // here, so the hedge never has to carry one chain's mode at the session
+    // level and leak it onto an unrelated delegate queued by a later turn.
+    annotateQueuedDelegatesInheritedPolicy(
+      sessionKey,
+      {
+        ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
+        ...(params.inheritedWake ? { inheritedWake: true } : {}),
+      },
+      hedgeQueuedCreatedAtOrBefore,
+    );
     armDelegateDispatchHedge(
       sessionKey,
       soonestUnmaturedDueAt,
@@ -161,14 +167,10 @@ export async function dispatchToolDelegates(
         persistChainState: params.persistChainState,
         ...(params.persistBeforeTerminalCommit ? { persistBeforeTerminalCommit: true } : {}),
         ...(params.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
-        ...(params.queuedCreatedAtOrBefore !== undefined
-          ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
-          : {}),
+        queuedCreatedAtOrBefore: hedgeQueuedCreatedAtOrBefore,
         ...(params.includeRunningUpdatedAtOrBefore !== undefined
           ? { includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore }
           : {}),
-        ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
-        ...(params.inheritedWake ? { inheritedWake: true } : {}),
       },
       dispatchToolDelegates,
     );
@@ -461,7 +463,7 @@ export async function dispatchToolDelegates(
     // instead of announcing (mirrors the subagent-announce chain-hop guards).
     const ownSilent = delegate.mode === "silent" || delegate.mode === "silent-wake";
     const ownWake = delegate.mode === "silent-wake";
-    const canInheritMode = delegate.mode === undefined || delegate.mode === "normal";
+    const canInheritMode = delegate.mode === undefined;
     const inheritedSilent = delegate.inheritedSilent === true || params.inheritedSilent === true;
     const inheritedWake = delegate.inheritedWake === true || params.inheritedWake === true;
     const silent = ownSilent || (canInheritMode && inheritedSilent);

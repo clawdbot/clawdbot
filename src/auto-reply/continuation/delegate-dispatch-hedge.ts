@@ -30,8 +30,6 @@ type DelegateDispatchHedgeParams = Pick<
   | "recoverRunningDelegates"
   | "queuedCreatedAtOrBefore"
   | "includeRunningUpdatedAtOrBefore"
-  | "inheritedSilent"
-  | "inheritedWake"
 >;
 
 // Per-session hedge timer for re-checking unmatured pending delegates in fully
@@ -80,13 +78,24 @@ function mergeOptionalUpperBound(
     : Math.max(existing, incoming);
 }
 
+// An unset incoming field must not erase what an earlier arm supplied: a merged
+// hedge that still claims `applyDelegateChainTokensFold` without its
+// persist/load callbacks reads as `foldWithoutPersist` in dispatch, which
+// force-claims not-yet-due delegates and loses the folded chain cost. The two
+// cutoffs below are merged explicitly and stay unaffected.
+function definedEntriesOnly(params: DelegateDispatchHedgeParams): DelegateDispatchHedgeParams {
+  return Object.fromEntries(
+    Object.entries(params).filter(([, value]) => value !== undefined),
+  ) as DelegateDispatchHedgeParams;
+}
+
 function mergeHedgeParams(
   existing: DelegateDispatchHedgeParams,
   incoming: DelegateDispatchHedgeParams,
 ): DelegateDispatchHedgeParams {
   const merged: DelegateDispatchHedgeParams = {
     ...existing,
-    ...incoming,
+    ...definedEntriesOnly(incoming),
     ...(existing.applyDelegateChainTokensFold || incoming.applyDelegateChainTokensFold
       ? { applyDelegateChainTokensFold: true }
       : {}),
@@ -96,8 +105,6 @@ function mergeHedgeParams(
     ...(existing.recoverRunningDelegates || incoming.recoverRunningDelegates
       ? { recoverRunningDelegates: true }
       : {}),
-    ...(existing.inheritedSilent || incoming.inheritedSilent ? { inheritedSilent: true } : {}),
-    ...(existing.inheritedWake || incoming.inheritedWake ? { inheritedWake: true } : {}),
   };
   const queuedCreatedAtOrBefore = mergeOptionalUpperBound(
     existing.queuedCreatedAtOrBefore,
@@ -181,10 +188,6 @@ export function armDelegateDispatchHedge(
         ...(activeParams.includeRunningUpdatedAtOrBefore !== undefined
           ? { includeRunningUpdatedAtOrBefore: activeParams.includeRunningUpdatedAtOrBefore }
           : {}),
-        // Delayed descendants of a silent/wake chain must remain internal when
-        // the hedge eventually dispatches them.
-        ...(activeParams.inheritedSilent ? { inheritedSilent: true } : {}),
-        ...(activeParams.inheritedWake ? { inheritedWake: true } : {}),
       });
       if (activeParams.persistChainState && (result.dispatched > 0 || result.rejected > 0)) {
         if (!result.chainStatePersistedBeforeTerminalCommit) {

@@ -40,6 +40,7 @@ import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runt
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
@@ -907,7 +908,11 @@ function tryLoadForceClearSessionSnapshot(
 ): ForceClearSessionSnapshot | undefined {
   try {
     const cfg = getRuntimeConfig();
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    // An unscoped canonical key (`global` under `session.scope: "global"`) carries
+    // no agent id, so deriving one from the bare key throws and the catch below
+    // would silently skip the terminal write — leaving the row `running` after
+    // recovery already reported the abort.
+    const agentId = resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     const entry = loadSessionEntry({ sessionKey, storePath });
     if (!entry || entry.status !== "running") {
