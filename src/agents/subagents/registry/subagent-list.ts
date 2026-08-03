@@ -43,6 +43,7 @@ type SubagentListItem = {
   label: string;
   task: string;
   status: string;
+  retentionReason?: string;
   pendingDescendants: number;
   runtime: string;
   runtimeMs: number;
@@ -224,7 +225,10 @@ export function buildSubagentList(params: {
     const totalTokens = resolveTotalTokens(sessionEntry);
     const usageText = formatTokenUsageDisplay(sessionEntry);
     const pendingDescendants = pendingDescendantCount(entry.childSessionKey);
-    const status = resolveSubagentDisplayStatus(entry, pendingDescendants);
+    const mismatch = entry.requesterSettleWake?.lifecycleMismatch;
+    const baseStatus = resolveSubagentDisplayStatus(entry, pendingDescendants);
+    const status = mismatch ? `${baseStatus} (retained: ${mismatch})` : baseStatus;
+    const retentionReason = entry.requesterSettleWake?.lastError;
     const childSessions = childSessionsByController.get(entry.childSessionKey) ?? [];
     const runtime = formatDurationCompact(runtimeMs) ?? "n/a";
     const label = truncateLine(resolveSubagentLabel(entry), 48);
@@ -241,6 +245,7 @@ export function buildSubagentList(params: {
       label,
       task,
       status,
+      ...(retentionReason ? { retentionReason: truncateLine(retentionReason, 140) } : {}),
       pendingDescendants,
       runtime,
       runtimeMs,

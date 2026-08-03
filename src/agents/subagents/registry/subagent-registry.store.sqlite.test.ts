@@ -8,6 +8,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchema,
 } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
@@ -339,6 +340,53 @@ describe("subagent registry sqlite store", () => {
       expect(loadSubagentRegistryFromSqlite().get(run.runId)?.completion).toMatchObject({
         resultText: "NO_REPLY",
         fallbackResultText: "legacy retained result",
+      });
+    });
+  });
+
+  it("repairs pre-upgrade databases and reads legacy rows without lifecycle columns", async () => {
+    await withTempStateEnv(async () => {
+      const legacy = createRun();
+      saveSubagentRegistryToSqlite(new Map([[legacy.runId, legacy]]));
+
+      // Simulate a database created before the lifecycle fence shipped: drop
+      // the two new columns, then run the doctor repair that restores them.
+      const { db } = openOpenClawStateDatabase();
+      db.exec("ALTER TABLE subagent_runs DROP COLUMN expected_requester_lifecycle_revision;");
+      db.exec("ALTER TABLE subagent_runs DROP COLUMN requester_settle_wake_lifecycle_mismatch;");
+      closeOpenClawStateDatabaseForTest();
+
+      repairOpenClawStateDatabaseSchema();
+      const repaired = openOpenClawStateDatabase();
+      const columns = repaired.db
+        .prepare("PRAGMA table_info(subagent_runs)")
+        .all()
+        .map((row) => (row as { name: string }).name);
+      expect(columns).toContain("expected_requester_lifecycle_revision");
+      expect(columns).toContain("requester_settle_wake_lifecycle_mismatch");
+
+      const restored = loadSubagentRegistryFromSqlite().get(legacy.runId);
+      expect(restored?.expectedRequesterLifecycleRevision).toBeUndefined();
+      expect(restored?.requesterSettleWake?.lifecycleMismatch).toBeUndefined();
+
+      const current = createRun({
+        runId: "run-current",
+        childSessionKey: "agent:main:subagent:current",
+        expectedRequesterLifecycleRevision: "revision-1",
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 1,
+          lifecycleMismatch: "requester_replaced",
+        },
+      });
+      saveSubagentRegistryToSqlite(new Map([[current.runId, current]]));
+      expect(loadSubagentRegistryFromSqlite().get(current.runId)).toMatchObject({
+        expectedRequesterLifecycleRevision: "revision-1",
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 1,
+          lifecycleMismatch: "requester_replaced",
+        },
       });
     });
   });

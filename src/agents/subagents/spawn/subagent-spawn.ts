@@ -21,6 +21,7 @@ import {
   type SpawnBackendAdapter,
   summarizeSpawnError,
 } from "../../spawn-pipeline.js";
+import { loadRequesterLifecycleRevision } from "../subagent-requester-lifecycle.js";
 import {
   completeCollectorLaunchCleanup,
   settleFailedQueuedSubagentLaunch,
@@ -494,7 +495,9 @@ export async function spawnSubagentDirect(
       admissionReservation,
       progressOrigin,
       progressSessionKey: requesterInternalKey,
-      buildRegistration: (_state, runId) => {
+      captureExpectedRequesterLifecycle: () =>
+        loadRequesterLifecycleRevision(ownership.completionRequesterSessionKey),
+      buildRegistration: (_state, runId, expectedRequesterLifecycleRevision) => {
         if (params.collect) {
           const latestAdmission = resolveAdmission();
           if (!latestAdmission.ok) {
@@ -523,6 +526,7 @@ export async function spawnSubagentDirect(
           workspaceDir: spawnedMetadata.workspaceDir,
           runTimeoutSeconds,
           expectsCompletionMessage: shouldAnnounceCompletion,
+          ...(shouldAnnounceCompletion ? { expectedRequesterLifecycleRevision } : {}),
           spawnMode,
           collect: params.collect === true,
           swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,

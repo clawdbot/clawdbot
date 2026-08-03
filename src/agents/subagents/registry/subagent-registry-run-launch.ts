@@ -57,6 +57,8 @@ export type RegisterSubagentRunParams = {
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
+  /** Requester lifecycle revision captured before child dispatch. */
+  expectedRequesterLifecycleRevision?: string;
   requesterOrigin?: DeliveryContext;
   progressOrigin?: SubagentProgressOrigin;
   requesterDisplayKey: string;
@@ -126,6 +128,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       childSessionKey,
       controllerSessionKey,
       requesterSessionKey,
+      ...(registerParams.expectsCompletionMessage === true
+        ? { expectedRequesterLifecycleRevision: registerParams.expectedRequesterLifecycleRevision }
+        : {}),
       requesterOrigin,
       progressOrigin: registerParams.progressOrigin,
       requesterDisplayKey: registerParams.requesterDisplayKey,

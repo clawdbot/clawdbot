@@ -41,13 +41,20 @@ export function summarizeSpawnError(error: unknown): string {
 type SpawnPipelineParams<TState> = {
   adapter: SpawnBackendAdapter<TState>;
   admissionReservation?: { release: () => void };
-  buildRegistration: (state: TState, runId: string) => RegisterSubagentRunInput;
+  buildRegistration: (
+    state: TState,
+    runId: string,
+    expectedRequesterLifecycleRevision?: string,
+  ) => RegisterSubagentRunInput;
   hookRunner?: SubagentLifecycleHookRunner | null;
   progressOrigin?: SpawnProgressOrigin;
   /** Session key the started-progress hook fires against. Backends differ on
       purpose: native passes the controller-side requester key, ACP its
       historical completion-owner key; do not collapse them. */
   progressSessionKey: string;
+  /** Captured before async child dispatch so a requester reset cannot re-tag
+      the admission with the replacement lifecycle's revision. */
+  captureExpectedRequesterLifecycle?: () => string | undefined;
 };
 
 export async function runSpawnPipeline<TState>(
@@ -63,6 +70,10 @@ export async function runSpawnPipeline<TState>(
 async function executeSpawnPipeline<TState>(
   params: SpawnPipelineParams<TState>,
 ): Promise<SpawnPipelineResult<TState>> {
+  // Record the accepting lifecycle before any interleaving await. Reading it
+  // during registration would let a reset between child acceptance and
+  // registration stamp the stale completion with the replacement revision.
+  const expectedRequesterLifecycleRevision = params.captureExpectedRequesterLifecycle?.();
   let state: TState;
   try {
     state = await params.adapter.initialize();
@@ -83,7 +94,7 @@ async function executeSpawnPipeline<TState>(
   try {
     // Keep construction and registration in one synchronous section so callers
     // can revalidate shared admission state without an interleaving await.
-    registration = params.buildRegistration(state, runId);
+    registration = params.buildRegistration(state, runId, expectedRequesterLifecycleRevision);
     registerSubagentRun(registration);
     // Registry insertion takes ownership synchronously; keeping the slot would double-count it.
     params.admissionReservation?.release();

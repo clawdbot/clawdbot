@@ -90,6 +90,7 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "./subagent-capabilities.js";
+import { loadRequesterLifecycleRevision } from "../subagent-requester-lifecycle.js";
 import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
@@ -654,7 +655,9 @@ export async function spawnAcpDirect(
     hookRunner: getGlobalHookRunner(),
     progressOrigin,
     progressSessionKey: ownership.completionRequesterSessionKey,
-    buildRegistration: (state, runId) => {
+    captureExpectedRequesterLifecycle: () =>
+      loadRequesterLifecycleRevision(ownership.completionRequesterSessionKey),
+    buildRegistration: (state, runId, expectedRequesterLifecycleRevision) => {
       const inlineDelivery = state.deliveryPlan?.useInlineDelivery === true;
       return {
         runId,
@@ -675,6 +678,9 @@ export async function spawnAcpDirect(
         expectsCompletionMessage: inlineDelivery
           ? false
           : params.expectsCompletionMessage !== false,
+        ...(params.expectsCompletionMessage !== false && !inlineDelivery
+          ? { expectedRequesterLifecycleRevision }
+          : {}),
         spawnMode,
       };
     },

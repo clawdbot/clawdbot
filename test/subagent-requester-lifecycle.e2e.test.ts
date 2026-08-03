@@ -184,9 +184,11 @@ async function waitFor<T>(
 
 async function startMockModelServer(): Promise<MockModelServer> {
   const requests: MockModelRequest[] = [];
-  let releaseChild: () => void = () => {};
-  let childReleasePromise = new Promise<void>((resolve) => {
-    releaseChild = resolve;
+  // One-shot deferred: every child request handler awaits the same promise and
+  // releaseChild resolves it directly, so the release cannot race a rebuild.
+  let childRelease: () => void = () => {};
+  const childReleasePromise = new Promise<void>((resolve) => {
+    childRelease = resolve;
   });
   let parentTurnSpawned = false;
   const server = createServer((req, res) => {
@@ -286,12 +288,7 @@ async function startMockModelServer(): Promise<MockModelServer> {
       }
       throw new Error("child model request never arrived");
     },
-    releaseChild: () => {
-      childReleasePromise = new Promise<void>((resolve) => {
-        releaseChild = resolve;
-      });
-      releaseChild();
-    },
+    releaseChild: () => childRelease(),
     stop: async () => {
       if (stopped) {
         return;
@@ -634,7 +631,11 @@ describe("requester lifecycle fence real-runtime proof", () => {
         for (const run of outcome.runs) {
           expect(run.lifecycleMismatch).toBeUndefined();
           expect(run.deliveryStatus).not.toBe("suspended");
-          expect(run.payloadPresent).toBe(true);
+          if (run.deliveredAt === undefined) {
+            // Not yet delivered means the completion is retained for the
+            // requester's next turn; a delivered completion consumed it.
+            expect(run.payloadPresent).toBe(true);
+          }
         }
       } finally {
         await disconnectGatewayClient(client);

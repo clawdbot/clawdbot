@@ -207,6 +207,21 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   });
 });
 
+test("sessions.reset with reason new stamps a fresh lifecycle revision", async () => {
+  await seedWaitingActiveMainSession();
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: { lifecycleRevision?: string; sessionId: string };
+  }>("sessions.reset", {
+    key: "main",
+    reason: "new",
+  });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.lifecycleRevision).toEqual(expect.any(String));
+});
+
 test("sessions.reset watches reply-backed MCP retirement after an active-run timeout", async () => {
   await seedActiveMainSession();
   embeddedRunMock.waitResults.set("sess-main", false);

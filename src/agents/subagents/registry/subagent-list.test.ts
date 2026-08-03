@@ -109,6 +109,45 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).toContain("review_subagents: Review worker");
   });
 
+  it("surfaces a retained requester lifecycle mismatch in list status", () => {
+    const now = Date.now();
+    const run = {
+      runId: "run-retained",
+      childSessionKey: "agent:main:subagent:retained",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "delegated work",
+      cleanup: "keep",
+      createdAt: now - 2_000,
+      execution: { status: "terminal", startedAt: now - 3_000, endedAt: now - 1_000 },
+      expectsCompletionMessage: true,
+      delivery: { status: "pending" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 1,
+        lifecycleMismatch: "requester_replaced",
+        lastError:
+          "requester_replaced: requester lifecycle was replaced before the subagent completion settled; stale completion retained without delivery (requester=agent:main:main)",
+      },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const list = buildSubagentList({
+      cfg,
+      runs: [run],
+      recentMinutes: 30,
+    });
+
+    const item = list.recent.find((entry) => entry.runId === run.runId) ?? list.active[0];
+    expect(item?.status).toBe("done (retained: requester_replaced)");
+    expect(item?.retentionReason).toContain("requester lifecycle was replaced");
+    expect(item?.line).toContain("(retained: requester_replaced)");
+  });
+
   it.each([
     {
       name: "a killed run with a provider failure",
