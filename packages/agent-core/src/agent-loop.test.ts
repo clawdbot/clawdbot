@@ -733,7 +733,11 @@ describe("runAgentLoop deferred tool hydration", () => {
                 stopReason: "stop" as const,
                 timestamp: Date.now(),
               };
-        stream.push({ type: "done", reason: message.stopReason, message });
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
       });
       return stream;
     };
@@ -815,7 +819,11 @@ describe("runAgentLoop deferred tool hydration", () => {
                 stopReason: "stop" as const,
                 timestamp: Date.now(),
               };
-        stream.push({ type: "done", reason: message.stopReason, message });
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
       });
       return stream;
     };
@@ -981,6 +989,200 @@ describe("agentLoop tool termination", () => {
       },
     };
   }
+
+  function criticalLoopFor(toolCall: { id: string; name: string }) {
+    return {
+      kind: "critical-tool-loop" as const,
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      actionKey: `${toolCall.name}:same-action`,
+      detector: "generic_repeat",
+      count: 20,
+      reason: `CRITICAL: ${toolCall.name} is looping`,
+    };
+  }
+
+  it("gives the model one recovery turn with the normal tool catalog", async () => {
+    const executed: string[] = [];
+    const providerToolNames: string[][] = [];
+    let turn = 0;
+    const streamFn: StreamFn = (_activeModel, context) => {
+      providerToolNames.push(context.tools?.map((tool) => tool.name) ?? []);
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "loop-1", name: "read", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "recovered" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "run", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [makeTool("read", executed)] },
+        {
+          ...config,
+          beforeToolBatch: async ({ calls }) => {
+            const first = calls[0];
+            return first ? { intervention: criticalLoopFor(first.toolCall) } : undefined;
+          },
+        },
+        undefined,
+        streamFn,
+      ),
+    );
+
+    expect(turn).toBe(2);
+    expect(providerToolNames).toEqual([["read"], ["read"]]);
+    expect(executed).toEqual([]);
+    expect(
+      events.find(
+        (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+          event.type === "tool_execution_end",
+      ),
+    ).toMatchObject({ executionStarted: false, isError: true });
+    expect(
+      events.find(
+        (
+          event,
+        ): event is Extract<AgentEvent, { type: "message_end" }> & {
+          message: { role: "toolResult" };
+        } => event.type === "message_end" && event.message.role === "toolResult",
+      )?.message,
+    ).toMatchObject({
+      details: { status: "blocked", deniedReason: "tool-loop" },
+    });
+  });
+
+  it("executes a different recovery action and keeps the one-shot budget spent", async () => {
+    const executed: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "loop-1", name: "read", arguments: {} },
+              ])
+            : turn === 2
+              ? makeAssistantMessage([
+                  { type: "toolCall", id: "safe-1", name: "list", arguments: {} },
+                ])
+              : makeAssistantMessage([
+                  { type: "toolCall", id: "loop-2", name: "read", arguments: {} },
+                ]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "run", timestamp: 1 }],
+        {
+          systemPrompt: "",
+          messages: [],
+          tools: [makeTool("read", executed), makeTool("list", executed)],
+        },
+        {
+          ...config,
+          beforeToolBatch: async ({ calls }) => {
+            const repeated = calls.find((call) => call.toolCall.name === "read");
+            return repeated ? { intervention: criticalLoopFor(repeated.toolCall) } : undefined;
+          },
+        },
+        undefined,
+        streamFn,
+      ),
+    );
+
+    expect(turn).toBe(3);
+    expect(executed).toEqual(["list"]);
+    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
+    const toolEnds = events.filter(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+    expect(toolEnds.map((event) => event.executionStarted)).toEqual([false, true, false]);
+    expect(toolEnds.at(-1)?.result).toMatchObject({ terminate: true });
+  });
+
+  it.each(["parallel", "sequential"] as const)(
+    "rejects the entire recovery batch before any $toolExecution sibling executes",
+    async (toolExecution) => {
+      const executed: string[] = [];
+      let turn = 0;
+      const streamFn: StreamFn = () => {
+        turn += 1;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          const message =
+            turn === 1
+              ? makeAssistantMessage([
+                  { type: "toolCall", id: "loop-1", name: "read", arguments: {} },
+                ])
+              : makeAssistantMessage([
+                  { type: "toolCall", id: "safe-1", name: "write", arguments: {} },
+                  { type: "toolCall", id: "loop-2", name: "read", arguments: {} },
+                ]);
+          stream.push({
+            type: "done",
+            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+            message,
+          });
+          stream.end();
+        });
+        return stream;
+      };
+      const events = await collectEvents(
+        agentLoop(
+          [{ role: "user", content: "run", timestamp: 1 }],
+          {
+            systemPrompt: "",
+            messages: [],
+            tools: [makeTool("read", executed), makeTool("write", executed)],
+          },
+          {
+            ...config,
+            toolExecution,
+            beforeToolBatch: async ({ calls }) => {
+              const repeated = calls.find((call) => call.toolCall.name === "read");
+              return repeated ? { intervention: criticalLoopFor(repeated.toolCall) } : undefined;
+            },
+          },
+          undefined,
+          streamFn,
+        ),
+      );
+
+      expect(turn).toBe(2);
+      expect(executed).toEqual([]);
+      expect(
+        events
+          .filter(
+            (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+              event.type === "tool_execution_end",
+          )
+          .map((event) => event.executionStarted),
+      ).toEqual([false, false, false]);
+    },
+  );
 
   it.each([
     { source: "network" as const, tainted: true },
