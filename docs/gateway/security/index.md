@@ -692,15 +692,16 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
     - `gateway.controlUi.dangerouslyDisableDeviceAuth` (retired upgrade input)
     - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
 
-    Channel name-matching (bundled and plugin channels; also per `accounts.<accountId>` where applicable):
+    Channel compatibility controls (bundled and plugin channels; also per `accounts.<accountId>` where applicable):
     - `channels.discord.dangerouslyAllowNameMatching`
     - `channels.googlechat.dangerouslyAllowNameMatching`
-    - `channels.msteams.dangerouslyAllowNameMatching`
-    - `channels.slack.dangerouslyAllowNameMatching`
     - `channels.irc.dangerouslyAllowNameMatching` (plugin channel)
     - `channels.mattermost.dangerouslyAllowNameMatching` (plugin channel)
-    - `channels.synology-chat.dangerouslyAllowNameMatching` (plugin channel)
+    - `channels.msteams.dangerouslyAllowNameMatching`
+    - `channels.slack.dangerouslyAllowNameMatching`
+    - `channels.synology-chat.dangerouslyAllowFileUrlFetch` (plugin channel)
     - `channels.synology-chat.dangerouslyAllowInheritedWebhookPath` (plugin channel)
+    - `channels.synology-chat.dangerouslyAllowNameMatching` (plugin channel)
     - `channels.zalouser.dangerouslyAllowNameMatching` (plugin channel)
 
     Network exposure:
