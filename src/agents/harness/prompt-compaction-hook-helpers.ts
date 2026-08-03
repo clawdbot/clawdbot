@@ -6,6 +6,7 @@
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { buildPromptBuildDropResult } from "../../plugins/prompt-build-drop.js";
 import type { PluginHookBeforePromptBuildResult } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
@@ -77,7 +78,9 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
     ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
         log.warn(`before_prompt_build hook failed: ${String(error)}`);
-        return undefined;
+        // The contribution is gone; say so in the prompt rather than handing
+        // the agent a context that only looks complete (openclaw-beads-201).
+        return buildPromptBuildDropResult([{ reason: "dispatch-failed", detail: String(error) }]);
       })
     : undefined;
   const systemPrompt = resolvePromptBuildSystemPrompt({

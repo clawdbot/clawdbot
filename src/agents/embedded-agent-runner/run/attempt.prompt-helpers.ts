@@ -10,6 +10,7 @@ import type {
 } from "../../../context-engine/types.js";
 import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
+import { buildPromptBuildDropResult } from "../../../plugins/prompt-build-drop.js";
 import type {
   PluginAgentTurnPrepareResult,
   PluginNextTurnInjectionRecord,
@@ -173,7 +174,11 @@ export async function resolvePromptBuildHookResult(params: {
         )
         .catch((hookErr: unknown) => {
           log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
-          return undefined;
+          // The contribution is gone; say so in the prompt rather than handing
+          // the agent a context that only looks complete (openclaw-beads-201).
+          return buildPromptBuildDropResult([
+            { reason: "dispatch-failed", detail: String(hookErr) },
+          ]);
         })
     : undefined;
   return {

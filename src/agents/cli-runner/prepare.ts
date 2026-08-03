@@ -36,6 +36,7 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { buildPromptBuildDropResult } from "../../plugins/prompt-build-drop.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
   isSubagentSessionKey,
@@ -754,7 +755,12 @@ export async function prepareCliRunContext(
       });
     } catch (error) {
       cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
-      return undefined;
+      // Preparation failed after the hooks may already have produced context.
+      // Surface the loss instead of shipping a prompt that looks complete
+      // (openclaw-beads-201).
+      return hookRunner?.hasHooks("before_prompt_build")
+        ? buildPromptBuildDropResult([{ reason: "dispatch-failed", detail: String(error) }])
+        : undefined;
     }
   })();
   const promptBuildToolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
