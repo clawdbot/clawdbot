@@ -1,6 +1,5 @@
 // Gateway hosted web tests cover Control UI and public plugin routes on one real listener.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
@@ -27,10 +26,11 @@ import {
   resetPluginRuntimeStateForTest,
 } from "../../../../src/plugins/runtime.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const TOKEN = "qa-hosted-web-token";
 const OPERATOR_SCOPES = ["operator.read", "operator.write", "operator.admin"];
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -38,7 +38,6 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
   resetPluginRuntimeStateForTest();
   setA2uiRootRealForTest(undefined);
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
 });
 
 function waitForWebSocketOpen(ws: WebSocket): Promise<void> {
@@ -108,8 +107,7 @@ describe("Gateway hosted web surfaces", () => {
     "serves the Control UI, admin RPC, and capability-scoped Canvas/A2UI routes",
     { timeout: 90_000 },
     async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-hosted-web-"));
-      tempDirs.push(root);
+      const root = tempDirs.make("openclaw-qa-hosted-web-");
       const stateDir = path.join(root, "state");
       const controlUiRoot = path.join(root, "control-ui");
       const canvasRoot = path.join(root, "canvas");
