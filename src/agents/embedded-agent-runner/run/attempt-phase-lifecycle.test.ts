@@ -261,7 +261,10 @@ describe("embedded attempt phase lifecycle state", () => {
           toolCallId: "tool_search_code:outer-exec:read:1",
           toolName: "read",
           input: { path: "missing.txt" },
-          result: { content: [{ type: "text", text: "ENOENT" }] },
+          result: {
+            content: [{ type: "text", text: "ENOENT" }],
+            details: { status: "error", error: "ENOENT" },
+          },
           isError: true,
         },
       ],
