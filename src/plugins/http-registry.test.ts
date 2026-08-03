@@ -339,7 +339,7 @@ describe("registerPluginHttpRoute", () => {
     });
   });
 
-  it("replaces stale route on same path when replaceExisting=true", () => {
+  it("preserves shipped same-plugin source-less replacement", () => {
     const { registry, logs, register } = createLoggedRouteHarness();
     const firstHandler = vi.fn();
     const secondHandler = vi.fn();
@@ -363,6 +363,7 @@ describe("registerPluginHttpRoute", () => {
 
     expect(registry.httpRoutes).toHaveLength(1);
     expect(registry.httpRoutes[0]?.handler).toBe(secondHandler);
+    expect(registry.httpRoutes[0]?.source).toBeUndefined();
     expect(logs).toContain(
       'plugin: replacing stale webhook path /plugins/synology (exact) for account "default" (synology-chat)',
     );
@@ -374,6 +375,43 @@ describe("registerPluginHttpRoute", () => {
 
     unregisterSecond();
     expect(registry.httpRoutes).toHaveLength(0);
+  });
+
+  it.each([
+    {
+      name: "source-aware replacement cannot evict a source-less route",
+      existingSource: undefined,
+      replacementSource: "demo-webhook",
+    },
+    {
+      name: "source-less replacement cannot evict a source-aware route",
+      existingSource: "demo-webhook",
+      replacementSource: undefined,
+    },
+  ])("$name", ({ existingSource, replacementSource }) => {
+    const { registry, register } = createLoggedRouteHarness();
+    const existingHandler = vi.fn();
+    register({
+      path: "/plugins/demo",
+      auth: "plugin",
+      handler: existingHandler,
+      pluginId: "demo",
+      source: existingSource,
+    });
+
+    expect(() =>
+      register({
+        path: "/plugins/demo",
+        auth: "plugin",
+        pluginId: "demo",
+        source: replacementSource,
+        replaceExisting: true,
+        throwOnFailure: true,
+      }),
+    ).toThrow("plugin: route replacement denied");
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes[0]?.handler).toBe(existingHandler);
+    expect(registry.httpRoutes[0]?.source).toBe(existingSource);
   });
 
   it.each([

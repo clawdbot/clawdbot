@@ -26,11 +26,12 @@ export function registerPluginHttpRoute(params: {
   auth: PluginHttpRouteRegistration["auth"];
   match?: PluginHttpRouteRegistration["match"];
   gatewayRuntimeScopeSurface?: PluginHttpRouteRegistration["gatewayRuntimeScopeSurface"];
-  /** Replace an existing canonical route owned by the same named plugin and route source. */
+  /** Replace an existing canonical route owned by the same plugin and compatible route source. */
   replaceExisting?: boolean;
   /** Throw when the route cannot be registered instead of returning a no-op cleanup. */
   throwOnFailure?: boolean;
   pluginId?: string;
+  /** Stable same-plugin sub-owner for replacement; omit consistently for legacy behavior. */
   source?: string;
   accountId?: string;
   log?: (message: string) => void;
@@ -89,6 +90,8 @@ export function registerPluginHttpRoute(params: {
     }
     const replacementOwner = normalizeOptionalString(params.pluginId);
     const replacementSource = normalizeOptionalString(params.source);
+    // Source-less same-plugin replacement shipped before route-source ownership.
+    // Preserve it only when both sides omit source; otherwise require an exact source match.
     const mismatchedOwner = canonicalMatches.find(
       (route) =>
         normalizeOptionalString(route.pluginId) !== replacementOwner ||

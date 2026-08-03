@@ -269,6 +269,7 @@ describe("monitorLineProvider lifecycle", () => {
     expect(registration.route.accountId).toBe("work");
     expect(registration.route.auth).toBe("plugin");
     expect(registration.route.pluginId).toBe("line");
+    expect(registration.route.source).toBe("line-webhook");
     expect(registration.route.throwOnFailure).toBe(true);
     expect(registration.route).not.toHaveProperty("path");
     expect(registration.route).not.toHaveProperty("replaceExisting");

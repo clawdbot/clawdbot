@@ -319,6 +319,7 @@ export async function monitorLineProvider(
     route: {
       auth: "plugin",
       pluginId: "line",
+      source: "line-webhook",
       accountId: resolvedAccountId,
       log: (msg) => logVerbose(msg),
       throwOnFailure: true,
