@@ -49,8 +49,11 @@ function isStaleLease(delivery: SubagentCompletionDeliveryState, now: number): b
   );
 }
 
-function selectResultText(payload: PendingFinalDeliveryPayload): string | undefined {
-  return selectDeliverableSessionsReply(payload.frozenResultText, payload.fallbackFrozenResultText);
+function selectResultText(entry: SubagentRunRecord): string | undefined {
+  return selectDeliverableSessionsReply(
+    entry.completion?.resultText,
+    entry.completion?.fallbackResultText,
+  );
 }
 
 function describeOutcome(payload: PendingFinalDeliveryPayload): string {
@@ -74,8 +77,8 @@ function promptLiteral(value: string): string {
 function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQueueItem): number {
   // Deliver oldest completed work first, then use creation time and run id for
   // deterministic prompt-cache-friendly ordering.
-  const aEnded = a.payload.endedAt ?? a.entry.endedAt ?? Number.MAX_SAFE_INTEGER;
-  const bEnded = b.payload.endedAt ?? b.entry.endedAt ?? Number.MAX_SAFE_INTEGER;
+  const aEnded = a.payload.endedAt ?? a.entry.execution.endedAt ?? Number.MAX_SAFE_INTEGER;
+  const bEnded = b.payload.endedAt ?? b.entry.execution.endedAt ?? Number.MAX_SAFE_INTEGER;
   if (aEnded !== bEnded) {
     return aEnded - bEnded;
   }
@@ -128,7 +131,7 @@ function buildAgentSteeringPromptSection(item: AgentSteeringQueueItem, index: nu
     promptLiteral(payload.task) ||
     promptLiteral(payload.childSessionKey) ||
     `subagent ${index + 1}`;
-  const resultText = selectResultText(payload);
+  const resultText = selectResultText(item.entry);
   return [
     `${index + 1}. ${title}`,
     `status: ${promptLiteral(describeOutcome(payload))}`,

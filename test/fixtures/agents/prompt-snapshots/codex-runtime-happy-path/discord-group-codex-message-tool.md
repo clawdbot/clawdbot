@@ -221,8 +221,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 63627,
-    "roughTokens": 15907
+    "chars": 63661,
+    "roughTokens": 15916
   },
   "openClawDeveloperInstructions": {
     "chars": 3811,
@@ -233,8 +233,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7049
   },
   "totalWithDynamicToolsJson": {
-    "chars": 91823,
-    "roughTokens": 22956
+    "chars": 91857,
+    "roughTokens": 22965
   },
   "userInputText": {
     "chars": 1300,
@@ -517,7 +517,7 @@ can you audit whether this prompt path has conflicting silence instructions?
 
 ### Tools: Dynamic Tool Catalog
 
-Full JSON: `codex-dynamic-tools.discord-group.json`
+Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dynamic-tools.telegram-direct.json`)
 
 ## Dynamic Tool Names
 

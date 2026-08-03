@@ -16,9 +16,8 @@ import {
   taskStatusLabel,
   taskTimestampMs,
   taskTitle,
-  type TaskStatus,
-  type TaskSummary,
 } from "../../lib/tasks/data.ts";
+import type { TaskStatus, TaskSummary } from "../../lib/tasks/task-summary.ts";
 
 type TasksProps = {
   basePath: string;
@@ -32,6 +31,9 @@ type TasksProps = {
   cancellingTaskIds: ReadonlySet<string>;
   sessionRow: (sessionKey: string) => GatewaySessionRow | undefined;
   onCancel: (taskId: string) => void;
+  onRetry: (taskId: string) => void;
+  onDismiss: (taskId: string) => void;
+  onCopyResult: (taskId: string) => void;
   onNavigateToChat: (sessionKey: string) => void;
 };
 
@@ -77,6 +79,9 @@ function renderTask(task: TaskSummary, props: TasksProps) {
   const detail = taskDetail(task);
   const title = taskTitle(task);
   const cancelling = props.cancellingTaskIds.has(task.id);
+  const retainedResult = task.terminalOutcome === "blocked";
+  const recoverableDelivery = retainedResult && task.deliveryStatus === "failed";
+  const dismissedDelivery = retainedResult && task.deliveryStatus === "dismissed";
   return html`
     <div class="list-item" data-task-id=${task.id}>
       <div class="list-main">
@@ -91,6 +96,14 @@ function renderTask(task: TaskSummary, props: TasksProps) {
             : nothing}
         </div>
         ${detail ? html`<div class="list-sub">${detail}</div>` : nothing}
+        ${retainedResult
+          ? html`<div class="callout warn">
+              ${t(dismissedDelivery ? "tasksPage.deliveryDismissed" : "tasksPage.deliveryBlocked")}
+              ${recoverableDelivery
+                ? html`<div class="muted">${t("tasksPage.duplicateRisk")}</div>`
+                : nothing}
+            </div>`
+          : nothing}
       </div>
       <div class="list-meta">
         ${timestamp > 0
@@ -107,6 +120,38 @@ function renderTask(task: TaskSummary, props: TasksProps) {
             >
               ${cancelling ? t("tasksPage.cancelling") : t("common.cancel")}
             </button>`
+          : nothing}
+        ${retainedResult && props.canCancel
+          ? html`
+              <button
+                class="btn"
+                type="button"
+                ?disabled=${cancelling || !props.connected}
+                @click=${() => props.onCopyResult(task.taskId)}
+              >
+                ${t("tasksPage.copyResult")}
+              </button>
+              ${recoverableDelivery
+                ? html`
+                    <button
+                      class="btn"
+                      type="button"
+                      ?disabled=${cancelling || !props.connected}
+                      @click=${() => props.onRetry(task.taskId)}
+                    >
+                      ${t("tasksPage.retryDelivery")}
+                    </button>
+                    <button
+                      class="btn"
+                      type="button"
+                      ?disabled=${cancelling || !props.connected}
+                      @click=${() => props.onDismiss(task.taskId)}
+                    >
+                      ${t("tasksPage.dismissDelivery")}
+                    </button>
+                  `
+                : nothing}
+            `
           : nothing}
       </div>
     </div>

@@ -5,6 +5,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
@@ -13,6 +14,10 @@ import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
 } from "../plugins/runtime-state.js";
+import {
+  allowsPluginModelNormalization,
+  hasExactConfiguredProviderModel,
+} from "./configured-provider-model.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type {
   ModelCandidate,
@@ -24,7 +29,6 @@ import {
   type ModelManifestNormalizationContext,
   modelKey,
   normalizeModelRef,
-  normalizeProviderId,
 } from "./model-ref-shared.js";
 import {
   buildModelAliasIndex,
@@ -35,50 +39,6 @@ import {
 
 const MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES = 256;
 const fallbackCandidateCache = new Map<string, ModelFallbackCandidate[]>();
-
-function hasExactConfiguredProviderModel(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  model: string;
-}): boolean {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const model = params.model.trim();
-  if (!params.cfg || !normalizedProvider || !model) {
-    return false;
-  }
-  for (const [providerId, providerConfig] of Object.entries(params.cfg.models?.providers ?? {})) {
-    if (normalizeProviderId(providerId) !== normalizedProvider) {
-      continue;
-    }
-    return (providerConfig.models ?? []).some((entry) => entry.id.trim() === model);
-  }
-  return false;
-}
-
-function hasConfiguredProvider(params: { cfg?: OpenClawConfig; provider: string }): boolean {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  if (!params.cfg || !normalizedProvider) {
-    return false;
-  }
-  return Object.keys(params.cfg.models?.providers ?? {}).some(
-    (providerId) => normalizeProviderId(providerId) === normalizedProvider,
-  );
-}
-
-function allowPluginModelNormalizationForRef(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  model: string;
-}): boolean {
-  if (
-    params.cfg &&
-    !normalizePluginsConfig(params.cfg.plugins).enabled &&
-    hasConfiguredProvider(params)
-  ) {
-    return false;
-  }
-  return !hasExactConfiguredProviderModel(params);
-}
 
 function createModelCandidateCollector(): {
   candidates: ModelFallbackCandidate[];
@@ -199,13 +159,7 @@ export function resolveModelCandidateChain(
   const candidates = resolveFallbackCandidatesUncached(params);
   if (cacheKey) {
     fallbackCandidateCache.set(cacheKey, candidates.map(cloneModelCandidate));
-    while (fallbackCandidateCache.size > MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES) {
-      const oldest = fallbackCandidateCache.keys().next();
-      if (oldest.done) {
-        break;
-      }
-      fallbackCandidateCache.delete(oldest.value);
-    }
+    pruneMapToMaxSize(fallbackCandidateCache, MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES);
   }
   return candidates;
 }
@@ -317,7 +271,7 @@ function resolveFallbackCandidatesUncached(
   const modelRaw = normalizeOptionalString(params.model) || defaultModel;
   const normalizeCandidateRef = (provider: string, model: string) =>
     normalizeModelRef(provider, model, {
-      allowPluginNormalization: allowPluginModelNormalizationForRef({
+      allowPluginNormalization: allowsPluginModelNormalization({
         cfg: params.cfg,
         provider,
         model,
@@ -353,7 +307,7 @@ function resolveFallbackCandidatesUncached(
         model: modelRaw,
         defaultProvider,
         aliasIndex,
-        allowPluginNormalization: allowPluginModelNormalizationForRef({
+        allowPluginNormalization: allowsPluginModelNormalization({
           cfg: params.cfg,
           provider: providerRaw,
           model: modelRaw,

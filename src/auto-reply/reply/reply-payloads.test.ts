@@ -216,6 +216,38 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
     ).toBe(false);
   });
 
+  it("matches a Teams send resolved to the originating DM conversation", () => {
+    expect(
+      shouldDedupeMessagingToolRepliesForRoute({
+        messageProvider: "msteams",
+        originatingTo: "conversation:19:dm-current@thread.v2",
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "msteams",
+            to: "conversation:19:dm-current@thread.v2",
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match a Teams user alias resolved to a different DM conversation", () => {
+    expect(
+      shouldDedupeMessagingToolRepliesForRoute({
+        messageProvider: "msteams",
+        originatingTo: "conversation:19:dm-current@thread.v2",
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "msteams",
+            to: "conversation:19:dm-newer@thread.v2",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("matches when only one side carries the account id", () => {
     expect(
       shouldDedupeMessagingToolRepliesForRoute({

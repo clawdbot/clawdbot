@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   emitReachableGatewayAuthDiagnostic: vi.fn(async (_params: unknown) => false),
   formatHealthChannelLines: vi.fn(() => []),
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
+  gatewayAuthTokenCommand: vi.fn(async (_runtime: unknown) => {}),
   defaultRuntime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -46,8 +47,13 @@ vi.mock("../../commands/gateway-status.js", () => ({
     mocks.gatewayStatusCommand(opts, runtime),
 }));
 
-vi.mock("./call.js", () => ({
-  callGatewayCli: (method: string, opts: unknown, params?: unknown) =>
+vi.mock("../../commands/gateway-auth-token.js", () => ({
+  gatewayAuthTokenCommand: (runtime: unknown) => mocks.gatewayAuthTokenCommand(runtime),
+}));
+
+vi.mock("../gateway-rpc.js", async () => ({
+  ...(await vi.importActual<typeof import("../gateway-rpc.js")>("../gateway-rpc.js")),
+  callGatewayFromCliWithTransport: (method: string, opts: unknown, params?: unknown) =>
     mocks.callGatewayCli(method, opts, params),
 }));
 
@@ -142,11 +148,29 @@ describe("gateway register option collisions", () => {
     emitReachableGatewayAuthDiagnostic.mockClear();
     mocks.formatHealthChannelLines.mockClear();
     gatewayStatusCommand.mockClear();
+    mocks.gatewayAuthTokenCommand.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.writeStdout.mockClear();
     defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
+  });
+
+  it("requires explicit confirmation before revealing the Gateway token", async () => {
+    await sharedProgram.parseAsync(["gateway", "auth-token"], { from: "user" });
+
+    expect(mocks.gatewayAuthTokenCommand).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Pass --show to confirm"),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("routes an explicitly confirmed token reveal through the output runtime", async () => {
+    await sharedProgram.parseAsync(["gateway", "auth-token", "--show"], { from: "user" });
+
+    expect(mocks.gatewayAuthTokenCommand).toHaveBeenCalledWith(defaultRuntime);
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
   });
 
   it.each([

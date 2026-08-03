@@ -59,6 +59,42 @@ export function resolveGatewayWindowsTaskName(profile?: string): string {
   return `OpenClaw Gateway (${normalized})`;
 }
 
+type GatewayNativeServiceIdentityConflict = {
+  envKey: "OPENCLAW_LAUNCHD_LABEL" | "OPENCLAW_SYSTEMD_UNIT" | "OPENCLAW_WINDOWS_TASK_NAME";
+  expected: string;
+};
+
+export function resolveGatewayNativeServiceIdentityConflict(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform = process.platform,
+): GatewayNativeServiceIdentityConflict | null {
+  const profile = normalizeGatewayProfile(env.OPENCLAW_PROFILE);
+  if (!profile) {
+    return null;
+  }
+
+  if (platform === "darwin") {
+    const envKey = "OPENCLAW_LAUNCHD_LABEL";
+    const actual = env[envKey]?.trim();
+    const expected = resolveGatewayLaunchAgentLabel(profile);
+    return actual && actual !== expected ? { envKey, expected } : null;
+  }
+  if (platform === "linux") {
+    const envKey = "OPENCLAW_SYSTEMD_UNIT";
+    const actual = env[envKey]?.trim();
+    const normalizedActual = actual?.endsWith(".service") ? actual : actual && `${actual}.service`;
+    const expected = `${resolveGatewaySystemdServiceName(profile)}.service`;
+    return normalizedActual && normalizedActual !== expected ? { envKey, expected } : null;
+  }
+  if (platform === "win32") {
+    const envKey = "OPENCLAW_WINDOWS_TASK_NAME";
+    const actual = env[envKey]?.trim();
+    const expected = resolveGatewayWindowsTaskName(profile);
+    return actual && actual !== expected ? { envKey, expected } : null;
+  }
+  return null;
+}
+
 function formatGatewayServiceDescription(params?: { profile?: string; version?: string }): string {
   const profile = normalizeGatewayProfile(params?.profile);
   const version = params?.version?.trim();

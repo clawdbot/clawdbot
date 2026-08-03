@@ -1,13 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { acquireLockSyncWithRetry } from "../agents/sessions/storage-lock.js";
+import { acquireFileLockSyncWithRetry } from "../infra/file-lock-sync.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  recordLegacyMigrationRun,
+  recordLegacyMigrationSource,
+} from "../infra/state-migrations.receipts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -112,47 +116,29 @@ function recordAuthProfileMigrationImported(
           `auth profile migration source already owned by ${existing.status} receipt`,
         );
       }
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .insertInto("migration_runs")
-          .values({
-            id: receipt.runId,
-            started_at: now,
-            finished_at: null,
-            status: "imported",
-            report_json: reportJson(receipt),
-          })
-          .onConflict((conflict) => conflict.column("id").doNothing()),
-      );
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .insertInto("migration_sources")
-          .values({
-            source_key: receipt.sourceKey,
-            migration_kind: MIGRATION_KIND,
-            source_path: receipt.sourcePath,
-            target_table: receipt.targetTable,
-            source_sha256: receipt.sourceSha256,
-            source_size_bytes: receipt.sourceSizeBytes,
-            source_record_count: receipt.sourceRecordCount,
-            last_run_id: receipt.runId,
-            status: "imported",
-            imported_at: now,
-            removed_source: 0,
-            report_json: reportJson(receipt),
-          })
-          .onConflict((conflict) =>
-            conflict.column("source_key").doUpdateSet({
-              last_run_id: receipt.runId,
-              status: "imported",
-              imported_at: now,
-              removed_source: 0,
-              report_json: reportJson(receipt),
-            }),
-          ),
-      );
+      const report = reportJson(receipt);
+      recordLegacyMigrationRun(db, {
+        runId: receipt.runId,
+        startedAt: now,
+        finishedAt: null,
+        status: "imported",
+        reportJson: report,
+        upsert: true,
+      });
+      recordLegacyMigrationSource(db, {
+        sourceKey: receipt.sourceKey,
+        migrationKind: MIGRATION_KIND,
+        sourcePath: receipt.sourcePath,
+        targetTable: receipt.targetTable,
+        sourceSha256: receipt.sourceSha256,
+        sourceSizeBytes: receipt.sourceSizeBytes,
+        sourceRecordCount: receipt.sourceRecordCount,
+        runId: receipt.runId,
+        status: "imported",
+        importedAt: now,
+        reportJson: report,
+        upsert: true,
+      });
     },
     { env: receipt.env },
   );
@@ -253,7 +239,7 @@ export function acquireAuthProfileMigrationSourceLocks(sourcePaths: readonly str
     for (const sourcePath of [
       ...new Set(sourcePaths.map((entry) => path.resolve(entry))),
     ].toSorted()) {
-      releases.push(acquireLockSyncWithRetry(sourcePath));
+      releases.push(acquireFileLockSyncWithRetry(sourcePath));
     }
   } catch (error) {
     for (const release of releases.toReversed()) {
@@ -315,7 +301,9 @@ export function finalizeAuthProfileMigrationSource(
   options: { sourceLocked?: boolean } = {},
 ): void {
   receipt.completionStatus = status;
-  const release = options.sourceLocked ? undefined : acquireLockSyncWithRetry(receipt.sourcePath);
+  const release = options.sourceLocked
+    ? undefined
+    : acquireFileLockSyncWithRetry(receipt.sourcePath);
   try {
     recordAuthProfileMigrationImported(receipt);
     verifyAuthProfileMigrationTarget(receipt);
@@ -385,7 +373,7 @@ export function resumePendingAuthProfileMigrationArchives(env?: NodeJS.ProcessEn
       throw new Error("pending auth profile migration has neither source nor archive");
     }
     const lockTarget = fs.existsSync(receipt.sourcePath) ? receipt.sourcePath : receipt.archivePath;
-    const release = acquireLockSyncWithRetry(lockTarget);
+    const release = acquireFileLockSyncWithRetry(lockTarget);
     try {
       const sourceExists = fs.existsSync(receipt.sourcePath);
       if (sourceExists) {

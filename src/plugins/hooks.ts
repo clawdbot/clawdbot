@@ -671,9 +671,23 @@ export function createHookRunner(
     hook: PluginHookRegistration<K>,
     event: SyncHookEvent<K>,
     ctx: SyncHookContext<K>,
-  ): SyncHookResult<K> | PromiseLike<unknown> => {
+  ): SyncHookResult<K> | undefined => {
     const handler = hook.handler as SyncHookHandler<K>;
-    return handler(event, ctx) as SyncHookResult<K> | PromiseLike<unknown>;
+    const out = handler(event, ctx) as SyncHookResult<K> | PromiseLike<unknown>;
+    if (!isPromiseLike(out)) {
+      return out;
+    }
+
+    // Sync-only hooks ignore async results; observe rejections so the global fatal handler cannot crash.
+    void Promise.resolve(out).catch(() => undefined);
+    const msg =
+      `[hooks] ${hook.hookName} handler from ${hook.pluginId} returned a Promise; ` +
+      `this hook is synchronous and the result was ignored.`;
+    if (shouldCatchHookErrors(hook.hookName)) {
+      logger?.warn?.(msg);
+      return undefined;
+    }
+    throw new Error(msg);
   };
 
   /**
@@ -1430,19 +1444,6 @@ export function createHookRunner(
     for (const hook of hooks) {
       try {
         const out = runSyncHookHandler(hook, { ...event, message: current }, ctx);
-
-        // Guard against accidental async handlers (this hook is sync-only).
-        if (isPromiseLike(out)) {
-          const msg =
-            `[hooks] tool_result_persist handler from ${hook.pluginId} returned a Promise; ` +
-            `this hook is synchronous and the result was ignored.`;
-          if (shouldCatchHookErrors("tool_result_persist")) {
-            logger?.warn?.(msg);
-            continue;
-          }
-          throw new Error(msg);
-        }
-
         const next = (out as PluginHookToolResultPersistResult | undefined)?.message;
         if (next) {
           current = next;
@@ -1490,19 +1491,6 @@ export function createHookRunner(
     for (const hook of hooks) {
       try {
         const out = runSyncHookHandler(hook, { ...event, message: current }, ctx);
-
-        // Guard against accidental async handlers (this hook is sync-only).
-        if (isPromiseLike(out)) {
-          const msg =
-            `[hooks] before_message_write handler from ${hook.pluginId} returned a Promise; ` +
-            `this hook is synchronous and the result was ignored.`;
-          if (shouldCatchHookErrors("before_message_write")) {
-            logger?.warn?.(msg);
-            continue;
-          }
-          throw new Error(msg);
-        }
-
         const result = out as PluginHookBeforeMessageWriteResult | undefined;
 
         // If any handler blocks, return immediately.

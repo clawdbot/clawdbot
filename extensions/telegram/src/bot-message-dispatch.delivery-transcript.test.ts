@@ -25,11 +25,8 @@ import type {
   TelegramBotDeps,
   TelegramMessageContext,
 } from "./bot-message-dispatch.test-harness.js";
-import {
-  buildTelegramConversationContext,
-  createTelegramMessageCache,
-  resolveTelegramMessageCacheScope,
-} from "./message-cache.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
+import { buildTelegramConversationContext, createTelegramMessageCache } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {

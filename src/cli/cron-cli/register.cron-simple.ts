@@ -162,6 +162,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .command("get")
       .description("Get an automation as JSON")
       .argument("<id>", "Job id")
+      .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.get", opts, { id: String(id) });
@@ -202,6 +203,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .command("runs")
       .description("Show automation run history")
       .requiredOption("--id <id>", "Job id")
+      .option("--json", "Output JSON", false)
       .option("--run-id <runId>", "Filter by cron run id")
       .option("--limit <n>", "Max entries (default 50)", "50")
       .action(async (opts) => {
@@ -211,6 +213,9 @@ export function registerCronSimpleCommands(cron: Command) {
             throw new Error("Invalid --limit (must be a positive integer).");
           }
           const id = String(opts.id);
+          if (typeof opts.runId === "string" && !opts.runId.trim()) {
+            throw new Error("--run-id must not be blank");
+          }
           const res = await callGatewayFromCli("cron.runs", opts, {
             id,
             ...(typeof opts.runId === "string" && opts.runId.trim() ? { runId: opts.runId } : {}),

@@ -6,10 +6,13 @@
  * to keep the two modes cleanly isolated.
  */
 
-import nodePath from "node:path";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import { detectMime, parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import {
+  detectMime,
+  extractOriginalFilename,
+  parseMediaContentLength,
+} from "openclaw/plugin-sdk/media-runtime";
 import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
@@ -426,6 +429,7 @@ export async function streamContainerEvents(params: {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   onEvent: (event: ContainerWebSocketMessage) => unknown;
+  onStreamOpen?: () => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
   const normalized = normalizeBaseUrl(params.baseUrl);
@@ -477,6 +481,7 @@ export async function streamContainerEvents(params: {
 
     ws.on("open", () => {
       log("[signal-ws] connected");
+      params.onStreamOpen?.();
     });
 
     ws.on("message", (data: Buffer) => {
@@ -554,7 +559,8 @@ async function filesToBase64DataUris(
     });
     remainingBytes -= buffer.byteLength;
     const mime = (await detectMime({ buffer, filePath })) ?? "application/octet-stream";
-    const filename = nodePath.basename(filePath);
+    // Signal splits on semicolons; commas and fragments break RFC 2397 attachment data.
+    const filename = extractOriginalFilename(filePath).replace(/[,;#]/g, "_");
     const b64 = buffer.toString("base64");
     results.push(`data:${mime};filename=${filename};base64,${b64}`);
   }

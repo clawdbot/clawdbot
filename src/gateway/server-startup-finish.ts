@@ -30,8 +30,7 @@ import {
 type GatewayCoreRuntime = Awaited<ReturnType<typeof startGatewayCoreRuntime>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
-const POST_READY_MAINTENANCE_DELAY_MS = 250;
-const RETAINED_PLUGIN_CLEANUP_DELAY_MS = 30_000;
+const [POST_READY_MAINTENANCE_DELAY_MS, RETAINED_PLUGIN_CLEANUP_DELAY_MS] = [250, 30_000];
 
 export async function finishGatewayStartup(params: {
   coreRuntime: GatewayCoreRuntime;
@@ -48,6 +47,7 @@ export async function finishGatewayStartup(params: {
   loadGatewayStartupPostAttachModule: () => Promise<
     typeof import("./server-startup-post-attach.js")
   >;
+  waitForPostReadyWork: () => Promise<void>;
 }) {
   const {
     coreRuntime: runtime,
@@ -82,6 +82,7 @@ export async function finishGatewayStartup(params: {
     startupTrace,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
+    readPreparedGatewayModelCatalog,
     refreshGatewayHealthSnapshotWithRuntime,
     getRuntimeSnapshot,
     broadcast,
@@ -145,8 +146,6 @@ export async function finishGatewayStartup(params: {
     attachedGatewayExtraHandlers,
     startListening,
     loadStartupPluginsModule,
-    runtimePluginsLoaded,
-    deferredConfiguredChannelPluginIds,
     gatewayPluginConfigAtStart,
     startupActivationSourceConfig,
     defaultWorkspaceDir,
@@ -166,6 +165,7 @@ export async function finishGatewayStartup(params: {
     tailscaleMode,
     tailscaleConfig,
     controlUiBasePath,
+    controlUiRootLifecycle,
     sidecarStartup,
     workerLiveEvents,
     earlyRuntime,
@@ -173,7 +173,6 @@ export async function finishGatewayStartup(params: {
     resolvedAuth,
     preauthConnectionBudget,
     releaseStartupAccountStarts,
-    loadGatewayPluginBootstrapModule,
     cronReconciliation,
     postReadyState,
     cronStartState,
@@ -214,6 +213,7 @@ export async function finishGatewayStartup(params: {
       listSessionPendingApprovals: approvalSessionEvents.replay,
       loadGatewayModelCatalog,
       loadGatewayModelCatalogSnapshot,
+      readPreparedGatewayModelCatalog,
       getHealthCache,
       refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
       logHealth,
@@ -288,6 +288,14 @@ export async function finishGatewayStartup(params: {
       broadcastVoiceWakeRoutingChanged,
     });
   });
+  const sessionChangeSidecar = {
+    stop: async () => {
+      const { flushPendingSessionsChangedEvents } =
+        await import("./server-methods/session-change-event.js");
+      flushPendingSessionsChangedEvents(gatewayRequestContext);
+    },
+  };
+  runtimeState.gatewayLifetimeSidecars.push(sessionChangeSidecar);
   pluginGatewayContext.current = gatewayRequestContext;
   const { createGatewayInstanceRuntime } = await import("./server-instance-runtime.js");
   const gatewayInstanceRuntimeLocal = createGatewayInstanceRuntime({
@@ -311,29 +319,6 @@ export async function finishGatewayStartup(params: {
       : () => {},
   );
 
-  if (!minimalTestGateway) {
-    if (runtimePluginsLoaded && deferredConfiguredChannelPluginIds.length > 0) {
-      const { reloadDeferredGatewayPlugins } = await loadGatewayPluginBootstrapModule();
-      const loaded = await startupTrace.measure("gateway.deferred-plugins", () =>
-        reloadDeferredGatewayPlugins({
-          cfg: gatewayPluginConfigAtStart,
-          activationSourceConfig: startupActivationSourceConfig,
-          workspaceDir: defaultWorkspaceDir,
-          log,
-          coreGatewayMethodNames,
-          hostServices: pluginHostServices,
-          baseMethods,
-          pluginIds: startupPluginIds,
-          pluginLookUpTable,
-          logDiagnostics: false,
-          ambientEnvTriggers,
-        }),
-      );
-      replaceAttachedPluginRuntime(loaded);
-      await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
-    }
-  }
-
   const [{ attachGatewayWsHandlers }, { listPluginNodeCapabilities }] = await startupTrace.measure(
     "gateway.ws-imports",
     () =>
@@ -342,7 +327,6 @@ export async function finishGatewayStartup(params: {
         import("./server/plugins-http/route-capability.js"),
       ]),
   );
-  const pluginSurfaceScheme = gatewayTls.enabled ? "https" : "http";
   await startupTrace.measure("gateway.ws-attach", () =>
     attachGatewayWsHandlers({
       wss,
@@ -350,7 +334,7 @@ export async function finishGatewayStartup(params: {
       preauthConnectionBudget,
       port,
       gatewayHost: bindHost ?? undefined,
-      pluginSurfaceScheme,
+      pluginSurfaceScheme: gatewayTls.enabled ? "https" : "http",
       getPluginNodeCapabilities: () =>
         withCoreCanvasNodeCapability(
           listPluginNodeCapabilities(pluginRuntime.registry),
@@ -426,6 +410,7 @@ export async function finishGatewayStartup(params: {
         startGatewayPostAttachRuntime({
           minimalTestGateway,
           cfgAtStart,
+          getConfig: getRuntimeConfig,
           bindHost,
           bindHosts: httpBindHosts,
           port,
@@ -440,6 +425,7 @@ export async function finishGatewayStartup(params: {
           serviceName: tailscaleConfig.serviceName,
           preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
           controlUiBasePath,
+          controlUiRootLifecycle,
           logTailscale,
           gatewayPluginConfigAtStart,
           activationSourceConfig: startupActivationSourceConfig,
@@ -453,24 +439,22 @@ export async function finishGatewayStartup(params: {
           logHooks,
           logChannels,
           unavailableGatewayMethods,
-          loadStartupPlugins: runtimePluginsLoaded
-            ? undefined
-            : async () => {
-                const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
-                return loadGatewayStartupPluginRuntime({
-                  cfg: gatewayPluginConfigAtStart,
-                  activationSourceConfig: startupActivationSourceConfig,
-                  workspaceDir: defaultWorkspaceDir,
-                  log,
-                  baseMethods,
-                  coreGatewayMethodNames,
-                  hostServices: pluginHostServices,
-                  startupPluginIds,
-                  pluginLookUpTable,
-                  startupTrace,
-                  ambientEnvTriggers,
-                });
-              },
+          loadStartupPlugins: async () => {
+            const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
+            return loadGatewayStartupPluginRuntime({
+              cfg: gatewayPluginConfigAtStart,
+              activationSourceConfig: startupActivationSourceConfig,
+              workspaceDir: defaultWorkspaceDir,
+              log,
+              baseMethods,
+              coreGatewayMethodNames,
+              hostServices: pluginHostServices,
+              startupPluginIds,
+              pluginLookUpTable,
+              startupTrace,
+              ambientEnvTriggers,
+            });
+          },
           onStartupPluginsLoading: () => {
             startupState.pendingReason = "startup-sidecars";
           },
@@ -498,9 +482,10 @@ export async function finishGatewayStartup(params: {
             }
           },
           onGatewayLifetimeSidecars: (gatewayLifetimeSidecars) => {
-            runtimeState.gatewayLifetimeSidecars = gatewayLifetimeSidecars;
+            const lifetimeSidecars = [sessionChangeSidecar, ...gatewayLifetimeSidecars];
+            runtimeState.gatewayLifetimeSidecars = lifetimeSidecars;
             stopPostReadySidecarsAfterCloseStarted({
-              postReadySidecars: gatewayLifetimeSidecars,
+              postReadySidecars: lifetimeSidecars,
               closeStarted: lifecycle.closePreludeStarted,
             });
             if (lifecycle.closePreludeStarted) {
@@ -530,6 +515,7 @@ export async function finishGatewayStartup(params: {
           isClosing: () => lifecycle.closePreludeStarted,
           startupTrace,
           sidecarStartup,
+          waitForPostReadyWork: params.waitForPostReadyWork,
           providerAuthPrewarm: {
             getConfig: getRuntimeConfig,
           },

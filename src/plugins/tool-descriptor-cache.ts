@@ -1,6 +1,7 @@
 /** Caches plugin tool descriptors by plugin source, contract names, and runtime context. */
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { JsonObject, ToolDescriptor } from "../tools/types.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
@@ -186,10 +187,10 @@ export function writeCachedPluginToolDescriptors(params: {
     !pluginToolDescriptorCacheState.descriptors.has(params.cacheKey) &&
     pluginToolDescriptorCacheState.descriptors.size >= PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT
   ) {
-    const oldestKey = pluginToolDescriptorCacheState.descriptors.keys().next().value;
-    if (oldestKey !== undefined) {
-      pluginToolDescriptorCacheState.descriptors.delete(oldestKey);
-    }
+    pruneMapToMaxSize(
+      pluginToolDescriptorCacheState.descriptors,
+      PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT - 1,
+    );
   }
   pluginToolDescriptorCacheState.descriptors.set(params.cacheKey, [...params.descriptors]);
 }

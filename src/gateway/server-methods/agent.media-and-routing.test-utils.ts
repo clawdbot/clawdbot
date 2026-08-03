@@ -8,8 +8,12 @@ import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
-import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  resetGatewayWorkAdmission,
+  waitForActiveGatewayRootWork,
+} from "../../process/gateway-work-admission.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -421,6 +425,13 @@ describe("gateway agent handler", () => {
 
   it("forwards trusted delegated policy handoffs only from internal client metadata", async () => {
     primeMainAgentRun();
+    const handoffId = registerSubagentCompletionToolHandoff({
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceSessionId: "child-session-id",
+      targetSessionKey: "agent:main:main",
+      targetSessionId: "existing-session-id",
+      idempotencyKey: "delegated-policy-handoff",
+    });
 
     await invokeAgent(
       {
@@ -432,18 +443,63 @@ describe("gateway agent handler", () => {
           sourceSessionKey: "agent:main:subagent:child",
           sourceTool: "subagent_announce",
         },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:main:subagent:child",
+            childSessionId: "child-session-id",
+            announceType: "subagent task",
+            taskLabel: "work",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child completed",
+            replyInstruction: "Continue from this result.",
+          },
+        ],
       },
       {
         client: {
           internal: {
-            delegatedToolPolicyHandoff: true,
+            delegatedToolPolicyHandoffId: handoffId,
           },
         } as never,
       },
     );
 
-    const call = await waitForAgentCommandCall<{ trustedInternalHandoff?: boolean }>();
-    expect(call.trustedInternalHandoff).toBe(true);
+    const call = await waitForAgentCommandCall<{
+      onActiveModelSelected?: (selection: { provider: string; model: string }) => Promise<void>;
+      trustedInternalHandoff?: {
+        kind: string;
+        sourceSessionKey: string;
+        sourceSessionId?: string;
+        targetSessionKey: string;
+        targetSessionId: string;
+        provider: string;
+        model: string;
+      };
+    }>();
+    const trustedInternalHandoff = expectDefined(
+      call.trustedInternalHandoff,
+      "trusted completion handoff test invariant",
+    );
+    await expectDefined(
+      call.onActiveModelSelected,
+      "model-selection callback test invariant",
+    )({
+      provider: "anthropic",
+      model: "sonnet-4.6",
+    });
+    expect(call.trustedInternalHandoff).toBe(trustedInternalHandoff);
+    expect(call.trustedInternalHandoff).toMatchObject({
+      kind: "subagent-completion",
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceSessionId: "child-session-id",
+      targetSessionKey: "agent:main:main",
+      targetSessionId: "existing-session-id",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+    });
   });
 
   it("does not claim stale pre-existing sessions for plugin runtime cleanup", async () => {
@@ -1075,9 +1131,12 @@ describe("gateway agent handler", () => {
       task: "initial task",
       cleanup: "keep" as const,
       createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" as const },
+      execution: {
+        status: "terminal" as const,
+        startedAt: 2,
+        endedAt: 3,
+        outcome: { status: "ok" as const },
+      },
     };
 
     mocks.loadSessionEntry.mockReturnValue({
@@ -1919,6 +1978,7 @@ describe("gateway agent handler", () => {
         phase: "ready",
         basePersisted: true,
       });
+      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-recovered",
@@ -2007,6 +2067,7 @@ describe("gateway agent handler", () => {
       expect(context.logGateway.warn).toHaveBeenCalledWith(
         "cron continuation release recovery exhausted for cron-media-release-exhausts",
       );
+      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-exhausted",

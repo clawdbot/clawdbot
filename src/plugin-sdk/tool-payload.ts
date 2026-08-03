@@ -26,6 +26,12 @@ export type PlainTextToolCallParseOptions = {
   maxPayloadBytes?: number;
 };
 
+export type PlainTextToolCallProtectedRange = { end: number; start: number };
+export type PlainTextToolCallStripOptions = {
+  /** Resolves literal source ranges that must not be interpreted as tool calls. */
+  resolveProtectedRanges?: (text: string) => readonly PlainTextToolCallProtectedRange[];
+};
+
 /** Parses a message made only of standalone plain-text tool call blocks. */
 export function parseStandalonePlainTextToolCallBlocks(
   text: string,
@@ -35,8 +41,11 @@ export function parseStandalonePlainTextToolCallBlocks(
 }
 
 /** Removes full-line standalone plain-text tool call blocks from visible text. */
-export function stripPlainTextToolCallBlocks(text: string): string {
-  return stripRepairToolCallBlocks(text);
+export function stripPlainTextToolCallBlocks(
+  text: string,
+  options?: PlainTextToolCallStripOptions,
+): string {
+  return stripRepairToolCallBlocks(text, options);
 }
 
 type ToolPayloadTextBlock = {

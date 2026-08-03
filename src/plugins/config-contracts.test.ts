@@ -76,7 +76,6 @@ function createPluginRecord(
     hooks: [],
     source: `/tmp/${overrides.id}/openclaw.plugin.json`,
     setupSource: undefined,
-    startupDeferConfiguredChannelFullLoadUntilAfterListen: undefined,
     channelCatalogMeta: undefined,
     ...overrides,
   };

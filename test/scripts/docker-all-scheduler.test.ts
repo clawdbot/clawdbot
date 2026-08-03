@@ -168,6 +168,7 @@ describe("scripts/test-docker-all scheduler", () => {
     const scriptsDir = path.join(root, "scripts");
     const libDir = path.join(scriptsDir, "lib");
     mkdirSync(libDir, { recursive: true });
+    copyFileSync("package.json", path.join(root, "package.json"));
     copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
     for (const fileName of ["docker-e2e-plan.mjs", "docker-e2e-scenarios.mjs", "sleep.mjs"]) {
       copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));

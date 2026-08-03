@@ -716,8 +716,11 @@ vi.mock("./doctor/shared/plugin-tool-allowlist-warnings.js", () => ({
   collectPluginToolAllowlistWarnings: vi.fn(() => []),
 }));
 
+vi.mock("../doctor-plugin-host-links.js", () => ({
+  maybeRepairPluginOpenClawHostLinks: vi.fn(async () => undefined),
+}));
+
 vi.mock("../doctor-plugin-registry.js", () => ({
-  maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(async () => undefined),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(() => undefined),
 }));
 
@@ -1627,9 +1630,29 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
+    expect(result.explicitSetPaths).toEqual([["agents", "entries"]]);
     expect(result.cfg.agents?.entries).toEqual({
       main: { default: true, workspace: "/tmp/migrated-main" },
     });
+    expect(terminalNoteMock).toHaveBeenCalledWith(
+      "Prepared agents.entries with exactly one explicit default agent for persistence.",
+      "Doctor changes",
+    );
+    expect(terminalNoteMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("Persisted agents.entries"),
+      expect.anything(),
+    );
+  });
+
+  it("drops roster write intent when a preview repair is declined", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { entries: { main: { default: true } } } },
+      parsedConfig: {},
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(false);
+    expect(result.explicitSetPaths).toBeUndefined();
   });
 
   it("removes a legacy list when Doctor persists keyed roster entries", async () => {
@@ -1777,6 +1800,7 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(false);
+    expect(result.explicitSetPaths).toBeUndefined();
     expect(result.cfg.agents?.entries).toEqual({ ops: { default: true } });
   });
 
@@ -1930,6 +1954,28 @@ describe("doctor config flow", () => {
       params: { refresh: true },
       timeoutMs: 3000,
     });
+  });
+
+  it("keeps the Codex session auth migration plan outside persisted config", async () => {
+    const openAICodexAuthProfileIdMap = new Map([
+      ["openai-codex:default", "openai:chatgpt-default"],
+    ]);
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: [],
+      warningNotes: [],
+      authProfilesRepaired: false,
+      openAICodexAuthProfileIdMap,
+    }));
+
+    const result = await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.openAICodexAuthProfileIdMap).toBe(openAICodexAuthProfileIdMap);
+    expect(result.cfg).not.toHaveProperty("openAICodexAuthProfileIdMap");
   });
 
   it("does not refresh gateway before writing a config-only auth repair", async () => {

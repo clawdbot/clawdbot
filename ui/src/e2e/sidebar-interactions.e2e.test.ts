@@ -9,6 +9,87 @@ import {
 const suite = createSidebarCustomizationSuite("Control UI sidebar interactions mocked Gateway E2E");
 
 suite.define(() => {
+  async function openCapabilitiesPrompt(reducedMotion: "no-preference" | "reduce") {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      reducedMotion,
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+    await page.goto(`${suite.server.baseUrl}chat`);
+
+    const sidebar = page.locator("openclaw-app-sidebar");
+    await sidebar.locator(".sidebar-agent-card__main").click();
+    await sidebar
+      .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
+      .click();
+
+    const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+    await expect.poll(() => textarea.inputValue()).toBe("What can you do?");
+    await expect
+      .poll(() => textarea.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+    const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
+    await expect
+      .poll(() => input.getAttribute("class"))
+      .toContain("agent-chat__input--prefill-attention");
+    return { context, input, page };
+  }
+
+  it("focuses and highlights the composer from the agent capabilities action", async () => {
+    const { context, input, page } = await openCapabilitiesPrompt("no-preference");
+
+    try {
+      await expect
+        .poll(() => input.evaluate((element) => getComputedStyle(element).animationName))
+        .toBe("chat-composer-prefill-attention");
+      const highlightedBackground = await input.evaluate(
+        (element) => getComputedStyle(element).backgroundColor,
+      );
+      await captureSidebarUiProof(page, "capabilities-composer-focus.png");
+      await expect
+        .poll(() => input.getAttribute("class"))
+        .not.toContain("agent-chat__input--prefill-attention");
+      expect(await input.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
+        highlightedBackground,
+      );
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps a static composer cue when reduced motion is requested", async () => {
+    const { context, input, page } = await openCapabilitiesPrompt("reduce");
+
+    try {
+      await expect
+        .poll(() =>
+          input.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return { animationName: style.animationName, boxShadow: style.boxShadow };
+          }),
+        )
+        .toEqual(expect.objectContaining({ animationName: "none" }));
+      await expect
+        .poll(() => input.evaluate((element) => getComputedStyle(element).boxShadow))
+        .not.toBe("none");
+      const highlightedBackground = await input.evaluate(
+        (element) => getComputedStyle(element).backgroundColor,
+      );
+      await captureSidebarUiProof(page, "capabilities-composer-reduced-motion.png");
+      await expect
+        .poll(() => input.getAttribute("class"))
+        .not.toContain("agent-chat__input--prefill-attention");
+      expect(await input.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
+        highlightedBackground,
+      );
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("restores focus to the Pages edit button after closing the pin editor with Escape", async () => {
     const { context, page } = await openSidebarCustomizationPage(suite);
 

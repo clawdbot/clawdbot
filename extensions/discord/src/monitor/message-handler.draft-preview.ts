@@ -1,6 +1,8 @@
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import {
   type AgentPlanStep,
+  buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   resolveChannelStreamingBlockEnabled,
@@ -121,6 +123,10 @@ export function createDiscordDraftPreviewController(params: {
     commentaryLinePrefix: "💬 ",
     reasoningGate: previewToolProgressEnabled,
     commentaryItalics: false,
+    buildProgressEventLine: (input, options) =>
+      input.event === "tool" || input.event === "item"
+        ? buildChannelProgressDraftLineForEntry(params.discordConfig, input, options)
+        : buildChannelProgressDraftLine(input, options),
     update: async (previewText, options) => {
       lastPartialText = previewText;
       draftText = previewText;
@@ -162,6 +168,25 @@ export function createDiscordDraftPreviewController(params: {
     if (discordStreamMode === "progress") {
       await progressDraft.pushPreambleHeadline(text, options);
     }
+  };
+
+  const beginNewProgressTurn = (options?: { force?: boolean }) => {
+    const beganNewTurn = progressDraft.beginNewTurn(options);
+    if (beganNewTurn) {
+      progressDraftCollapsed = false;
+      progressDraftStartedBeforeFinal = false;
+      finalReplyDelivered = false;
+      finalizedViaPreviewMessage = false;
+      progressNarratorLifecycle?.beginTurn();
+    }
+    if (discordStreamMode === "progress") {
+      if (beganNewTurn) {
+        draftStream?.forceNewMessage("discard");
+      }
+    } else {
+      forceNewMessageIfNeeded();
+    }
+    return beganNewTurn;
   };
 
   return {
@@ -233,6 +258,11 @@ export function createDiscordDraftPreviewController(params: {
       return true;
     },
     disableBlockStreamingForDraft: draftStream ? true : undefined,
+    pushToolEvent: progressDraft.pushToolEvent,
+    pushItemEvent: progressDraft.pushItemEvent,
+    pushApprovalEvent: progressDraft.pushApprovalEvent,
+    pushCommandOutputEvent: progressDraft.pushCommandOutputEvent,
+    pushPatchEvent: progressDraft.pushPatchEvent,
     async pushToolProgress(
       line?: string | ChannelProgressDraftLine,
       options?: { toolName?: string },
@@ -359,22 +389,10 @@ export function createDiscordDraftPreviewController(params: {
     },
     handleAssistantMessageBoundary() {
       // Queued/followup turns need a fresh progress draft after the primary final.
-      const beganNewTurn = progressDraft.beginNewTurn();
-      if (beganNewTurn) {
-        progressDraftCollapsed = false;
-        progressDraftStartedBeforeFinal = false;
-        finalReplyDelivered = false;
-        finalizedViaPreviewMessage = false;
-        progressNarratorLifecycle?.beginTurn();
-      }
-      if (discordStreamMode === "progress") {
-        if (beganNewTurn) {
-          draftStream?.forceNewMessage("discard");
-        }
-        return beganNewTurn;
-      }
-      forceNewMessageIfNeeded();
-      return beganNewTurn;
+      return beginNewProgressTurn();
+    },
+    handleQueuedFollowupAdmitted() {
+      return beginNewProgressTurn({ force: true });
     },
     async flush() {
       if (!draftStream) {

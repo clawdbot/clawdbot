@@ -1,36 +1,24 @@
 // Control UI helpers derive native constraints and safe initial values from config schemas.
-import { schemaType, type JsonSchema } from "./config-form.shared.ts";
 import {
-  configValuesEqual,
-  decimalRational,
-  isSupportedConfigValueValid,
-  ownPropertySchema,
-} from "./config-form.validation.ts";
+  isJsonSchemaValueValid,
+  jsonSchemaValuesEqual,
+} from "@openclaw/normalization-core/json-schema";
+import { decimalRational } from "./config-form.numeric.ts";
+import { schemaType, type JsonSchema } from "./config-form.shared.ts";
 
-export { configValuesEqual, isSupportedConfigValueValid } from "./config-form.validation.ts";
+export const configValuesEqual = jsonSchemaValuesEqual;
+
+export function isSupportedConfigValueValid(schema: JsonSchema, value: unknown): boolean {
+  return isJsonSchemaValueValid(schema, value);
+}
+
+function ownPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
+  const properties = schema.properties;
+  return properties && Object.hasOwn(properties, key) ? properties[key] : undefined;
+}
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-const CONFIG_FORM_DECIMAL_NUMBER_RE = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/u;
-
-export function coerceConfigFormNumberString(
-  value: string,
-  integer: boolean,
-): number | undefined | string {
-  const trimmed = value.trim();
-  if (trimmed === "") {
-    return undefined;
-  }
-  if (!CONFIG_FORM_DECIMAL_NUMBER_RE.test(trimmed)) {
-    return value;
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || (integer && !Number.isInteger(parsed))) {
-    return value;
-  }
-  return parsed;
 }
 
 function decimalPlaces(value: number): number {

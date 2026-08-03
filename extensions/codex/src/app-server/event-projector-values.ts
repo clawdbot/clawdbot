@@ -82,20 +82,18 @@ export function splitPlanText(text: string): string[] {
 
 export function extractRawAssistantText(item: JsonObject): string | undefined {
   const content = Array.isArray(item.content) ? item.content : [];
-  const text = content
-    .flatMap((entry) => {
-      if (!isJsonObject(entry)) {
-        return [];
-      }
-      const type = readString(entry, "type");
-      if (type !== "output_text" && type !== "text") {
-        return [];
-      }
-      const value = readString(entry, "text");
-      return value ? [value] : [];
-    })
-    .join("");
-  return text.trim() || undefined;
+  const parts = content.flatMap((entry) => {
+    if (!isJsonObject(entry)) {
+      return [];
+    }
+    const type = readString(entry, "type");
+    if (type !== "output_text" && type !== "text") {
+      return [];
+    }
+    const value = readString(entry, "text");
+    return value === undefined ? [] : [value];
+  });
+  return parts.length > 0 ? parts.join("").trim() : undefined;
 }
 
 export function readItemString(item: CodexThreadItem, key: string): string | undefined {

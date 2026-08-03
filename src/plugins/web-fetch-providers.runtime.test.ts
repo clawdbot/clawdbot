@@ -104,9 +104,10 @@ function createRuntimeWebFetchProvider() {
 
 describe("resolvePluginWebFetchProviders", () => {
   beforeAll(async () => {
-    vi.doMock("./plugin-registry.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
+    vi.doMock("./plugin-registry-snapshot.js", async () => {
+      const actual = await vi.importActual<typeof import("./plugin-registry-snapshot.js")>(
+        "./plugin-registry-snapshot.js",
+      );
       return {
         ...actual,
         loadPluginRegistrySnapshotWithMetadata: () => ({

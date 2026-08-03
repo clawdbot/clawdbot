@@ -591,9 +591,41 @@ async function runProviderManualSecretMethod(params: {
       throw new Error(methodError || `Provider setup exited with code ${code}.`);
     },
   };
+  const existingPrimary = resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
+  const existingProvider = existingPrimary ? parseRef(existingPrimary).provider : undefined;
+  let providerSetupConfig = params.config;
+  if (
+    existingProvider &&
+    normalizeProviderId(existingProvider) !== normalizeProviderId(params.choice.providerId)
+  ) {
+    const agents = params.config.agents;
+    const defaults = agents?.defaults;
+    const model = defaults?.model;
+    if (defaults && model !== undefined) {
+      const { model: _model, ...defaultsWithoutModel } = defaults;
+      let modelWithoutPrimary: Exclude<typeof model, string> | undefined;
+      if (typeof model === "object" && model !== null) {
+        const { primary: _primary, ...remainingModelConfig } = model;
+        modelWithoutPrimary = remainingModelConfig;
+      }
+      // App-guided setup needs this provider's verified candidate, not an
+      // unrelated current default. The original config remains the merge base.
+      providerSetupConfig = {
+        ...params.config,
+        agents: {
+          ...agents,
+          defaults:
+            modelWithoutPrimary && Object.keys(modelWithoutPrimary).length > 0
+              ? { ...defaultsWithoutModel, model: modelWithoutPrimary }
+              : defaultsWithoutModel,
+        },
+      };
+    }
+  }
+
   const configured = await runNonInteractive({
     authChoice: params.choice.choiceId,
-    config: params.config,
+    config: providerSetupConfig,
     baseConfig: params.baseConfig,
     opts: { [optionKey]: params.apiKey, secretInputMode: "plaintext" },
     runtime: isolatedRuntime,

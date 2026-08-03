@@ -119,8 +119,9 @@ actor MacNodeRuntime {
     private let computerControlEnabled: @Sendable () -> Bool
     private let canvasHostedSurfaceResolver: MacNodeCanvasHostedSurfaceResolver
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
-    private let codexThreadListRequest: @Sendable (String?) async throws -> String
-    private let codexThreadTurnsRequest: @Sendable (String?) async throws -> String
+    private let codexThreadCatalogClient: MacNodeCodexThreadCatalogClient
+    private let codexThreadListRequest: (@Sendable (String?) async throws -> String)?
+    private let codexThreadTurnsRequest: (@Sendable (String?) async throws -> String)?
     private let claudeSessionCatalogEnabled: @Sendable () -> Bool
     private let claudeSessionListRequest: @Sendable (String?) async throws -> String
     private let claudeSessionReadRequest: @Sendable (String?) async throws -> String
@@ -148,12 +149,9 @@ actor MacNodeRuntime {
         codexThreadCatalogEnabled: @escaping @Sendable () -> Bool = {
             MacNodeCodexThreadCatalog.shouldAdvertise()
         },
-        codexThreadListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
-            try await MacNodeCodexThreadCatalog.list(paramsJSON: paramsJSON)
-        },
-        codexThreadTurnsRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
-            try await MacNodeCodexThreadCatalog.turns(paramsJSON: paramsJSON)
-        },
+        codexThreadCatalogClient: MacNodeCodexThreadCatalogClient = MacNodeCodexThreadCatalogClient(),
+        codexThreadListRequest: (@Sendable (String?) async throws -> String)? = nil,
+        codexThreadTurnsRequest: (@Sendable (String?) async throws -> String)? = nil,
         claudeSessionCatalogEnabled: @escaping @Sendable () -> Bool = {
             MacNodeClaudeSessionCatalog.shouldAdvertise()
         },
@@ -171,6 +169,7 @@ actor MacNodeRuntime {
             currentSurfaceURL: canvasSurfaceUrl,
             refreshSurfaceURL: refreshCanvasSurfaceUrl)
         self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
+        self.codexThreadCatalogClient = codexThreadCatalogClient
         self.codexThreadListRequest = codexThreadListRequest
         self.codexThreadTurnsRequest = codexThreadTurnsRequest
         self.claudeSessionCatalogEnabled = claudeSessionCatalogEnabled
@@ -259,10 +258,19 @@ actor MacNodeRuntime {
                 code: .unavailable,
                 message: "UNAVAILABLE: Codex session catalog is disabled")
         }
-        let request = req.command == MacNodeCodexThreadCatalogContract.listCommand
-            ? self.codexThreadListRequest
-            : self.codexThreadTurnsRequest
-        let payload = try await request(req.paramsJSON)
+        let payload: String = if req.command == MacNodeCodexThreadCatalogContract.listCommand {
+            if let request = self.codexThreadListRequest {
+                try await request(req.paramsJSON)
+            } else {
+                try await self.codexThreadCatalogClient.list(paramsJSON: req.paramsJSON)
+            }
+        } else {
+            if let request = self.codexThreadTurnsRequest {
+                try await request(req.paramsJSON)
+            } else {
+                try await self.codexThreadCatalogClient.turns(paramsJSON: req.paramsJSON)
+            }
+        }
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 

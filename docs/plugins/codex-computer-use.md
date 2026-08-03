@@ -119,7 +119,9 @@ also tries to register the bundled Codex marketplace from
 as a fallback for legacy standalone installs. If setup still cannot make the
 MCP server available, the turn fails before the thread starts.
 Strict readiness failures are harness preflight failures, so model fallback
-does not repeat the same local readiness sequence for every model candidate.
+does not repeat the same local readiness sequence for every Codex candidate.
+A candidate resolved to another harness remains eligible and enters that
+runtime through its normal policy checks.
 
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.

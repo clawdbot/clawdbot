@@ -273,6 +273,7 @@ vi.mock("ws", () => ({
       setTimeout(() => {
         if (wsMockState.behavior === "open") {
           this.emit("open");
+          this.emit("close", 1000, Buffer.from("done"));
         } else if (wsMockState.behavior === "error") {
           this.emit("error", new Error("WebSocket failed"));
         } else if (wsMockState.behavior === "unexpected-response") {
@@ -912,6 +913,78 @@ describe("containerSendMessage", () => {
     await fs.rm(tmpDir, { recursive: true });
   });
 
+  it.each([
+    {
+      stagedFilename: "report---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "report.jpg",
+    },
+    {
+      stagedFilename: "quarter;final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "quarter_final.jpg",
+    },
+    {
+      stagedFilename: "first;middle;last---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "first_middle_last.jpg",
+    },
+    {
+      stagedFilename: "quarter,final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "quarter_final.jpg",
+    },
+    {
+      stagedFilename: "first,middle,last---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "first_middle_last.jpg",
+    },
+    {
+      stagedFilename: "hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "hash_name.jpg",
+    },
+    {
+      stagedFilename: "mixed;comma,hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "mixed_comma_hash_name.jpg",
+    },
+    { stagedFilename: "quarter;final.jpg", expectedFilename: "quarter_final.jpg" },
+    { stagedFilename: "quarter,final.jpg", expectedFilename: "quarter_final.jpg" },
+    { stagedFilename: "hash#name.jpg", expectedFilename: "hash_name.jpg" },
+    {
+      stagedFilename: "quarter final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "quarter final.jpg",
+    },
+  ])(
+    "restores the provider-safe original attachment filename $expectedFilename",
+    async ({ stagedFilename, expectedFilename }) => {
+      const fs = await import("node:fs/promises");
+      const os = await import("node:os");
+      const path = await import("node:path");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+      try {
+        const stagedFile = path.join(tmpDir, stagedFilename);
+        const content = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+        await fs.writeFile(stagedFile, content);
+
+        mockFetch.mockResolvedValue({
+          ok: true,
+          status: 200,
+          ...bodyStream(JSON.stringify({})),
+        });
+
+        await containerSendMessage({
+          baseUrl: "http://localhost:8080",
+          account: "+14259798283",
+          recipients: ["+15550001111"],
+          message: "Photo",
+          attachments: [stagedFile],
+        });
+
+        expect(parseFetchBody().base64_attachments).toEqual([
+          `data:image/jpeg;filename=${expectedFilename};base64,${content.toString("base64")}`,
+        ]);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("rejects outbound attachments that exceed the size cap", async () => {
     const fs = await import("node:fs/promises");
     const os = await import("node:os");
@@ -1515,14 +1588,18 @@ describe("streamContainerEvents", () => {
 
   it("redacts the account and bounds the opening handshake wait", async () => {
     const log = vi.fn();
+    const onStreamOpen = vi.fn();
+    wsMockState.behavior = "open";
 
     await streamContainerEvents({
       baseUrl: "http://localhost:8080",
       account: "+14259798283",
       onEvent: vi.fn(),
+      onStreamOpen,
       logger: { log },
     });
 
+    expect(onStreamOpen).toHaveBeenCalledOnce();
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );

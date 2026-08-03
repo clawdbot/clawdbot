@@ -40,6 +40,8 @@ describe("google generative ai helpers", () => {
     expect(normalizeGoogleGenerativeAiBaseUrl("https://xgenerativelanguage.googleapis.com")).toBe(
       "https://xgenerativelanguage.googleapis.com",
     );
+    expect(normalizeGoogleGenerativeAiBaseUrl("")).toBeUndefined();
+    expect(normalizeGoogleGenerativeAiBaseUrl("   ")).toBeUndefined();
     expect(normalizeGoogleGenerativeAiBaseUrl()).toBeUndefined();
   });
 
@@ -253,6 +255,21 @@ describe("google generative ai helpers", () => {
       "x-goog-api-key": "api-key-123",
     });
     expect(apiKeyHeaders["x-goog-api-client"]).toMatch(/^openclaw\//u);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("defaults a %s shared request base URL", (_label, baseUrl) => {
+    const config = resolveGoogleGenerativeAiHttpRequestConfig({
+      apiKey: "api-key-123",
+      baseUrl,
+      capability: "video",
+      transport: "media-understanding",
+    });
+
+    expect(config.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(new Headers(config.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
   });
 
   it("preserves explicit OpenAI-compatible Google endpoints during provider normalization", () => {

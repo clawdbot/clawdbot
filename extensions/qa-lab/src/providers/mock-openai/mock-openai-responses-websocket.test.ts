@@ -157,6 +157,37 @@ describe("QA mock OpenAI Responses WebSocket", () => {
     });
   });
 
+  it("preserves empty tool-result identity without replaying a native patch", async () => {
+    const server = await startServer();
+    const socket = await connectResponsesWebSocket(server.baseUrl);
+    const prompt =
+      "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.";
+    const initial = readCompletedResponse(
+      await collectResponseEvents(socket, {
+        type: "response.create",
+        tools: [{ type: "custom", name: "apply_patch" }],
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    );
+    const call = (initial.output as Array<Record<string, unknown>>)[0];
+    expect(call).toMatchObject({ type: "custom_tool_call", name: "apply_patch" });
+
+    const completed = readCompletedResponse(
+      await collectResponseEvents(socket, {
+        type: "response.create",
+        previous_response_id: initial.id,
+        input: [{ type: "custom_tool_call_output", call_id: call?.call_id, output: "" }],
+      }),
+    );
+
+    expect(completed.output).toEqual([expect.objectContaining({ type: "message" })]);
+    const debug = (await fetch(`${server.baseUrl}/debug/last-request`).then((response) =>
+      response.json(),
+    )) as Record<string, unknown>;
+    expect(debug).toMatchObject({ toolOutput: "", toolOutputCallId: call?.call_id });
+    expect(debug).not.toHaveProperty("plannedToolName");
+  });
+
   it("rejects a response ID after a newer response replaces the connection cache", async () => {
     const server = await startServer();
     const socket = await connectResponsesWebSocket(server.baseUrl);

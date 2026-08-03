@@ -76,6 +76,27 @@ and export only when `diagnostics.otel.logs` is explicitly `true`. Log export
 defaults to OTLP; set `diagnostics.otel.logsExporter` to `stdout` for JSONL on
 stdout, or `both` for both.
 
+## Which processes export
+
+- **Gateway** starts the exporter at startup and exports from the Gateway
+  process for every run it executes, including `openclaw agent` turns
+  dispatched to it.
+- **One-shot local runs** (`openclaw agent --local`) execute in the CLI
+  process. When OTel export is configured and
+  the plugin is enabled, that same CLI process starts one exporter instance for
+  the run and flushes buffered spans, metrics, and logs before the process exits.
+  The CLI waits at most 5 seconds for the diagnostic-event queue to drain and 10
+  more for the flush, so an unreachable collector cannot hold the command open.
+  A collector that accepts the connection but never answers can still delay exit
+  until the exporter's own request timeout (`OTEL_EXPORTER_OTLP_TIMEOUT`).
+  In JSON output mode, these one-shot runs suppress only the stdout JSONL log
+  sink so command stdout stays reserved for the JSON response; OTLP traces,
+  metrics, and logs continue when configured.
+- `openclaw agent exec` also runs the agent embedded in the CLI process, but
+  does not yet start this exporter, so its runs export no telemetry. Dispatch
+  through the Gateway, or use `openclaw agent --local`, when you need traces
+  from a headless run.
+
 ## Configuration reference
 
 ```json5
@@ -90,6 +111,7 @@ stdout, or `both` for both.
       logsEndpoint: "http://otel-collector:4318/v1/logs",
       protocol: "http/protobuf", // grpc disables OTLP export
       serviceName: "openclaw-gateway", // unset falls back to OTEL_SERVICE_NAME, then "openclaw"
+      metricNamePrefix: "acme.", // optional; include the separator
       headers: { "x-collector-token": "..." },
       traces: true,
       metrics: true,
@@ -102,6 +124,18 @@ stdout, or `both` for both.
   },
 }
 ```
+
+`metricNamePrefix` replaces the default `openclaw.` prefix only on
+OpenClaw-owned metrics. For example, `"acme."` exports `openclaw.tokens` as
+`acme.tokens`; set it to `""` to export `tokens` with no prefix. Non-empty
+values must start with an ASCII letter, use only letters, digits, underscores,
+dots, hyphens, and slashes, and contain at most 128 characters. Set it to
+`"acme.openclaw."` if you want `acme.openclaw.tokens`. Standard
+semantic-convention metrics such as
+`gen_ai.client.token.usage` and `gen_ai.client.operation.duration` keep their
+original names. Leave the option unset to preserve every current metric name.
+Enabling or changing this option renames the affected metric series, so update
+dashboards, alerts, and recording rules that query the old names.
 
 ### Environment variables
 
@@ -473,19 +507,93 @@ content classes you opted into.
 
 ## Diagnostic event catalog
 
-The events below back the metrics and spans above or are available for direct
-plugin subscription. `run.progress` and `run.execution_phase` are direct-only
-lifecycle signals; the diagnostics-otel plugin does not export them as
-standalone OTLP signals. Event kinds and `run.execution_phase.phase` values are
-additive. TypeScript consumers should keep default branches instead of assuming
-either union is permanently exhaustive.
+The events below back the metrics and spans above. Public events are also
+available for direct plugin subscription; trusted core events such as
+`model.usage` are restricted to authorized internal consumers.
+`run.progress` and `run.execution_phase` are direct-only lifecycle signals;
+the diagnostics-otel plugin does not export them as standalone OTLP signals.
+Event kinds and `run.execution_phase.phase` values are additive. TypeScript
+consumers should keep default branches instead of assuming either union is
+permanently exhaustive.
 
 **Model usage**
 
-- `model.usage` - tokens, cost, duration, context, provider/model/channel,
-  session ids. `usage` is provider/turn accounting for cost and telemetry;
-  `context.used` is the current prompt/context snapshot and can be lower than
-  provider `usage.total` when cached input or tool-loop calls are involved.
+`model.usage` is a trusted, in-process diagnostic event, not a JSONL log
+record. A representative event has this shape:
+
+```json
+{
+  "type": "model.usage",
+  "ts": 1735689600000,
+  "seq": 42,
+  "provider": "openai",
+  "model": "gpt-5.4",
+  "channel": "webchat",
+  "agentId": "main",
+  "sessionId": "session-123",
+  "sessionKey": "agent:main:main",
+  "usage": {
+    "input": 120,
+    "output": 40,
+    "cacheRead": 30,
+    "cacheWrite": 10,
+    "promptTokens": 160,
+    "total": 200
+  },
+  "lastCallUsage": {
+    "input": 120,
+    "output": 40,
+    "cacheRead": 30,
+    "cacheWrite": 10,
+    "total": 200
+  },
+  "context": { "limit": 128000, "used": 160 },
+  "costUsd": 0.0012,
+  "durationMs": 850,
+  "trace": {
+    "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "spanId": "00f067aa0ba902b7",
+    "traceFlags": "01"
+  }
+}
+```
+
+- `ts` is a Unix timestamp in milliseconds; `seq` is process-local.
+- `usage` holds turn-level token counts. `promptTokens` includes `input`,
+  `cacheRead`, and `cacheWrite`; `lastCallUsage`, when available, describes the
+  final model call.
+- `context.used` is the current prompt/context snapshot and can be lower than
+  `usage.total` when cached input or tool-loop calls are involved.
+- Provider/model/session identifiers, token buckets, `lastCallUsage`,
+  `context`, `costUsd`, `durationMs`, and `trace` fields are optional.
+  `costUsd` is an estimate and can be absent when model pricing is unavailable;
+  it is not provider-reported billing. Trace context can also include
+  `parentSpanId`.
+
+The Gateway's `/tmp/openclaw/openclaw-YYYY-MM-DD.log` JSONL file and
+`diagnostics.otel.logsExporter: "stdout"` contain ordinary log records, not raw
+`model.usage` events. Public diagnostic subscriptions and
+`diagnostics.stability` do not expose trusted core usage events. The
+diagnostics-otel plugin converts them to metrics such as `openclaw.tokens` and
+`openclaw.cost.usd` and to `openclaw.model.usage` spans; those usage metrics
+and spans intentionally omit session identifiers.
+
+For an external integration that needs session-correlated usage, query the
+authenticated Gateway instead:
+
+```bash
+openclaw gateway call sessions.usage --params '{"range":"30d","agentScope":"all"}' --json
+openclaw gateway usage-cost --days 30 --all-agents --json
+```
+
+Both commands require `operator.read`. `sessions.usage` can include per-session
+`sessionId`, provider/model details, and token/cost summaries; per-session usage
+can be temporarily `null` while its cache refreshes. `usage-cost` provides
+aggregate estimates. Omit `agentScope` or `--all-agents` to scope the report
+to the default agent. For continuously updated clients,
+[subscribe to session changes instead of polling usage reports](/gateway/clients#subscribe-instead-of-polling-usage).
+See the [Gateway RPC method reference](/gateway/protocol#rpc-method-families)
+for usage methods and request options.
 
 **Message flow**
 

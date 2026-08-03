@@ -15,6 +15,10 @@ import {
   jsonResult,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import {
+  addTimerTimeoutGraceMs,
+  clampPositiveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
@@ -34,6 +38,8 @@ type CanvasImageSanitizationLimits = {
 };
 
 export const CANVAS_JSONL_MAX_BYTES = 16 * 1024 * 1024;
+const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
+const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
 
 function readGatewayCallOptions(params: Record<string, unknown>) {
   return {
@@ -113,13 +119,25 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
 
       const invoke = async (command: string, invokeParams?: Record<string, unknown>) => {
         const nodeId = await resolveNodeId(gatewayOpts, nodeQuery, true);
-        return await callGatewayTool("node.invoke", gatewayOpts, {
-          nodeId,
-          command,
-          params: invokeParams,
-          idempotencyKey: randomUUID(),
-          ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
-        });
+        const timeoutMs =
+          clampPositiveTimerTimeoutMs(
+            gatewayOpts.timeoutMs ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+          ) ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS;
+        // Preserve the node lookup budget while letting Gateway outlive node execution.
+        const transportTimeoutMs =
+          addTimerTimeoutGraceMs(timeoutMs, CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS) ?? timeoutMs;
+        return await callGatewayTool(
+          "node.invoke",
+          { ...gatewayOpts, timeoutMs: transportTimeoutMs },
+          {
+            nodeId,
+            command,
+            params: invokeParams,
+            timeoutMs,
+            idempotencyKey: randomUUID(),
+            ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
+          },
+        );
       };
 
       switch (action) {

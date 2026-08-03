@@ -18,6 +18,8 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createVault } = createMemoryWikiTestHarness();
 
 const appConfig = {
+  // This suite registers memory-core directly; runtime discovery would load unrelated plugins.
+  plugins: { enabled: false },
   agents: { list: [{ id: "main", default: true }, { id: "secondary" }] },
 } as OpenClawConfig;
 

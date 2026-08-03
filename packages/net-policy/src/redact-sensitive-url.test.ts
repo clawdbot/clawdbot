@@ -22,6 +22,16 @@ describe("redactSensitiveUrl", () => {
     );
   });
 
+  it("redacts signed and x-* auth aliases without matching adjacent metadata", () => {
+    expect(
+      redactSensitiveUrl(
+        "https://example.com/mcp?sig=one&X-Api-Key=two&x_access_token=three&x-auth-token=four&signal=keep&x-api-version=1",
+      ),
+    ).toBe(
+      "https://example.com/mcp?sig=***&X-Api-Key=***&x_access_token=***&x-auth-token=***&signal=keep&x-api-version=1",
+    );
+  });
+
   it("redacts encoded and invisible-spliced sensitive query param names", () => {
     expect(
       redactSensitiveUrl("https://example.com/mcp?client%5Fse%E2%80%8Bcret=secret&safe=value"),
@@ -199,6 +209,16 @@ describe("redactSensitiveUrlLikeString", () => {
     );
   });
 
+  it("redacts signed and x-* auth aliases in invalid URL-like strings", () => {
+    expect(
+      redactSensitiveUrlLikeString(
+        "//example.com/mcp?sig=one&x-api-key=two&x-access-token=three&x-auth-token=four&safe=value",
+      ),
+    ).toBe(
+      "//example.com/mcp?sig=***&x-api-key=***&x-access-token=***&x-auth-token=***&safe=value",
+    );
+  });
+
   it("redacts encoded and invisible-spliced query names in invalid URL-like strings", () => {
     expect(
       redactSensitiveUrlLikeString("//example.com/mcp?client%5Fse%E2%80%8Bcret=secret&safe=value"),
@@ -263,6 +283,14 @@ describe("isSensitiveUrlQueryParamName", () => {
     expect(isSensitiveUrlQueryParamName("client_se+cret")).toBe(true);
     expect(isSensitiveUrlQueryParamName("client_se\u3164cret")).toBe(true);
     expect(isSensitiveUrlQueryParamName("credential")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("sig")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("X-Api-Key")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("x-access-token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("x-auth-token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("signal")).toBe(false);
+    expect(isSensitiveUrlQueryParamName("sigmoid")).toBe(false);
+    expect(isSensitiveUrlQueryParamName("x-api-version")).toBe(false);
+    expect(isSensitiveUrlQueryParamName("x-request-id")).toBe(false);
     expect(isSensitiveUrlQueryParamName("safe")).toBe(false);
   });
 });

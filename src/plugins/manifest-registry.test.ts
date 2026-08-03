@@ -675,6 +675,49 @@ describe("loadPluginManifestRegistry", () => {
     ).toHaveLength(2);
   });
 
+  it("preserves the identity of every independently malformed plugin manifest", () => {
+    const candidates = ["first-invalid", "second-invalid"].map((pluginId) => {
+      const rootDir = makeTempDir();
+      fs.writeFileSync(path.join(rootDir, "openclaw.plugin.json"), '{"id":', "utf-8");
+      return createPluginCandidate({ idHint: pluginId, rootDir, origin: "global" });
+    });
+
+    const registry = loadRegistry(candidates);
+
+    expect(registry.diagnostics).toEqual([
+      expect.objectContaining({ level: "error", pluginId: "first-invalid" }),
+      expect.objectContaining({ level: "error", pluginId: "second-invalid" }),
+    ]);
+  });
+
+  it("keeps configured same-name default-entry manifest failures distinct by full root", () => {
+    const root = makeTempDir();
+    const candidates = ["first", "second"].map((parent) => {
+      const rootDir = path.join(root, parent, "plugin");
+      mkdirSafe(rootDir);
+      fs.writeFileSync(path.join(rootDir, "openclaw.plugin.json"), '{"id":', "utf-8");
+      writeTextFile(rootDir, "index.js", "export default {};");
+      return createPluginCandidate({
+        idHint: "index",
+        rootDir,
+        sourceName: "index.js",
+        origin: "config",
+      });
+    });
+
+    const registry = loadRegistry(candidates);
+
+    expect(registry.diagnostics).toEqual(
+      candidates.map((candidate) =>
+        expect.objectContaining({
+          level: "error",
+          pluginId: "index",
+          source: path.join(candidate.rootDir, "openclaw.plugin.json"),
+        }),
+      ),
+    );
+  });
+
   it("lets config-loaded plugins replace bundled duplicates", () => {
     const bundledDir = makeTempDir();
     const configDir = makeTempDir();
@@ -1258,6 +1301,7 @@ describe("loadPluginManifestRegistry", () => {
           assistantPriority: 10,
           assistantVisibility: "visible",
           appGuidedSecret: true,
+          appGuidedActionLabel: "Connect account",
           appGuidedDiscovery: true,
         },
       ],
@@ -1326,6 +1370,7 @@ describe("loadPluginManifestRegistry", () => {
         assistantPriority: 10,
         assistantVisibility: "visible",
         appGuidedSecret: true,
+        appGuidedActionLabel: "Connect account",
         appGuidedDiscovery: true,
       },
     ]);
@@ -1764,6 +1809,38 @@ describe("loadPluginManifestRegistry", () => {
       },
     );
     expectRecordFields(wecomConfig.schema, "wecom schema", { type: "object" });
+    expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
+  });
+
+  it("hydrates Slack channel config metadata for lagging npm manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "slack",
+      channels: ["slack"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "slack",
+        rootDir: dir,
+        origin: "global",
+        packageName: "@openclaw/slack",
+      }),
+    ]);
+
+    const slackConfig = expectRecordFields(
+      registry.plugins[0]?.channelConfigs?.slack,
+      "slack config",
+      {
+        label: "Slack",
+        description: "Slack channel, DM, command, and app event integration.",
+      },
+    );
+    expectRecordFields(slackConfig.schema, "slack schema", {
+      type: "object",
+      additionalProperties: true,
+    });
     expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
   });
 

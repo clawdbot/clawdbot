@@ -11,6 +11,24 @@ const HISTORY_RELOAD_OWNED = 1 << 1;
 const HISTORY_RELOAD_DISPLAYED = 1 << 2;
 const HISTORY_RELOAD_GAP_RECOVERY = 1 << 3;
 
+/** A small FIFO membership tracker for run IDs that need no lifecycle metadata. */
+export function createTuiRunIdTracker() {
+  const runIds = new Set<string>();
+  return {
+    note: (runId: string) => {
+      if (runId) {
+        runIds.add(runId);
+      }
+      if (runIds.size > MAX_TRACKED_RUNS) {
+        runIds.delete(runIds.values().next().value as string);
+      }
+    },
+    forget: (runId: string) => void runIds.delete(runId),
+    has: (runId: string) => runIds.has(runId),
+    clear: () => runIds.clear(),
+  };
+}
+
 type HistoryOwnedRun = {
   runId: string;
   result: TuiHistoryLoadResult;

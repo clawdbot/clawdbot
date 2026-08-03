@@ -19,7 +19,8 @@ import {
   setupDraftStreams,
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
-import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
+import { createTelegramMessageCache } from "./message-cache.js";
 import {
   recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual,
   registerTelegramOutboundGroupHistoryRecorder,

@@ -12,11 +12,11 @@ import {
   browserProxyUploadUnavailableMessage,
 } from "../browser-node-commands.js";
 import { isBrowserControlHostUnavailableError } from "../browser-node-fallback.js";
+import { resolveBrowserNodeTarget } from "../browser-node-routing.js";
 import {
   BROWSER_PROXY_ERROR_ENVELOPE,
   parseBrowserProxyFailure,
   type BrowserProxyEnvelope,
-  type BrowserProxyFile,
   type BrowserProxySuccess,
 } from "../browser-proxy-envelope.js";
 import {
@@ -35,7 +35,6 @@ import {
   isPersistentBrowserProfileMutation,
   persistBrowserProxyFiles,
   resolveNodeCommandAllowlist,
-  resolveNodeIdFromList,
   resolveRequestedBrowserProfile,
   respondUnavailableOnNodeInvokeError,
   safeParseJson,
@@ -43,7 +42,6 @@ import {
   withTimeout,
   type GatewayRequestHandlers,
   type NodeSession,
-  type OpenClawConfig,
 } from "../core-api.js";
 
 const logger = createSubsystemLogger("browser");
@@ -55,62 +53,6 @@ type BrowserRequestParams = {
   body?: unknown;
   timeoutMs?: number;
 };
-
-function isBrowserNode(node: NodeSession) {
-  const caps = Array.isArray(node.caps) ? node.caps : [];
-  const commands = Array.isArray(node.commands) ? node.commands : [];
-  return caps.includes("browser") || commands.includes(BROWSER_PROXY_COMMAND);
-}
-
-function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {
-  const q = normalizeOptionalString(query) ?? "";
-  if (!q) {
-    return null;
-  }
-  const nodeId = resolveNodeIdFromList(nodes, q, false, { allowCompactDisplayName: true });
-  return nodes.find((node) => node.nodeId === nodeId) ?? null;
-}
-
-function resolveBrowserNodeTarget(params: {
-  cfg: OpenClawConfig;
-  nodes: NodeSession[];
-}): NodeSession | null {
-  const policy = params.cfg.gateway?.nodes?.browser;
-  const mode = policy?.mode ?? "auto";
-  if (mode === "off") {
-    return null;
-  }
-  const browserNodes = params.nodes.filter((node) => isBrowserNode(node));
-  if (browserNodes.length === 0) {
-    if (normalizeOptionalString(policy?.node)) {
-      throw new Error("No connected browser-capable nodes.");
-    }
-    return null;
-  }
-  const requested = normalizeOptionalString(policy?.node) ?? "";
-  if (requested) {
-    const resolved = resolveBrowserNode(browserNodes, requested);
-    if (!resolved) {
-      throw new Error(`Configured browser node not connected: ${requested}`);
-    }
-    return resolved;
-  }
-  if (mode === "manual") {
-    return null;
-  }
-  if (browserNodes.length === 1) {
-    return browserNodes[0] ?? null;
-  }
-  return null;
-}
-
-async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
-  return await persistBrowserProxyFiles(files);
-}
-
-function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
-  applyBrowserProxyPaths(result, mapping);
-}
 
 /** Handles one browser.request gateway call and streams a success/error response. */
 export async function handleBrowserGatewayRequest({
@@ -151,8 +93,8 @@ export async function handleBrowserGatewayRequest({
   if (!forceHostLocal) {
     try {
       nodeTarget = resolveBrowserNodeTarget({
-        cfg,
         nodes: context.nodeRegistry.listConnected(),
+        policy: cfg.gateway?.nodes?.browser,
       });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
@@ -271,8 +213,8 @@ export async function handleBrowserGatewayRequest({
         return;
       }
       const success = proxy as BrowserProxySuccess;
-      const mapping = await persistProxyFiles(success.files);
-      applyProxyPaths(success.result, mapping);
+      const mapping = await persistBrowserProxyFiles(success.files);
+      applyBrowserProxyPaths(success.result, mapping);
       respond(true, success.result);
       return;
     }

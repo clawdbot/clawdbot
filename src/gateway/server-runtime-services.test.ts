@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 
@@ -17,6 +18,8 @@ function waitForFast<T>(
 
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
+type DrainPendingDeliveries =
+  typeof import("../infra/outbound/delivery-queue.js").drainPendingDeliveries;
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -40,11 +43,17 @@ const hoisted = vi.hoisted(() => {
     ),
     schedulePendingSessionDeliveries: vi.fn(async () => undefined),
     startSessionUpstreamMonitor: vi.fn(() => ({ stop: stopSessionUpstreamMonitor })),
-    recoverPendingDeliveries: vi.fn(async () => undefined),
+    recoverPendingDeliveries: vi.fn(async () => ({
+      recovered: 0,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    })),
+    drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
+    settleQueuedSessionDelivery: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
-    removeCronRunContinuationSessionIfIdle: vi.fn(async () => undefined),
   };
 });
 
@@ -71,6 +80,7 @@ vi.mock("../infra/outbound/deliver.js", () => ({
 
 vi.mock("../infra/outbound/delivery-queue.js", () => ({
   recoverPendingDeliveries: hoisted.recoverPendingDeliveries,
+  drainPendingDeliveries: hoisted.drainPendingDeliveries,
 }));
 
 vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
@@ -78,13 +88,10 @@ vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
   schedulePendingSessionDeliveries: hoisted.schedulePendingSessionDeliveries,
 }));
 
-vi.mock("../tasks/cron-run-continuation-cleanup.js", () => ({
-  removeCronRunContinuationSessionIfIdle: hoisted.removeCronRunContinuationSessionIfIdle,
-}));
-
 vi.mock("./server-restart-sentinel.js", () => ({
   deliverQueuedSessionDelivery: hoisted.deliverQueuedSessionDelivery,
   recoverPendingRestartContinuationDeliveries: hoisted.recoverPendingRestartContinuationDeliveries,
+  settleQueuedSessionDelivery: hoisted.settleQueuedSessionDelivery,
 }));
 
 vi.mock("./channel-health-monitor.js", () => ({
@@ -119,10 +126,12 @@ describe("server-runtime-services", () => {
     hoisted.startSessionDeliveryRuntime.mockClear();
     hoisted.schedulePendingSessionDeliveries.mockClear();
     hoisted.recoverPendingDeliveries.mockClear();
+    hoisted.drainPendingDeliveries.mockReset();
+    hoisted.drainPendingDeliveries.mockResolvedValue(undefined);
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
     hoisted.deliverQueuedSessionDelivery.mockClear();
+    hoisted.settleQueuedSessionDelivery.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
-    hoisted.removeCronRunContinuationSessionIfIdle.mockClear();
   });
 
   afterEach(() => {
@@ -348,15 +357,24 @@ describe("server-runtime-services", () => {
       log: sessionDeliveryLog,
     });
     const runtimeParams = hoisted.startSessionDeliveryRuntime.mock.calls[0]?.[0] as
-      | { onSettled?: (entry: { id: string; sessionKey: string }) => Promise<void> }
+      | {
+          onSettled?: (
+            entry: { id: string; sessionKey: string },
+            outcome: "recovered",
+          ) => Promise<void>;
+        }
       | undefined;
-    await runtimeParams?.onSettled?.({
-      id: "settled-delivery-1",
-      sessionKey: "agent:main:cron:job:run:run-1",
-    });
-    expect(hoisted.removeCronRunContinuationSessionIfIdle).toHaveBeenCalledWith(
-      "agent:main:cron:job:run:run-1",
-      "settled-delivery-1",
+    expect(runtimeParams?.onSettled).toBe(hoisted.settleQueuedSessionDelivery);
+    await runtimeParams?.onSettled?.(
+      {
+        id: "settled-delivery-1",
+        sessionKey: "agent:main:cron:job:run:run-1",
+      },
+      "recovered",
+    );
+    expect(hoisted.settleQueuedSessionDelivery).toHaveBeenCalledWith(
+      { id: "settled-delivery-1", sessionKey: "agent:main:cron:job:run:run-1" },
+      "recovered",
     );
     expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledTimes(1);
   });
@@ -402,6 +420,139 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "startup recovery deferred an existing delivery for backoff",
+      deferredBackoff: 1,
+    },
+    {
+      name: "a new delivery failed after an empty startup scan",
+      deferredBackoff: 0,
+    },
+  ])("retries outbound deliveries when $name", async ({ deferredBackoff }) => {
+    vi.useFakeTimers();
+    hoisted.recoverPendingDeliveries.mockResolvedValueOnce({
+      recovered: 0,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff,
+    });
+    const { services } = activateScheduledServicesForTest({ startCron: false });
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    const [drain] = hoisted.drainPendingDeliveries.mock.calls[0] ?? [];
+    expect(drain).toMatchObject({
+      drainKey: "gateway:outbound",
+      deliver: hoisted.deliverOutboundPayloads,
+    });
+    expect(drain?.selectEntry({ channel: "discord" } as never, Date.now())).toEqual({
+      match: true,
+      bypassBackoff: false,
+    });
+    services.heartbeatRunner.stop();
+  });
+
+  it("uses the current runtime config when retrying queued outbound deliveries", async () => {
+    vi.useFakeTimers();
+    const configModule = await import("../config/config.js");
+    const reloadedConfig = { channels: { discord: { enabled: false } } };
+    const runtimeConfig = vi
+      .spyOn(configModule, "getRuntimeConfig")
+      .mockReturnValue(reloadedConfig as never);
+    const { services } = activateScheduledServicesForTest({
+      startCron: false,
+      cfgAtStart: { channels: { discord: { enabled: true } } } as never,
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(hoisted.drainPendingDeliveries).toHaveBeenCalledWith(
+        expect.objectContaining({ cfg: reloadedConfig }),
+      );
+      expect(runtimeConfig).toHaveBeenCalledOnce();
+    } finally {
+      services.heartbeatRunner.stop();
+      runtimeConfig.mockRestore();
+    }
+  });
+
+  it("never overlaps outbound retry drains or admits work between timer firings", async () => {
+    vi.useFakeTimers();
+    let finishDrain: (() => void) | undefined;
+    hoisted.drainPendingDeliveries.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishDrain = resolve;
+        }),
+    );
+    const { services } = activateScheduledServicesForTest({ startCron: false });
+
+    await vi.advanceTimersByTimeAsync(1_250);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(3_750);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    if (!finishDrain) {
+      throw new Error("Expected the outbound retry drain to be pending");
+    }
+    finishDrain();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
+    services.heartbeatRunner.stop();
+  });
+
+  it("stops outbound delivery retry timers with the gateway lifecycle", async () => {
+    vi.useFakeTimers();
+    const { services } = activateScheduledServicesForTest({ startCron: false });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+
+    services.heartbeatRunner.stop();
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.heartbeatRunner.stop).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("skips outbound retry ticks while gateway work admission is suspended", async () => {
+    vi.useFakeTimers();
+    const { services } = activateScheduledServicesForTest({ startCron: false });
+    await vi.advanceTimersByTimeAsync(1_250);
+
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    if (!suspension?.commit()) {
+      throw new Error("Expected gateway suspension admission to be acquired");
+    }
+    await vi.advanceTimersByTimeAsync(13_750);
+
+    expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    suspension.release();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    services.heartbeatRunner.stop();
   });
 
   it("starts cron and records memory when post-ready maintenance fails", async () => {
@@ -498,6 +649,34 @@ describe("server-runtime-services", () => {
     expect(run).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await waitForFast(() => expect(run).toHaveBeenCalledOnce());
+  });
+
+  it("rechecks request work after joining the admitted root set", async () => {
+    vi.useFakeTimers();
+    const run = vi.fn(async () => undefined);
+    const isBusy = vi
+      .fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+
+    scheduleGatewayIdleTask({
+      delayMs: 25,
+      retryDelayMs: 50,
+      isClosing: () => false,
+      isBusy,
+      run,
+      log: createLog(),
+      errorMessage: "idle task failed",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(49);
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await waitForFast(() => expect(run).toHaveBeenCalledOnce());
+    expect(isBusy).toHaveBeenCalledTimes(4);
   });
 
   it("cancels a scheduled idle task before its delay elapses", async () => {

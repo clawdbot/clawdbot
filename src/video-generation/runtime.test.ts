@@ -47,6 +47,16 @@ function runGenerateVideo(params: GenerateVideoParams) {
   return generateVideo({ ...params, cfg }, runtimeDeps);
 }
 
+function createBufferedVideoProvider(id: string, buffers: Buffer[]): VideoGenerationProvider {
+  return {
+    id,
+    capabilities: {},
+    generateVideo: async () => ({
+      videos: buffers.map((buffer) => ({ buffer, mimeType: "video/mp4" })),
+    }),
+  };
+}
+
 function requireAttempt(
   result: Awaited<ReturnType<typeof runGenerateVideo>>,
   index: number,
@@ -272,6 +282,96 @@ describe("video-generation runtime", () => {
         error: "Your request was blocked by our moderation system.",
       },
     ]);
+  });
+
+  it("falls through when a video provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedVideoProvider("empty", [Buffer.from("partial"), Buffer.alloc(0)]),
+      createBufferedVideoProvider("valid", [Buffer.from("mp4-bytes")]),
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            mediaModels: {
+              video: { primary: "empty/vid-v1", fallbacks: ["valid/vid-v2"] },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+    });
+
+    expect(result.provider).toBe("valid");
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("mp4-bytes"));
+    expect(result.attempts).toEqual([
+      {
+        provider: "empty",
+        model: "vid-v1",
+        error: "Video generation provider returned an empty video buffer at index 1.",
+      },
+    ]);
+  });
+
+  it("fails visibly when every video provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedVideoProvider("empty-primary", [Buffer.alloc(0)]),
+      createBufferedVideoProvider("empty-fallback", [Buffer.alloc(0)]),
+    ];
+
+    await expect(
+      runGenerateVideo({
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                video: {
+                  primary: "empty-primary/vid-v1",
+                  fallbacks: ["empty-fallback/vid-v2"],
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "animate a cat",
+      }),
+    ).rejects.toThrow(
+      "All video generation models failed (2): empty-primary/vid-v1: Video generation provider returned an empty video buffer at index 0. | empty-fallback/vid-v2: Video generation provider returned an empty video buffer at index 0.",
+    );
+  });
+
+  it("uses a provider URL when the same video asset has an empty buffer", async () => {
+    providers = [
+      {
+        id: "url-provider",
+        capabilities: {},
+        generateVideo: async () => ({
+          videos: [
+            {
+              buffer: Buffer.alloc(0),
+              url: "https://example.com/generated.mp4",
+              mimeType: "video/mp4",
+            },
+          ],
+        }),
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: { mediaModels: { video: { primary: "url-provider/vid-v1" } } },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+    });
+
+    expect(result.attempts).toEqual([]);
+    expect(result.videos[0]).toEqual({
+      url: "https://example.com/generated.mp4",
+      mimeType: "video/mp4",
+    });
   });
 
   it("forwards providerOptions to providers that declare the matching schema", async () => {

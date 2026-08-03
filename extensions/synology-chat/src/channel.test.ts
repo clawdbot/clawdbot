@@ -146,6 +146,30 @@ describe("createSynologyChatPlugin", () => {
     });
   });
 
+  it("projects lifecycle through the computed status adapter", async () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          token: "test-token",
+          incomingUrl: "https://nas/incoming",
+        },
+      },
+    };
+    const account = synologyChatPlugin.config.resolveAccount(cfg, "default");
+
+    const snapshot = await synologyChatPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg,
+      runtime: { accountId: "default", lifecycle: "ready" },
+    });
+
+    expect(snapshot).toMatchObject({
+      accountId: "default",
+      configured: true,
+      lifecycle: "ready",
+    });
+  });
+
   describe("config", () => {
     it("listAccountIds includes default and named accounts when configured", () => {
       const plugin = synologyChatPlugin;
@@ -452,6 +476,13 @@ describe("createSynologyChatPlugin", () => {
   });
 
   describe("outbound", () => {
+    it("declares bounded Markdown chunking for gateway text delivery", () => {
+      const plugin = synologyChatPlugin;
+      expect(plugin.outbound.chunkerMode).toBe("markdown");
+      expect(plugin.outbound.textChunkLimit).toBe(2_000);
+      expect(plugin.outbound.chunker("x".repeat(2_001), 2_000)).toEqual(["x".repeat(2_000), "x"]);
+    });
+
     it("declares message adapter durable text and media with receipt proofs", async () => {
       const plugin = synologyChatPlugin;
       const cfg = {
@@ -632,6 +663,7 @@ describe("createSynologyChatPlugin", () => {
           accountId: "default",
           log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           abortSignal: abortController.signal,
+          setStatus: vi.fn(),
         },
       };
     }
@@ -666,6 +698,7 @@ describe("createSynologyChatPlugin", () => {
           accountId: "alerts",
           log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           abortSignal: abortController.signal,
+          setStatus: vi.fn(),
         },
       };
     }
@@ -698,7 +731,51 @@ describe("createSynologyChatPlugin", () => {
     }
 
     it("startAccount returns pending promise for disabled account", async () => {
-      await expectPendingStartAccount({ enabled: false });
+      const { ctx, abortController } = makeStartAccountCtx({ enabled: false });
+      const result = synologyChatPlugin.gateway.startAccount(ctx);
+      await Promise.resolve();
+      expect(ctx.setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        running: true,
+        lifecycle: "blocked",
+        terminalDisconnect: true,
+        lastError: "Synology Chat account failed startup validation",
+      });
+      await expectPendingStartAccountPromise(result, abortController);
+    });
+
+    it("publishes ready after route registration and stopped after abort cleanup", async () => {
+      const cleanup = vi.fn(async () => undefined);
+      registerSynologyWebhookRouteMock.mockResolvedValueOnce(cleanup);
+      const { ctx, abortController } = makeStartAccountCtx({
+        enabled: true,
+        token: "t",
+        incomingUrl: "https://nas/incoming",
+        dmPolicy: "allowlist",
+        allowedUserIds: ["123"],
+      });
+
+      const result = synologyChatPlugin.gateway.startAccount(ctx);
+      await vi.waitFor(() => expect(registerSynologyWebhookRouteMock).toHaveBeenCalledOnce());
+      expect(ctx.setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        running: true,
+        connected: true,
+        lifecycle: "ready",
+        lastConnectedAt: expect.any(Number),
+        lastError: null,
+        terminalDisconnect: undefined,
+      });
+
+      abortController.abort();
+      await result;
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(ctx.setStatus).toHaveBeenLastCalledWith({
+        accountId: "default",
+        running: false,
+        connected: false,
+        lifecycle: "stopped",
+      });
     });
 
     it("startAccount returns pending promise for account without token", async () => {

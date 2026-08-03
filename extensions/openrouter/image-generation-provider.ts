@@ -18,6 +18,7 @@ import {
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
@@ -265,6 +266,9 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
             "HTTP-Referer": "https://openclaw.ai",
             "X-OpenRouter-Title": "OpenClaw",
           },
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.openrouter?.request,
+          ),
           provider: "openrouter",
           capability: "image",
           transport: "http",

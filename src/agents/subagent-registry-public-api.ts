@@ -1,4 +1,3 @@
-import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import {
   ackLeasedAgentSteeringItemsFromSubagentRuns,
   leasePendingAgentSteeringItemsFromSubagentRuns,
@@ -6,6 +5,7 @@ import {
 } from "./agent-steering-queue.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
@@ -38,6 +38,9 @@ export function createSubagentRegistryPublicApi(config: {
     startAnnounceCleanup,
     settleRequesterTurn,
   } = config;
+  const readRuns = () => deps().getSubagentRunsSnapshotForRead(runs);
+  const findRunById = (records: Map<string, SubagentRunRecord>, runId: string) =>
+    records.get(runId) ?? [...records.values()].find((entry) => entry.swarmRunId === runId);
 
   function leasePendingAgentSteeringItems(params: {
     requesterSessionKey: string;
@@ -45,12 +48,7 @@ export function createSubagentRegistryPublicApi(config: {
     now?: number;
   }) {
     restoreOnce();
-    const leased = leasePendingAgentSteeringItemsFromSubagentRuns({
-      runs,
-      requesterSessionKey: params.requesterSessionKey,
-      leaseId: params.leaseId,
-      now: params.now,
-    });
+    const leased = leasePendingAgentSteeringItemsFromSubagentRuns({ ...params, runs });
     if (leased) {
       persist(...leased.runIds);
     }
@@ -62,12 +60,7 @@ export function createSubagentRegistryPublicApi(config: {
     leaseId: string;
     now?: number;
   }): number {
-    const updated = ackLeasedAgentSteeringItemsFromSubagentRuns({
-      runs,
-      runIds: params.runIds,
-      leaseId: params.leaseId,
-      now: params.now,
-    });
+    const updated = ackLeasedAgentSteeringItemsFromSubagentRuns({ ...params, runs });
     if (updated > 0) {
       persist(...params.runIds);
       for (const runId of params.runIds) {
@@ -87,12 +80,7 @@ export function createSubagentRegistryPublicApi(config: {
     leaseId: string;
     error?: string;
   }): number {
-    const updated = releaseLeasedAgentSteeringItemsFromSubagentRuns({
-      runs,
-      runIds: params.runIds,
-      leaseId: params.leaseId,
-      error: params.error,
-    });
+    const updated = releaseLeasedAgentSteeringItemsFromSubagentRuns({ ...params, runs });
     if (updated > 0) {
       persist(...params.runIds);
     }
@@ -107,17 +95,14 @@ export function createSubagentRegistryPublicApi(config: {
   }
 
   function getSubagentRunByRunId(runId: string): SubagentRunRecord | undefined {
-    const key = runId.trim();
-    const snapshot = deps().getSubagentRunsSnapshotForRead(runs);
-    return snapshot.get(key) ?? [...snapshot.values()].find((entry) => entry.swarmRunId === key);
+    return findRunById(readRuns(), runId.trim());
   }
 
   function getSubagentRunsByRunIds(runIds: readonly string[]): {
     entries: Map<string, SubagentRunRecord>;
   } {
-    const snapshot = deps().getSubagentRunsSnapshotForRead(runs);
     const byId = new Map<string, SubagentRunRecord>();
-    for (const entry of snapshot.values()) {
+    for (const entry of readRuns().values()) {
       byId.set(entry.runId, entry);
       if (entry.swarmRunId) {
         byId.set(entry.swarmRunId, entry);
@@ -134,9 +119,7 @@ export function createSubagentRegistryPublicApi(config: {
   }
 
   function completeCollectorLaunchCleanup(runId: string): void {
-    const key = runId.trim();
-    const entry =
-      runs.get(key) ?? [...runs.values()].find((candidate) => candidate.swarmRunId === key);
+    const entry = findRunById(runs, runId.trim());
     if (!entry?.collectorLaunchCleanupPending) {
       return;
     }
@@ -153,14 +136,12 @@ export function createSubagentRegistryPublicApi(config: {
     const runId = identity.runId?.trim();
     const childSessionKey = identity.childSessionKey?.trim();
     const entry =
-      (runId
-        ? (runs.get(runId) ??
-          [...runs.values()].find((candidate) => candidate.swarmRunId === runId))
-        : undefined) ??
+      (runId ? findRunById(runs, runId) : undefined) ??
       (childSessionKey
-        ? [...runs.values()]
-            .filter((candidate) => candidate.childSessionKey === childSessionKey)
-            .toSorted((left, right) => (right.generation ?? 0) - (left.generation ?? 0))[0]
+        ? getLatestSubagentRunByChildSessionKeyFromRuns(
+            getSubagentRunsForChildSession(childSessionKey),
+            childSessionKey,
+          )
         : undefined);
     if (!entry?.collect || entry.collectorCompletion) {
       throw new Error("collector run is unavailable");
@@ -181,7 +162,7 @@ export function createSubagentRegistryPublicApi(config: {
   ): SubagentRunRecord[] {
     const key = groupId.trim();
     const requesterKey = requesterSessionKey?.trim();
-    return [...deps().getSubagentRunsSnapshotForRead(runs).values()].filter(
+    return [...readRuns().values()].filter(
       (entry) =>
         entry.collect === true &&
         entry.groupId === key &&
@@ -200,7 +181,7 @@ export function createSubagentRegistryPublicApi(config: {
     if (!key) {
       return undefined;
     }
-    return [...deps().getSubagentRunsSnapshotForRead(runs).values()].find(
+    return [...readRuns().values()].find(
       (entry) =>
         entry.collect === true &&
         entry.swarmLaunchReplayKey === key &&
@@ -213,37 +194,24 @@ export function createSubagentRegistryPublicApi(config: {
     requesterSessionKey: string,
     options?: { collect?: boolean },
   ): number {
-    return countActiveRunsForSessionFromRuns(
-      deps().getSubagentRunsSnapshotForRead(runs),
-      requesterSessionKey,
-      options,
-    );
+    return countActiveRunsForSessionFromRuns(readRuns(), requesterSessionKey, options);
   }
 
   function countActiveDescendantRuns(rootSessionKey: string): number {
-    return countActiveDescendantRunsFromRuns(
-      deps().getSubagentRunsSnapshotForRead(runs),
-      rootSessionKey,
-    );
+    return countActiveDescendantRunsFromRuns(readRuns(), rootSessionKey);
   }
 
   function countPendingDescendantRuns(rootSessionKey: string): number {
-    return countPendingDescendantRunsFromRuns(
-      deps().getSubagentRunsSnapshotForRead(runs),
-      rootSessionKey,
-    );
+    return countPendingDescendantRunsFromRuns(readRuns(), rootSessionKey);
   }
 
   function listDescendantRunsForRequester(rootSessionKey: string): SubagentRunRecord[] {
-    return listDescendantRunsForRequesterFromRuns(
-      deps().getSubagentRunsSnapshotForRead(runs),
-      rootSessionKey,
-    );
+    return listDescendantRunsForRequesterFromRuns(readRuns(), rootSessionKey);
   }
 
   function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
     return getSubagentRunByChildSessionKeyFromRuns(
-      deps().getSubagentRunsSnapshotForRead(runs),
+      deps().getSubagentRunsSnapshotForChildSession(runs, childSessionKey),
       childSessionKey,
     );
   }
@@ -251,27 +219,12 @@ export function createSubagentRegistryPublicApi(config: {
   function getLatestSubagentRunByChildSessionKey(
     childSessionKey: string,
   ): SubagentRunRecord | null {
-    const key = childSessionKey.trim();
-    if (!key) {
-      return null;
-    }
-
     return (
       getLatestSubagentRunByChildSessionKeyFromRuns(
-        deps().getSubagentRunsSnapshotForChildSession(runs, key),
-        key,
+        deps().getSubagentRunsSnapshotForChildSession(runs, childSessionKey),
+        childSessionKey,
       ) ?? null
     );
-  }
-
-  /** Re-admits a delivered child batch after its requester explicitly yields. */
-  function settleRequesterAfterSessionSpawns(params: {
-    requesterSessionKey: string;
-    requesterTurnRunId: string;
-    requesterYielded: boolean;
-    acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
-  }): boolean {
-    return settleRequesterTurn(params);
   }
 
   /** Records sessions_yield before the active requester run is aborted. */
@@ -304,7 +257,7 @@ export function createSubagentRegistryPublicApi(config: {
     listDescendantRunsForRequester,
     getSubagentRunByChildSessionKey,
     getLatestSubagentRunByChildSessionKey,
-    settleRequesterAfterSessionSpawns,
+    settleRequesterAfterSessionSpawns: settleRequesterTurn,
     markRequesterTurnYielded,
   };
 }

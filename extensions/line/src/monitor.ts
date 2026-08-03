@@ -1,5 +1,6 @@
 // Line plugin module implements monitor behavior.
 import type { webhook } from "@line/bot-sdk";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -11,6 +12,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import {
+  canonicalizeWebhookRouteKey,
   isRequestBodyLimitError,
   normalizePluginHttpPath,
   normalizeWebhookPath,
@@ -53,6 +55,7 @@ interface MonitorLineProviderOptions {
   abortSignal?: AbortSignal;
   webhookUrl?: string;
   webhookPath?: string;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }
 
 interface LineProviderMonitor {
@@ -72,6 +75,18 @@ type LineWebhookTarget = {
   path: string;
   runtime: RuntimeEnv;
 };
+
+async function registerLineWebhookTarget(
+  params: Parameters<typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>>[0],
+  bot: ReturnType<typeof createLineBot>,
+) {
+  try {
+    return registerWebhookTargetWithPluginRoute(params);
+  } catch (error) {
+    await Promise.allSettled([bot.stop()]);
+    throw error;
+  }
+}
 
 const lineWebhookTargets = new Map<string, LineWebhookTarget[]>();
 
@@ -120,6 +135,7 @@ export async function monitorLineProvider(
     runtime,
     abortSignal,
     webhookPath,
+    statusSink,
   } = opts;
   const resolvedAccountId = accountId ?? resolveDefaultLineAccountId(config);
   const token = channelAccessToken.trim();
@@ -282,13 +298,16 @@ export async function monitorLineProvider(
   const normalizedPath = normalizeWebhookPath(
     normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook",
   );
+  const webhookRouteKey = canonicalizeWebhookRouteKey(normalizedPath);
   const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
     createLineNodeWebhookHandler({
       channelSecret: target.channelSecret,
       bot: target.bot,
       runtime: target.runtime,
     });
-  const { unregister: unregisterHttp } = registerWebhookTargetWithPluginRoute({
+  const registrationParams: Parameters<
+    typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>
+  >[0] = {
     targetsByPath: lineWebhookTargets,
     target: {
       accountId: resolvedAccountId,
@@ -300,10 +319,12 @@ export async function monitorLineProvider(
     route: {
       auth: "plugin",
       pluginId: "line",
+      source: "line-webhook",
       accountId: resolvedAccountId,
       log: (msg) => logVerbose(msg),
+      throwOnFailure: true,
       handler: async (req, res) => {
-        const targets = lineWebhookTargets.get(normalizedPath) ?? [];
+        const targets = lineWebhookTargets.get(webhookRouteKey) ?? [];
         const firstTarget = targets[0];
         if (req.method !== "POST") {
           if (!firstTarget) {
@@ -319,7 +340,7 @@ export async function monitorLineProvider(
           req,
           res,
           inFlightLimiter: lineWebhookInFlightLimiter,
-          inFlightKey: `line:${normalizedPath}`,
+          inFlightKey: `line:${webhookRouteKey}`,
         });
         if (!requestLifecycle.ok) {
           return;
@@ -406,9 +427,17 @@ export async function monitorLineProvider(
         }
       },
     },
-  });
+  };
+  const { unregister: unregisterHttp } = await registerLineWebhookTarget(registrationParams, bot);
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
+  statusSink?.({
+    connected: true,
+    lifecycle: "ready",
+    lastConnectedAt: Date.now(),
+    lastError: null,
+    terminalDisconnect: undefined,
+  });
 
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
@@ -422,7 +451,9 @@ export async function monitorLineProvider(
     stopped = true;
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
-    stopPromise = bot.stop();
+    stopPromise = bot.stop().finally(() => {
+      statusSink?.({ running: false, connected: false, lifecycle: "stopped" });
+    });
     return stopPromise;
   };
   const stopOnAbort = () => void stopHandler();

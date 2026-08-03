@@ -86,7 +86,6 @@ describe("resolveEffectivePluginIds", () => {
     mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue([]);
     mocks.loadGatewayStartupPluginPlan.mockReturnValue({
       channelPluginIds: [],
-      configuredDeferredChannelPluginIds: [],
       pluginIds: [],
     });
     mocks.resolveConfiguredChannelPluginIds.mockReturnValue([]);

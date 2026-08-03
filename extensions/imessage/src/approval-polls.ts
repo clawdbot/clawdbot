@@ -11,6 +11,7 @@ import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-rep
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
 import {
@@ -53,15 +54,12 @@ type IMessageApprovalPollTombstone = { approvalId: string };
 
 const loadApprovalResolver = createLazyRuntimeModule(() => import("./approval-resolver.js"));
 
-function reportPersistentError(error: unknown): void {
-  try {
-    getOptionalIMessageRuntime()
-      ?.logging.getChildLogger({ plugin: "imessage", feature: "approval-poll-state" })
-      .warn("iMessage persistent approval poll state failed", { error: String(error) });
-  } catch {
-    // Best effort only: persistent state must never break poll approvals.
-  }
-}
+const reportPersistentError = createPluginStateErrorReporter(
+  getOptionalIMessageRuntime,
+  "imessage",
+  "approval-poll-state",
+  "iMessage persistent approval poll state failed",
+);
 
 function readPersistedTarget(value: unknown): IMessageApprovalPollTarget | null {
   const target = value as Partial<IMessageApprovalPollTarget> | undefined;

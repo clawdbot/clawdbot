@@ -86,6 +86,13 @@ vi.mock("./model-catalog.js", () => ({
     state.loadManifestModelCatalogMock(params),
 }));
 
+vi.mock("./model-catalog.runtime.js", () => ({
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
+    entries: [],
+    routeVariants: [],
+  })),
+}));
+
 vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: (params: {
     provider: string;

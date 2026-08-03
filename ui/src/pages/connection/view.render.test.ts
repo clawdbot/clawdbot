@@ -76,6 +76,42 @@ describe("connection view rendering", () => {
     expect(container.textContent).not.toContain("Last error");
   });
 
+  it("keeps every gateway access input labeled when credentials are revealed", () => {
+    const container = document.createElement("div");
+    const props = createConnectionProps({ password: "password" });
+    const labels = [
+      "WebSocket URL",
+      "Gateway Token",
+      "Password (not stored)",
+      "Default Session Key",
+    ];
+    const inputLabels = () =>
+      Array.from(container.querySelectorAll<HTMLInputElement>(".settings-group input")).map(
+        (input) => input.getAttribute("aria-label"),
+      );
+
+    render(renderConnection(props), container);
+    expect(inputLabels()).toEqual(labels);
+    expect(
+      container.querySelector<HTMLInputElement>('input[aria-label="Gateway Token"]')?.type,
+    ).toBe("password");
+    expect(
+      container.querySelector<HTMLInputElement>('input[aria-label="Password (not stored)"]')?.type,
+    ).toBe("password");
+
+    render(
+      renderConnection({ ...props, showGatewayToken: true, showGatewayPassword: true }),
+      container,
+    );
+    expect(inputLabels()).toEqual(labels);
+    expect(
+      container.querySelector<HTMLInputElement>('input[aria-label="Gateway Token"]')?.type,
+    ).toBe("text");
+    expect(
+      container.querySelector<HTMLInputElement>('input[aria-label="Password (not stored)"]')?.type,
+    ).toBe("text");
+  });
+
   it("hides token and password fields for trusted-proxy auth", async () => {
     const container = document.createElement("div");
     const hello = {

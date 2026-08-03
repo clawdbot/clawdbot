@@ -4,7 +4,6 @@ import {
   buildRestartRecoveryClaimCleanupPatch,
   hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
-  sameRestartRecoveryTerminalRunIds,
 } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -12,6 +11,7 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
+import { sessionMatchesExpectedTranscriptTurn } from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type {
   UserTurnTranscriptRecorder,
@@ -34,6 +34,7 @@ type ReplyRestartRecoveryClaimController = {
     };
   }) => Promise<void>;
   clear: () => Promise<void>;
+  confirmRestartRecoveryArmedAfterLeaseLoss: () => Promise<boolean>;
   isArmed: () => boolean;
 };
 
@@ -104,38 +105,6 @@ function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnEx
   };
 }
 
-function matchesExpectedSessionState(
-  entry: SessionEntry,
-  sessionId: string,
-  expected: SessionTranscriptTurnExpectedState,
-): boolean {
-  return (
-    entry.sessionId === sessionId &&
-    entry.abortedLastRun === expected.abortedLastRun &&
-    entry.mainRestartRecovery?.cycleId === expected.mainRestartRecoveryCycleId &&
-    entry.mainRestartRecovery?.revision === expected.mainRestartRecoveryRevision &&
-    entry.restartRecoveryBeforeAgentReplyState === expected.restartRecoveryBeforeAgentReplyState &&
-    entry.restartRecoveryDeliveryReceiptState === expected.restartRecoveryDeliveryReceiptState &&
-    entry.restartRecoveryDeliveryToolCallId === expected.restartRecoveryDeliveryToolCallId &&
-    entry.restartRecoveryDeliveryRequestFingerprint ===
-      expected.restartRecoveryDeliveryRequestFingerprint &&
-    entry.restartRecoveryDeliveryRunId === expected.restartRecoveryDeliveryRunId &&
-    entry.restartRecoveryDeliverySourceRunId === expected.restartRecoveryDeliverySourceRunId &&
-    entry.restartRecoveryRequesterAccountId === expected.restartRecoveryRequesterAccountId &&
-    entry.restartRecoveryRequesterSenderId === expected.restartRecoveryRequesterSenderId &&
-    entry.restartRecoverySameChannelThreadRequired ===
-      expected.restartRecoverySameChannelThreadRequired &&
-    entry.restartRecoverySourceIngress === expected.restartRecoverySourceIngress &&
-    entry.restartRecoverySourceReplyDeliveryMode ===
-      expected.restartRecoverySourceReplyDeliveryMode &&
-    sameRestartRecoveryTerminalRunIds(
-      entry.restartRecoveryTerminalRunIds,
-      expected.restartRecoveryTerminalRunIds,
-    ) &&
-    entry.status === expected.status
-  );
-}
-
 export function createReplyRestartRecoveryClaimController(params: {
   admissionRunId?: unknown;
   getEntry: () => SessionEntry | undefined;
@@ -161,6 +130,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   let recoveryRunId: string = randomUUID();
   let recoverySourceRunId: string | undefined;
   let tracked = false;
+  let leaseLossRestartHandoffConfirmed = false;
 
   const persistAdmissionPatch = async (options: {
     entry: SessionEntry;
@@ -191,7 +161,10 @@ export function createReplyRestartRecoveryClaimController(params: {
     const persisted = await updateSessionEntry(
       { storePath: options.storePath, sessionKey: options.sessionKey },
       (current) =>
-        matchesExpectedSessionState(current, options.sessionId, expectedSessionState)
+        sessionMatchesExpectedTranscriptTurn(
+          { entry: current },
+          { expectedSessionId: options.sessionId, expectedSessionState },
+        )
           ? options.patch
           : null,
     );
@@ -465,8 +438,43 @@ export function createReplyRestartRecoveryClaimController(params: {
       return true;
     };
 
+  const confirmRestartRecoveryArmedAfterLeaseLoss = async (): Promise<boolean> => {
+    if (!tracked || !params.sessionKey || !params.storePath || !recoverySourceRunId) {
+      return false;
+    }
+    // Lease loss means the replacement may have advanced the authoritative row
+    // past this process's cache. This cold error path performs one latest read.
+    const persisted = loadSessionEntry({
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      clone: false,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+    });
+    if (!persisted || persisted.sessionId !== params.getSessionId()) {
+      return false;
+    }
+    params.setEntry(persisted);
+    const activeHandoff =
+      persisted.abortedLastRun === true &&
+      normalizeOptionalString(persisted.restartRecoveryDeliveryRunId) === recoveryRunId &&
+      hasRestartRecoverySourceClaim(persisted, recoverySourceRunId);
+    // The replacement may finish and clear the active claim before the old
+    // owner observes lease loss. Its terminal source marker proves completion.
+    const completedHandoff = hasRestartRecoveryTerminalRun(persisted, recoverySourceRunId);
+    const armed = activeHandoff || completedHandoff;
+    leaseLossRestartHandoffConfirmed ||= armed;
+    return armed;
+  };
+
   const clear = async (): Promise<void> => {
-    if (!tracked || !params.sessionKey || !params.storePath || params.isRestartAbort()) {
+    if (
+      !tracked ||
+      !params.sessionKey ||
+      !params.storePath ||
+      params.isRestartAbort() ||
+      leaseLossRestartHandoffConfirmed
+    ) {
       return;
     }
     const persisted = await updateSessionEntry(
@@ -553,5 +561,12 @@ export function createReplyRestartRecoveryClaimController(params: {
     return persisted?.abortedLastRun === true || params.getEntry()?.abortedLastRun === true;
   };
 
-  return { admitUserTurn, beginBeforeAgentReply, checkpointBeforeAgentReply, clear, isArmed };
+  return {
+    admitUserTurn,
+    beginBeforeAgentReply,
+    checkpointBeforeAgentReply,
+    clear,
+    confirmRestartRecoveryArmedAfterLeaseLoss,
+    isArmed,
+  };
 }

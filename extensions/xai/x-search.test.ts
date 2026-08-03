@@ -76,21 +76,32 @@ function parseFirstRequestBody(mockFetch: ReturnType<typeof installXSearchFetch>
   >;
 }
 
-function createConfiguredXSearchTool() {
-  const tool = createXSearchTool({
-    config: {
-      plugins: {
-        entries: {
-          xai: {
-            config: {
-              webSearch: {
-                apiKey: "xai-config-test", // pragma: allowlist secret
-              },
-            },
+function xaiPluginConfig({
+  apiKey = "xai-config-test",
+  webSearch,
+  xSearch,
+}: {
+  apiKey?: unknown;
+  webSearch?: Record<string, unknown>;
+  xSearch?: Record<string, unknown>;
+} = {}) {
+  return {
+    plugins: {
+      entries: {
+        xai: {
+          config: {
+            webSearch: { apiKey, ...webSearch },
+            ...(xSearch ? { xSearch } : {}),
           },
         },
       },
     },
+  };
+}
+
+function createConfiguredXSearchTool(config?: Parameters<typeof xaiPluginConfig>[0]) {
+  const tool = createXSearchTool({
+    config: xaiPluginConfig(config),
   });
   if (!tool) {
     throw new Error("expected x_search tool to be configured");
@@ -104,21 +115,7 @@ afterEach(() => {
 
 describe("xai x_search tool", () => {
   it("describes query as the required instruction for the Grok X-search agent", () => {
-    const tool = createXSearchTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-key", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    const tool = createConfiguredXSearchTool({ apiKey: "xai-plugin-key" });
 
     const parameters = tool?.parameters as
       | { properties?: { query?: { description?: string } } }
@@ -149,19 +146,7 @@ describe("xai x_search tool", () => {
   it("enables x_search when runtime config carries the shared xAI key", () => {
     const tool = createXSearchTool({
       config: {},
-      runtimeConfig: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "x-search-runtime-key", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
+      runtimeConfig: xaiPluginConfig({ apiKey: "x-search-runtime-key" }),
     });
 
     expect(tool?.name).toBe("x_search");
@@ -187,43 +172,14 @@ describe("xai x_search tool", () => {
   });
 
   it("enables x_search when the xAI plugin web search key is configured", () => {
-    const tool = createXSearchTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-key", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    const tool = createConfiguredXSearchTool({ apiKey: "xai-plugin-key" });
 
     expect(tool?.name).toBe("x_search");
   });
 
   it("uses the xAI Responses x_search tool with structured filters", async () => {
     const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-config-test", // pragma: allowlist secret
-                },
-                xSearch: { maxTurns: 2 },
-              },
-            },
-          },
-        },
-      },
-    });
+    const tool = createConfiguredXSearchTool({ xSearch: { maxTurns: 2 } });
 
     const result = await tool?.execute?.("x-search:1", {
       query: "dinner recipes",
@@ -311,23 +267,10 @@ describe("xai x_search tool", () => {
 
   it("routes x_search through plugin-owned xSearch.baseUrl", async () => {
     const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-config-test", // pragma: allowlist secret
-                },
-                xSearch: {
-                  enabled: true,
-                  baseUrl: "https://api.x.ai/xai-search/v1/",
-                },
-              },
-            },
-          },
-        },
+    const tool = createConfiguredXSearchTool({
+      xSearch: {
+        enabled: true,
+        baseUrl: "https://api.x.ai/xai-search/v1/",
       },
     });
 
@@ -340,24 +283,10 @@ describe("xai x_search tool", () => {
 
   it("shares plugin webSearch.baseUrl with x_search when xSearch.baseUrl is unset", async () => {
     const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-key", // pragma: allowlist secret
-                  baseUrl: "https://api.x.ai/shared/v1/",
-                },
-                xSearch: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      },
+    const tool = createConfiguredXSearchTool({
+      apiKey: "xai-plugin-key",
+      webSearch: { baseUrl: "https://api.x.ai/shared/v1/" },
+      xSearch: { enabled: true },
     });
 
     await tool?.execute?.("x-search:web-search-base-url", {
@@ -369,21 +298,7 @@ describe("xai x_search tool", () => {
 
   it("reuses the xAI plugin web search key for x_search requests", async () => {
     const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-key", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    const tool = createConfiguredXSearchTool({ apiKey: "xai-plugin-key" });
 
     await tool?.execute?.("x-search:plugin-key", {
       query: "latest post from huntharo",
@@ -402,23 +317,9 @@ describe("xai x_search tool", () => {
       ),
     );
     global.fetch = withFetchPreconnect(mockFetch);
-    const tool = createXSearchTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-key", // pragma: allowlist secret
-                },
-                xSearch: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      },
+    const tool = createConfiguredXSearchTool({
+      apiKey: "xai-plugin-key",
+      xSearch: { enabled: true },
     });
 
     await expect(
@@ -433,23 +334,9 @@ describe("xai x_search tool", () => {
       Promise.resolve(jsonResponse({ output: [] })),
     );
     global.fetch = withFetchPreconnect(mockFetch);
-    const tool = createXSearchTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-key", // pragma: allowlist secret
-                },
-                xSearch: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      },
+    const tool = createConfiguredXSearchTool({
+      apiKey: "xai-plugin-key",
+      xSearch: { enabled: true },
     });
 
     await expect(
@@ -462,32 +349,10 @@ describe("xai x_search tool", () => {
   it("prefers the active runtime config for shared xAI keys", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
-                },
-              },
-            },
-          },
-        },
-      },
-      runtimeConfig: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "x-search-runtime-key", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
+      config: xaiPluginConfig({
+        apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+      }),
+      runtimeConfig: xaiPluginConfig({ apiKey: "x-search-runtime-key" }),
     });
 
     await tool?.execute?.("x-search:runtime-key", {
@@ -499,21 +364,7 @@ describe("xai x_search tool", () => {
 
   it("rejects invalid date ordering before calling xAI", async () => {
     const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-config-test", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    const tool = createConfiguredXSearchTool();
 
     await expect(
       tool?.execute?.("x-search:bad-dates", {

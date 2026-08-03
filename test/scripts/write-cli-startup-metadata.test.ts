@@ -590,7 +590,9 @@ describe("write-cli-startup-metadata", () => {
         return "Usage: openclaw browser\n";
       },
       renderSourceSecretsHelpText: async () => {
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
         statePresentDuringSiblingRender = existsSync(stateDir);
         return "Usage: openclaw secrets\n";
       },

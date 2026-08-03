@@ -1,5 +1,25 @@
-const runListeners = new Map<string, Set<() => void>>();
-const runLastActivityMs = new Map<string, number>();
+import { resolveGlobalSingleton } from "./global-singleton.js";
+
+const { runListeners, runLastActivityMs } = resolveGlobalSingleton(
+  Symbol.for("openclaw.toolActivityHeartbeat"),
+  () => ({
+    runListeners: new Map<string, Set<() => void>>(),
+    runLastActivityMs: new Map<string, number>(),
+  }),
+  (state) => {
+    for (const listeners of state.runListeners.values()) {
+      for (const listener of listeners) {
+        try {
+          listener();
+        } catch {
+          // Shutdown wakeups are best-effort; one observer cannot strand the rest.
+        }
+      }
+    }
+    state.runListeners.clear();
+    state.runLastActivityMs.clear();
+  },
+);
 
 export function notifyToolActivity(runId: string): void {
   runLastActivityMs.set(runId, Date.now());

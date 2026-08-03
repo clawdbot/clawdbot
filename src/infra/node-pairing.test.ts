@@ -36,11 +36,12 @@ async function seedNodeDevice(baseDir: string, nodeId: string): Promise<void> {
   await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
 }
 
-async function setupPairedNode(baseDir: string): Promise<void> {
+async function setupPairedNode(baseDir: string, displayName?: string): Promise<void> {
   await seedNodeDevice(baseDir, "node-1");
   const request = await requestNodePairing(
     {
       nodeId: "node-1",
+      displayName,
       platform: "darwin",
       commands: ["system.run"],
     },
@@ -783,17 +784,50 @@ describe("node surface approvals", () => {
     });
   });
 
-  test("renames the operator-facing node name without touching approval state", async () => {
+  test("keeps the operator-facing node name through capability reapproval", async () => {
     await withNodePairingDir(async (baseDir) => {
-      await setupPairedNode(baseDir);
+      await setupPairedNode(baseDir, "Reported iPad");
+      const initialGeneration = resolveNodePairingGeneration(
+        await getPairedDevice("node-1", baseDir),
+      );
+      if (!initialGeneration) {
+        throw new Error("expected initial node pairing generation");
+      }
+      const upgrade = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          displayName: "Reported iPad (updated)",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+      expect(upgrade.request.displayName).toBe("Reported iPad (updated)");
 
       const renamed = await renamePairedNode("node-1", "Living Room iPad", baseDir);
       expect(renamed?.displayName).toBe("Living Room iPad");
       await expect(renamePairedNode("missing", "Nope", baseDir)).resolves.toBeNull();
 
+      await expect(
+        approveNodePairing(
+          upgrade.request.requestId,
+          { callerScopes: ["operator.pairing", "operator.admin", "operator.write"] },
+          baseDir,
+        ),
+      ).resolves.toMatchObject({
+        node: {
+          displayName: "Living Room iPad",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+      });
+
       const pairedNode = await findPairedNode("node-1", baseDir);
       expect(pairedNode?.displayName).toBe("Living Room iPad");
-      expect(pairedNode?.commands).toEqual(["system.run"]);
+      expect(pairedNode?.commands).toEqual(["system.run", "canvas.snapshot"]);
+      expect((await listNodePairing(baseDir)).pending).toEqual([]);
+      expect(resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir))?.key).not.toBe(
+        initialGeneration.key,
+      );
     });
   });
 });

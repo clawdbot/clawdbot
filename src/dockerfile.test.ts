@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const dockerComposePath = join(repoRoot, "docker-compose.yml");
 const dockerInstallDocsPath = join(repoRoot, "docs/install/docker.md");
 const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
 const fullReleaseValidationWorkflowPath = join(
@@ -35,6 +36,16 @@ function resolveOptionalAptPackages(dockerfile: string, env: NodeJS.ProcessEnv):
 }
 
 describe("Dockerfile", () => {
+  it("runs the built port-aware Gateway liveness probe", async () => {
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    const compose = await readFile(dockerComposePath, "utf8");
+
+    expect(dockerfile).toContain('CMD ["node", "dist/docker-healthcheck.js"]');
+    expect(dockerfile).not.toContain("127.0.0.1:18789/healthz");
+    expect(compose).toContain('"dist/docker-healthcheck.js"');
+    expect(compose).not.toContain("127.0.0.1:18789/healthz");
+  });
+
   it("does not force an external Dockerfile frontend pull", async () => {
     for (const path of dockerSetupDockerfilePaths) {
       const dockerfile = await readFile(join(repoRoot, path), "utf8");
@@ -543,11 +554,20 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
   });
 
-  it("validates release tags before immutable Docker publication", async () => {
+  it("validates immutable release identity before Docker publication", async () => {
     const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
 
-    expect(workflow).toContain("Existing stable, extended-stable, or beta release tag");
+    expect(workflow).toContain("workflow_call:");
+    expect(workflow).toContain("Immutable stable, extended-stable, or beta release tag");
+    expect(workflow).toContain("Full immutable commit SHA resolved from tag");
     expect(workflow).toContain('! "${RELEASE_TAG}" =~ ^v[0-9]{4}');
+    expect(workflow).toContain('! "${RELEASE_SHA}" =~ ^[a-f0-9]{40}$');
+    expect(workflow).toContain('git rev-parse "refs/tags/${RELEASE_TAG}^{commit}"');
+    expect(workflow).toContain('"${tag_sha}" != "${RELEASE_SHA}"');
+    expect(workflow).toContain('"v${package_version}" != "${RELEASE_TAG}"');
+    expect(workflow).toContain("^v${package_version}-[1-9][0-9]*$");
+    expect(workflow).not.toContain("workflow_dispatch:");
+    expect(workflow).not.toContain("push:\n");
     expect(workflow).toContain("(-(beta\\.)?[1-9][0-9]*)?");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-slim");

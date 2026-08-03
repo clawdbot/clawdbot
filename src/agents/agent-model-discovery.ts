@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedTransportWithPlugin,
@@ -44,6 +45,10 @@ type DiscoverModelsOptions = {
   normalizeModels?: boolean;
 };
 
+type NormalizeDiscoveredModelOptions = Pick<DiscoverModelsOptions, "config" | "workspaceDir"> & {
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
+};
+
 type DiscoverCapturedModelsOptions = Omit<
   DiscoverModelsOptions,
   "modelsJsonContents" | "normalizeModels" | "pluginCatalogs"
@@ -56,7 +61,7 @@ type DiscoverCapturedModelsOptions = Omit<
 export function normalizeDiscoveredAgentModel<T>(
   value: T,
   agentDir: string,
-  options?: Pick<DiscoverModelsOptions, "config" | "workspaceDir">,
+  options?: NormalizeDiscoveredModelOptions,
 ): T {
   if (!isRecord(value)) {
     return value;
@@ -106,7 +111,7 @@ export function normalizeDiscoveredAgentModel<T>(
   ) {
     return value;
   }
-  return normalizeModelCompat(transportNormalized as Model) as T;
+  return normalizeModelCompat(transportNormalized as Model, options?.providerMetadataOwners) as T;
 }
 
 function createOpenClawModelRegistry(
@@ -151,7 +156,12 @@ function createOpenClawModelRegistry(
     if (!agentDir) {
       throw new Error("agent directory is required for model normalization");
     }
-    return normalizeDiscoveredAgentModel(entry, agentDir, options);
+    return normalizeDiscoveredAgentModel(entry, agentDir, {
+      ...options,
+      ...(pluginMetadataSnapshot?.owners
+        ? { providerMetadataOwners: pluginMetadataSnapshot.owners }
+        : {}),
+    });
   };
 
   registry.getAll = () => {

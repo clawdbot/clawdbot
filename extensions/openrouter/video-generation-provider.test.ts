@@ -683,10 +683,11 @@ describe("openrouter video generation provider", () => {
       releasedJson({
         id: "job-123",
         polling_url: "/api/v1/videos/job-123",
-        status: "pending",
+        status: "in_progress",
       }),
     );
     fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce(releasedJson({ id: "job-123", status: "in_progress" }))
       .mockResolvedValueOnce(
         releasedJson({
           id: "job-123",
@@ -802,10 +803,16 @@ describe("openrouter video generation provider", () => {
     expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer openrouter-key");
     expectOpenRouterFetchCall(
       1,
+      "https://custom.openrouter.test/api/v1/videos/job-123",
+      "openrouter-video-status",
+    );
+    expectOpenRouterFetchCall(
+      2,
       "https://custom.openrouter.test/api/v1/videos/job-123/content?index=0",
       "openrouter-video-download",
     );
-    expect(requireFetchCallHeaders(1).get("authorization")).toBe("Bearer openrouter-key");
+    expect(requireFetchCallHeaders(2).get("authorization")).toBe("Bearer openrouter-key");
+    expect(waitProviderOperationPollIntervalMock).toHaveBeenCalledOnce();
     const { video, buffer } = requireGeneratedVideoBuffer(result, 0);
     expect(buffer.toString()).toBe("mp4-bytes");
     expect(video.mimeType).toBe("video/mp4");

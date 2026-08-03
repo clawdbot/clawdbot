@@ -1,6 +1,7 @@
 // Nextcloud Talk plugin module implements monitor runtime behavior.
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
@@ -33,7 +34,11 @@ type NextcloudTalkMonitorOptions = {
     message: NextcloudTalkInboundMessage,
     lifecycle: NextcloudTalkIngressLifecycle,
   ) => void | Promise<void>;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+    lifecycle?: ChannelAccountSnapshot["lifecycle"];
+  }) => void;
   createSpool?: typeof createNextcloudTalkWebhookSpool;
   createServer?: typeof createNextcloudTalkWebhookServer;
 };
@@ -138,6 +143,7 @@ export async function monitorNextcloudTalkProvider(
     await stop();
     return { stop };
   }
+  opts.statusSink?.({ lifecycle: "ready" });
 
   const publicUrl =
     account.config.webhookPublicUrl ??

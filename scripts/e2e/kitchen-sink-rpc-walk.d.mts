@@ -69,15 +69,13 @@ export function signalProcessGroup(
     runTaskkill,
     useProcessGroup,
   }?: {
-    platform?: NodeJS.Platform | undefined;
-    runTaskkill?:
-      | ((
-          command: string,
-          args: string[],
-          options: { stdio: "ignore" },
-        ) => { error?: Error; status: number | null })
-      | undefined;
-    useProcessGroup?: boolean | undefined;
+    platform?: NodeJS.Platform;
+    runTaskkill?: (
+      command: string,
+      args: string[],
+      options: { stdio: "ignore" },
+    ) => { error?: Error; status: number | null };
+    useProcessGroup?: boolean;
   },
 ): void;
 export function parseJsonOutput(stdout: string): Record<string, unknown>;
@@ -109,11 +107,6 @@ export function fetchJson(
   status: unknown;
   body: unknown;
 }>;
-export function readBoundedResponseText(
-  response: unknown,
-  byteLimit: number,
-  timeoutPromise?: Promise<never>,
-): Promise<string>;
 export function stopGateway(child: unknown, options?: Record<string, unknown>): Promise<void>;
 export function hasChildExited(child: unknown): boolean;
 export function signalGateway(
@@ -136,11 +129,10 @@ export function assertExpectedKitchenSinkToolEntries(
   {
     requirePluginProvenance,
   }?: {
-    requirePluginProvenance?: boolean | undefined;
+    requirePluginProvenance?: boolean;
   },
 ): unknown;
 export function assertChannelAccountRunning(payload: unknown): unknown;
-export function extractTtsProviderIds(payload: unknown, surface: unknown): unknown[];
 export function assertTtsProviderCoverage(payload: unknown, surface: unknown): void;
 export function assertKitchenSinkSearchInvokeResult(payload: unknown): void;
 export function assertKitchenSinkTextInvokeResult(payload: unknown): void;
@@ -189,7 +181,5 @@ export function sampleWindowsProcessByPort(
 export function assertResourceCeiling(sample: unknown): void;
 export function assertCommandResourceCeiling(sample: unknown): void;
 export function findErrorLogFindings(logPath: string): Array<{ line: string; lineNumber: number }>;
-export function tailFile(file: string, maxBytes?: number): string;
-export function main(): Promise<void>;
 export const MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS: 2147000000;
 declare function defaultKillProcess(pid: unknown, signal: unknown): true;

@@ -224,6 +224,68 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.lastError).toContain("4008");
   });
 
+  it("starts a newly selected Gateway as a fresh connection", () => {
+    const { gateway, clients, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+
+    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test", token: "other-token" });
+
+    expect(clients[0]?.stopped).toBe(1);
+    expect(current().opts.url).toBe("wss://other-gateway.example.test");
+    expect(current().opts.token).toBe("other-token");
+    expect(gateway.snapshot.phase).toBe("connecting");
+  });
+
+  it("keeps a newly selected Gateway's first retry at the login gate", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
+
+    current().opts.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
+
+    expect(gateway.snapshot.phase).toBe("connecting");
+    expect(gateway.snapshot.lastError).toBe("disconnected (1006): remote refused");
+  });
+
+  it("treats a newly selected Gateway's first terminal close as never connected", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
+
+    current().opts.onClose?.({ code: 4008, reason: "remote rejected", willRetry: false });
+
+    expect(gateway.snapshot.phase).toBe("stopped");
+    expect(gateway.snapshot.lastError).toBe("disconnected (4008): remote rejected");
+  });
+
+  it("retains a newly selected Gateway's shell after its own successful hello", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
+    current().opts.onHello?.(HELLO);
+
+    current().opts.onClose?.({ code: 1006, reason: "remote blip", willRetry: true });
+
+    expect(gateway.snapshot.phase).toBe("reconnecting");
+  });
+
+  it("preserves an established Gateway's lineage when its unchanged URL is resubmitted", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    const gatewayUrl = gateway.connection.gatewayUrl;
+
+    gateway.connect({ gatewayUrl, token: "replacement-token", sessionKey: "agent:main:other" });
+
+    expect(gateway.snapshot.phase).toBe("reconnecting");
+    expect(current().opts.token).toBe("replacement-token");
+    expect(gateway.snapshot.sessionKey).toBe("agent:main:other");
+  });
+
   it.each(["stopped", "connecting", "connected", "reconnecting", "offline"] as const)(
     "stop() resets %s to stopped",
     (phase) => {

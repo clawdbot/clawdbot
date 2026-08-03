@@ -17,6 +17,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
+import { AgentHarnessPreflightError, resolveAgentHarnessPreflightOwner } from "./errors.js";
 import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
@@ -171,6 +172,41 @@ describe("AgentHarness lifecycle runner", () => {
 
     expect(attemptResult).toEqual({ ...result, agentHarnessId: "codex" });
     expect(runAttempt).toHaveBeenCalledWith(params);
+  });
+
+  it("records the selected harness for harness-scoped preflight failures", async () => {
+    const params = createAttemptParams();
+    const preflightError = new AgentHarnessPreflightError("Codex preflight failed", {
+      scope: "harness",
+    });
+    const harness: AgentHarness = {
+      id: "custom-codex",
+      label: "Custom Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw preflightError;
+      },
+    };
+
+    await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toBe(preflightError);
+    expect(resolveAgentHarnessPreflightOwner(preflightError)).toBe("custom-codex");
+    expect(preflightError).not.toHaveProperty("harnessId");
+  });
+
+  it("does not scope a legacy preflight failure without explicit opt-in", async () => {
+    const params = createAttemptParams();
+    const preflightError = new AgentHarnessPreflightError("Global preflight failed");
+    const harness: AgentHarness = {
+      id: "custom-codex",
+      label: "Custom Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw preflightError;
+      },
+    };
+
+    await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toBe(preflightError);
+    expect(resolveAgentHarnessPreflightOwner(preflightError)).toBeUndefined();
   });
 
   it("runs isolated finalization through the narrow lifecycle contract", async () => {

@@ -1184,6 +1184,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceContract("provider-setup", {
       mentions: [
         "applyProviderDefaultModel",
+        "defineSelfHostedOpenAICompatibleProvider",
         "discoverOpenAICompatibleLocalModels",
         "discoverOpenAICompatibleSelfHostedProvider",
       ],
@@ -1240,6 +1241,8 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceOmitsSnippet("google-model-id", "./google.js");
     expectSourceOmitsSnippet("google-model-id", "./facade-runtime.js");
     expectSourceOmitsSnippet("google-model-id", "../../extensions/");
+    expectSourceMentions("xiaomi", ["./facade-runtime.js"]);
+    expectSourceOmitsSnippet("xiaomi", "./facade-loader.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./xai.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./facade-runtime.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "../../extensions/");

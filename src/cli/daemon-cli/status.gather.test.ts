@@ -7,10 +7,12 @@ import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import type { PortListener, PortUsageStatus } from "../../infra/ports.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
+import { defaultRuntime } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus } from "./status.gather.js";
+import { printDaemonStatus } from "./status.print.js";
 
 type PortConnections = Awaited<
   ReturnType<typeof import("../../infra/ports.js").inspectPortConnections>
@@ -47,16 +49,21 @@ type PortUsageTestSummary = {
   hints: string[];
 };
 
-const inspectPortUsage = vi.fn<(port: number) => Promise<PortUsageTestSummary>>(
-  async (port: number) => ({
-    port,
-    status: "free",
-    listeners: [],
-    hints: [],
-  }),
-);
+type PortUsageInspectionOptions = { probeHosts?: readonly string[] };
+
+const inspectPortUsage = vi.fn<
+  (port: number, options?: PortUsageInspectionOptions) => Promise<PortUsageTestSummary>
+>(async (port: number) => ({
+  port,
+  status: "free",
+  listeners: [],
+  hints: [],
+}));
 const inspectPortUsages = vi.fn<
-  (ports: readonly number[]) => Promise<Map<number, PortUsageTestSummary>>
+  (
+    ports: readonly number[],
+    options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
+  ) => Promise<Map<number, PortUsageTestSummary>>
 >(
   async (ports) =>
     new Map(
@@ -98,10 +105,15 @@ const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>
   details: [],
 }));
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
-const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
+const serviceIsLoaded = vi.fn<
+  (opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => Promise<boolean>
+>(async (_opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => true);
 const serviceReadRuntime = vi.fn<
-  (_env?: NodeJS.ProcessEnv) => Promise<{ status: string; detail?: string }>
->(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
+  (
+    _env?: NodeJS.ProcessEnv,
+    _opts?: { timeoutMs?: number },
+  ) => Promise<{ status: string; detail?: string }>
+>(async (_env?: NodeJS.ProcessEnv, _opts?: { timeoutMs?: number }) => ({ status: "running" }));
 const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
   async (_opts?: unknown) => ({
     runtime: { status: "running", pid: 1234 },
@@ -205,7 +217,8 @@ vi.mock("../../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
 }));
 
-vi.mock("../../daemon/launchd.js", () => ({
+vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/launchd.js")>()),
   findStaleOpenClawUpdateLaunchdJobs: (env?: NodeJS.ProcessEnv) =>
     findStaleOpenClawUpdateLaunchdJobs(env),
 }));
@@ -214,7 +227,8 @@ vi.mock("../../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig: (opts: unknown) => auditGatewayServiceConfig(opts),
 }));
 
-vi.mock("../../daemon/service.js", () => ({
+vi.mock("../../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
   resolveGatewayService: () =>
     createMockGatewayService({
       isLoaded: serviceIsLoaded,
@@ -226,6 +240,10 @@ vi.mock("../../daemon/service.js", () => ({
 vi.mock("../../gateway/net.js", () => ({
   resolveGatewayBindHost: (bindMode: string, customBindHost?: string) =>
     resolveGatewayBindHost(bindMode, customBindHost),
+  resolveGatewayRequiredListenHosts: (bindHost: string) =>
+    /^\d+\.\d+\.\d+\.\d+$/.test(bindHost) && bindHost !== "0.0.0.0" && bindHost !== "127.0.0.1"
+      ? [bindHost, "127.0.0.1"]
+      : [bindHost],
 }));
 
 vi.mock("../../gateway/control-ui-links.js", () => ({
@@ -247,8 +265,12 @@ vi.mock("../../gateway/probe-auth.js", async (importOriginal) => {
 
 vi.mock("../../infra/ports.js", () => ({
   inspectPortConnections: (port: number) => inspectPortConnections(port),
-  inspectPortUsage: (port: number) => inspectPortUsage(port),
-  inspectPortUsages: (ports: readonly number[]) => inspectPortUsages(ports),
+  inspectPortUsage: (port: number, options?: PortUsageInspectionOptions) =>
+    inspectPortUsage(port, options),
+  inspectPortUsages: (
+    ports: readonly number[],
+    options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
+  ) => inspectPortUsages(ports, options),
   formatPortDiagnostics: () => [],
 }));
 
@@ -316,6 +338,10 @@ describe("gatherDaemonStatus", () => {
       httpUrl: "https://10.211.55.3:19001/",
       wsUrl: "wss://10.211.55.3:19001",
     });
+    resolveGatewayBindHost.mockClear();
+    resolveGatewayBindHost.mockImplementation(async (bindMode?: string) =>
+      bindMode === "loopback" ? "127.0.0.1" : "0.0.0.0",
+    );
     resolveGatewayProbeAuthSafeWithSecretInputsCalls.mockClear();
     createConfigIOCalls.mockClear();
     findStaleOpenClawUpdateLaunchdJobs.mockReset();
@@ -357,6 +383,9 @@ describe("gatherDaemonStatus", () => {
     readLastGatewayErrorLine.mockReset();
     readLastGatewayErrorLine.mockResolvedValue(null);
     readGatewayRestartHandoffSync.mockClear();
+    serviceIsLoaded.mockClear();
+    serviceReadCommand.mockClear();
+    serviceReadRuntime.mockClear();
     readConfigFileSnapshotCalls.mockClear();
     loadConfigCalls.mockClear();
     daemonConfigWarnings = [];
@@ -420,7 +449,12 @@ describe("gatherDaemonStatus", () => {
       deep: false,
     });
 
-    expect(inspectPortUsages).toHaveBeenCalledWith([19001, 18789]);
+    expect(inspectPortUsages).toHaveBeenCalledWith(
+      [19001, 18789],
+      expect.objectContaining({
+        probeHostsByPort: new Map([[19001, ["0.0.0.0"]]]),
+      }),
+    );
     expect(inspectPortUsage).not.toHaveBeenCalled();
   });
 
@@ -535,6 +569,12 @@ describe("gatherDaemonStatus", () => {
 
     expect(resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);
     expect(status.gateway?.bindMode).toBe("loopback");
+    expect(inspectPortUsages).toHaveBeenCalledWith(
+      [19001, 18789],
+      expect.objectContaining({
+        probeHostsByPort: new Map([[19001, ["127.0.0.1"]]]),
+      }),
+    );
   });
 
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
@@ -611,6 +651,67 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
+
+  it("bounds both service-manager reads and still emits JSON after they time out", async () => {
+    serviceIsLoaded.mockImplementationOnce(async (args?: { timeoutMs?: number }) => {
+      if (args?.timeoutMs === undefined) {
+        return await new Promise<boolean>(() => {});
+      }
+      throw new Error("systemctl is-enabled timed out");
+    });
+    serviceReadRuntime.mockImplementationOnce(async (_env, opts) => {
+      if (opts?.timeoutMs === undefined) {
+        return await new Promise<{ status: string }>(() => {});
+      }
+      throw new Error("systemctl show timed out");
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: { timeout: "100", json: true },
+      probe: false,
+      deep: true,
+    });
+
+    expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
+    expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
+    expect(status.service.loaded).toBe(false);
+    expect(status.service.runtime).toEqual({
+      status: "unknown",
+      detail: "Error: systemctl show timed out",
+    });
+
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    try {
+      printDaemonStatus(status, { json: true, deep: true });
+      expect(writeJson).toHaveBeenCalledOnce();
+      const serialized = JSON.stringify(writeJson.mock.calls[0]?.[0]);
+      if (!serialized) {
+        throw new Error("expected terminal JSON output");
+      }
+      expect(JSON.parse(serialized)).toMatchObject({
+        service: {
+          loaded: false,
+          runtime: {
+            status: "unknown",
+            detail: "Error: systemctl show timed out",
+          },
+        },
+      });
+    } finally {
+      writeJson.mockRestore();
+    }
+
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      printDaemonStatus(status, { json: false, deep: true });
+      const output = log.mock.calls.flat().join("\n");
+      expect(output).toContain("Runtime: unknown (Error: systemctl show timed out)");
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  }, 1_000);
 
   it("keeps gateway status read-only when service management is unsupported", async () => {
     serviceReadCommand.mockResolvedValueOnce(null);

@@ -3,12 +3,17 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  upsertSessionEntry,
+  type SessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
 import {
   clearInternalHooks,
   registerInternalHook,
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -24,6 +29,7 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
+import { SessionManager } from "./sessions/session-manager.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import { mergeWorkspaceSetupState } from "./workspace-state-store.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -477,199 +483,108 @@ describe("resolveBootstrapContextForRun", () => {
 
 describe("hasCompletedBootstrapTurn", () => {
   let tmpDir: string;
+  let sessionTarget: SessionTranscriptRuntimeTarget;
+  let sessionManager: SessionManager;
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "openclaw-bootstrap-turn-"));
+    sessionTarget = {
+      agentId: "main",
+      sessionId: randomUUID(),
+      sessionKey: "agent:main:bootstrap-turn",
+      storePath: path.join(tmpDir, "sessions.json"),
+    };
+    await upsertSessionEntry(sessionTarget, {
+      sessionId: sessionTarget.sessionId,
+      updatedAt: Date.now(),
+    });
+    sessionManager = SessionManager.open(sessionTarget, tmpDir);
   });
 
   afterEach(async () => {
-    vi.restoreAllMocks();
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("returns false when session file does not exist", async () => {
-    expect(await hasCompletedBootstrapTurn(path.join(tmpDir, "missing.jsonl"))).toBe(false);
+  it("returns false without a complete SQLite transcript identity", async () => {
+    expect(await hasCompletedBootstrapTurn()).toBe(false);
+    expect(await hasCompletedBootstrapTurn({ ...sessionTarget, storePath: undefined })).toBe(false);
   });
 
-  it("returns false for SQLite transcript markers", async () => {
-    expect(
-      await hasCompletedBootstrapTurn("sqlite:main:session-1:/tmp/openclaw/sessions.json"),
-    ).toBe(false);
+  it("returns false when the SQLite session has no transcript", async () => {
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
-  it("returns false for empty session files", async () => {
-    const sessionFile = path.join(tmpDir, "empty.jsonl");
-    await fs.writeFile(sessionFile, "", "utf8");
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  it("returns false when no full bootstrap marker has been recorded", async () => {
+    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    sessionManager.appendCustomEntry("openclaw:unrelated", { timestamp: 2 });
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
-  it("returns false for header-only session files", async () => {
-    const sessionFile = path.join(tmpDir, "header-only.jsonl");
-    await fs.writeFile(sessionFile, `${JSON.stringify({ type: "session", id: "s1" })}\n`, "utf8");
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  it("reads a completion marker persisted by the SQLite session manager", async () => {
+    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
   });
 
-  it("returns false when no assistant turn has been flushed yet", async () => {
-    const sessionFile = path.join(tmpDir, "user-only.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({ type: "session", id: "s1" }),
-        JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
-  });
-
-  it("returns false for assistant turns without a recorded full bootstrap marker", async () => {
-    const sessionFile = path.join(tmpDir, "assistant-no-marker.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({ type: "session", id: "s1" }),
-        JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
-        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
-  });
-
-  it("returns true when a full bootstrap completion marker exists", async () => {
-    const sessionFile = path.join(tmpDir, "full-bootstrap.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 1 },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
-  });
-
-  it("returns false when compaction happened after the last assistant turn", async () => {
-    const sessionFile = path.join(tmpDir, "post-compaction.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 1 },
-        }),
-        JSON.stringify({ type: "compaction", summary: "trimmed" }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
-  });
-
-  it("returns true when a later full bootstrap marker happens after compaction", async () => {
-    const sessionFile = path.join(tmpDir, "assistant-after-compaction.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 1 },
-        }),
-        JSON.stringify({ type: "compaction", summary: "trimmed" }),
-        JSON.stringify({ type: "message", message: { role: "user", content: "new ask" } }),
-        JSON.stringify({ type: "message", message: { role: "assistant", content: "new reply" } }),
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 2 },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
-  });
-
-  it("ignores malformed JSON lines", async () => {
-    const sessionFile = path.join(tmpDir, "malformed.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        "{broken",
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 1 },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
-  });
-
-  it("finds a recent full bootstrap marker even when the scan starts mid-file", async () => {
-    const sessionFile = path.join(tmpDir, "large-prefix.jsonl");
-    const hugePrefix = "x".repeat(300 * 1024);
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({ type: "message", message: { role: "user", content: hugePrefix } }),
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 1 },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
-  });
-
-  it("finds a recent full bootstrap marker when the tail read returns short", async () => {
-    const sessionFile = path.join(tmpDir, "short-read-tail.jsonl");
-    const lines = [
-      JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
-      JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
-      JSON.stringify({
-        type: "custom",
-        customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-        data: { timestamp: 1 },
-      }),
-    ];
-    await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, "utf8");
-
-    const realOpen = fs.open.bind(fs);
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      const realRead = handle.read.bind(handle);
-      return new Proxy(handle, {
-        get(target, prop, receiver) {
-          if (prop === "read") {
-            return (buffer: Buffer, offset: number, length: number, position: number) =>
-              realRead(buffer, offset, Math.min(length, 16), position);
-          }
-          return Reflect.get(target, prop, receiver);
-        },
-      });
+  it("invalidates a completion marker after compaction", async () => {
+    const firstEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
     });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+    sessionManager.appendCompaction("trimmed", firstEntryId, 10);
 
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
-  it("returns false for symbolic links", async () => {
-    const realFile = path.join(tmpDir, "real.jsonl");
-    const linkFile = path.join(tmpDir, "link.jsonl");
-    await fs.writeFile(
-      realFile,
-      `${JSON.stringify({ type: "custom", customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, data: { timestamp: 1 } })}\n`,
-      "utf8",
-    );
-    await fs.symlink(realFile, linkFile);
-    expect(await hasCompletedBootstrapTurn(linkFile)).toBe(false);
+  it("accepts a newer full bootstrap marker after compaction", async () => {
+    const firstEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+    });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+    sessionManager.appendCompaction("trimmed", firstEntryId, 10);
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
+  });
+
+  it("invalidates a completion marker after a session reset", async () => {
+    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+    sessionManager.appendResetBoundary("reset");
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
+  });
+
+  it("accepts a newer full bootstrap marker after a session reset", async () => {
+    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+    sessionManager.appendResetBoundary("reset");
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
+  });
+
+  it("ignores completion markers on an inactive transcript branch", async () => {
+    const firstEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+    });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
+
+    sessionManager.appendLeafControl({
+      targetId: firstEntryId,
+      appendParentId: firstEntryId,
+    });
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 });
 

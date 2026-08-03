@@ -267,6 +267,9 @@ describe("tool mutation helpers", () => {
         plan: [{ step: "Inspect", status: "in_progress" }],
       }),
     ).toBe(true);
+    expect(isReplaySafeToolCall("memory_get", { path: "memory/notes.md" })).toBe(true);
+    expect(isReplaySafeToolCall("memory_search", { query: "recall" })).toBe(false);
+    expect(isReplaySafeToolCall("memory_recall", { query: "recall" })).toBe(false);
     expect(isReplaySafeToolCall("automations", { action: "status" })).toBe(true);
     // Legacy transcript entries predate the rename and must stay classified.
     expect(isReplaySafeToolCall("cron", { action: "status" })).toBe(true);

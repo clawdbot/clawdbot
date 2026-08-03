@@ -4,11 +4,12 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { renderDocsHeadingMap } from "./docs-list.js";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(HERE, "..");
+const ROOT = resolveRepoRoot(import.meta.url);
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
 const INTERNAL_DOCS_DIRS = ["internal"];
@@ -784,6 +785,7 @@ function syncDocsTree(targetRoot, options = {}) {
     `${targetDocsDir}/`,
   ]);
   pruneInternalDocs(targetDocsDir);
+  writePublishedDocsMap(targetDocsDir);
 
   for (const locale of GENERATED_LOCALES) {
     const sourceTmPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.tmFile);
@@ -803,6 +805,13 @@ function syncDocsTree(targetRoot, options = {}) {
   repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
   return { clawhub: clawhubSource };
+}
+
+/** Writes the public heading map into the publish tree without committing an expanded mirror. */
+export function writePublishedDocsMap(targetDocsDir) {
+  const outputPath = path.join(targetDocsDir, "docs_map.md");
+  fs.writeFileSync(outputPath, renderDocsHeadingMap(SOURCE_DOCS_DIR), "utf8");
+  return outputPath;
 }
 
 function writeSyncMetadata(targetRoot, args, sources) {

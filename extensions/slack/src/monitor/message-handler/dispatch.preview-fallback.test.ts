@@ -876,6 +876,7 @@ vi.mock("../../format.js", () => ({
 
 vi.mock("../../limits.js", () => ({
   SLACK_TEXT_LIMIT: 4000,
+  SLACK_EDIT_TEXT_MAX_BYTES: 4000,
 }));
 
 vi.mock("../../sent-thread-cache.js", () => ({
@@ -1228,6 +1229,23 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
+
+  it.each([
+    { name: "ASCII", text: "x".repeat(4_001) },
+    { name: "UTF-8", text: "界".repeat(1_334) },
+  ])(
+    "delivers the complete $name final when it exceeds Slack's edit byte limit",
+    async ({ text }) => {
+      finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+      mockedDispatchSequence = [{ kind: "final", payload: { text } }];
+
+      await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+      expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+      expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+      expectDeliverReplyCall(0, text);
+    },
+  );
 
   it("uses a disposable portable preview before custom-identity final delivery", async () => {
     const relayIdentity = { username: "Nik Team Claw", iconEmoji: ":robot_face:" };
@@ -1924,7 +1942,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Shelling\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
+      "Shelling\n\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
     );
   });
 
@@ -3100,6 +3118,20 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
+  it("suppresses terminal progress callbacks without their terminal phase", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        { kind: "command_output", name: "bash", title: "must stay hidden", exitCode: 0 },
+        { kind: "patch", name: "apply_patch", summary: "must stay hidden" },
+      ],
+    });
+
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(appendSlackStreamMock).not.toHaveBeenCalled();
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
   it("keeps duplicate-text native tool tasks as distinct rows", async () => {
     await dispatchNativeProgressScenario({
       finalPayload: { text: FINAL_REPLY_TEXT },
@@ -4255,6 +4287,40 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         audioAsVoice: true,
         spokenText: "Spoken answer",
         ttsSupplement: { spokenText: "Spoken answer" },
+      },
+    ]);
+  });
+
+  it("delivers complete oversized TTS text together with its media", async () => {
+    const spokenText = "x".repeat(4_001);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText,
+          ttsSupplement: { spokenText },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(delivered.replies).toEqual([
+      {
+        text: spokenText,
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText,
+        ttsSupplement: { spokenText },
       },
     ]);
   });

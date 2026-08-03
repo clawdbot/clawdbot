@@ -366,6 +366,22 @@ export async function startMatrixQaFaultProxy(
     void (async () => {
       let observedRequest: MatrixQaFaultProxyRequest | undefined;
       let observedContext: unknown;
+      let observerNotified = false;
+      const observeExchange = async (
+        request: MatrixQaFaultProxyRequest,
+        response: MatrixQaFaultProxyForwardedResponse,
+        context?: unknown,
+      ) => {
+        if (!params.onExchange) {
+          return;
+        }
+        observerNotified = true;
+        await params.onExchange({
+          ...(context !== undefined ? { context } : {}),
+          request,
+          response,
+        });
+      };
       try {
         const requestTarget = req.url ?? "/";
         if (!requestTarget.startsWith("/") || requestTarget.startsWith("//")) {
@@ -408,11 +424,7 @@ export async function startMatrixQaFaultProxy(
           });
           if (rule.response) {
             const response = normalizeJsonResponse(rule.response(request));
-            await params.onExchange?.({
-              ...(context !== undefined ? { context } : {}),
-              request,
-              response,
-            });
+            await observeExchange(request, response, context);
             writeForwardedResponse(res, response);
             return;
           }
@@ -431,11 +443,7 @@ export async function startMatrixQaFaultProxy(
                 response: forwarded,
               })
             : forwarded;
-        await params.onExchange?.({
-          ...(context !== undefined ? { context } : {}),
-          request,
-          response,
-        });
+        await observeExchange(request, response, context);
         writeForwardedResponse(res, response);
       } catch (error) {
         const failure =
@@ -456,12 +464,12 @@ export async function startMatrixQaFaultProxy(
                 status: 502,
               };
         const response = normalizeJsonResponse(failure);
-        if (observedRequest) {
-          await params.onExchange?.({
-            ...(observedContext !== undefined ? { context: observedContext } : {}),
-            request: observedRequest,
-            response,
-          });
+        if (observedRequest && !observerNotified) {
+          try {
+            await observeExchange(observedRequest, response, observedContext);
+          } catch {
+            // Capture is diagnostic; its failure must not strand the original HTTP response.
+          }
         }
         if (!res.destroyed) {
           writeForwardedResponse(res, response, {

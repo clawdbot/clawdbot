@@ -59,6 +59,24 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("🛠️ Next", expect.anything());
   });
 
+  it("publishes partial-preview tool lines without enabling progress-only plans", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "partial", progress: { label: false } } },
+      mode: "partial",
+      active: true,
+      seed: "preview",
+      update,
+    });
+
+    await progress.pushToolProgress("Inspecting files");
+    expect(update).toHaveBeenLastCalledWith("• Inspecting files", {
+      lines: ["Inspecting files"],
+    });
+    expect(await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }])).toBe(false);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
   it("returns detached structured state for channel-native renderers", async () => {
     const progress = createChannelProgressDraftCompositor({
       entry: { streaming: { mode: "progress", progress: { label: false } } },
@@ -976,6 +994,57 @@ describe("createChannelProgressDraftCompositor", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("normalizes transport-neutral agent events through the compositor", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress" } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.start();
+    await progress.pushToolEvent({
+      itemId: "tool-1",
+      name: "exec",
+      phase: "start",
+      args: { command: "pnpm test" },
+      detailMode: "raw",
+    });
+    await progress.pushItemEvent({
+      itemId: "item-1",
+      kind: "search",
+      progressText: "found tests",
+    });
+    await progress.pushApprovalEvent({ phase: "requested", command: "pnpm test" });
+    await progress.pushCommandOutputEvent({
+      itemId: "command-1",
+      phase: "end",
+      name: "exec",
+      exitCode: 0,
+    });
+    await progress.pushPatchEvent({
+      itemId: "patch-1",
+      phase: "end",
+      modified: ["src/example.ts"],
+    });
+    await progress.pushApprovalEvent({ phase: "resolved", command: "ignored" });
+    await progress.pushApprovalEvent({ command: "ignored without phase" });
+    await progress.pushCommandOutputEvent({ phase: "start", title: "ignored" });
+    await progress.pushCommandOutputEvent({ title: "ignored without phase" });
+    await progress.pushPatchEvent({ phase: "start", modified: ["ignored.ts"] });
+    await progress.pushPatchEvent({ modified: ["ignored-without-phase.ts"] });
+
+    expect(progress.getSnapshot().lines).toEqual([
+      expect.objectContaining({ id: "tool-1", kind: "tool", toolName: "exec" }),
+      expect.objectContaining({ id: "item-1", kind: "item", toolName: "web_search" }),
+      expect.objectContaining({ kind: "approval", status: "requested" }),
+      expect.objectContaining({ id: "command-1", kind: "command-output", status: "completed" }),
+      expect.objectContaining({ id: "patch-1", kind: "patch", toolName: "apply_patch" }),
+    ]);
   });
 
   it("ignores status updates once the final reply started and clears both per turn", async () => {

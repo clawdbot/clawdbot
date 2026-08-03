@@ -9,6 +9,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
@@ -24,6 +25,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   assertMinimaxBaseResp,
   DEFAULT_MINIMAX_MEDIA_BASE_URL,
+  normalizeMinimaxHexAudio,
   resolveMinimaxGuardedRequestOptions,
   resolveMinimaxMediaBaseUrl,
   type MinimaxBaseResp,
@@ -58,10 +60,7 @@ type MinimaxMusicStreamFrame = {
 };
 
 function decodeHexAudioWithLimit(data: string, maxBytes: number): Buffer {
-  const trimmed = data.trim();
-  if (!/^[0-9a-f]+$/iu.test(trimmed) || trimmed.length % 2 !== 0) {
-    throw new Error("MiniMax music generation returned malformed hex audio");
-  }
+  const trimmed = normalizeMinimaxHexAudio(data, "MiniMax music generation");
   if (trimmed.length / 2 > maxBytes) {
     throw createGeneratedMusicTooLargeError(maxBytes);
   }
@@ -123,19 +122,34 @@ async function downloadTrackFromUrl(params: {
     },
   });
   try {
+    try {
+      assertProviderBinaryResponseContent(
+        result.response,
+        "MiniMax generated music download",
+        "audio",
+      );
+    } catch (error) {
+      // Release the unread response before its guarded dispatcher is closed.
+      await result.response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
     const mimeType =
       normalizeOptionalString(result.response.headers.get("content-type")) ?? "audio/mpeg";
     const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
+    const buffer = await readResponseWithLimit(result.response, params.maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `MiniMax generated music download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
+      onOverflow: ({ maxBytes }) =>
+        new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`),
+    });
+    if (buffer.byteLength === 0) {
+      throw new Error("MiniMax generated music download: malformed audio response");
+    }
     return {
-      buffer: await readResponseWithLimit(result.response, params.maxBytes, {
-        timeoutMs,
-        onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-          new Error(
-            `MiniMax generated music download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-          ),
-        onOverflow: ({ maxBytes }) =>
-          new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`),
-      }),
+      buffer,
       mimeType,
       fileName: `track-1.${ext}`,
     };
@@ -196,6 +210,7 @@ async function readStreamingTrack(
   }
   const chunks: Buffer[] = [];
   let decodedBytes = 0;
+  let completed = false;
   const text = new TextDecoder().decode(
     await readResponseBufferWithDeadline(
       response,
@@ -214,19 +229,21 @@ async function readStreamingTrack(
     }
     const frame = JSON.parse(json) as MinimaxMusicStreamFrame;
     assertMinimaxBaseResp(frame.base_resp, "MiniMax music generation failed");
-    const audio = normalizeOptionalString(frame.data?.audio);
-    if (audio) {
-      if (String(frame.data?.status ?? "") === "2" && chunks.length > 0) {
+    if (String(frame.data?.status ?? "") === "2") {
+      completed = true;
+      if (chunks.length > 0) {
         continue;
       }
-      const chunk = decodeHexAudioWithLimit(audio, maxBytes - decodedBytes);
-      const nextDecodedBytes = decodedBytes + chunk.byteLength;
-      if (nextDecodedBytes > maxBytes) {
-        throw createGeneratedMusicTooLargeError(maxBytes);
-      }
-      chunks.push(chunk);
-      decodedBytes = nextDecodedBytes;
     }
+    const audio = normalizeOptionalString(frame.data?.audio);
+    if (audio) {
+      const chunk = decodeHexAudioWithLimit(audio, maxBytes - decodedBytes);
+      chunks.push(chunk);
+      decodedBytes += chunk.byteLength;
+    }
+  }
+  if (!completed) {
+    throw new Error("MiniMax music generation stream ended without completion");
   }
   const buffer = Buffer.concat(chunks);
   if (buffer.byteLength === 0) {
@@ -400,10 +417,6 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
                 };
               })()
             : await readStreamingTrack(res, deadline, maxGeneratedMusicBytes);
-        if (!track) {
-          throw new Error("MiniMax music generation response missing audio output");
-        }
-
         return {
           tracks: [track],
           ...(responseLyrics ? { lyrics: [responseLyrics] } : {}),

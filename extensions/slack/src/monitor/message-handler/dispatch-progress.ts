@@ -1,11 +1,11 @@
 import type { AgentPlanStep } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftCompositor,
   createChannelProgressReceiptTracker,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
-  mergeChannelProgressDraftLine,
-  resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftRender,
   resolveChannelStreamingPreviewToolProgress,
@@ -110,7 +110,6 @@ export function createSlackProgressRuntime(runtimeParams: {
       previewStreamingEnabled,
     });
   let previewToolProgressSuppressed = false;
-  let legacyPreviewToolProgressLines: ChannelProgressDraftLine[] = [];
   // Last task rows emitted to the native stream; reconciliation terminalizes
   // ids that drop out (plan shrinks, tool-line <-> plan source switches).
   let nativeTaskState: SlackNativeTaskSnapshot = new Map();
@@ -321,13 +320,17 @@ export function createSlackProgressRuntime(runtimeParams: {
   const progressDraft = createChannelProgressDraftCompositor({
     entry: account.config,
     mode: slackStreaming.mode,
-    active: progressDraftActive && streamMode === "status_final",
+    active: progressDraftActive,
     seed: progressSeed,
     formatLine: escapeSlackMrkdwn,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
     reasoningGate: previewToolProgressEnabled,
     commentaryItalics: false,
+    buildProgressEventLine: (input, options) =>
+      input.event === "tool" || input.event === "item"
+        ? buildChannelProgressDraftLineForEntry(account.config, input, options)
+        : buildChannelProgressDraftLine(input, options),
     updateOnLineChange: useNativeProgressStreaming || useRichProgressDraft,
     update: async (previewText, options) => {
       if (useNativeProgressStreaming) {
@@ -437,7 +440,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     }
     const text = formatChannelProgressDraftText({
       entry: account.config,
-      lines: legacyPreviewToolProgressLines,
+      lines: [...progressDraft.getSnapshot().lines],
       seed: progressSeed,
       formatLine: escapeSlackMrkdwn,
       narration: explanation,
@@ -468,31 +471,10 @@ export function createSlackProgressRuntime(runtimeParams: {
       await progressDraft.pushToolProgress(line, options);
       return;
     }
-    if (
-      !line ||
-      !normalized ||
-      !draftStream ||
-      !previewToolProgressEnabled ||
-      previewToolProgressSuppressed
-    ) {
+    if (!line || !normalized || !draftStream || !previewToolProgressEnabled) {
       return;
     }
-    const nextLines = mergeChannelProgressDraftLine(legacyPreviewToolProgressLines, line, {
-      maxLines: resolveChannelProgressDraftMaxLines(account.config),
-    });
-    if (nextLines === legacyPreviewToolProgressLines) {
-      return;
-    }
-    legacyPreviewToolProgressLines = nextLines;
-    draftStream.update(
-      formatChannelProgressDraftText({
-        entry: account.config,
-        lines: legacyPreviewToolProgressLines,
-        seed: progressSeed,
-        formatLine: escapeSlackMrkdwn,
-      }),
-    );
-    hasStreamedMessage = true;
+    await progressDraft.pushToolProgress(line, options);
   };
 
   const updateDraftFromPartial = (text?: string) => {
@@ -503,7 +485,7 @@ export function createSlackProgressRuntime(runtimeParams: {
 
     if (streamMode === "append") {
       previewToolProgressSuppressed = true;
-      legacyPreviewToolProgressLines = [];
+      progressDraft.suppress();
       const next = applyAppendOnlyStreamUpdate({
         incoming: trimmed,
         rendered: appendRenderedText,
@@ -524,7 +506,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     }
 
     previewToolProgressSuppressed = true;
-    legacyPreviewToolProgressLines = [];
+    progressDraft.suppress();
     draftStream?.update(trimmed);
     hasStreamedMessage = true;
   };
@@ -551,6 +533,8 @@ export function createSlackProgressRuntime(runtimeParams: {
         text: normalized,
         label: "Reasoning",
       });
+      // Tool admission closes reasoning bursts; restore this still-open preview lane.
+      progressDraft.mergeReasoningProgress(normalized, { snapshot: true });
       return;
     }
     progressReceipt.noteReasoning();
@@ -564,9 +548,8 @@ export function createSlackProgressRuntime(runtimeParams: {
     appendSourceText = "";
   };
   const resetDraftProgressState = () => {
-    progressDraft.resetReasoningProgress();
     previewToolProgressSuppressed = false;
-    legacyPreviewToolProgressLines = [];
+    progressDraft.reset();
   };
   const beginNewProgressTurn = async (options?: { force?: boolean }) => {
     const completionChunks =

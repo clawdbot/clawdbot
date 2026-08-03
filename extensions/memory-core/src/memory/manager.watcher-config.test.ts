@@ -175,6 +175,7 @@ import {
   getMemorySearchManager,
   type MemoryIndexManager,
 } from "./index.js";
+import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
@@ -230,7 +231,7 @@ describe("memory watcher config", () => {
     const defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {
       workspace: workspaceDir,
     };
-    return {
+    return isolateMemoryManagerTestConfig({
       memory: {
         backend: "builtin",
         search: {
@@ -247,7 +248,7 @@ describe("memory watcher config", () => {
         defaults,
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    } as OpenClawConfig);
   }
 
   async function expectWatcherManager(cfg: OpenClawConfig) {

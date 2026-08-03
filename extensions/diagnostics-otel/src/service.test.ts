@@ -57,6 +57,7 @@ const telemetryState = vi.hoisted(() => {
 
 const sdkStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const sdkShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const sdkCtor = vi.hoisted(() => vi.fn());
 const logEmit = vi.hoisted(() => vi.fn());
 const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
@@ -107,6 +108,10 @@ vi.mock("@opentelemetry/api", () => ({
 
 vi.mock("@opentelemetry/sdk-node", () => ({
   NodeSDK: class {
+    constructor(options?: unknown) {
+      sdkCtor(options);
+    }
+
     start = sdkStart;
     shutdown = sdkShutdown;
   },
@@ -220,7 +225,9 @@ const LATE_CHILD_ELAPSED_MS = 30 * 60_000 + 1_000;
 const PROTO_KEY = "__proto__";
 const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
 const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
+const OTEL_TEST_USERINFO = ["operator", "example-fixture"].join(":");
 const ORIGINAL_OPENCLAW_OTEL_PRELOADED = process.env.OPENCLAW_OTEL_PRELOADED;
+const ORIGINAL_OTEL_EXPORTER_OTLP_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
 const ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL = process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
 const ORIGINAL_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
 const ORIGINAL_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
@@ -584,6 +591,7 @@ describe("diagnostics-otel service", () => {
     telemetryState.tracer.setSpanContext.mockClear();
     telemetryState.meter.createCounter.mockClear();
     telemetryState.meter.createHistogram.mockClear();
+    sdkCtor.mockClear();
     sdkStart.mockClear();
     sdkShutdown.mockClear();
     logEmit.mockReset();
@@ -597,6 +605,7 @@ describe("diagnostics-otel service", () => {
     createNodeProxyAgentMock.mockReturnValue(undefined);
     unhandledRejectionHandlerState.reset();
     unhandledRejectionHandlerState.register.mockClear();
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
@@ -612,6 +621,11 @@ describe("diagnostics-otel service", () => {
       delete process.env.OPENCLAW_OTEL_PRELOADED;
     } else {
       process.env.OPENCLAW_OTEL_PRELOADED = ORIGINAL_OPENCLAW_OTEL_PRELOADED;
+    }
+    if (ORIGINAL_OTEL_EXPORTER_OTLP_ENDPOINT === undefined) {
+      delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    } else {
+      process.env.OTEL_EXPORTER_OTLP_ENDPOINT = ORIGINAL_OTEL_EXPORTER_OTLP_ENDPOINT;
     }
     if (ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL === undefined) {
       delete process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
@@ -704,6 +718,49 @@ describe("diagnostics-otel service", () => {
       expect(Object.hasOwn(emitCall.attributes ?? {}, key)).toBe(false);
     }
   });
+
+  test.each([
+    {
+      metricNamePrefix: undefined,
+      expectedTokenName: "openclaw.tokens",
+      expectedDurationName: "openclaw.run.duration_ms",
+    },
+    {
+      metricNamePrefix: "acme.",
+      expectedTokenName: "acme.tokens",
+      expectedDurationName: "acme.run.duration_ms",
+    },
+    {
+      metricNamePrefix: "",
+      expectedTokenName: "tokens",
+      expectedDurationName: "run.duration_ms",
+    },
+    {
+      metricNamePrefix: "acme.openclaw.",
+      expectedTokenName: "acme.openclaw.tokens",
+      expectedDurationName: "acme.openclaw.run.duration_ms",
+    },
+  ])(
+    "replaces the default OpenClaw metric prefix with $metricNamePrefix",
+    async ({ metricNamePrefix, expectedTokenName, expectedDurationName }) => {
+      await startOtelService({
+        metrics: true,
+        configure: (ctx) => {
+          if (metricNamePrefix !== undefined) {
+            ctx.config.diagnostics!.otel!.metricNamePrefix = metricNamePrefix;
+          }
+        },
+      });
+
+      expect(telemetryState.counters.has(expectedTokenName)).toBe(true);
+      expect(telemetryState.histograms.has(expectedDurationName)).toBe(true);
+      expect(telemetryState.histograms.has("gen_ai.client.token.usage")).toBe(true);
+      expect(telemetryState.histograms.has("gen_ai.client.operation.duration")).toBe(true);
+      expect(telemetryState.counters.has("openclaw.tokens")).toBe(
+        expectedTokenName === "openclaw.tokens",
+      );
+    },
+  );
 
   test("records message-flow metrics and spans", async () => {
     await startOtelService({ traces: true, metrics: true, logs: true });
@@ -1645,6 +1702,16 @@ describe("diagnostics-otel service", () => {
       "https://collector.example.com/otlp/v1/traces#tenant-a",
     ],
     [
+      "preserves valid collector credentials and query parameters",
+      `https://${OTEL_TEST_USERINFO}@collector.example.com/otlp?tenant=red`,
+      `https://${OTEL_TEST_USERINFO}@collector.example.com/otlp/v1/traces?tenant=red`,
+    ],
+    [
+      "preserves parseable non-HTTP collector URL schemes",
+      "custom+otel://collector.example.com/otlp",
+      "custom+otel://collector.example.com/otlp/v1/traces",
+    ],
+    [
       "keeps signal-qualified endpoint unchanged when signal path casing differs",
       "https://collector.example.com/v1/Traces",
       "https://collector.example.com/v1/Traces",
@@ -1720,6 +1787,105 @@ describe("diagnostics-otel service", () => {
     expect(logOptions.url).toBe("https://log-env.example.com/otlp/v1/logs");
   });
 
+  test("ignores malformed shared OTLP env when valid signal endpoints shadow it", async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://operator:qa-ignored-shared-password@[";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "https://trace-env.example.com/v1/traces";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = "https://metric-env.example.com/v1/metrics";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = "https://log-env.example.com/v1/logs";
+
+    await startOtelService({ traces: true, metrics: true, logs: true });
+
+    expect(firstExporterOptions(traceExporterCtor).url).toBe(
+      "https://trace-env.example.com/v1/traces",
+    );
+    expect(firstExporterOptions(metricExporterCtor).url).toBe(
+      "https://metric-env.example.com/v1/metrics",
+    );
+    expect(firstExporterOptions(logExporterCtor).url).toBe("https://log-env.example.com/v1/logs");
+  });
+
+  test("treats whitespace-only OTLP environment endpoints as unset", async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = " \u00a0 ";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = " \t ";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = "\u2000";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = "\ufeff";
+
+    await startOtelService({ traces: true, metrics: true, logs: true });
+
+    expect(firstExporterOptions(traceExporterCtor).url).toBe(`${OTEL_TEST_ENDPOINT}/v1/traces`);
+    expect(firstExporterOptions(metricExporterCtor).url).toBe(`${OTEL_TEST_ENDPOINT}/v1/metrics`);
+    expect(firstExporterOptions(logExporterCtor).url).toBe(`${OTEL_TEST_ENDPOINT}/v1/logs`);
+  });
+
+  test.each([
+    {
+      enabledSignal: "traces",
+      flags: { traces: true, metrics: false, logs: false },
+      metricReaderCount: 0,
+      tracesDisabled: false,
+    },
+    {
+      enabledSignal: "metrics",
+      flags: { traces: false, metrics: true, logs: false },
+      metricReaderCount: 1,
+      tracesDisabled: true,
+    },
+    {
+      enabledSignal: "traces and metrics",
+      flags: { traces: true, metrics: true, logs: false },
+      metricReaderCount: 1,
+      tracesDisabled: false,
+    },
+  ] as const)(
+    "keeps NodeSDK exporter ownership explicit for $enabledSignal",
+    async ({ flags, metricReaderCount, tracesDisabled }) => {
+      await startOtelService(flags);
+
+      const options = mockCallArg(sdkCtor, 0) as {
+        logRecordProcessors?: unknown[];
+        metricReaders?: unknown[];
+        spanProcessors?: unknown[];
+      };
+      expect(options.logRecordProcessors).toEqual([]);
+      expect(options.metricReaders).toHaveLength(metricReaderCount);
+      expect(options).not.toHaveProperty("metricReader");
+      if (tracesDisabled) {
+        expect(options.spanProcessors).toEqual([]);
+      }
+    },
+  );
+
+  test("ignores malformed collector endpoints for preloaded traces and metrics", async () => {
+    process.env.OPENCLAW_OTEL_PRELOADED = "1";
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://operator:qa-preloaded-shared-password@[";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT =
+      "https://operator:qa-preloaded-trace-password@[";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
+      "https://operator:qa-preloaded-metric-password@[";
+
+    await startOtelService({ traces: true, metrics: true, logs: false });
+
+    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(metricExporterCtor).not.toHaveBeenCalled();
+  });
+
+  test("ignores malformed collector endpoints for stdout-only diagnostics", async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://operator:qa-stdout-shared-password@[";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = "https://operator:qa-stdout-log-password@[";
+
+    await startOtelService({
+      endpoint: "https://operator:qa-stdout-config-password@[",
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "stdout",
+    });
+
+    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(logExporterCtor).not.toHaveBeenCalled();
+  });
+
   test("passes env proxy agents to OTLP HTTP exporters", async () => {
     createNodeProxyAgentMock.mockReturnValue(nodeProxyAgent);
 
@@ -1762,11 +1928,14 @@ describe("diagnostics-otel service", () => {
     try {
       const rootCertificatePath = path.join(certDir, "root.pem");
       const clientCertificatePath = path.join(certDir, "client.pem");
+      const sharedClientCertificatePath = path.join(certDir, "shared-client.pem");
       const clientKeyPath = path.join(certDir, "client-key.pem");
       writeFileSync(rootCertificatePath, "root-certificate");
       writeFileSync(clientCertificatePath, "trace-client-certificate");
+      writeFileSync(sharedClientCertificatePath, "shared-client-certificate");
       writeFileSync(clientKeyPath, "client-key");
       process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = rootCertificatePath;
+      process.env.OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE = sharedClientCertificatePath;
       process.env.OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE = clientCertificatePath;
       process.env.OTEL_EXPORTER_OTLP_CLIENT_KEY = clientKeyPath;
       createNodeProxyAgentMock.mockReturnValue(nodeProxyAgent);
@@ -1793,6 +1962,7 @@ describe("diagnostics-otel service", () => {
       expect(metricCall.agentOptions).toEqual({
         keepAlive: true,
         ca: Buffer.from("root-certificate"),
+        cert: Buffer.from("shared-client-certificate"),
         key: Buffer.from("client-key"),
       });
     } finally {
@@ -1826,31 +1996,213 @@ describe("diagnostics-otel service", () => {
     }
   });
 
-  test("falls back to default OTLP agents when env proxy agent creation fails", async () => {
+  test("pins validated collector TLS material on direct HTTPS exporter agents", async () => {
+    const certDir = mkdtempSync(path.join(tmpdir(), "openclaw-otel-direct-tls-"));
+    try {
+      const rootCertificatePath = path.join(certDir, "root.pem");
+      writeFileSync(rootCertificatePath, "explicit-root-certificate");
+      process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = rootCertificatePath;
+
+      await startOtelService({
+        endpoint: "https://collector.example.com/otlp",
+        traces: true,
+      });
+
+      expect(firstExporterOptions(traceExporterCtor).httpAgentOptions).toEqual({
+        keepAlive: true,
+        ca: Buffer.from("explicit-root-certificate"),
+      });
+    } finally {
+      rmSync(certDir, { force: true, recursive: true });
+    }
+  });
+
+  test("validates log TLS before constructing any trace, metric, or SDK owner", async () => {
+    process.env.OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE =
+      "/definitely-missing/qa-otel-log-root-atomic.pem";
+
+    await expect(
+      startOtelService({
+        endpoint: "https://collector.example.com/otlp",
+        traces: true,
+        metrics: true,
+        logs: true,
+      }),
+    ).rejects.toThrow(
+      "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
+    );
+
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(metricExporterCtor).not.toHaveBeenCalled();
+    expect(logExporterCtor).not.toHaveBeenCalled();
+    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(sdkStart).not.toHaveBeenCalled();
+  });
+
+  test("never falls back from an unreadable signal TLS file to readable shared trust", async () => {
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = process.execPath;
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE =
+      "/definitely-missing/qa-otel-signal-override.pem";
+
+    await expect(startOtelService({ traces: true })).rejects.toThrow(
+      "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
+    );
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+  });
+
+  test("lets a readable signal TLS file shadow an unreadable shared trust file", async () => {
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE =
+      "/definitely-missing/qa-otel-shadowed-shared-root.pem";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = process.execPath;
+
+    await startOtelService({ traces: true });
+
+    expect(traceExporterCtor).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps valid ambient TLS material compatible with plain HTTP collectors", async () => {
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = process.execPath;
+
+    await startOtelService({ endpoint: "http://collector.example.com/otlp", traces: true });
+
+    expect(traceExporterCtor).toHaveBeenCalledTimes(1);
+    expect(firstExporterOptions(traceExporterCtor).httpAgentOptions).toBeUndefined();
+  });
+
+  test("does not validate TLS material owned by a preloaded SDK", async () => {
+    process.env.OPENCLAW_OTEL_PRELOADED = "1";
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE =
+      "/definitely-missing/qa-otel-preloaded-traces-root.pem";
+    process.env.OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE =
+      "/definitely-missing/qa-otel-preloaded-metrics-root.pem";
+
+    await startOtelService({ traces: true, metrics: true, logs: false });
+
+    expect(sdkCtor).not.toHaveBeenCalled();
+  });
+
+  test("still validates plugin-owned OTLP logs when a trace SDK is preloaded", async () => {
+    process.env.OPENCLAW_OTEL_PRELOADED = "1";
+    process.env.OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE =
+      "/definitely-missing/qa-otel-preloaded-log-root.pem";
+
+    await expect(startOtelService({ traces: true, logs: true })).rejects.toThrow(
+      "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
+    );
+    expect(logExporterCtor).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    {
+      signal: "disabled traces",
+      envKey: "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+      flags: { traces: false, metrics: true, logs: false },
+    },
+    {
+      signal: "disabled metrics",
+      envKey: "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+      flags: { traces: true, metrics: false, logs: false },
+    },
+    {
+      signal: "disabled logs",
+      envKey: "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
+      flags: { traces: true, metrics: false, logs: false },
+    },
+    {
+      signal: "stdout-only logs",
+      envKey: "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
+      flags: { traces: true, metrics: false, logs: true, logsExporter: "stdout" },
+    },
+  ] as const)("does not read TLS files for $signal", async ({ envKey, flags }) => {
+    process.env[envKey] = "/definitely-missing/qa-otel-inactive-signal-root.pem";
+
+    await startOtelService(flags);
+
+    expect(sdkCtor).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    ["traces", { traces: true }, "unsupported proxy protocol"],
+    ["metrics", { metrics: true }, "invalid proxy URL"],
+    ["logs", { logs: true }, "unsupported proxy protocol"],
+  ] as const)(
+    "refuses direct %s export when the configured proxy cannot initialize",
+    async (_signal, signals, errorMessage) => {
+      createNodeProxyAgentMock.mockImplementation(() => {
+        throw new Error(errorMessage);
+      });
+
+      await expect(
+        startOtelService({ endpoint: "https://collector.example.com/otlp", ...signals }),
+      ).rejects.toThrow(
+        "Configured telemetry proxy is invalid or unsupported; refusing direct export",
+      );
+
+      expect(traceExporterCtor).not.toHaveBeenCalled();
+      expect(metricExporterCtor).not.toHaveBeenCalled();
+      expect(logExporterCtor).not.toHaveBeenCalled();
+    },
+  );
+
+  test("redacts proxy credentials from telemetry startup failures", async () => {
+    const proxyPassword = "qa-otel-proxy-password-sentinel";
     createNodeProxyAgentMock.mockImplementation(() => {
-      throw new Error("unsupported proxy protocol");
+      throw new Error(`Invalid proxy URL: "https://operator:${proxyPassword}@proxy.example.com"`);
     });
 
-    const { ctx } = await startOtelService({
+    const failure = await startOtelService({
       endpoint: "https://collector.example.com/otlp",
       traces: true,
-      metrics: true,
-      logs: true,
-    });
+    }).catch((error: unknown) => error);
 
-    expect(firstExporterOptions(traceExporterCtor).httpAgentOptions).toBeUndefined();
-    expect(firstExporterOptions(metricExporterCtor).httpAgentOptions).toBeUndefined();
-    expect(firstExporterOptions(logExporterCtor).httpAgentOptions).toBeUndefined();
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "diagnostics-otel: env proxy agent unavailable for OTLP traces exporter; falling back to default Node agent",
-    );
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "diagnostics-otel: env proxy agent unavailable for OTLP metrics exporter; falling back to default Node agent",
-    );
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "diagnostics-otel: env proxy agent unavailable for OTLP logs exporter; falling back to default Node agent",
-    );
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({
+      message: "Configured telemetry proxy is invalid or unsupported; refusing direct export",
+    });
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(proxyPassword);
+    expect(traceExporterCtor).not.toHaveBeenCalled();
   });
+
+  test.each([
+    {
+      disabledSignal: "traces",
+      enabledSignal: "metrics",
+      disabledEndpoint: "tracesEndpoint",
+      signals: { traces: false, metrics: true },
+    },
+    {
+      disabledSignal: "metrics",
+      enabledSignal: "traces",
+      disabledEndpoint: "metricsEndpoint",
+      signals: { traces: true, metrics: false },
+    },
+  ] as const)(
+    "does not resolve proxy settings for disabled $disabledSignal export",
+    async ({ disabledSignal, enabledSignal, disabledEndpoint, signals }) => {
+      createNodeProxyAgentMock.mockImplementation(({ targetUrl }: { targetUrl: string }) => {
+        if (targetUrl.includes(`disabled-${disabledSignal}.example.com`)) {
+          throw new Error("invalid disabled-signal proxy");
+        }
+        return nodeProxyAgent;
+      });
+
+      await startOtelService({
+        endpoint: "https://collector.example.com/otlp",
+        ...signals,
+        configure: (ctx) => {
+          ctx.config.diagnostics!.otel![disabledEndpoint] =
+            `https://disabled-${disabledSignal}.example.com/otlp`;
+        },
+      });
+
+      expect(createNodeProxyAgentCalls()).toEqual([
+        expect.objectContaining({
+          targetUrl: `https://collector.example.com/otlp/v1/${enabledSignal}`,
+        }),
+      ]);
+    },
+  );
 
   test("leaves OTLP HTTP exporters on their default agents when env proxy is bypassed", async () => {
     await startOtelService({

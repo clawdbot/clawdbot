@@ -135,7 +135,6 @@ export function buildWorkerAgentMeta(params: {
     usageAccumulator,
     lastAssistantUsage: lastAssistant?.usage,
     lastRunPromptUsage,
-    lastTurnTotal: lastRunPromptUsage?.total,
   });
   const reportedModelRef = resolveReportedModelRef({
     ...params.modelRef,

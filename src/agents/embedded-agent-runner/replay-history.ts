@@ -363,7 +363,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     if (Array.isArray(replayContent) && replayContent.length === 0) {
       // An assistant turn can legitimately end with `content: []` — for
       // example the silent-reply / NO_REPLY path locked in by
-      // run.empty-error-retry.test.ts ("Clean stop with no output is a
+      // run.shared-integration.test.ts ("Clean stop with no output is a
       // legitimate silent reply, not a crash"). We must NOT inject the
       // failure sentinel into those turns: doing so would fabricate a
       // failure statement in the next provider request and change model

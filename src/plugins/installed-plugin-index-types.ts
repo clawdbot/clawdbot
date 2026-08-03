@@ -29,7 +29,6 @@ export type InstalledPluginIndexRefreshReason =
 export type InstalledPluginStartupInfo = {
   sidecar: boolean;
   memory: boolean;
-  deferConfiguredChannelFullLoadUntilAfterListen: boolean;
   agentHarnesses: readonly string[];
   /**
    * Manifest activation.onConfigPaths copied into the installed index for

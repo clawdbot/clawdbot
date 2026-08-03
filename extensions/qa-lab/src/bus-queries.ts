@@ -115,7 +115,7 @@ export function searchQaBusMessages(params: {
   const limit = Math.max(1, Math.min(params.input.limit ?? 20, 100));
   const query = normalizeOptionalLowercaseString(params.input.query);
   return Array.from(params.messages.values())
-    .filter((message) => message.accountId === accountId)
+    .filter((message) => message.accountId === accountId && !message.deleted)
     .filter((message) =>
       params.input.conversationId !== undefined
         ? message.conversation.id === params.input.conversationId

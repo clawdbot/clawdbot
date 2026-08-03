@@ -47,6 +47,7 @@ export type AgentRunRequest = {
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
   forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   timeout?: number;
   bestEffortDeliver?: boolean;
   cleanupBundleMcpOnRunEnd?: boolean;

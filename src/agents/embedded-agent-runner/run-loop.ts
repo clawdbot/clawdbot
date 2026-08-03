@@ -43,6 +43,13 @@ import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
 } from "./run/incomplete-turn.js";
+import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
+import {
+  beginRunAttempt,
+  createRunRetryBudget,
+  isRunRetryBudgetExhausted,
+  recordRunRetry,
+} from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
@@ -77,20 +84,25 @@ export async function runPreparedEmbeddedLoop(
   const { maybeEmitFastModeAutoResetBestEffort, notifyExecutionPhase } = input.progressController;
   const { laneTaskAbortController } = input.laneController;
   let startupStagesEmitted = false;
-  const preparedRuntime = await prepareEmbeddedRunRuntime({
-    runParams: params,
-    provider,
-    modelId,
-    agentDir,
-    workspaceDir: resolvedWorkspace,
-    globalLane,
-    hookRunner,
-    hookContext: hookCtx,
-    markStartupStage: (stage) => startupStages.mark(stage),
-    notifyExecutionPhase,
-    fallbackConfigured,
-    preparedModelRuntime: input.preparedModelRuntime,
-  });
+  const preparedRuntime = await measureEmbeddedAgentPreparation(
+    "runtime",
+    () =>
+      prepareEmbeddedRunRuntime({
+        runParams: params,
+        provider,
+        modelId,
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+        globalLane,
+        hookRunner,
+        hookContext: hookCtx,
+        markStartupStage: (stage) => startupStages.mark(stage),
+        notifyExecutionPhase,
+        fallbackConfigured,
+        preparedModelRuntime: input.preparedModelRuntime,
+      }),
+    { config: params.config },
+  );
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;
   const {
@@ -168,14 +180,14 @@ export async function runPreparedEmbeddedLoop(
   const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
   const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
-  const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
+  const MAX_RUN_RETRY_ATTEMPTS = resolveMaxRunRetryIterations(profileCandidates.length);
+  const runRetryBudget = createRunRetryBudget(MAX_RUN_RETRY_ATTEMPTS);
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   let bootstrapPromptWarningSignaturesSeen =
     params.bootstrapPromptWarningSignaturesSeen ??
     (params.bootstrapPromptWarningSignature ? [params.bootstrapPromptWarningSignature] : []);
   const usageAccumulator = createUsageAccumulator();
   let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-  let runLoopIterations = 0;
   let overloadProfileRotations = 0;
   const terminalRetryState = createEmbeddedRunTerminalRetryState();
   let sameModelIdleTimeoutRetries = 0;
@@ -254,10 +266,15 @@ export async function runPreparedEmbeddedLoop(
   // Resolve the context engine once and reuse across retries to avoid
   // repeated initialization/connection overhead per attempt.
   ensureContextEnginesInitialized();
-  const contextEngine = await resolveContextEngine(params.config, {
-    agentDir,
-    workspaceDir: resolvedWorkspace,
-  });
+  const contextEngine = await measureEmbeddedAgentPreparation(
+    "context-engine",
+    () =>
+      resolveContextEngine(params.config, {
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+      }),
+    { config: params.config },
+  );
   const resolveContextEnginePluginId = () => resolveContextEngineOwnerPluginId(contextEngine);
   startupStages.mark("context-engine");
   notifyExecutionPhase("context_engine", { provider, model: modelId });
@@ -272,18 +289,16 @@ export async function runPreparedEmbeddedLoop(
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
     let latestMcpAppChannelView: McpAppChannelView | undefined;
-    // Hoisted so the retry-limit error path can use the most recent API total.
-    let lastTurnTotal: number | undefined;
     while (true) {
       refreshPreparedRuntimeSnapshot();
-      if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
+      if (isRunRetryBudgetExhausted(runRetryBudget)) {
         const message =
-          `Exceeded retry limit after ${runLoopIterations} attempts ` +
-          `(max=${MAX_RUN_LOOP_ITERATIONS}).`;
+          `Exceeded retry limit after ${runRetryBudget.attemptsDispatched} attempts ` +
+          `(counted attempts=${runRetryBudget.attemptsCounted}, max=${runRetryBudget.maxAttempts}).`;
         log.error(
           `[run-retry-limit] sessionKey=${params.sessionKey ?? params.sessionId} ` +
-            `provider=${provider}/${modelId} attempts=${runLoopIterations} ` +
-            `maxAttempts=${MAX_RUN_LOOP_ITERATIONS}`,
+            `provider=${provider}/${modelId} attempts=${runRetryBudget.attemptsDispatched} ` +
+            `countedAttempts=${runRetryBudget.attemptsCounted} maxAttempts=${runRetryBudget.maxAttempts}`,
         );
         const retryLimitDecision = resolveRunFailoverDecision({
           stage: "retry_limit",
@@ -305,20 +320,19 @@ export async function runPreparedEmbeddedLoop(
             ...outerContextTokenMeta,
             usageAccumulator,
             lastRunPromptUsage,
-            lastTurnTotal,
           }),
           replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
           livenessState: "blocked",
         });
       }
-      runLoopIterations += 1;
+      beginRunAttempt(runRetryBudget);
       const runtimeAuthRetry: boolean = authRetryPending;
       authRetryPending = false;
       attemptedThinking.add(thinkLevel);
       const codexAppServerRecoveryRetryAvailable = hasCodexAppServerRecoveryRetryBudget({
         alreadyRetried: codexAppServerRecoveryRetries > 0,
-        runLoopIterations,
-        maxRunLoopIterations: MAX_RUN_LOOP_ITERATIONS,
+        runLoopIterations: runRetryBudget.attemptsCounted,
+        maxRunLoopIterations: runRetryBudget.maxAttempts,
       });
       const dispatch = await prepareAndDispatchEmbeddedRunAttempt({
         runInput: input,
@@ -347,6 +361,10 @@ export async function runPreparedEmbeddedLoop(
       });
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
+      // Preserve the newest launch target before normalization can request an early retry.
+      latestMcpAppChannelView =
+        dispatchedAttempt.rawAttempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
+      dispatchedAttempt.rawAttempt.latestMcpAppChannelView = latestMcpAppChannelView;
       const normalizedAttempt = await normalizeEmbeddedRunAttempt({
         runInput: input,
         preparedRuntime,
@@ -357,7 +375,6 @@ export async function runPreparedEmbeddedLoop(
         bootstrapPromptWarningSignaturesSeen,
         usageAccumulator,
         lastRunPromptUsage,
-        lastTurnTotal,
         idleTimeoutBreakerState,
         contextRecoveryState,
         replayState: accumulatedReplayState,
@@ -370,13 +387,12 @@ export async function runPreparedEmbeddedLoop(
         bootstrapPromptWarningSignaturesSeen =
           normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
         lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
-        lastTurnTotal = normalizedAttempt.lastTurnTotal;
         accumulatedReplayState = normalizedAttempt.replayState;
+        recordRunRetry(runRetryBudget, normalizedAttempt.retryKind);
         continue;
       }
       bootstrapPromptWarningSignaturesSeen = normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
       lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
-      lastTurnTotal = normalizedAttempt.lastTurnTotal;
       accumulatedReplayState = normalizedAttempt.replayState;
       const {
         attempt,
@@ -392,9 +408,6 @@ export async function runPreparedEmbeddedLoop(
         resolveReplayInvalidForAttempt,
         canRestartForLiveSwitch,
       } = normalizedAttempt;
-      // Continuation retries remain one user turn, so keep the newest launch target.
-      latestMcpAppChannelView = attempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
-      attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       const recovery = await recoverEmbeddedRunAttempt({
         runInput: input,
         preparedRuntime,
@@ -410,7 +423,6 @@ export async function runPreparedEmbeddedLoop(
         armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
         usageAccumulator,
         lastRunPromptUsage,
-        lastTurnTotal,
         runtimeAuthRetry,
         codexAppServerRecoveryRetryAvailable,
         codexAppServerRecoveryRetries,
@@ -509,7 +521,6 @@ export async function runPreparedEmbeddedLoop(
           resolvedToolResultFormat,
         },
         lastRunPromptUsage,
-        lastTurnTotal,
         finalization: {
           preparedAttempt: dispatchedAttempt.preparedAttempt,
           harness: agentHarness,
@@ -528,7 +539,6 @@ export async function runPreparedEmbeddedLoop(
         finalizationAttempted: settledTurnFinalizationAttempted,
       } = finalizedTerminal;
       lastRunPromptUsage = finalizedTerminal.lastRunPromptUsage;
-      lastTurnTotal = finalizedTerminal.lastTurnTotal;
       if (finalizedTerminal.finalizationSucceeded) {
         assistantProfileFailureReason = null;
       }

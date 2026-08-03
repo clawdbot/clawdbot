@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import {
   ackDelivery,
   claimDeliveryPlatformSendAttempt,
@@ -20,8 +21,10 @@ import {
   markDeliveryPlatformSendAttemptStarted,
   moveToFailed,
   reserveDeliveryAttempt,
+  type QueuedDelivery,
 } from "./delivery-queue-storage.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
+import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 describe("delivery-queue storage", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
@@ -33,8 +36,8 @@ describe("delivery-queue storage", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
     });
     const row = db
-      .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?")
-      .get(id) as { status?: string } | undefined;
+      .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+      .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { status?: string } | undefined;
     return row?.status;
   }
 
@@ -181,6 +184,52 @@ describe("delivery-queue storage", () => {
       expect(readQueuedEntry(tmpDir(), id).maxRetries).toBe(45);
     });
 
+    it("projects process-local hook metadata out before JSON custody", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        preparedBatch: {
+          schemaVersion: 1,
+          sourcePayloadCount: 1,
+          entries: [
+            {
+              sourceIndex: 0,
+              status: "suppressed",
+              reason: "cancelled_by_message_sending_hook",
+              hookEffect: {
+                cancelReason: "owned elsewhere",
+                metadata: { nonJsonValue: 1n },
+              },
+            },
+          ],
+        },
+      });
+
+      expect(readQueuedEntry(tmpDir(), id).preparedBatch).toEqual({
+        schemaVersion: 1,
+        sourcePayloadCount: 1,
+        entries: [
+          {
+            sourceIndex: 0,
+            status: "suppressed",
+            reason: "cancelled_by_message_sending_hook",
+          },
+        ],
+      });
+    });
+
+    it("canonicalizes duplicate singular and plural media before recording fan-out", async () => {
+      const mediaUrl = "https://example.com/same.png";
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "caption", mediaUrl, mediaUrls: [mediaUrl] }],
+      });
+
+      const entry = readQueuedEntry(tmpDir(), id) as unknown as QueuedDelivery;
+      expect(acceptedPreparedOutboundEntries(entry.preparedBatch)[0]?.preparedMediaCount).toBe(1);
+    });
+
     it("atomically reserves delivery attempts up to the producer budget", async () => {
       const id = await enqueueTextDelivery({
         channel: "directchat",
@@ -286,7 +335,11 @@ describe("delivery-queue storage", () => {
         requesterSenderId: "sender-1",
       });
       expect(entry.retryCount).toBe(0);
-      expect(entry.payloads).toEqual([{ text: "hello" }]);
+      expect(
+        acceptedPreparedOutboundEntries((entry as unknown as QueuedDelivery).preparedBatch).map(
+          (prepared) => prepared.payload,
+        ),
+      ).toEqual([{ text: "hello" }]);
 
       await ackDelivery(id, tmpDir());
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
@@ -320,7 +373,9 @@ describe("delivery-queue storage", () => {
       expect(first).toEqual({ id: "operation-stable", created: true });
       expect(repeated).toEqual({ id: "operation-stable", created: false });
       expect(readQueuedEntry(tmpDir(), "operation-stable")).toMatchObject({
-        payloads: [{ text: "first" }],
+        preparedBatch: {
+          entries: [expect.objectContaining({ payload: { text: "first" }, status: "accepted" })],
+        },
         deliveryCompletion: {
           kind: "conversation",
           agentId: "main",

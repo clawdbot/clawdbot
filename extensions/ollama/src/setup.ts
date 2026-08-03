@@ -142,6 +142,9 @@ export async function checkOllamaCloudAuth(
       }
       return { signedIn: true };
     } finally {
+      // Capture can retain a cloned tee branch, so cancellation must not delay
+      // the guard's bounded dispatcher release.
+      void response.body?.cancel().catch(() => undefined);
       await release();
     }
   } catch {

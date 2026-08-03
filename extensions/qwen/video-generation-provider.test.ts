@@ -9,6 +9,10 @@ import {
   expectSuccessfulDashscopeVideoResult,
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
+import {
+  DASHSCOPE_WAN_VIDEO_MODELS,
+  DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
+} from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const {
@@ -19,10 +23,10 @@ const {
   sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
 
-let buildQwenVideoGenerationProvider: typeof import("./video-generation-provider.js").buildQwenVideoGenerationProvider;
+let qwenVideoGenerationProvider: typeof import("./video-generation-provider.js").qwenVideoGenerationProvider;
 
 beforeAll(async () => {
-  ({ buildQwenVideoGenerationProvider } = await import("./video-generation-provider.js"));
+  ({ qwenVideoGenerationProvider } = await import("./video-generation-provider.js"));
 });
 
 installProviderHttpMockCleanup();
@@ -74,13 +78,19 @@ function streamedVideoResponse(bytes: string): Response {
 
 describe("qwen video generation provider", () => {
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildQwenVideoGenerationProvider());
+    expectExplicitVideoGenerationCapabilities(qwenVideoGenerationProvider);
+    expect(qwenVideoGenerationProvider).toMatchObject({
+      id: "qwen",
+      label: "Qwen Cloud",
+      defaultModel: DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
+      models: [...DASHSCOPE_WAN_VIDEO_MODELS],
+    });
   });
 
   it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 
-    const provider = buildQwenVideoGenerationProvider();
+    const provider = qwenVideoGenerationProvider;
     const result = await provider.generateVideo({
       provider: "qwen",
       model: "wan2.6-r2v-flash",
@@ -130,7 +140,7 @@ describe("qwen video generation provider", () => {
     });
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 
-    const provider = buildQwenVideoGenerationProvider();
+    const provider = qwenVideoGenerationProvider;
     await provider.generateVideo({
       provider: "qwen",
       model: "wan2.6-t2v",
@@ -217,7 +227,7 @@ describe("qwen video generation provider", () => {
       })
       .mockResolvedValueOnce(streamedVideoResponse("too-large"));
 
-    const provider = buildQwenVideoGenerationProvider();
+    const provider = qwenVideoGenerationProvider;
     await expect(
       provider.generateVideo({
         provider: "qwen",
@@ -229,7 +239,7 @@ describe("qwen video generation provider", () => {
   });
 
   it("fails fast when reference inputs are local buffers instead of remote URLs", async () => {
-    const provider = buildQwenVideoGenerationProvider();
+    const provider = qwenVideoGenerationProvider;
 
     await expect(
       provider.generateVideo({
@@ -254,7 +264,7 @@ describe("qwen video generation provider", () => {
       { requestId: "req-2", taskId: "task-2" },
     );
 
-    const provider = buildQwenVideoGenerationProvider();
+    const provider = qwenVideoGenerationProvider;
     await provider.generateVideo({
       provider: "qwen",
       model: "wan2.6-t2v",

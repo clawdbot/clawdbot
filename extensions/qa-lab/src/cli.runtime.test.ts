@@ -306,6 +306,8 @@ describe("qa cli runtime", () => {
     runQaCharacterEval.mockResolvedValue({
       reportPath: "/tmp/character-report.md",
       summaryPath: "/tmp/character-summary.json",
+      runs: [{ model: "qa/candidate", status: "pass" }],
+      judgments: [{ model: "qa/judge", rankings: [{ model: "qa/candidate", rank: 1 }] }],
     });
     runQaManualLane.mockResolvedValue({
       model: "openai/gpt-5.6-luna",
@@ -314,12 +316,12 @@ describe("qa cli runtime", () => {
       watchUrl: "http://127.0.0.1:43124",
     });
     runQaMultipass.mockResolvedValue({
-      outputDir: "/tmp/multipass",
-      reportPath: "/tmp/multipass/qa-suite-report.md",
-      summaryPath: "/tmp/multipass/qa-suite-summary.json",
-      hostLogPath: "/tmp/multipass/multipass-host.log",
-      bootstrapLogPath: "/tmp/multipass/multipass-guest-bootstrap.log",
-      guestScriptPath: "/tmp/multipass/multipass-guest-run.sh",
+      outputDir: suiteArtifactsDir,
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      hostLogPath: path.join(suiteArtifactsDir, "multipass-host.log"),
+      bootstrapLogPath: path.join(suiteArtifactsDir, "multipass-guest-bootstrap.log"),
+      guestScriptPath: path.join(suiteArtifactsDir, "multipass-guest-run.sh"),
       vmName: "openclaw-qa-test",
       scenarioIds: ["channel-chat-baseline"],
     });
@@ -464,9 +466,7 @@ describe("qa cli runtime", () => {
     }
   });
 
-  it("keeps direct-suite zero-work validation disabled with --allow-failures", async () => {
-    const priorExitCode = process.exitCode;
-    process.exitCode = undefined;
+  it("rejects direct-suite zero-work summaries even with --allow-failures", async () => {
     const optionalScenario = {
       name: "Runtime tool fixture — image_generate",
       status: "skip" as const,
@@ -490,13 +490,107 @@ describe("qa cli runtime", () => {
       }),
     );
 
-    try {
-      await runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo", allowFailures: true });
-      expect(process.exitCode).toBeUndefined();
-    } finally {
-      process.exitCode = priorExitCode;
-    }
+    await expect(
+      runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo", allowFailures: true }),
+    ).rejects.toThrow("did not include any executed scenarios");
   });
+
+  it.each([
+    { runner: "host" as const, summary: "missing" as const, expected: "Could not read QA summary" },
+    {
+      runner: "host" as const,
+      summary: "malformed" as const,
+      expected: "Could not parse QA summary",
+    },
+    {
+      runner: "multipass" as const,
+      summary: "missing" as const,
+      expected: "Could not read QA summary",
+    },
+    {
+      runner: "multipass" as const,
+      summary: "malformed" as const,
+      expected: "Could not parse QA summary",
+    },
+    {
+      runner: "multipass" as const,
+      summary: "zero-work" as const,
+      expected: "did not include any executed scenarios",
+    },
+    ...(["host", "flow", "multipass"] as const).flatMap((runner) => [
+      {
+        runner,
+        summary: "required-skip" as const,
+        expected: "did not include any executed scenarios",
+      },
+      {
+        runner,
+        summary: "blocked" as const,
+        expected: "did not include any executed scenarios",
+      },
+    ]),
+  ])(
+    "rejects $summary $runner summaries even with --allow-failures",
+    async ({ runner, summary, expected }) => {
+      if (summary === "missing") {
+        await fs.rm(suiteSummaryPath);
+      } else if (summary === "malformed") {
+        await fs.writeFile(suiteSummaryPath, "{not-json", "utf8");
+      } else if (summary === "zero-work") {
+        await fs.writeFile(
+          suiteSummaryPath,
+          JSON.stringify({
+            counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
+            scenarios: [],
+          }),
+          "utf8",
+        );
+      } else {
+        await fs.writeFile(
+          suiteSummaryPath,
+          JSON.stringify({
+            counts: {
+              total: 1,
+              passed: 0,
+              failed: 0,
+              skipped: summary === "required-skip" ? 1 : 0,
+            },
+            scenarios: [
+              {
+                name: "Required channel scenario",
+                status: summary === "required-skip" ? "skip" : "blocked",
+                details: "Required transport unavailable",
+              },
+            ],
+          }),
+          "utf8",
+        );
+      }
+      if (runner === "host" || runner === "flow") {
+        runQaSuite.mockResolvedValueOnce(
+          runner === "flow"
+            ? flowSuiteRuntimeResult({
+                reportPath: suiteReportPath,
+                summaryPath: suiteSummaryPath,
+              })
+            : unifiedSuiteRuntimeResult({
+                outputDir: suiteArtifactsDir,
+                reportPath: suiteReportPath,
+                summaryPath: suiteSummaryPath,
+                evidencePath: suiteEvidencePath,
+              }),
+        );
+      }
+
+      await expect(
+        runQaSuiteCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          ...(runner === "multipass" ? { runner } : {}),
+          allowFailures: true,
+        }),
+      ).rejects.toThrow(expected);
+    },
+  );
 
   it("rejects host-only resource options for Playwright scenarios", async () => {
     await expect(
@@ -2533,6 +2627,54 @@ describe("qa cli runtime", () => {
       candidateConcurrency: undefined,
       judgeConcurrency: undefined,
     });
+  });
+
+  it("keeps a successful character eval exit status clear", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      await runQaCharacterEvalCommand({ model: ["qa/candidate"] });
+
+      expect(process.exitCode).toBeUndefined();
+      expectWriteContains(stdoutWrite, "QA character eval report: /tmp/character-report.md");
+      expectWriteContains(stdoutWrite, "QA character eval summary: /tmp/character-summary.json");
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it.each([
+    {
+      label: "candidate failure",
+      runs: [{ model: "qa/candidate", status: "fail" }],
+      judgments: [{ model: "qa/judge", rankings: [{ model: "qa/candidate", rank: 1 }] }],
+      expectedVerdict: "QA character eval failed: 1 candidate(s), 0 judge(s).",
+    },
+    {
+      label: "judge failure",
+      runs: [{ model: "qa/candidate", status: "pass" }],
+      judgments: [{ model: "qa/judge", rankings: [], error: "judge unavailable" }],
+      expectedVerdict: "QA character eval failed: 0 candidate(s), 1 judge(s).",
+    },
+  ])("returns a failing exit code on $label without hiding artifacts", async (failure) => {
+    runQaCharacterEval.mockResolvedValueOnce({
+      reportPath: "/tmp/character-report.md",
+      summaryPath: "/tmp/character-summary.json",
+      runs: failure.runs,
+      judgments: failure.judgments,
+    });
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      await runQaCharacterEvalCommand({ model: ["qa/candidate"] });
+
+      expect(process.exitCode).toBe(1);
+      expectWriteContains(stderrWrite, failure.expectedVerdict);
+      expectWriteContains(stdoutWrite, "QA character eval report: /tmp/character-report.md");
+      expectWriteContains(stdoutWrite, "QA character eval summary: /tmp/character-summary.json");
+    } finally {
+      process.exitCode = priorExitCode;
+    }
   });
 
   it("rejects invalid character eval thinking levels", async () => {

@@ -222,8 +222,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 64853,
-    "roughTokens": 16214
+    "chars": 64887,
+    "roughTokens": 16222
   },
   "openClawDeveloperInstructions": {
     "chars": 2702,
@@ -234,8 +234,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6783
   },
   "totalWithDynamicToolsJson": {
-    "chars": 91985,
-    "roughTokens": 22997
+    "chars": 92019,
+    "roughTokens": 23005
   },
   "userInputText": {
     "chars": 1271,
@@ -512,7 +512,7 @@ Follow the heartbeat monitor scratch context when provided. Recurring tasks are 
 
 ### Tools: Dynamic Tool Catalog
 
-Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
+Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dynamic-tools.telegram-direct.json`)
 
 ## Dynamic Tool Names
 

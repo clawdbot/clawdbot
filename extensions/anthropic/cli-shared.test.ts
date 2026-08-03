@@ -115,17 +115,6 @@ function normalizeClaudeArgs(
 }
 
 describe("Claude backend permission args", () => {
-  it("leaves args alone when they omit permission flags", () => {
-    expect(normalizeClaudeArgs(["-p", "--output-format", "stream-json", "--verbose"])).toEqual([
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--setting-sources",
-      "user",
-    ]);
-  });
-
   it("removes legacy skip-permissions without adding bypassPermissions", () => {
     expect(normalizeClaudeArgs(["-p", "--dangerously-skip-permissions", "--verbose"])).toEqual([
       "-p",

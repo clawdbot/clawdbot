@@ -44,6 +44,17 @@ export type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   resolveApiKey?: () => Promise<string>;
 };
 
+type XaiRealtimeResponseItem = {
+  id?: string;
+  type?: string;
+  status?: "completed" | "incomplete" | "in_progress";
+  role?: string;
+  call_id?: string;
+  name?: string;
+  arguments?: string;
+  content?: Array<{ type?: string; text?: string; transcript?: string }>;
+};
+
 export type XaiRealtimeEvent = {
   type: string;
   delta?: string;
@@ -59,15 +70,10 @@ export type XaiRealtimeEvent = {
     id?: string;
     status?: string;
     status_details?: unknown;
+    output?: XaiRealtimeResponseItem[];
   };
   conversation?: { id?: string };
-  item?: {
-    id?: string;
-    type?: string;
-    call_id?: string;
-    name?: string;
-    arguments?: string;
-  };
+  item?: XaiRealtimeResponseItem;
   error?: unknown;
 };
 
