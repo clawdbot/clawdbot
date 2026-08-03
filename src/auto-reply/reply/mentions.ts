@@ -27,13 +27,22 @@ type ResolvedMentionPatterns = {
 // boundary assertions below but stay out of the token class: mention text is
 // normalized with those characters stripped, so a derived name may never
 // require them.
-const NAME_TOKEN_CHARS = String.raw`\p{L}\p{M}\p{N}\p{Pc}`;
+const NAME_IDENTITY_CHARS = String.raw`\p{L}\p{N}\p{Pc}`;
+const NAME_TOKEN_CHARS = String.raw`${NAME_IDENTITY_CHARS}\p{M}`;
 const UNICODE_WORD_CHAR = String.raw`[${NAME_TOKEN_CHARS}\u200C\u200D]`;
 // Decoration between word runs (emoji, flags, symbols, punctuation) may be
 // typed as shown, replaced by whitespace, or omitted. Only code points the
 // name itself carries are accepted, so matching and stripping never consume
 // unrelated punctuation adjacent to a mention.
-const NAME_TOKEN_SPLIT = new RegExp(`([${NAME_TOKEN_CHARS}]+)`, "gu");
+// A token has to carry an identity character: marks attach to one, they never
+// stand for one. A run of bare marks is presentation -- the variation selector
+// U+FE0F an emoji identity name carries, the enclosing keycap U+20E3 -- and
+// requiring it as the token would match every unrelated emoji carrying the
+// same mark.
+const NAME_TOKEN_SPLIT = new RegExp(
+  `([${NAME_TOKEN_CHARS}]*[${NAME_IDENTITY_CHARS}][${NAME_TOKEN_CHARS}]*)`,
+  "gu",
+);
 
 function wrapDerivedMentionPattern(pattern: string): string {
   // JavaScript \b is ASCII-oriented. Derived identity names need Unicode word

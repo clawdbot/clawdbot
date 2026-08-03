@@ -194,6 +194,50 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("hello there", regexes)).toBe(false);
   });
 
+  it("never requires a bare variation selector as the identity token", () => {
+    // "❤️" is U+2764 plus the selector: the selector is a mark, but on its own it
+    // is presentation. Deriving it as the required token would match every
+    // unrelated emoji that carries U+FE0F.
+    const regexes = buildMentionRegexes(configForName("❤️"), "decorated-agent");
+
+    expect(matchesMentionPatterns("❤️ status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("☀️ status", regexes)).toBe(false);
+    expect(matchesMentionPatterns("⚠️ status", regexes)).toBe(false);
+  });
+
+  it("keeps unrelated selector-carrying emoji out of derived mention stripping", () => {
+    const cfg = configForName("❤️");
+
+    expect(stripMentions("❤️ /status", {} as MsgContext, cfg, "decorated-agent")).toBe("/status");
+    expect(stripMentions("☀️ /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "☀️ /status",
+    );
+    expect(stripMentions("⚠️ 天氣如何", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "⚠️ 天氣如何",
+    );
+  });
+
+  it("rejects other emoji assembled from the same bare marks", () => {
+    // Enclosed letter (U+1F170 + selector) and keycap (# + selector + U+20E3):
+    // both leave the marks as the only mark-run in the name.
+    const enclosed = buildMentionRegexes(configForName("\u{1F170}️"), "decorated-agent");
+    const keycap = buildMentionRegexes(configForName("#️⃣"), "decorated-agent");
+
+    expect(matchesMentionPatterns("\u{1F170}️ status", enclosed)).toBe(true);
+    expect(matchesMentionPatterns("\u{1F171}️ status", enclosed)).toBe(false);
+    expect(matchesMentionPatterns("#️⃣ status", keycap)).toBe(true);
+    expect(matchesMentionPatterns("*️⃣ status", keycap)).toBe(false);
+  });
+
+  it("keeps a combining mark inside a written name required", () => {
+    // A non-selector mark belongs to the letter it sits on, so it stays part of
+    // the required token.
+    const regexes = buildMentionRegexes(configForName("Jose\u0301\u{1F98B}"), "decorated-agent");
+
+    expect(matchesMentionPatterns("jose\u0301 hello", regexes)).toBe(true);
+    expect(matchesMentionPatterns("jose hello", regexes)).toBe(false);
+  });
+
   it("never requires a decoration-only leading token", () => {
     const regexes = buildMentionRegexes(configForName("🦋 Bot"), "decorated-agent");
 
