@@ -6,6 +6,8 @@ import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE } from "../../../sessions/agent-harness-session-key.js";
+import { resolveEmbeddedRunEffectiveModel } from "./model-harness.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
 import {
   buildBeforeModelResolveAttachments,
   resolveAgentHarnessRunAdmissionError,
@@ -295,6 +297,43 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       tokens: 272_000,
     });
     expect(result.effectiveModel.contextWindow).toBe(272_000);
+  });
+
+  it("applies the selected agent context cap before the model limit", () => {
+    const result = resolveEmbeddedRuntimeModelPolicy({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      runtimeModel: createRuntimeModel(),
+      agentContextTokens: 128_000,
+      nativeModelOwned: false,
+    });
+
+    expect(result.contextWindowInfo).toEqual({
+      source: "agentContextTokens",
+      referenceTokens: 272_000,
+      tokens: 128_000,
+    });
+    expect(result.contextTokenBudget).toBe(128_000);
+    expect(result.effectiveModel.contextWindow).toBe(128_000);
+  });
+
+  it("passes the selected agent context cap through embedded model preparation", () => {
+    const result = resolveEmbeddedRunEffectiveModel({
+      runParams: {
+        agentId: "work",
+        config: { agents: { list: [{ id: "work", contextTokens: 128_000 }] } },
+      } as RunEmbeddedAgentParams,
+      provider: "openai",
+      modelConfigProvider: "openai",
+      modelId: "gpt-5.5",
+      agentHarnessId: "openclaw",
+      runtimeModel: createRuntimeModel(),
+      nativeModelOwned: false,
+    });
+
+    expect(result.contextTokenBudget).toBe(128_000);
+    expect(result.effectiveModel.contextWindow).toBe(128_000);
   });
 });
 

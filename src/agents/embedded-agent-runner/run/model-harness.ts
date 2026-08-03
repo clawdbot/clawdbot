@@ -1,4 +1,5 @@
 import type { Model } from "../../../llm/types.js";
+import { resolveAgentConfig } from "../../agent-scope-config.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
@@ -41,6 +42,9 @@ export function resolveEmbeddedRunEffectiveModel(
     }),
     modelId: params.modelId,
     runtimeModel: params.runtimeModel,
+    agentContextTokens: params.runParams.agentId
+      ? resolveAgentConfig(params.runParams.config ?? {}, params.runParams.agentId)?.contextTokens
+      : undefined,
     nativeModelOwned: params.nativeModelOwned,
   });
 }
