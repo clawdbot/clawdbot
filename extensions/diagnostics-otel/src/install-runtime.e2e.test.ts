@@ -25,6 +25,139 @@ type MutableConfig = {
   [key: string]: unknown;
 };
 
+type TraceRequest = {
+  at: number;
+  path: string;
+  spanEndTimesMs: number[];
+};
+
+class ProtoReader {
+  private offset = 0;
+
+  constructor(private readonly buffer: Uint8Array) {}
+
+  done() {
+    return this.offset >= this.buffer.length;
+  }
+
+  tag() {
+    const raw = this.varint();
+    return { field: raw >>> 3, wire: raw & 7 };
+  }
+
+  varint() {
+    let result = 0;
+    let shift = 0;
+    while (this.offset < this.buffer.length) {
+      const byte = this.buffer[this.offset++];
+      result += (byte & 0x7f) * 2 ** shift;
+      if ((byte & 0x80) === 0) {
+        return result;
+      }
+      shift += 7;
+    }
+    throw new Error("truncated protobuf varint");
+  }
+
+  bytes() {
+    const length = this.varint();
+    const end = this.offset + length;
+    if (end > this.buffer.length) {
+      throw new Error("truncated protobuf bytes");
+    }
+    const value = this.buffer.subarray(this.offset, end);
+    this.offset = end;
+    return value;
+  }
+
+  fixed64() {
+    const end = this.offset + 8;
+    if (end > this.buffer.length) {
+      throw new Error("truncated protobuf fixed64");
+    }
+    const value = Buffer.from(this.buffer.subarray(this.offset, end)).readBigUInt64LE();
+    this.offset = end;
+    return value;
+  }
+
+  skip(wire: number) {
+    if (wire === 0) {
+      this.varint();
+      return;
+    }
+    if (wire === 1) {
+      this.fixed64();
+      return;
+    }
+    if (wire === 2) {
+      this.bytes();
+      return;
+    }
+    if (wire === 5) {
+      this.offset += 4;
+      return;
+    }
+    throw new Error(`unsupported protobuf wire type ${wire}`);
+  }
+}
+
+function decodeSpanEndTime(message: Uint8Array) {
+  const reader = new ProtoReader(message);
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 8 && wire === 1) {
+      return Number(reader.fixed64() / 1_000_000n);
+    }
+    reader.skip(wire);
+  }
+  return undefined;
+}
+
+function decodeScopeSpanEndTimes(message: Uint8Array) {
+  const reader = new ProtoReader(message);
+  const times: number[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 2 && wire === 2) {
+      const endTime = decodeSpanEndTime(reader.bytes());
+      if (endTime !== undefined) {
+        times.push(endTime);
+      }
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return times;
+}
+
+function decodeResourceSpanEndTimes(message: Uint8Array) {
+  const reader = new ProtoReader(message);
+  const times: number[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 2 && wire === 2) {
+      times.push(...decodeScopeSpanEndTimes(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return times;
+}
+
+function decodeTraceRequestEndTimes(message: Uint8Array) {
+  const reader = new ProtoReader(message);
+  const times: number[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 1 && wire === 2) {
+      times.push(...decodeResourceSpanEndTimes(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return times;
+}
+
 async function stopServer(server: Server) {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => {
@@ -38,13 +171,19 @@ async function stopServer(server: Server) {
 }
 
 async function startReceiver() {
-  const requests: Array<{ at: number; path: string }> = [];
+  const requests: TraceRequest[] = [];
   const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
     for await (const chunk of request) {
-      // Drain the body so exporter connections can be reused.
-      void chunk;
+      chunks.push(Buffer.from(chunk));
     }
-    requests.push({ at: Date.now(), path: request.url ?? "" });
+    const requestPath = request.url ?? "";
+    requests.push({
+      at: Date.now(),
+      path: requestPath,
+      spanEndTimesMs:
+        requestPath === "/v1/traces" ? decodeTraceRequestEndTimes(Buffer.concat(chunks)) : [],
+    });
     response.writeHead(200, { "content-type": "application/x-protobuf" });
     response.end();
   });
@@ -285,13 +424,20 @@ describe("managed diagnostics-otel install runtime", () => {
         registryBaseUrl: registry.baseUrl,
         repoRoot,
       });
-      const runFinishedAt = Date.now();
       await runTurn(gateway, "OTEL-MANAGED-INSTALL-OK");
       const traceRequest = await waitFor(
-        () => configured.requests.find((request) => request.path === "/v1/traces"),
+        () =>
+          configured.requests.find(
+            (request) => request.path === "/v1/traces" && request.spanEndTimesMs.length > 0,
+          ),
         15_000,
       );
-      expect(traceRequest.at - runFinishedAt).toBeLessThan(10_000);
+      // BatchSpanProcessor starts its timer on the first ended span. The first
+      // export's earliest end timestamp is the boundary that must observe the clamp.
+      const firstSpanEndAt = Math.min(...traceRequest.spanEndTimesMs);
+      const exportDelayMs = traceRequest.at - firstSpanEndAt;
+      expect(exportDelayMs).toBeGreaterThanOrEqual(1_000);
+      expect(exportDelayMs).toBeLessThan(4_500);
       expect(envOnly.requests).toHaveLength(0);
     } finally {
       await gateway?.stop();
