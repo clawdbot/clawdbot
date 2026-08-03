@@ -11,7 +11,8 @@ struct GatewayProtocolGeneratedModelsTests {
         let additiveRequest = try JSONDecoder().decode(
             GatewayFrame.self,
             from: Data(
-                #"{"type":"req","id":"new-req","method":"health","traceparent":"00-a-b-01","futureField":true}"#.utf8))
+                #"{"type":"req","id":"new-req","method":"health","traceparent":"00-0123456789abcdef0123456789abcdef-0123456789abcdef-01","futureField":true}"#
+                    .utf8))
         let response = try JSONDecoder().decode(
             GatewayFrame.self,
             from: Data(#"{"type":"res","id":"old-req","ok":true}"#.utf8))
@@ -40,7 +41,7 @@ struct GatewayProtocolGeneratedModelsTests {
 
         #expect(oldRequest.params == nil)
         #expect(oldRequest.traceparent == nil)
-        #expect(newRequest.traceparent == "00-a-b-01")
+        #expect(newRequest.traceparent == "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
         #expect(oldResponse.payload == nil)
         #expect(newResponse.payload != nil)
         #expect(oldEvent.seq == nil)

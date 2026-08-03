@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertPublishedProtocolSchema,
   buildCanonicalProtocolSchema,
+  buildSwiftProtocolCompatibilityHarness,
   parseGatewayProtocolArtifactOptions,
 } from "./gateway-protocol-artifacts.js";
 
@@ -65,5 +66,14 @@ describe("Gateway protocol artifact producer", () => {
         },
       }),
     ).toThrow("published protocol.schema.json differs");
+  });
+
+  it("builds a standalone Swift compatibility harness for the generated model artifact", () => {
+    const harness = buildSwiftProtocolCompatibilityHarness();
+
+    expect(harness).toContain("@main");
+    expect(harness).toContain("GatewayFrame.self");
+    expect(harness).toContain("ConnectParams.self");
+    expect(harness).toContain('"futureField":true');
   });
 });
