@@ -40,42 +40,86 @@ const CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA =
   ChannelHeartbeatVisibilitySchema.unwrap().toJSONSchema({ target: "draft-07" });
 
 function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Record<string, unknown> {
-  const normalizeEntry = (entry: Record<string, unknown>): Record<string, unknown> => {
-    if (entry.additionalProperties !== false) {
-      return entry;
+  const normalized = structuredClone(schema);
+  let changed = false;
+  const normalizeNode = (
+    node: Record<string, unknown>,
+    accountMap = false,
+    rootScope = true,
+  ): void => {
+    rootScope &&= node === normalized || typeof node.$id !== "string";
+    if (typeof node.$ref === "string") {
+      const match = rootScope
+        ? /^#\/(\$defs|definitions)\/([A-Za-z0-9_.-]+)$/.exec(node.$ref)
+        : null;
+      const definitions = match?.[1] ? normalized[match[1]] : undefined;
+      const target = isRecord(definitions) && match?.[2] ? definitions[match[2]] : undefined;
+      if (
+        !isRecord(target) ||
+        Object.keys(node).some(
+          (key) => !["$ref", "$defs", "definitions", "$id", "$schema"].includes(key),
+        ) ||
+        ["$id", "$anchor", "$dynamicAnchor", "$recursiveAnchor", "$schema", "$ref"].some((key) =>
+          Object.hasOwn(target, key),
+        )
+      ) {
+        return;
+      }
+      // Inline only this owner; changing shared definitions would affect unrelated consumers.
+      const owner = { ...node };
+      Object.assign(node, structuredClone(target), owner);
+      delete node.$ref;
+      changed = true;
+      rootScope = node === normalized;
     }
-    const properties = isRecord(entry.properties) ? entry.properties : {};
-    if (Object.hasOwn(properties, "heartbeatVisibility")) {
-      return entry;
+
+    for (const key of ["allOf", "anyOf", "oneOf"] as const) {
+      const variants = node[key];
+      for (const variant of Array.isArray(variants) ? variants : []) {
+        if (isRecord(variant)) {
+          normalizeNode(variant, accountMap, rootScope);
+        }
+      }
     }
-    return {
-      ...entry,
-      properties: {
+
+    if (accountMap) {
+      if (node.additionalProperties === true) {
+        node.additionalProperties = {};
+        changed = true;
+      }
+      const entries = [
+        node.additionalProperties,
+        ...Object.values(isRecord(node.patternProperties) ? node.patternProperties : {}),
+      ];
+      for (const entry of entries) {
+        if (isRecord(entry)) {
+          normalizeNode(entry, false, rootScope);
+        }
+      }
+      return;
+    }
+
+    const properties = isRecord(node.properties) ? node.properties : {};
+    if (
+      JSON.stringify(properties.heartbeatVisibility) !==
+      JSON.stringify(CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA)
+    ) {
+      node.properties = {
         ...properties,
         heartbeatVisibility: CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA,
-      },
-    };
+      };
+      changed = true;
+    }
+
+    // Account maps are containers; only each account entry owns heartbeat visibility.
+    const accounts = properties.accounts;
+    if (isRecord(accounts)) {
+      normalizeNode(accounts, true, rootScope);
+    }
   };
 
-  // Core owns heartbeat visibility at both scopes, even for older closed plugin schemas.
-  const normalized = normalizeEntry(schema);
-  const properties = isRecord(normalized.properties) ? normalized.properties : undefined;
-  const accounts = properties && isRecord(properties.accounts) ? properties.accounts : undefined;
-  const accountEntry =
-    accounts && isRecord(accounts.additionalProperties) ? accounts.additionalProperties : undefined;
-  if (!accountEntry) {
-    return normalized;
-  }
-  const normalizedAccount = normalizeEntry(accountEntry);
-  return normalizedAccount === accountEntry
-    ? normalized
-    : {
-        ...normalized,
-        properties: {
-          ...properties,
-          accounts: { ...accounts, additionalProperties: normalizedAccount },
-        },
-      };
+  normalizeNode(normalized);
+  return changed ? normalized : schema;
 }
 
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
