@@ -2932,7 +2932,7 @@ install_openclaw_from_git() {
 
     local git_ref
     git_ref="$(resolve_git_openclaw_ref)"
-    if [[ -z "$(git -C -- "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+    if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
         ui_info "Using git ref: ${git_ref}"
         checkout_git_openclaw_ref "$repo_dir" "$git_ref"
     else
