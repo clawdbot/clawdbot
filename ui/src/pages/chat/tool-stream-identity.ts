@@ -12,7 +12,7 @@ type ToolMessageRef = {
   runId?: string;
 };
 
-type LiveToolStreamRef = ToolMessageRef & {
+export type LiveToolStreamRef = ToolMessageRef & {
   identity: string;
 };
 

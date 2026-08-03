@@ -6,7 +6,10 @@ import type {
   ChatRunStartupPhase,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
-import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+} from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
@@ -78,6 +81,13 @@ export type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+
+const CHAT_STATE_BY_TERMINAL_CLASSIFICATION = {
+  success: "done",
+  timeout: "error",
+  cancellation: "aborted",
+  failure: "error",
+} as const;
 
 function readChatRunStartupPhase(value: unknown): ChatRunStartupPhase | undefined {
   switch (value) {
@@ -725,8 +735,6 @@ export function createAgentEventHandler({
         (deliverySessionKey ? sessionMessageSubscribers.get(deliverySessionKey).size > 0 : false))
     ) {
       if (!isAborted) {
-        const evtStopReason =
-          typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
         const finished = chatLink ? chatRunState.registry.shift(evt.runId) : undefined;
         if (chatLink && !finished) {
           clearRunContextForEvent(evt);
@@ -736,35 +744,23 @@ export function createAgentEventHandler({
         const terminalSessionKey = finished?.sessionKey ?? sessionKey;
         const terminalRunId = finished?.clientRunId ?? eventRunId;
         const terminalAgentId = finished?.agentId ?? sessionAgentId;
-        // Some local lifecycle sources only carry the aborted flag. Preserve
-        // that terminal state instead of misclassifying the run as a timeout.
-        const terminalStopReason = evtStopReason ?? (lifecycleAborted ? "aborted" : undefined);
+        const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+          phase: lifecyclePhase,
+          data: evt.data,
+          endedAt: evt.data?.endedAt ?? evt.ts,
+        });
         const yieldedWaiting = isAgentLifecycleYieldedWaiting({
           phase: lifecyclePhase,
           yielded: evt.data?.yielded,
           livenessState: evt.data?.livenessState,
-          stopReason: terminalStopReason,
+          stopReason: terminalOutcome.stopReason,
           aborted: lifecycleAborted,
           status: evt.data?.status,
           timeoutPhase: evt.data?.timeoutPhase,
           error: evt.data?.error,
         });
-        const terminalOutcome = buildAgentRunTerminalOutcome({
-          status: lifecyclePhase === "error" ? "error" : lifecycleAborted ? "timeout" : "ok",
-          error: evt.data?.error,
-          stopReason: terminalStopReason,
-          livenessState: evt.data?.livenessState,
-          timeoutPhase: evt.data?.timeoutPhase,
-          providerStarted: evt.data?.providerStarted,
-          startedAt: evt.data?.startedAt,
-          endedAt: evt.data?.endedAt ?? evt.ts,
-        });
         const terminalState =
-          terminalOutcome.reason === "completed"
-            ? "done"
-            : terminalOutcome.reason === "cancelled" || terminalOutcome.reason === "aborted"
-              ? "aborted"
-              : "error";
+          CHAT_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminalOutcome)];
         if (!(opts?.skipChatErrorFinal && terminalState === "error")) {
           emitChatTerminal(
             terminalSessionKey,
@@ -1420,6 +1416,17 @@ export function createAgentEventHandler({
         steps,
         ...(explanation ? { explanation } : {}),
       };
+    }
+    if (
+      chatLink &&
+      isControlUiVisible &&
+      !isAborted &&
+      ((isToolEvent && !suppressHeartbeatToolEvents) || isItemEvent)
+    ) {
+      // Persist the client-facing identity after run/session remapping. Route
+      // changes discard transient UI rows, so history replay must use the same
+      // payload identity as live delivery or tool results cannot reconcile.
+      chatRunState.recordProgressEvent(clientRunId, agentPayload);
     }
     if (evt.stream === "run_status") {
       const phase = readChatRunStartupPhase(evt.data?.phase);

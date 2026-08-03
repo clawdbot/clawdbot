@@ -554,6 +554,129 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     sharedBrowser = null;
   });
 
+  it(
+    "does not replay a consumed session rail open generation after round trips or remounts",
+    FULL_APP_TEST_OPTIONS,
+    async () => {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      const page = await openBrowserPage(900, 700);
+      try {
+        await page.goto(realChatServer.baseUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+        });
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              const script = document.createElement("script");
+              script.type = "module";
+              script.src = "/src/pages/chat/components/chat-session-rail.ts";
+              script.addEventListener("load", () => resolve(), { once: true });
+              script.addEventListener(
+                "error",
+                () => reject(new Error("Session rail module failed")),
+                {
+                  once: true,
+                },
+              );
+              document.head.append(script);
+            }),
+        );
+        const result = await page.evaluate(async () => {
+          localStorage.setItem("openclaw.chat.observerHud.display", "pill");
+          type Rail = HTMLElement & {
+            companion: {
+              exchanges: [];
+              pendingQuestion: null;
+              failedQuestion: null;
+              hint: null;
+              draft: string;
+            };
+            connected: boolean;
+            consumedOpenRequest: number;
+            onOpenRequestConsumed: (openRequest: number) => void;
+            onVisibilityChange: (visible: boolean) => void;
+            openRequest: number;
+            sessionKey: string;
+            updateComplete: Promise<boolean>;
+          };
+          const createRail = () => document.createElement("openclaw-chat-session-rail") as Rail;
+          let rail = createRail();
+          let consumedOpenRequest = 0;
+          let visibleReports = 0;
+          const configureRail = (nextRail: Rail) => {
+            nextRail.companion = {
+              exchanges: [],
+              pendingQuestion: null,
+              failedQuestion: null,
+              hint: null,
+              draft: "What changed?",
+            };
+            nextRail.connected = true;
+            nextRail.consumedOpenRequest = consumedOpenRequest;
+            nextRail.onOpenRequestConsumed = (openRequest) => {
+              consumedOpenRequest = openRequest;
+            };
+            nextRail.onVisibilityChange = (visible) => {
+              if (visible) {
+                visibleReports += 1;
+              }
+            };
+          };
+          configureRail(rail);
+          rail.sessionKey = "agent:main:a";
+          document.body.replaceChildren(rail);
+          await rail.updateComplete;
+          const mode = () =>
+            rail.querySelector(".chat-session-rail--expanded") ? "expanded" : "pill";
+          const update = async (sessionKey: string, openRequest: number) => {
+            rail.sessionKey = sessionKey;
+            rail.openRequest = openRequest;
+            rail.consumedOpenRequest = consumedOpenRequest;
+            await rail.updateComplete;
+            return mode();
+          };
+
+          const sameElementModes = [
+            await update("agent:main:a", 1),
+            await update("agent:main:b", 0),
+            await update("agent:main:a", 1),
+            await update("agent:main:a", 2),
+          ];
+          rail.remove();
+          rail = createRail();
+          configureRail(rail);
+          rail.sessionKey = "agent:main:a";
+          rail.openRequest = 2;
+          document.body.append(rail);
+          await rail.updateComplete;
+          const remountMode = mode();
+          const nextGenerationMode = await update("agent:main:a", 3);
+
+          return {
+            sameElementModes,
+            remountMode,
+            nextGenerationMode,
+            storedPreference: localStorage.getItem("openclaw.chat.observerHud.display"),
+            visibleReports,
+          };
+        });
+
+        expect(result).toEqual({
+          sameElementModes: ["expanded", "pill", "pill", "expanded"],
+          remountMode: "pill",
+          nextGenerationMode: "expanded",
+          storedPreference: "pill",
+          visibleReports: 3,
+        });
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
   it.each([
     [320, 568],
     [1366, 900],

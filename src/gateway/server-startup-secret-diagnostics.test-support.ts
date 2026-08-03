@@ -1,4 +1,4 @@
-/** Tests Gateway aggregation of provider-scoped SecretRef diagnostics. */
+/** Gateway aggregation coverage loaded by the startup SecretRef suite. */
 import { describe, expect, it, vi } from "vitest";
 import { logPreparedSecretDegradations } from "./server-startup-secret-diagnostics.js";
 

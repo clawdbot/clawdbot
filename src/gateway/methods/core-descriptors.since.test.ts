@@ -76,6 +76,8 @@ const CURRENT_TRAIN_METHODS = [
   "skills.proposals.evaluate",
   "skills.proposals.events.list",
   "hooks.status",
+  "tasks.retry",
+  "tasks.dismiss",
 ] as const;
 
 describe("core gateway method release trains", () => {

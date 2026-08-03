@@ -3,6 +3,7 @@ import {
   applyChatDelta,
   buildCopilotChatSendParams,
   createChatStream,
+  deriveCopilotSessionLabel,
   deriveTabSessionKey,
   gatewayUrlFromPairing,
   normalizeGatewayUrl,
@@ -25,6 +26,19 @@ describe("browser copilot panel contracts", () => {
     );
     expect(first).not.toBe(second);
     expect(deriveTabSessionKey("agent:main:main", "tab-7")).toBeNull();
+  });
+
+  it("derives deterministic unique labels from the session UUID", () => {
+    const first = "agent:main:main:thread:browser-copilot-11111111-1111-4111-8111-111111111111";
+    const second = "agent:main:main:thread:browser-copilot-22222222-2222-4222-8222-222222222222";
+    expect(deriveCopilotSessionLabel(first)).toBe(
+      "Browser copilot 11111111-1111-4111-8111-111111111111",
+    );
+    expect(deriveCopilotSessionLabel(first)).toBe(deriveCopilotSessionLabel(first));
+    expect(deriveCopilotSessionLabel(first)).not.toBe(deriveCopilotSessionLabel(second));
+    expect(() => deriveCopilotSessionLabel("agent:main:main")).toThrow(
+      "Browser copilot session key is invalid.",
+    );
   });
 
   it("derives only secure remote or loopback Gateway endpoints", () => {

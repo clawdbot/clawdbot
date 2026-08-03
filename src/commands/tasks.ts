@@ -516,6 +516,74 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
   );
 }
 
+type GatewayTaskRecoveryResult = {
+  results?: Array<{ taskId?: string; ok?: boolean; reason?: string; duplicateRisk?: boolean }>;
+};
+
+async function runTaskRecoveryCommand(
+  action: "retry" | "dismiss",
+  lookups: string[],
+  runtime: RuntimeEnv,
+) {
+  if (lookups.length > 10) {
+    runtime.error("At most 10 task deliveries can be recovered per request.");
+    runtime.exit(1);
+    return;
+  }
+  const tasks: TaskRecord[] = [];
+  for (const lookup of lookups) {
+    const task = reconcileTaskLookupToken(lookup);
+    if (!task) {
+      runtime.error(formatTaskLookupMiss(lookup));
+      runtime.exit(1);
+      return;
+    }
+    tasks.push(task);
+  }
+  try {
+    const { callGateway } = await import("../gateway/call.js");
+    const response = await callGateway<GatewayTaskRecoveryResult>({
+      method: `tasks.${action}`,
+      params: { taskIds: tasks.map((task) => task.taskId) },
+      timeoutMs: 10_000,
+    });
+    const failures = response.results?.filter((result) => result.ok !== true) ?? [];
+    if (failures.length > 0) {
+      for (const failure of failures) {
+        runtime.error(
+          sanitizeTerminalText(
+            `${failure.taskId ?? "task"}: ${failure.reason ?? `${action} failed`}`,
+          ),
+        );
+      }
+      runtime.exit(1);
+      return;
+    }
+    runtime.log(
+      sanitizeTerminalText(
+        `${action === "retry" ? "Retried" : "Dismissed"} ${tasks.length} ${tasks.length === 1 ? "completion delivery" : "completion deliveries"}.${action === "retry" ? " Ambiguous prior acknowledgements may still produce a duplicate visible result." : ""}`,
+      ),
+    );
+  } catch (error) {
+    runtime.error(
+      sanitizeTerminalText(
+        `Task delivery ${action} requires a live Gateway: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
+    runtime.exit(1);
+  }
+}
+
+/** Starts a new fenced delivery generation for one to ten blocked completions. */
+export async function tasksRetryCommand(opts: { lookups: string[] }, runtime: RuntimeEnv) {
+  await runTaskRecoveryCommand("retry", opts.lookups, runtime);
+}
+
+/** Records intentional non-delivery while preserving the task result and audit projection. */
+export async function tasksDismissCommand(opts: { lookups: string[] }, runtime: RuntimeEnv) {
+  await runTaskRecoveryCommand("dismiss", opts.lookups, runtime);
+}
+
 /** Prints or serializes combined task/task-flow audit findings. */
 export async function tasksAuditCommand(
   opts: {

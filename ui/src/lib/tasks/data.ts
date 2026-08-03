@@ -4,8 +4,12 @@ import {
   TasksCancelResultSchema,
   TasksGetResultSchema,
   TasksListResultSchema,
+  TasksRecoveryResultSchema,
 } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
-import type { TasksCancelResult } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
+import type {
+  TasksCancelResult,
+  TasksRecoveryResult,
+} from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import { t } from "../../i18n/index.ts";
 import { normalizeTaskSummary, type TaskStatus, type TaskSummary } from "./task-summary.ts";
 
@@ -213,6 +217,23 @@ export function normalizeTasksCancelResult(value: unknown): NormalizedTasksCance
     cancelled: value.cancelled,
     ...(reason ? { reason } : {}),
     ...(task ? { task } : {}),
+  };
+}
+
+type NormalizedTasksRecoveryResult = Omit<TasksRecoveryResult, "results"> & {
+  results: Array<Omit<TasksRecoveryResult["results"][number], "task"> & { task?: TaskSummary }>;
+};
+
+export function normalizeTasksRecoveryResult(value: unknown): NormalizedTasksRecoveryResult | null {
+  if (!Value.Check(TasksRecoveryResultSchema, value)) {
+    return null;
+  }
+  return {
+    results: value.results.map((result) => {
+      const task = normalizeTaskSummary(result.task);
+      const { task: _wireTask, ...rest } = result;
+      return { ...rest, ...(task ? { task } : {}) };
+    }),
   };
 }
 

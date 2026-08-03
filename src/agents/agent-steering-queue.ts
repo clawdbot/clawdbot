@@ -49,8 +49,11 @@ function isStaleLease(delivery: SubagentCompletionDeliveryState, now: number): b
   );
 }
 
-function selectResultText(payload: PendingFinalDeliveryPayload): string | undefined {
-  return selectDeliverableSessionsReply(payload.frozenResultText, payload.fallbackFrozenResultText);
+function selectResultText(entry: SubagentRunRecord): string | undefined {
+  return selectDeliverableSessionsReply(
+    entry.completion?.resultText,
+    entry.completion?.fallbackResultText,
+  );
 }
 
 function describeOutcome(payload: PendingFinalDeliveryPayload): string {
@@ -128,7 +131,7 @@ function buildAgentSteeringPromptSection(item: AgentSteeringQueueItem, index: nu
     promptLiteral(payload.task) ||
     promptLiteral(payload.childSessionKey) ||
     `subagent ${index + 1}`;
-  const resultText = selectResultText(payload);
+  const resultText = selectResultText(item.entry);
   return [
     `${index + 1}. ${title}`,
     `status: ${promptLiteral(describeOutcome(payload))}`,

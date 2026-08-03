@@ -7,6 +7,7 @@ import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercio
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
+import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
@@ -31,6 +32,7 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { sanitizeAgentRunTerminalReplyText } from "./agent-run-terminal-reply.js";
 import { resolveDefaultAgentId } from "./agent-scope-config.js";
 import {
   getAgentCommandDeliveryFailure,
@@ -80,6 +82,7 @@ import {
   resolveGeneratedMediaSessionDeliveryRoute,
   type DeliveryContext,
 } from "./subagent-announce-origin.js";
+import { admitCorrelatedSubagentSessionDelivery } from "./subagent-completion-delivery.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
@@ -192,6 +195,26 @@ function resolveCompactionSteerRetryDelaysMs() {
     : ([1_000, 2_000, 4_000, 8_000] as const);
 }
 
+const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
+
+function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: false,
+    path: "none",
+    reason: "source_owner_changed",
+    error: "subagent source lifecycle changed before completion delivery",
+    terminal: true,
+    disposition: "intentional_non_delivery",
+  };
+}
+
+class SourceOwnerChangedError extends Error {
+  constructor() {
+    super("subagent source lifecycle changed before completion delivery");
+    this.name = "SourceOwnerChangedError";
+  }
+}
+
 // Wake an active requester run through transient compacting and transcript-wait
 // outcomes. Both active-wake call sites use one loop so delivery deadlines and
 // best-effort transcript retry stay consistent.
@@ -200,7 +223,8 @@ async function resolveActiveWakeWithRetries(
   message: string,
   wakeOptions: EmbeddedAgentQueueMessageOptions,
   signal?: AbortSignal,
-): Promise<EmbeddedAgentQueueMessageOutcome> {
+  isSourceSessionEffectsAllowed?: () => boolean,
+): Promise<EmbeddedAgentQueueMessageOutcome | typeof SOURCE_OWNER_CHANGED> {
   // Bound the whole active wake by the caller's delivery window. Each retry
   // passes only the remaining window into transcript-commit waiting so a
   // near-deadline retry cannot add another full timeout.
@@ -222,11 +246,22 @@ async function resolveActiveWakeWithRetries(
       deliveryTimeoutMs: remainingDeliveryTimeoutMs,
     };
   };
-  let outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+  const attemptWake = (options: EmbeddedAgentQueueMessageOptions) =>
+    isSourceSessionEffectsAllowed?.() === false
+      ? SOURCE_OWNER_CHANGED
+      : resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, options);
+  let outcome = await attemptWake(currentOptions);
   const compactionRetryDelaysMs = resolveCompactionSteerRetryDelaysMs();
   let compactionRetryIndex = 0;
   for (;;) {
+    if (outcome === SOURCE_OWNER_CHANGED) {
+      break;
+    }
     if (outcome.queued || signal?.aborted) {
+      break;
+    }
+    if (isSourceSessionEffectsAllowed?.() === false) {
+      outcome = SOURCE_OWNER_CHANGED;
       break;
     }
     if (
@@ -236,7 +271,7 @@ async function resolveActiveWakeWithRetries(
       const bestEffortOptions = { ...currentOptions };
       delete bestEffortOptions.waitForTranscriptCommit;
       currentOptions = bestEffortOptions;
-      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+      outcome = await attemptWake(currentOptions);
       continue;
     }
     if (
@@ -248,7 +283,7 @@ async function resolveActiveWakeWithRetries(
       const activeRunOptions = { ...currentOptions };
       delete activeRunOptions.sourceReplyDeliveryMode;
       currentOptions = activeRunOptions;
-      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+      outcome = await attemptWake(currentOptions);
       continue;
     }
     if (outcome.reason === "compacting") {
@@ -286,7 +321,7 @@ async function resolveActiveWakeWithRetries(
       if (!retryOptions) {
         break;
       }
-      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, retryOptions);
+      outcome = await attemptWake(retryOptions);
       continue;
     }
     break;
@@ -488,10 +523,14 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
 export async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
+  isAttemptAllowed?: () => boolean;
   run: () => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
   for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
+    if (params.isAttemptAllowed?.() === false) {
+      throw new SourceOwnerChangedError();
+    }
     if (params.signal?.aborted) {
       throw new Error("announce delivery aborted");
     }
@@ -500,6 +539,9 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
     } catch (err) {
       if (!isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
+      }
+      if (params.isAttemptAllowed?.() === false) {
+        throw new SourceOwnerChangedError();
       }
       const nextAttempt = retryIndex + 2;
       const maxAttempts = retryDelaysMs.length + 1;
@@ -511,6 +553,9 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
   }
   if (params.signal?.aborted) {
     throw new Error("announce delivery aborted");
+  }
+  if (params.isAttemptAllowed?.() === false) {
+    throw new SourceOwnerChangedError();
   }
   return await params.run();
 }
@@ -544,8 +589,10 @@ async function maybeSteerSubagentAnnounce(params: {
   requesterSessionKey: string;
   steerMessage: string;
   signal?: AbortSignal;
+  isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<
-  { status: "steered"; deliveredAt?: number; enqueuedAt?: number } | { status: "none" | "dropped" }
+  | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
+  | { status: "none" | "dropped" | "source_owner_changed" }
 > {
   if (params.signal?.aborted) {
     return { status: "none" };
@@ -579,7 +626,11 @@ async function maybeSteerSubagentAnnounce(params: {
     params.steerMessage,
     queueOptions,
     params.signal,
+    params.isSourceSessionEffectsAllowed,
   );
+  if (queueOutcome === SOURCE_OWNER_CHANGED) {
+    return { status: "source_owner_changed" };
+  }
   if (queueOutcome.queued) {
     return {
       status: "steered",
@@ -640,7 +691,10 @@ function resolveTextCompletionDirectFallback(events: readonly AgentInternalEvent
     if (event.status !== "ok") {
       continue;
     }
-    const result = typeof event.result === "string" ? event.result.trim() : "";
+    const result =
+      typeof event.result === "string"
+        ? sanitizeAgentRunTerminalReplyText(sanitizePendingFinalDeliveryText(event.result))
+        : "";
     if (result && result !== "(no output)") {
       return result;
     }
@@ -673,6 +727,7 @@ async function deliverCompletionDirect(params: {
   };
   internalEvents?: readonly AgentInternalEvent[];
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
   const content = resolveTextCompletionDirectFallback(params.internalEvents);
   if (
@@ -691,6 +746,9 @@ async function deliverCompletionDirect(params: {
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   let committedDelivery: SubagentAnnounceDeliveryResult | undefined;
   try {
+    if (params.isSourceSessionEffectsAllowed?.() === false) {
+      return sourceOwnerChangedResult();
+    }
     await subagentAnnounceDeliveryDeps.sendMessage({
       cfg: params.cfg,
       channel: params.deliveryTarget.channel,
@@ -784,6 +842,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  isSourceSessionEffectsAllowed?: () => boolean;
   requesterIsSubagent: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
@@ -885,6 +944,7 @@ async function sendSubagentAnnounceDirectly(params: {
         deliveryTarget,
         internalEvents: params.internalEvents,
         onDeliveryResult: params.onDeliveryResult,
+        isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
       });
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
@@ -921,7 +981,11 @@ async function sendSubagentAnnounceDirectly(params: {
         params.triggerMessage,
         wakeOptions,
         params.signal,
+        params.isSourceSessionEffectsAllowed,
       );
+      if (wakeOutcome === SOURCE_OWNER_CHANGED) {
+        return sourceOwnerChangedResult();
+      }
       if (wakeOutcome.queued) {
         return {
           delivered: true,
@@ -995,14 +1059,19 @@ async function sendSubagentAnnounceDirectly(params: {
           ? "completion direct announce agent call"
           : "direct announce agent call",
         signal: params.signal,
-        run: async () =>
-          await runAnnounceAgentCall({
+        isAttemptAllowed: params.isSourceSessionEffectsAllowed,
+        run: async () => {
+          if (params.isSourceSessionEffectsAllowed?.() === false) {
+            throw new SourceOwnerChangedError();
+          }
+          return await runAnnounceAgentCall({
             agentParams: directAgentParams,
             delegatedToolPolicyHandoff:
               isSubagentCompletion &&
               trustedCompletionEvent &&
               params.sourceSessionKey &&
-              requesterActivity.sessionId
+              requesterActivity.sessionId &&
+              params.isSourceSessionEffectsAllowed?.() !== false
                 ? {
                     sourceSessionKey: params.sourceSessionKey,
                     ...(trustedCompletionEvent.childSessionId
@@ -1015,9 +1084,13 @@ async function sendSubagentAnnounceDirectly(params: {
                 : undefined,
             expectFinal: true,
             timeoutMs: announceTimeoutMs,
-          }),
+          });
+        },
       });
     } catch (err) {
+      if (err instanceof SourceOwnerChangedError) {
+        return sourceOwnerChangedResult();
+      }
       if (isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err)) {
         throw err;
       }
@@ -1057,7 +1130,7 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "direct",
         error: directDeliveryFailure,
         ...(directAnnounceResult && hasPayloadOutcomeSendEvidence(directAnnounceResult)
-          ? { terminal: true }
+          ? { disposition: "ambiguous" as const }
           : {}),
       };
     }
@@ -1065,9 +1138,14 @@ async function sendSubagentAnnounceDirectly(params: {
       directAnnounceResult &&
       hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
     );
+    const completionPayloadVisibility = {
+      includeErrorPayloads: false,
+      includeReasoningPayloads: false,
+    };
     const hasVisibleGatewayPayload = Boolean(
       directAnnounceResult &&
-      (hasVisibleAgentPayload(directAnnounceResult) || hasMessagingToolDelivery),
+      (hasVisibleAgentPayload(directAnnounceResult, completionPayloadVisibility) ||
+        hasMessagingToolDelivery),
     );
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
@@ -1122,7 +1200,10 @@ async function sendSubagentAnnounceDirectly(params: {
     const hasVisibleCompletionReply = Boolean(
       directAnnounceResult &&
       (hasMessagingToolDelivery ||
-        hasVisibleAgentPayload(directAnnounceResult, { includeSilentReplyPayloads: false })),
+        hasVisibleAgentPayload(directAnnounceResult, {
+          ...completionPayloadVisibility,
+          includeSilentReplyPayloads: false,
+        })),
     );
     const hasCompletionSideEffect = Boolean(
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
@@ -1163,12 +1244,17 @@ async function sendSubagentAnnounceDirectly(params: {
       path: "direct",
     };
   } catch (err) {
-    const terminal = isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err);
+    const permanent = isPermanentAnnounceDeliveryError(err);
+    const disposition = permanent
+      ? hasAnnounceSendEvidence(err)
+        ? "ambiguous"
+        : "permanent_failure"
+      : "retryable";
     return {
       delivered: false,
       path: "direct",
       error: summarizeDeliveryError(err),
-      ...(terminal ? { terminal: true } : {}),
+      disposition,
     };
   }
 }
@@ -1185,8 +1271,10 @@ export async function deliverSubagentAnnouncement(params: {
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   sourceSessionKey?: string;
+  sourceRunId?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  isSourceSessionEffectsAllowed?: () => boolean;
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
@@ -1196,13 +1284,16 @@ export async function deliverSubagentAnnouncement(params: {
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
+  const sourceOwnerChanged = () => params.isSourceSessionEffectsAllowed?.() === false;
+  if (sourceOwnerChanged()) {
+    return sourceOwnerChangedResult();
+  }
   const durableGeneratedMediaHandoff =
     params.expectsCompletionMessage &&
     isAgentMediatedCompletionSourceTool(params.sourceTool) &&
     hasGeneratedMediaCompletionEvent(params.internalEvents);
   let durableQueueId: string | undefined;
   let durableQueueClaimed = false;
-  let durableQueueStatusUnknown = false;
   if (durableGeneratedMediaHandoff) {
     try {
       const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
@@ -1237,42 +1328,43 @@ export async function deliverSubagentAnnouncement(params: {
               })
             ? "message_tool_only"
             : "automatic";
-      const queued = await enqueueClaimedSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: canonicalSessionKey,
-          message:
-            formatAgentInternalEventsForPrompt(params.internalEvents) || params.triggerMessage,
-          messageId: `${params.directIdempotencyKey}:agent-loop`,
-          route: queuedRoute.route,
-          ...(queuedRoute.deliveryContext ? { deliveryContext: queuedRoute.deliveryContext } : {}),
-          inputProvenance: {
-            kind: "inter_session",
-            ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-            sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
-            sourceTool: params.sourceTool ?? "subagent_announce",
-          },
-          sourceReplyDeliveryMode,
-          expectedMediaUrls: collectExpectedMediaFromInternalEvents(params.internalEvents),
-          idempotencyKey: `${params.directIdempotencyKey}:agent-loop`,
+      const queuePayload = {
+        kind: "agentTurn",
+        sessionKey: canonicalSessionKey,
+        message: formatAgentInternalEventsForPrompt(params.internalEvents) || params.triggerMessage,
+        messageId: `${params.directIdempotencyKey}:agent-loop`,
+        route: queuedRoute.route,
+        ...(queuedRoute.deliveryContext ? { deliveryContext: queuedRoute.deliveryContext } : {}),
+        inputProvenance: {
+          kind: "inter_session",
+          ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+          sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+          sourceTool: params.sourceTool ?? "subagent_announce",
         },
-        resolveSubagentAnnounceTimeoutMs(cfg) + 5_000,
-      );
+        sourceReplyDeliveryMode,
+        expectedMediaUrls: collectExpectedMediaFromInternalEvents(params.internalEvents),
+        idempotencyKey: `${params.directIdempotencyKey}:agent-loop`,
+      } as const;
+      const queued = params.sourceRunId
+        ? admitCorrelatedSubagentSessionDelivery({
+            runId: params.sourceRunId,
+            payload: queuePayload,
+          })
+        : await enqueueClaimedSessionDelivery(queuePayload, resolveSubagentAnnounceTimeoutMs(cfg));
       if (queued.status === "failed") {
         return {
           delivered: false,
           path: "queued",
           reason: "completion_handoff_unavailable",
           error: "generated media session handoff was already dead-lettered",
-          terminal: true,
+          disposition: "permanent_failure",
         };
       }
       if (queued.status === "completed") {
-        return { delivered: true, path: "queued" };
+        return { delivered: true, path: "queued", disposition: "delivered" };
       }
       durableQueueId = queued.id;
       durableQueueClaimed = queued.claimed;
-      durableQueueStatusUnknown = queued.status === "unknown";
     } catch (error) {
       defaultRuntime.log(
         `[warn] Generated media session handoff could not be persisted; refusing ambiguous fallback: ${summarizeDeliveryError(error)}`,
@@ -1282,7 +1374,7 @@ export async function deliverSubagentAnnouncement(params: {
         path: "queued",
         reason: "completion_handoff_unavailable",
         error: "generated media session handoff could not be persisted",
-        terminal: true,
+        disposition: "retryable",
       };
     }
   }
@@ -1300,31 +1392,32 @@ export async function deliverSubagentAnnouncement(params: {
         `[warn] Generated media session handoff retry scheduling failed; durable recovery remains pending: ${summarizeDeliveryError(error)}`,
       );
     });
-    return durableQueueStatusUnknown
-      ? {
-          delivered: false,
-          path: "queued",
-          reason: "completion_handoff_pending",
-          error: "generated media session handoff state could not be verified",
-        }
-      : { delivered: true, path: "queued" };
+    return { delivered: false, path: "queued", disposition: "session_queued" };
   }
 
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
     requireDirectDelivery: params.requireDirectDelivery,
     signal: params.signal,
-    steer: async () =>
-      await maybeSteerSubagentAnnounce({
+    steer: async () => {
+      if (sourceOwnerChanged()) {
+        return { status: "source_owner_changed" };
+      }
+      return await maybeSteerSubagentAnnounce({
         deliveryTimeoutMs: resolveSubagentAnnounceTimeoutMs(
           subagentAnnounceDeliveryDeps.getRuntimeConfig(),
         ),
         requesterSessionKey: params.requesterSessionKey,
         steerMessage: params.steerMessage,
         signal: params.signal,
-      }),
-    direct: async () =>
-      await sendSubagentAnnounceDirectly({
+        isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+      });
+    },
+    direct: async () => {
+      if (sourceOwnerChanged()) {
+        return sourceOwnerChangedResult();
+      }
+      return await sendSubagentAnnounceDirectly({
         requesterSessionKey: params.requesterSessionKey,
         targetRequesterSessionKey: params.targetRequesterSessionKey,
         triggerMessage: params.triggerMessage,
@@ -1336,12 +1429,14 @@ export async function deliverSubagentAnnouncement(params: {
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
+        isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
         onDeliveryResult: params.onDeliveryResult,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
-      }),
+      });
+    },
   });
 }
 

@@ -18874,6 +18874,11 @@
       "translated": "ล้าง"
     },
     {
+      "id": "native.apple.3b776a593deeab22",
+      "source": "These settings changed outside the app while you were editing: \\(fieldList). Choose which version to keep.",
+      "translated": "การตั้งค่าเหล่านี้เปลี่ยนแปลงภายนอกแอปขณะที่คุณกำลังแก้ไข: \\(fieldList) เลือกเวอร์ชันที่จะเก็บไว้"
+    },
+    {
       "id": "native.apple.9cd2ced909f0952d",
       "source": "\\(user)@\\(host)",
       "translated": "\\(user)@\\(host)"
@@ -20597,6 +20602,51 @@
       "id": "native.apple.1b8ba1cf6f9dfdc9",
       "source": "missing:\\(hash)",
       "translated": "missing:\\(hash)"
+    },
+    {
+      "id": "native.apple.52b517452a108b59",
+      "source": "Gateway location",
+      "translated": "ตำแหน่งของ Gateway"
+    },
+    {
+      "id": "native.apple.2961fe211d71d35a",
+      "source": "Transport",
+      "translated": "การรับส่งข้อมูล"
+    },
+    {
+      "id": "native.apple.3dfb5eefb5f66202",
+      "source": "Gateway URL",
+      "translated": "URL ของ Gateway"
+    },
+    {
+      "id": "native.apple.d771ae993a61fdf7",
+      "source": "SSH target",
+      "translated": "เป้าหมาย SSH"
+    },
+    {
+      "id": "native.apple.e817b77dd5751910",
+      "source": "Identity file",
+      "translated": "ไฟล์ระบุตัวตน"
+    },
+    {
+      "id": "native.apple.1d7afbe829a31e8d",
+      "source": "SSH host key policy",
+      "translated": "นโยบายคีย์โฮสต์ SSH"
+    },
+    {
+      "id": "native.apple.ba3cf88d2dadb205",
+      "source": "Gateway token",
+      "translated": "โทเคนของ Gateway"
+    },
+    {
+      "id": "native.apple.83779c40a38ec48e",
+      "source": "Use file version",
+      "translated": "ใช้เวอร์ชันจากไฟล์"
+    },
+    {
+      "id": "native.apple.eab4dbc3ca4a9352",
+      "source": "Keep my edits",
+      "translated": "เก็บการแก้ไขของฉัน"
     },
     {
       "id": "native.apple.db0fa6b60bd859f8",
@@ -23479,14 +23529,14 @@
       "translated": "อุปกรณ์นี้ต้องได้รับการอนุมัติการจับคู่"
     },
     {
-      "id": "native.apple.b52cb4aae7ca6573",
-      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`.",
-      "translated": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+      "id": "native.apple.90b00f3f5418b439",
+      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then paste its output.",
+      "translated": "วางโทเคนที่กำหนดค่าไว้บนโฮสต์ Gateway บนโฮสต์ Gateway ให้รัน `openclaw gateway auth-token --show` ในเทอร์มินัลแบบโต้ตอบ แล้ววางผลลัพธ์ที่ได้"
     },
     {
-      "id": "native.apple.bbb87d21ce8a291e",
-      "source": "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again.",
-      "translated": "ตรวจสอบ `gateway.auth.token` หรือ `OPENCLAW_GATEWAY_TOKEN` บนโฮสต์ Gateway แล้วลองอีกครั้ง"
+      "id": "native.apple.b79d3c42bd5438d5",
+      "source": "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then replace the token and try again.",
+      "translated": "บนโฮสต์ Gateway ให้รัน `openclaw gateway auth-token --show` ในเทอร์มินัลแบบโต้ตอบ จากนั้นแทนที่โทเคนแล้วลองอีกครั้ง"
     },
     {
       "id": "native.apple.c26f61d639591f81",
@@ -23509,14 +23559,14 @@
       "translated": "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
     },
     {
-      "id": "native.apple.e73170e4ab1dbe8f",
-      "source": "This gateway requires an auth token from the gateway host.",
-      "translated": "Gateway นี้ต้องใช้โทเค็นการยืนยันตัวตนจากโฮสต์ Gateway"
+      "id": "native.apple.a1cb5542806f0ec9",
+      "source": "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "Gateway นี้ต้องใช้โทเคนการยืนยันตัวตน รัน openclaw gateway auth-token --show บนโฮสต์ Gateway"
     },
     {
-      "id": "native.apple.e3f983b8c517da29",
-      "source": "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host.",
-      "translated": "โทเค็น Gateway ไม่ตรงกัน ตรวจสอบ gateway.auth.token หรือ OPENCLAW_GATEWAY_TOKEN บนโฮสต์ Gateway"
+      "id": "native.apple.e12c96574b97ed4a",
+      "source": "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "โทเคนของ Gateway ไม่ตรงกัน รัน openclaw gateway auth-token --show บนโฮสต์ Gateway"
     },
     {
       "id": "native.apple.cd96754a96e5aa35",

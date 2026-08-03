@@ -17,6 +17,7 @@ import {
   loadExactSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntry,
+  replaceTranscriptEvents,
   replaceSessionEntry,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
@@ -25,6 +26,12 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
+import {
+  captureCurrentPluginMetadataSnapshotState,
+  restoreCurrentPluginMetadataSnapshotState,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createDeferred } from "../test-utils/deferred.js";
@@ -201,20 +208,22 @@ async function writeMainSessionTranscript(
   if (!storePath) {
     throw new Error("session store path was not initialized");
   }
-  for (const event of events) {
-    if (typeof event === "string" && !event.trim()) {
-      continue;
-    }
-    await appendTranscriptEvent(
-      {
-        agentId: opts?.agentId ?? "main",
-        sessionId,
-        sessionKey: opts?.sessionKey ?? "agent:main:main",
-        storePath,
-      },
-      typeof event === "string" ? (JSON.parse(event) as unknown) : event,
-    );
-  }
+  // These fixtures always seed a complete fresh transcript. Replace it in one
+  // transaction so large history cases do not pay one SQLite commit per event.
+  const transcriptEvents = events
+    .filter((event) => typeof event !== "string" || event.trim())
+    .map((event) => (typeof event === "string" ? JSON.parse(event) : event)) as Parameters<
+    typeof replaceTranscriptEvents
+  >[1];
+  await replaceTranscriptEvents(
+    {
+      agentId: opts?.agentId ?? "main",
+      sessionId,
+      sessionKey: opts?.sessionKey ?? "agent:main:main",
+      storePath,
+    },
+    transcriptEvents,
+  );
 }
 
 async function withDirectChatSession(
@@ -519,6 +528,163 @@ describe("gateway server chat", () => {
           },
         });
       } finally {
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+      }
+    },
+  );
+
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s replays bounded active progress events in inFlightRun",
+    async (method) => {
+      const {
+        createAgentEventHandler,
+        createSessionEventSubscriberRegistry,
+        createSessionMessageSubscriberRegistry,
+      } = await import("./server-chat.js");
+      openDirectChatSession();
+      const context = createDirectChatContext();
+      const handler = createAgentEventHandler({
+        broadcast: context.broadcast,
+        broadcastToConnIds: context.broadcastToConnIds,
+        nodeSendToSession: context.nodeSendToSession,
+        agentRunSeq: context.agentRunSeq,
+        chatRunState: context.chatRunState,
+        resolveSessionKeyForRun: () => "main",
+        clearAgentRunContext: vi.fn(),
+        toolEventRecipients: context.chatRunState.toolEventRecipients,
+        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+      });
+      try {
+        await writeMainSessionStore();
+        const controller = new AbortController();
+        context.chatAbortControllers.set("run-active", {
+          controller,
+          sessionId: "sess-main",
+          sessionKey: "main",
+          startedAtMs: 1_000,
+          expiresAtMs: 10_000,
+          projectSessionActive: true,
+        });
+        context.chatRunState.registry.add("provider-run", {
+          sessionKey: "main",
+          clientRunId: "run-active",
+        });
+
+        handler({
+          runId: "provider-run",
+          seq: 1,
+          stream: "item",
+          ts: 1_001,
+          data: { kind: "preamble", itemId: "preamble-1", progressText: "Checking files" },
+        });
+        handler({
+          runId: "provider-run",
+          seq: 2,
+          stream: "tool",
+          ts: 1_002,
+          data: { phase: "start", name: "read", toolCallId: "tool-active", args: { path: "a" } },
+        });
+        handler({
+          runId: "provider-run",
+          seq: 3,
+          stream: "tool",
+          ts: 1_003,
+          data: {
+            phase: "update",
+            name: "read",
+            toolCallId: "tool-active",
+            partialResult: "halfway",
+          },
+        });
+        handler({
+          runId: "provider-run",
+          seq: 4,
+          stream: "tool",
+          ts: 1_004,
+          data: { phase: "start", name: "exec", toolCallId: "tool-finished", args: {} },
+        });
+        handler({
+          runId: "provider-run",
+          seq: 5,
+          stream: "tool",
+          ts: 1_005,
+          data: {
+            phase: "result",
+            name: "exec",
+            toolCallId: "tool-finished",
+            result: "x".repeat(256_000),
+          },
+        });
+        // A delayed result older than the latest accepted progress event must
+        // not remove the active tool from the reconnect projection.
+        handler({
+          runId: "provider-run",
+          seq: 3,
+          stream: "tool",
+          ts: 1_006,
+          data: { phase: "result", name: "read", toolCallId: "tool-active", result: "stale" },
+        });
+
+        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+        await callDirectChat(method, {
+          id: method,
+          params: { sessionKey: "main" },
+          respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+          context,
+        });
+
+        expect(responses).toHaveLength(1);
+        expect(responses[0]?.ok).toBe(true);
+        expect(
+          (responses[0]?.payload as { inFlightRun?: unknown } | undefined)?.inFlightRun,
+        ).toEqual({
+          runId: "run-active",
+          text: "",
+          events: [
+            {
+              runId: "run-active",
+              seq: 1,
+              stream: "item",
+              ts: 1_001,
+              sessionKey: "main",
+              data: {
+                kind: "preamble",
+                itemId: "preamble-1",
+                progressText: "Checking files",
+              },
+            },
+            {
+              runId: "run-active",
+              seq: 2,
+              stream: "tool",
+              ts: 1_002,
+              sessionKey: "main",
+              data: {
+                phase: "start",
+                name: "read",
+                toolCallId: "tool-active",
+                args: { path: "a" },
+              },
+            },
+            {
+              runId: "run-active",
+              seq: 3,
+              stream: "tool",
+              ts: 1_003,
+              sessionKey: "main",
+              data: {
+                phase: "update",
+                name: "read",
+                toolCallId: "tool-active",
+                partialResult: "halfway",
+              },
+            },
+          ],
+        });
+      } finally {
+        handler.dispose();
         testState.sessionStorePath = undefined;
         clearConfigCache();
       }
@@ -1072,6 +1238,7 @@ describe("gateway server chat", () => {
         },
       },
       async (state) => {
+        const previousPluginMetadata = captureCurrentPluginMetadataSnapshotState();
         openDirectChatSession();
         try {
           const config = {
@@ -1201,6 +1368,14 @@ describe("gateway server chat", () => {
           const { createGatewayAgentModelCatalogProjector } =
             await import("./server-methods/models-list-result.js");
           const persistedConfig = getRuntimeConfig();
+          // Direct handlers bypass Gateway startup, so publish its process-lifecycle handoff once.
+          // Otherwise every route projector rediscovers the full plugin metadata graph.
+          const pluginMetadata = resolvePluginMetadataSnapshot({ config, env: process.env });
+          setCurrentPluginMetadataSnapshot(pluginMetadata, {
+            config,
+            compatibleConfigs: [persistedConfig],
+            env: process.env,
+          });
           expect(persistedConfig.auth?.order?.openai).toEqual([
             "openai:api",
             "openai:chatgpt",
@@ -1227,7 +1402,9 @@ describe("gateway server chat", () => {
           });
 
           expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
-          expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "work" });
+          expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
+            agentId: "work",
+          });
           expect(responses).toHaveLength(1);
           expect(responses[0]?.ok).toBe(true);
           const payload = responses[0]?.payload as
@@ -1303,6 +1480,7 @@ describe("gateway server chat", () => {
           }
         } finally {
           testState.sessionStorePath = undefined;
+          restoreCurrentPluginMetadataSnapshotState(previousPluginMetadata);
         }
       },
     );
@@ -5192,7 +5370,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history keeps visible assistant progress text from mixed tool-use transcript messages", async () => {
+  test("chat.history preserves assistant trace from mixed tool-use transcript messages", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       await writeMainSessionTranscript([
@@ -5240,7 +5418,14 @@ describe("gateway server chat", () => {
       };
       expect(assistantMessage.role).toBe("assistant");
       expect(assistantMessage.content).toEqual([
+        { type: "thinking", thinking: "private reasoning" },
         { type: "text", text: "I will clean that up now." },
+        {
+          type: "toolCall",
+          id: "call-read",
+          name: "read",
+          arguments: { path: "AGENTS.md" },
+        },
       ]);
       expect(assistantMessage.timestamp).toBe(2);
     });

@@ -147,6 +147,8 @@ const JSON_NOT_APPLICABLE = {
       "onboard recommendations refresh",
       "tasks notify",
       "tasks cancel",
+      "tasks retry",
+      "tasks dismiss",
       "tasks flow cancel",
       "models set",
       "models set-image",

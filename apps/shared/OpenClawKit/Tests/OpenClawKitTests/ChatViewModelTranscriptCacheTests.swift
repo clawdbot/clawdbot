@@ -3,20 +3,6 @@ import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
-private func cachedMessage(role: String, text: String, timestamp: Double) -> OpenClawChatMessage {
-    OpenClawChatMessage(
-        role: role,
-        content: [
-            OpenClawChatMessageContent(
-                type: "text",
-                text: text,
-                mimeType: nil,
-                fileName: nil,
-                content: nil),
-        ],
-        timestamp: timestamp)
-}
-
 private func liveHistoryMessage(role: String, text: String, timestamp: Double) -> AnyCodable {
     AnyCodable([
         "role": role,
@@ -29,27 +15,16 @@ private func visibleTexts(_ vm: OpenClawChatViewModel) async -> [String] {
     await MainActor.run { vm.messages.map { $0.content.compactMap(\.text).joined() } }
 }
 
-private func cachedSessionEntry(key: String, updatedAt: Double) -> OpenClawChatSessionEntry {
-    OpenClawChatSessionEntry(
-        key: key,
-        kind: nil,
-        displayName: nil,
-        surface: nil,
-        subject: nil,
-        room: nil,
-        space: nil,
-        updatedAt: updatedAt,
-        sessionId: nil,
-        systemSent: nil,
-        abortedLastRun: nil,
-        thinkingLevel: nil,
-        verboseLevel: nil,
-        inputTokens: nil,
-        outputTokens: nil,
-        totalTokens: nil,
-        modelProvider: nil,
-        model: nil,
-        contextTokens: nil)
+private func historyPayload(
+    sessionKey: String,
+    sessionID: String = "sess-live",
+    messages: [AnyCodable] = []) -> OpenClawChatHistoryPayload
+{
+    OpenClawChatHistoryPayload(
+        sessionKey: sessionKey,
+        sessionId: sessionID,
+        messages: messages,
+        thinkingLevel: "off")
 }
 
 /// In-memory per-instance stub matching the cache seam.
@@ -57,9 +32,7 @@ private actor TestTranscriptCache: OpenClawChatTranscriptCache {
     private var transcripts: [String: [OpenClawChatMessage]]
     private var sessions: [OpenClawChatSessionEntry]
     private let loadSessionsHook: (@Sendable () async -> Void)?
-    private(set) var storedTranscriptSessionKeys: [String] = []
     private(set) var storedTranscripts: [[OpenClawChatMessage]] = []
-    private(set) var storedSessionsCallCount = 0
 
     init(
         transcripts: [String: [OpenClawChatMessage]] = [:],
@@ -82,7 +55,6 @@ private actor TestTranscriptCache: OpenClawChatTranscriptCache {
 
     func storeSessions(_ sessions: [OpenClawChatSessionEntry]) async {
         self.sessions = sessions
-        self.storedSessionsCallCount += 1
     }
 
     func storeCanonicalTranscript(
@@ -92,54 +64,29 @@ private actor TestTranscriptCache: OpenClawChatTranscriptCache {
         canonicalMessageIdempotencyKeys _: Set<String>) async
     {
         self.transcripts[sessionKey] = messages
-        self.storedTranscriptSessionKeys.append(sessionKey)
         self.storedTranscripts.append(messages)
     }
 }
 
-/// Minimal FIFO scripted transport; history responses can be gated to model a
-/// slow or unreachable gateway during cold open.
+/// Minimal FIFO transport whose history responses can be gated during cold open.
 private final class GatedHistoryChatTransport: @unchecked Sendable, OpenClawChatTransport {
-    private let historyGate: AsyncStream<Void>.Continuation?
-    private let historyGateStream: AsyncStream<Void>?
-    private let historyResult: @Sendable (String, Int) throws -> OpenClawChatHistoryPayload
+    private let historyResult: @Sendable (String, Int) async throws -> OpenClawChatHistoryPayload
     private let historyRequestLock = NSLock()
     private var historyRequestCount = 0
     private let stream: AsyncStream<OpenClawChatTransportEvent>
     private let continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation
 
-    init(
-        gated: Bool,
-        historyResult: @escaping @Sendable (String, Int) throws -> OpenClawChatHistoryPayload)
-    {
+    init(historyResult: @escaping @Sendable (String, Int) async throws -> OpenClawChatHistoryPayload) {
         self.historyResult = historyResult
-        if gated {
-            var cont: AsyncStream<Void>.Continuation!
-            self.historyGateStream = AsyncStream { c in cont = c }
-            self.historyGate = cont
-        } else {
-            self.historyGateStream = nil
-            self.historyGate = nil
-        }
-        var eventCont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
-        self.stream = AsyncStream { c in eventCont = c }
-        self.continuation = eventCont
-    }
-
-    func releaseHistory() {
-        self.historyGate?.yield(())
+        (self.stream, self.continuation) = AsyncStream.makeStream()
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        if let historyGateStream {
-            var iterator = historyGateStream.makeAsyncIterator()
-            _ = await iterator.next()
-        }
         let requestNumber = self.historyRequestLock.withLock {
             self.historyRequestCount += 1
             return self.historyRequestCount
         }
-        return try self.historyResult(sessionKey, requestNumber)
+        return try await self.historyResult(sessionKey, requestNumber)
     }
 
     func observedHistoryRequestCount() -> Int {
@@ -175,31 +122,43 @@ private final class GatedHistoryChatTransport: @unchecked Sendable, OpenClawChat
 
 private struct TransportOfflineError: Error {}
 
+@MainActor
+private func makeViewModel(
+    sessionKey: String = "main",
+    transport: GatedHistoryChatTransport,
+    activeAgentID: String? = nil,
+    cache: TestTranscriptCache,
+    load: Bool = true) -> OpenClawChatViewModel
+{
+    let vm = OpenClawChatViewModel(
+        sessionKey: sessionKey,
+        transport: transport,
+        activeAgentId: activeAgentID,
+        transcriptCache: cache)
+    if load { vm.load() }
+    return vm
+}
+
 struct ChatViewModelTranscriptCacheTests {
     @Test func `cold open paints cached transcript then live history replaces it`() async throws {
         let cache = TestTranscriptCache(
             transcripts: [
                 "main": [
-                    cachedMessage(role: "user", text: "cached question", timestamp: 1000),
-                    cachedMessage(role: "assistant", text: "cached answer", timestamp: 2000),
+                    cacheMessage(role: "user", text: "cached question", timestamp: 1000),
+                    cacheMessage(role: "assistant", text: "cached answer", timestamp: 2000),
                 ],
             ])
-        let transport = GatedHistoryChatTransport(gated: true) { sessionKey, _ in
-            OpenClawChatHistoryPayload(
-                sessionKey: sessionKey,
-                sessionId: "sess-live",
-                messages: [
-                    liveHistoryMessage(role: "user", text: "cached question", timestamp: 1000),
-                    liveHistoryMessage(role: "assistant", text: "live answer", timestamp: 2000),
-                    liveHistoryMessage(role: "user", text: "newer turn", timestamp: 3000),
-                ],
-                thinkingLevel: "off")
+        let (historyGate, releaseHistory) = AsyncStream<Void>.makeStream()
+        let transport = GatedHistoryChatTransport { sessionKey, _ in
+            var iterator = historyGate.makeAsyncIterator()
+            _ = await iterator.next()
+            return historyPayload(sessionKey: sessionKey, messages: [
+                liveHistoryMessage(role: "user", text: "cached question", timestamp: 1000),
+                liveHistoryMessage(role: "assistant", text: "live answer", timestamp: 2000),
+                liveHistoryMessage(role: "user", text: "newer turn", timestamp: 3000),
+            ])
         }
-        let vm = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
-        }
-
-        await MainActor.run { vm.load() }
+        let vm = await makeViewModel(transport: transport, cache: cache)
 
         // Cache pre-paint lands while live history is still gated.
         try await waitUntil("cached transcript painted") {
@@ -207,7 +166,7 @@ struct ChatViewModelTranscriptCacheTests {
         }
         #expect(await visibleTexts(vm) == ["cached question", "cached answer"])
 
-        transport.releaseHistory()
+        releaseHistory.yield(())
 
         // Live history replaces the cached rows wholesale and clears the marker.
         try await waitUntil("live history applied") {
@@ -220,16 +179,12 @@ struct ChatViewModelTranscriptCacheTests {
     @Test func `offline cold open keeps cached transcript browsable`() async throws {
         let cache = TestTranscriptCache(
             transcripts: [
-                "main": [cachedMessage(role: "assistant", text: "offline answer", timestamp: 1000)],
+                "main": [cacheMessage(role: "assistant", text: "offline answer", timestamp: 1000)],
             ])
-        let transport = GatedHistoryChatTransport(gated: false) { _, _ in
+        let transport = GatedHistoryChatTransport { _, _ in
             throw TransportOfflineError()
         }
-        let vm = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
-        }
-
-        await MainActor.run { vm.load() }
+        let vm = await makeViewModel(transport: transport, cache: cache)
 
         try await waitUntil("cached transcript painted") {
             await MainActor.run { vm.isShowingCachedTranscript && !vm.messages.isEmpty }
@@ -244,21 +199,15 @@ struct ChatViewModelTranscriptCacheTests {
 
     @Test func `live history is written through to cache`() async throws {
         let cache = TestTranscriptCache()
-        let transport = GatedHistoryChatTransport(gated: false) { sessionKey, _ in
-            OpenClawChatHistoryPayload(
+        let transport = GatedHistoryChatTransport { sessionKey, _ in
+            historyPayload(
                 sessionKey: sessionKey,
-                sessionId: "sess-live",
-                messages: [liveHistoryMessage(role: "assistant", text: "hello", timestamp: 1000)],
-                thinkingLevel: "off")
+                messages: [liveHistoryMessage(role: "assistant", text: "hello", timestamp: 1000)])
         }
-        let vm = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
-        }
-
-        await MainActor.run { vm.load() }
+        let vm = await makeViewModel(transport: transport, cache: cache)
 
         try await waitUntil("write-through stored transcript") {
-            await cache.storedTranscriptSessionKeys.contains("main")
+            await !cache.storedTranscripts.isEmpty
         }
         let stored = await cache.loadTranscript(sessionKey: "main")
         #expect(stored.map { $0.content.compactMap(\.text).joined() } == ["hello"])
@@ -267,20 +216,14 @@ struct ChatViewModelTranscriptCacheTests {
 
     @Test func `optimistic echo is not written through as canonical history`() async throws {
         let cache = TestTranscriptCache()
-        let transport = GatedHistoryChatTransport(gated: false) { sessionKey, requestNumber in
-            OpenClawChatHistoryPayload(
+        let transport = GatedHistoryChatTransport { sessionKey, requestNumber in
+            historyPayload(
                 sessionKey: sessionKey,
-                sessionId: "sess-live",
                 messages: requestNumber == 1
                     ? [liveHistoryMessage(role: "assistant", text: "canonical answer", timestamp: 1000)]
-                    : [],
-                thinkingLevel: "off")
+                    : [])
         }
-        let vm = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
-        }
-
-        await MainActor.run { vm.load() }
+        let vm = await makeViewModel(transport: transport, cache: cache)
         try await waitUntil("bootstrap finished") {
             await MainActor.run { vm.sessionId == "sess-live" && !vm.isLoading }
         }
@@ -301,29 +244,20 @@ struct ChatViewModelTranscriptCacheTests {
     }
 
     @Test func `stale cached sessions never overwrite live empty session list`() async throws {
-        // The live sessions.list response is authoritative even when empty; a
-        // cache read that resolves afterwards must not repaint stale sessions.
+        // A live empty sessions.list response stays authoritative if a delayed cache read resolves afterwards.
         var releaseSessions: AsyncStream<Void>.Continuation!
         let sessionsGate = AsyncStream<Void> { releaseSessions = $0 }
         let release = try #require(releaseSessions)
         let cache = TestTranscriptCache(
-            sessions: [cachedSessionEntry(key: "stale-session", updatedAt: 1000)],
+            sessions: [cacheSessionEntry(key: "stale-session", updatedAt: 1000)],
             loadSessionsHook: {
                 var iterator = sessionsGate.makeAsyncIterator()
                 _ = await iterator.next()
             })
-        let transport = GatedHistoryChatTransport(gated: false) { sessionKey, _ in
-            OpenClawChatHistoryPayload(
-                sessionKey: sessionKey,
-                sessionId: "sess-live",
-                messages: [],
-                thinkingLevel: "off")
+        let transport = GatedHistoryChatTransport { sessionKey, _ in
+            historyPayload(sessionKey: sessionKey)
         }
-        let vm = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
-        }
-
-        await MainActor.run { vm.load() }
+        let vm = await makeViewModel(transport: transport, cache: cache)
         // Bootstrap completes with a live empty session list while the cache
         // read is still gated.
         try await waitUntil("bootstrap finished") {
@@ -342,7 +276,7 @@ struct ChatViewModelTranscriptCacheTests {
         let started = AsyncStream<Void> { loadStarted = $0 }
         let startedSignal = try #require(loadStarted)
         var startedIterator = started.makeAsyncIterator()
-        var global = cachedSessionEntry(key: "global", updatedAt: 1000)
+        var global = cacheSessionEntry(key: "global", updatedAt: 1000)
         global.observerDigest = OpenClawChatSessionObserverDigest(
             agentId: "main",
             runId: "run-main",
@@ -357,20 +291,15 @@ struct ChatViewModelTranscriptCacheTests {
                 var iterator = sessionsGate.makeAsyncIterator()
                 _ = await iterator.next()
             })
-        let transport = GatedHistoryChatTransport(gated: false) { sessionKey, _ in
-            OpenClawChatHistoryPayload(
-                sessionKey: sessionKey,
-                sessionId: "unused-live-session",
-                messages: [],
-                thinkingLevel: "off")
+        let transport = GatedHistoryChatTransport { sessionKey, _ in
+            historyPayload(sessionKey: sessionKey, sessionID: "unused-live-session")
         }
-        let vm = await MainActor.run {
-            OpenClawChatViewModel(
-                sessionKey: "agent:main:work",
-                transport: transport,
-                activeAgentId: "main",
-                transcriptCache: cache)
-        }
+        let vm = await makeViewModel(
+            sessionKey: "agent:main:work",
+            transport: transport,
+            activeAgentID: "main",
+            cache: cache,
+            load: false)
         let snapshot = await MainActor.run { vm.currentSessionSnapshot() }
         await MainActor.run { vm.paintFromCacheIfNeeded(session: snapshot) }
         _ = await startedIterator.next()
@@ -383,7 +312,7 @@ struct ChatViewModelTranscriptCacheTests {
     }
 
     @Test func `ownerless shared cache cannot claim the selected global owner`() async throws {
-        var global = cachedSessionEntry(key: "global", updatedAt: 1000)
+        var global = cacheSessionEntry(key: "global", updatedAt: 1000)
         global.observerDigest = OpenClawChatSessionObserverDigest(
             runId: "run-legacy",
             revision: 3,
@@ -391,20 +320,15 @@ struct ChatViewModelTranscriptCacheTests {
             headline: "Ambiguous legacy owner",
             health: "on-track")
         let cache = TestTranscriptCache(sessions: [global])
-        let transport = GatedHistoryChatTransport(gated: false) { sessionKey, _ in
-            OpenClawChatHistoryPayload(
-                sessionKey: sessionKey,
-                sessionId: "unused-live-session",
-                messages: [],
-                thinkingLevel: "off")
+        let transport = GatedHistoryChatTransport { sessionKey, _ in
+            historyPayload(sessionKey: sessionKey, sessionID: "unused-live-session")
         }
-        let vm = await MainActor.run {
-            OpenClawChatViewModel(
-                sessionKey: "agent:work:main",
-                transport: transport,
-                activeAgentId: "work",
-                transcriptCache: cache)
-        }
+        let vm = await makeViewModel(
+            sessionKey: "agent:work:main",
+            transport: transport,
+            activeAgentID: "work",
+            cache: cache,
+            load: false)
         let snapshot = await MainActor.run { vm.currentSessionSnapshot() }
 
         await MainActor.run { vm.paintFromCacheIfNeeded(session: snapshot) }
@@ -417,7 +341,7 @@ struct ChatViewModelTranscriptCacheTests {
     }
 
     @Test func `session cache strips active markers and preserves terminal recap`() {
-        var active = cachedSessionEntry(key: "active", updatedAt: 2000)
+        var active = cacheSessionEntry(key: "active", updatedAt: 2000)
         active.status = "running"
         active.hasActiveRun = true
         active.activeRunIds = ["run-active"]
@@ -452,20 +376,12 @@ struct ChatViewModelTranscriptCacheTests {
         // land in, live history is authoritative and the cached rows must go.
         let cache = TestTranscriptCache(
             transcripts: [
-                "main": [cachedMessage(role: "assistant", text: "stale cached", timestamp: 500)],
+                "main": [cacheMessage(role: "assistant", text: "stale cached", timestamp: 500)],
             ])
-        let transport = GatedHistoryChatTransport(gated: false) { sessionKey, _ in
-            OpenClawChatHistoryPayload(
-                sessionKey: sessionKey,
-                sessionId: "sess-live",
-                messages: [],
-                thinkingLevel: "off")
+        let transport = GatedHistoryChatTransport { sessionKey, _ in
+            historyPayload(sessionKey: sessionKey)
         }
-        let vm = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: transport, transcriptCache: cache)
-        }
-
-        await MainActor.run { vm.load() }
+        let vm = await makeViewModel(transport: transport, cache: cache)
         try await waitUntil("live history applied") {
             await MainActor.run { vm.sessionId == "sess-live" && !vm.isLoading }
         }

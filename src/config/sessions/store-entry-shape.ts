@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { validateSessionId } from "./paths.js";
-import type { SessionEntry } from "./types.js";
+import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
 
 // Persisted stores may contain old or malformed ids; reject path-like ids before use.
 function isSafeSessionId(value: unknown): value is string {
@@ -87,6 +87,14 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
   } else {
     delete canonicalValue.pendingFinalDelivery;
   }
+  const pendingTranscriptRepair = normalizePendingTranscriptRepair(
+    canonicalValue.pendingTranscriptRepair,
+  );
+  if (pendingTranscriptRepair) {
+    canonicalValue.pendingTranscriptRepair = pendingTranscriptRepair;
+  } else {
+    delete canonicalValue.pendingTranscriptRepair;
+  }
   const reason = normalizeOptionalString(fallbackNoticeReason);
   const fallbackNotice =
     normalizeFallbackNotice(canonicalValue.fallbackNotice) ??
@@ -145,6 +153,45 @@ function normalizePendingFinalDelivery(
   }
   const text = normalizeOptionalString(value.text);
   return value.kind === "replayable" && text ? { kind: "replayable", text, ...base } : undefined;
+}
+
+function normalizePendingTranscriptRepair(
+  value: unknown,
+): SessionEntry["pendingTranscriptRepair"] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const normalized: NonNullable<SessionEntry["pendingTranscriptRepair"]> = [];
+  for (const item of value) {
+    const record = normalizePendingTranscriptRepairRecord(item);
+    if (record) {
+      normalized.push(record);
+    }
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizePendingTranscriptRepairRecord(
+  value: unknown,
+): PendingTranscriptRepairState | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = normalizeOptionalString(value.id);
+  const text = normalizeOptionalString(value.text);
+  const createdAt = normalizeOptionalTimestamp(value.createdAt);
+  if (!id || !text || createdAt === undefined) {
+    return undefined;
+  }
+  const provider = normalizeOptionalString(value.provider);
+  const model = normalizeOptionalString(value.model);
+  return {
+    id,
+    text,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    createdAt,
+  };
 }
 
 function normalizeFallbackNotice(value: unknown): SessionEntry["fallbackNotice"] | undefined {

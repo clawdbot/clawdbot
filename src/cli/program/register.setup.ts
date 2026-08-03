@@ -81,10 +81,19 @@ async function isConfiguredInstance(): Promise<boolean> {
   if (!snapshot.exists) {
     return false;
   }
-  if (!snapshot.valid) {
+  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
     return true;
   }
-  return !isUnconfiguredConfigSource(snapshot.sourceConfig);
+  if (isUnconfiguredConfigSource(snapshot.sourceConfig)) {
+    return false;
+  }
+  // Inference commits before installation finishes; pending local setup must
+  // resume onboarding instead of opening a chat against an unfinished Gateway.
+  const { readLocalOnboardingStateForConfig } =
+    await import("../../state/local-onboarding-state.js");
+  return (
+    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status !== "pending"
+  );
 }
 
 async function runSystemAgentEntry(

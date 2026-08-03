@@ -21,6 +21,15 @@ function resolveConcurrencyOwnerSessionKey(entry: SubagentRunRecord): string {
     : resolveControllerSessionKey(entry);
 }
 
+function isDeliveryTerminalForRequesterSettle(entry: Pick<SubagentRunRecord, "delivery">): boolean {
+  return (
+    isDeliverySuspended(entry) ||
+    entry.delivery?.disposition === "delivered" ||
+    entry.delivery?.disposition === "intentional_non_delivery" ||
+    entry.delivery?.disposition === "permanent_failure"
+  );
+}
+
 /** Lists requester-owned runs, optionally scoped to the lifetime of a requester run. */
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
@@ -253,7 +262,10 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       }
       const runPending = hasSubagentRunEnded(entry)
         ? typeof entry.cleanupCompletedAt !== "number" &&
-          !(options?.treatSuspendedDeliveryAsSettled === true && isDeliverySuspended(entry))
+          !(
+            options?.treatSuspendedDeliveryAsSettled === true &&
+            isDeliveryTerminalForRequesterSettle(entry)
+          )
         : isLiveUnendedSubagentRun(entry, now);
       if (runPending) {
         count += 1;

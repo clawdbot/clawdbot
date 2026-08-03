@@ -33,16 +33,23 @@ describe("agent runtime plugin registries", () => {
 
   it("returns a non-activating handle for a prepared runtime", () => {
     const config = {} as never;
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" };
     const selections = [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }];
 
     expect(
       loadAgentRuntimePluginRegistryHandle({
         config,
+        env,
         workspaceDir: "/tmp/workspace",
         allowGatewaySubagentBinding: true,
         selections,
       }),
     ).toEqual({ handle: true });
+    expect(hoisted.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+      config,
+      env,
+      workspaceDir: "/tmp/workspace",
+    });
     expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
       config,
       workspaceDir: "/tmp/workspace",
@@ -52,6 +59,7 @@ describe("agent runtime plugin registries", () => {
       activate: false,
       config,
       activationSourceConfig: config,
+      env,
       workspaceDir: "/tmp/workspace",
       runtimeOptions: { allowGatewaySubagentBinding: true },
     });

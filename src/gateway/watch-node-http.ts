@@ -31,6 +31,7 @@ import {
   requestDevicePairing,
   verifyDeviceToken,
 } from "../infra/device-pairing.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { captureAuthenticatedNodePairingState } from "../infra/node-pairing-state.js";
 import {
   approveNodePairing,
@@ -254,13 +255,7 @@ function createChallengeStore() {
           challenges.delete(oldest[0]);
         }
       }
-      while (challenges.size >= MAX_PENDING_CHALLENGES) {
-        const oldest = challenges.keys().next().value;
-        if (typeof oldest !== "string") {
-          break;
-        }
-        challenges.delete(oldest);
-      }
+      pruneMapToMaxSize(challenges, MAX_PENDING_CHALLENGES - 1);
       const nonce = randomBytes(24).toString("base64url");
       const expiresAtMs = current + CHALLENGE_TTL_MS;
       challenges.set(nonce, { clientKey, expiresAtMs });

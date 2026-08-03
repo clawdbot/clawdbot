@@ -27,7 +27,7 @@ import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-reg
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 const subagentRegistryRuntimeLoader = createLazyImportLoader(
-  () => import("./subagent-announce.registry.runtime.js"),
+  () => import("./subagent-registry-runtime.js"),
 );
 
 function loadSubagentRegistryRuntime() {
@@ -448,7 +448,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       });
       return true;
     }
-    if (delivery.terminal === true || delivery.reason === "requester_abandoned") {
+    if (
+      delivery.disposition === "ambiguous" ||
+      delivery.disposition === "permanent_failure" ||
+      delivery.disposition === "intentional_non_delivery" ||
+      delivery.reason === "requester_abandoned"
+    ) {
       completeRequesterSettleWakeBatch({
         runIds: batchRunIds,
         state,

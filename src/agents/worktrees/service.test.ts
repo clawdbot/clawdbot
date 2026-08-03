@@ -7,10 +7,13 @@ import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
+  deleteRegistryWorktree,
+  finalizeWorktreeRemovalRows,
   getRegistryWorktree,
   getRegistryWorktreeProvisionedChunk,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
+  listRegistryWorktrees,
 } from "./registry.js";
 import {
   IDLE_GC_MS,
@@ -70,6 +73,7 @@ describe("ManagedWorktreeService", () => {
   let templateRoot: string;
   let templateRepo: string;
   let gitTemplate: string;
+  let stateDir: string;
   let root: string;
   let repo: string;
   let env: NodeJS.ProcessEnv;
@@ -80,6 +84,7 @@ describe("ManagedWorktreeService", () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     templateRoot = await fs.mkdtemp(path.join(tempRoot, "openclaw-managed-worktrees-template-"));
     gitTemplate = path.join(templateRoot, "git-template");
+    stateDir = path.join(templateRoot, "state");
     // Keep the hooks directory expected by hook-safety coverage without copying
     // the host's sample hooks into every per-test repository.
     await fs.mkdir(path.join(gitTemplate, "hooks"), { recursive: true });
@@ -87,6 +92,7 @@ describe("ManagedWorktreeService", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawStateDatabaseForTest();
     await fs.rm(templateRoot, { recursive: true, force: true });
   });
 
@@ -99,13 +105,17 @@ describe("ManagedWorktreeService", () => {
       recursive: true,
     });
     repo = await fs.realpath(repo);
-    env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
+    env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     now = 1_700_000_000_000;
     service = new ManagedWorktreeService({ env, now: () => now });
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    for (const record of listRegistryWorktrees(env)) {
+      finalizeWorktreeRemovalRows(env, record.id);
+      deleteRegistryWorktree(env, record.id);
+    }
+    await fs.rm(path.join(stateDir, "worktrees"), { recursive: true, force: true });
     await fs.rm(root, { recursive: true, force: true });
   });
 

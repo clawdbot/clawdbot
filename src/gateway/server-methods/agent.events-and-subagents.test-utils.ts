@@ -20,7 +20,10 @@ import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
-import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  resetGatewayWorkAdmission,
+  waitForActiveGatewayRootWork,
+} from "../../process/gateway-work-admission.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId } from "../../tasks/task-registry.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
@@ -114,6 +117,7 @@ describe("gateway agent handler", () => {
         phase: "continuing",
         ownerRunId: "cron-media-release-rotates",
       });
+      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-rotation-complete",

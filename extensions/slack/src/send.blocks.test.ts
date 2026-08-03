@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
+import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -367,6 +368,104 @@ describe("sendMessageSlack blocks", () => {
     expect(receiptPart?.kind).toBe("card");
     expect((receiptPart?.raw as Record<string, unknown> | undefined)?.channel).toBe("slack");
     expect((receiptPart?.raw as Record<string, unknown> | undefined)?.channelId).toBe("C123");
+  });
+
+  it("records question action identities on the exact delivered Block Kit card", async () => {
+    const client = createSlackSendTestClient();
+    const onDeliveryResult = vi.fn();
+    const questionActionId = "openclaw:question_button:2:1";
+    const result = await sendMessageSlack("channel:C123", "Pick one", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      onDeliveryResult,
+      blocks: [
+        { type: "section", text: { type: "mrkdwn", text: "Private displayed question" } },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              action_id: "openclaw:reply_button:1:1",
+              text: { type: "plain_text", text: "Reply" },
+            },
+            {
+              type: "button",
+              action_id: questionActionId,
+              text: { type: "plain_text", text: "Answer" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.meta).toMatchObject({ slackQuestionActionIds: [questionActionId] });
+    expect(result.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: "Private displayed question" } },
+    ]);
+    expect(Object.keys(result.meta ?? {})).toEqual(["slackQuestionActionIds"]);
+    expect(JSON.stringify(result.meta)).toBe(
+      JSON.stringify({ slackQuestionActionIds: [questionActionId] }),
+    );
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "171234.567",
+        meta: expect.objectContaining({ slackQuestionActionIds: [questionActionId] }),
+      }),
+    );
+  });
+
+  it("marks only the fallback card that actually contains the question controls", async () => {
+    const client = createSlackSendTestClient();
+    let messageCount = 0;
+    client.chat.postMessage = vi.fn(async () => ({
+      ok: true,
+      ts: `171234.${String(++messageCount).padStart(3, "0")}`,
+    }));
+    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const questionActionId = "openclaw:question_button:2:1";
+    const blocks = interleavedNativeDataBlocks();
+    const actionBlock = blocks.at(-1) as { elements: Array<{ action_id: string }> };
+    actionBlock.elements[0]!.action_id = questionActionId;
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: "After question" } });
+    const onDeliveryResult = vi.fn();
+
+    const aggregateResult = await sendMessageSlack("channel:C123", "Outside", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks: blocks as never,
+      nativeDataFallbackBaseText: "Outside",
+      textLimit: 25,
+      onDeliveryResult,
+    });
+
+    const delivered = onDeliveryResult.mock.calls.map(([result]) => result);
+    expect(delivered.length).toBeGreaterThan(1);
+    expect(delivered.filter((result) => result.meta)).toEqual([
+      expect.objectContaining({
+        meta: expect.objectContaining({ slackQuestionActionIds: [questionActionId] }),
+      }),
+    ]);
+    expect(
+      delivered.some((result) => result.receipt.parts[0]?.kind === "card" && !result.meta),
+    ).toBe(true);
+    const questionDelivery = delivered.find((delivery) => delivery.meta);
+    expect(questionDelivery?.messageId).not.toBe(aggregateResult.messageId);
+    expect(JSON.stringify(aggregateResult.meta)).toBe(
+      JSON.stringify({
+        slackQuestionActionIds: [questionActionId],
+        slackQuestionMessageId: questionDelivery?.messageId,
+      }),
+    );
+    expect(aggregateResult.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]).toBe(
+      questionDelivery?.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS],
+    );
+    expect(
+      aggregateResult.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]?.some(
+        (block) => block.type === "actions" || block.type === "data_table",
+      ),
+    ).toBe(false);
   });
 
   it("includes sibling block text in top-level fallback for raw block sends", async () => {

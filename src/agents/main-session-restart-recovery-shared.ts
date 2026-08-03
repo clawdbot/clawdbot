@@ -1,6 +1,8 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  listConfiguredSessionStoreAgentIds,
+  resolveStorePath,
   type InternalSessionEntry as SessionEntry,
   resolveAllAgentSessionStoreTargetsSync,
 } from "../config/sessions.js";
@@ -89,12 +91,30 @@ export async function resolveRestartRecoveryStorePaths(params: {
   const storePaths = new Set<string>();
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  for (const sessionsDir of await resolveAgentSessionDirs(stateDir)) {
-    storePaths.add(path.join(sessionsDir, "sessions.json"));
-  }
   if (params.cfg) {
+    // Recovery must not reopen a deleted or otherwise unconfigured agent database merely
+    // because its old directory still exists on disk. Those stores are intentionally fenced
+    // by the deletion journal, and stale auth-probe directories are not agent roster entries.
+    const configuredAgentIds = listConfiguredSessionStoreAgentIds(params.cfg);
+    const configuredStorePaths = new Set(
+      configuredAgentIds.map((agentId) =>
+        path.resolve(resolveStorePath(params.cfg?.session?.store, { agentId, env })),
+      ),
+    );
+    const configuredAgentIdSet = new Set(configuredAgentIds);
     for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
-      storePaths.add(path.resolve(target.storePath));
+      const storePath = path.resolve(target.storePath);
+      // Fixed configured stores can retain a durable owner whose ID differs from the
+      // current roster entry. The validated path is the configuration fact; the target's
+      // owner label is not evidence that the path itself is unconfigured.
+      if (!configuredAgentIdSet.has(target.agentId) && !configuredStorePaths.has(storePath)) {
+        continue;
+      }
+      storePaths.add(storePath);
+    }
+  } else {
+    for (const sessionsDir of await resolveAgentSessionDirs(stateDir)) {
+      storePaths.add(path.join(sessionsDir, "sessions.json"));
     }
   }
   // Agent databases also hold auth and model-catalog state. Enter the writer

@@ -150,6 +150,7 @@ export type SessionTranscriptTurnWriteContext = {
 };
 
 export type SessionEntryPatchOptions = {
+  assertCommitAllowed?: () => void;
   fallbackEntry?: SessionEntry;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   preserveActivity?: boolean;

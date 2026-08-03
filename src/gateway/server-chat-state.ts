@@ -6,6 +6,8 @@ import {
   normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
 } from "./live-chat-projector.js";
+import type { ChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
+import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
 
 export type ChatRunTiming = {
   ackedAtMs: number;
@@ -109,6 +111,7 @@ type ChatRunRecord = {
   /** Projection stays valid only while source matches rawBuffer; readers refresh it lazily. */
   bufferProjection?: { source: string; suppress: boolean };
   planSnapshot?: ChatRunPlanSnapshot;
+  progressSnapshot?: ChatRunProgressSnapshot;
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
@@ -236,6 +239,7 @@ export type ChatRunState = {
   resolveBuffer: (runId: string) => { text: string; suppress: boolean };
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
+  recordProgressEvent: (runId: string, event: AgentEventPayload) => void;
   clearRun: (runId: string) => void;
   clear: () => void;
 };
@@ -246,6 +250,16 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistryForStore(store);
   const toolEventRecipients = createToolEventRecipientRegistryForStore(store);
 
+  const recordProgressEvent = (runId: string, event: AgentEventPayload) => {
+    const progressSnapshot = updateChatRunProgressSnapshot(
+      store.runs.get(runId)?.progressSnapshot,
+      event,
+    );
+    if (progressSnapshot) {
+      store.getOrCreate(runId).progressSnapshot = progressSnapshot;
+    }
+  };
+
   const clearRun = (runId: string) => {
     const record = store.runs.get(runId);
     if (!record) {
@@ -255,6 +269,7 @@ export function createChatRunState(): ChatRunState {
     delete record.buffer;
     delete record.bufferProjection;
     delete record.planSnapshot;
+    delete record.progressSnapshot;
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
     delete record.deltaLastBroadcastLen;
@@ -306,6 +321,7 @@ export function createChatRunState(): ChatRunState {
       delete record.abortMarker;
       store.releaseIfEmpty(runId);
     },
+    recordProgressEvent,
     clearRun,
     clear,
   };

@@ -190,7 +190,6 @@ extensions/openai/realtime-voice-provider.ts
 extensions/openrouter/index.test.ts
 extensions/openshell/src/backend.ts
 extensions/openshell/src/openshell-core.test.ts
-extensions/policy/src/cli.test.ts
 extensions/policy/src/doctor/register.base.test-utils.ts
 extensions/policy/src/doctor/register.gateway-data-and-approvals.test-utils.ts
 extensions/policy/src/doctor/register.ingress-and-secrets.test-utils.ts
@@ -532,7 +531,6 @@ src/auto-reply/reply/session.ts
 src/auto-reply/status.test.ts
 src/channels/message/ingress-queue.ts
 src/channels/plugins/bundled.shape-guard.test.ts
-src/channels/plugins/bundled.ts
 src/channels/plugins/message-actions.security.test.ts
 src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts
@@ -633,7 +631,6 @@ src/config/mutate.ts
 src/config/plugin-auto-enable.core.test.ts
 src/config/plugin-auto-enable.shared.ts
 src/config/redact-snapshot.test.ts
-src/config/redact-snapshot.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
 src/config/schema.ts
@@ -860,7 +857,6 @@ src/plugins/discovery.ts
 src/plugins/hook-types.ts
 src/plugins/hooks.ts
 src/plugins/install-security-scan.runtime.ts
-src/plugins/install.npm-spec.e2e.test.ts
 src/plugins/install.npm-spec.test.ts
 src/plugins/install.test.ts
 src/plugins/installed-plugin-index.test.ts

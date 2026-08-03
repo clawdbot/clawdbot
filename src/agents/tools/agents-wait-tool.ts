@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import { resolveSubagentCompletionResultText } from "../subagent-completion-result.js";
 import { onSubagentRegistryPersisted } from "../subagent-registry-state.js";
 import { getSubagentRunsByRunIds } from "../subagent-registry.js";
 import type { SubagentRunRecord } from "../subagent-registry.types.js";
@@ -38,7 +39,7 @@ function completionResult(entry: SubagentRunRecord) {
   return {
     runId: entry.swarmRunId ?? entry.runId,
     status: completion.status,
-    result: entry.completion?.resultText ?? entry.completion?.fallbackResultText ?? "",
+    result: resolveSubagentCompletionResultText(entry) ?? "",
     ...(completion.structured !== undefined ? { structured: completion.structured } : {}),
     ...(completion.schemaError ? { schemaError: completion.schemaError } : {}),
     sessionKey: entry.childSessionKey,

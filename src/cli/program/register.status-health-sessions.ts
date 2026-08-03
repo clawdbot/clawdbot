@@ -733,6 +733,26 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
+  tasksCmd
+    .command("retry <lookups...>")
+    .description("Retry delivery for up to 10 blocked subagent completions")
+    .action(async (lookups: string[]) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksRetryCommand } = await loadTasksCommands();
+        await tasksRetryCommand({ lookups }, defaultRuntime);
+      });
+    });
+
+  tasksCmd
+    .command("dismiss <lookups...>")
+    .description("Dismiss delivery for up to 10 blocked subagent completions")
+    .action(async (lookups: string[]) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { tasksDismissCommand } = await loadTasksCommands();
+        await tasksDismissCommand({ lookups }, defaultRuntime);
+      });
+    });
+
   const tasksFlowCmd = tasksCmd
     .command("flow")
     .description("Inspect durable TaskFlow state under tasks");

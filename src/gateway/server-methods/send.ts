@@ -1107,7 +1107,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       idempotencyKey: string;
     };
     const to = normalizeOptionalString(request.to) ?? "";
-    const message = normalizeOptionalString(request.message) ?? "";
+    const message = request.message?.trim() ? request.message : "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
     const mediaUrls = Array.isArray(request.mediaUrls)
       ? request.mediaUrls

@@ -15,7 +15,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 import {
-  authorizeScopedGatewayHttpRequestOrReply,
+  authorizeScopedUserProfileAvatarHttpRequestOrReply,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
@@ -281,7 +281,7 @@ function sendAvatar(
   res.end(req.method === "HEAD" ? undefined : avatar.bytes);
 }
 
-/** Serves a profile avatar with the same HTTP operator auth as sibling gateway endpoints. */
+/** Serves a profile avatar to authenticated HTTP or verified Tailscale UI sessions. */
 export async function handleUserProfileAvatarHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -318,7 +318,7 @@ export async function handleUserProfileAvatarHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const authResult = await authorizeScopedGatewayHttpRequestOrReply({
+  const authResult = await authorizeScopedUserProfileAvatarHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,

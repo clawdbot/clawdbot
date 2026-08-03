@@ -459,8 +459,24 @@ describe("legacy MCP OAuth Doctor migration", () => {
     const sourcePath = await writeLegacy({ stateDir });
     await fsp.writeFile(`${sourcePath}.lock`, "not a verifiable lock owner");
 
-    const result = await migrate(stateDir, env);
+    const retryDelays: number[] = [];
+    const setTimeoutActual = globalThis.setTimeout;
+    // fs-safe owns backoff timing; this migration test still exercises every failed acquisition.
+    const fastSetTimeout = (...params: Parameters<typeof setTimeout>) => {
+      const [callback, delay, ...args] = params;
+      retryDelays.push(delay ?? 0);
+      return setTimeoutActual(callback, 0, ...args);
+    };
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(fastSetTimeout);
 
+    let result: Awaited<ReturnType<typeof migrate>>;
+    try {
+      result = await migrate(stateDir, env);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+
+    expect(retryDelays).toHaveLength(20);
     expect(result.changes).toEqual([]);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Failed locking legacy MCP OAuth store");

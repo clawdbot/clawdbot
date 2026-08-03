@@ -5,10 +5,16 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
   isStickyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import {
+  mergeAgentRunTerminalReplySnapshot,
+  normalizeAgentRunTerminalReplySnapshot,
+  type AgentRunTerminalReplySnapshot,
+} from "../../agents/agent-run-terminal-reply.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -29,6 +35,7 @@ type AgentJobTerminalSnapshot = {
   pendingError?: boolean;
   timeoutPhase?: AgentRunTerminalOutcome["timeoutPhase"];
   providerStarted?: boolean;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 type AgentJobSource = "agent" | "chat" | "lifecycle";
@@ -154,10 +161,23 @@ function mergeSnapshot(
   existing: AgentRunSnapshot | undefined,
   incoming: AgentRunSnapshot,
 ): AgentRunSnapshot {
-  if (!existing || !shouldPreserveTerminalSnapshot(existing, incoming)) {
+  if (!existing) {
     return incoming;
   }
-  return { ...existing, cachedAt: incoming.cachedAt };
+  const terminalReply = mergeAgentRunTerminalReplySnapshot(
+    existing.terminalReply,
+    incoming.terminalReply,
+  );
+  const canonical = shouldPreserveTerminalSnapshot(existing, incoming) ? existing : incoming;
+  // Terminal status precedence and producer reply evidence are independent;
+  // a late sticky timeout must not erase the final reply (or vice versa).
+  return {
+    ...canonical,
+    ...(terminalReply ? { terminalReply } : {}),
+    cachedAt: incoming.cachedAt,
+    recordedAt: incoming.recordedAt,
+    version: incoming.version,
+  };
 }
 
 function notifyAgentRunWaiters(runId: string) {
@@ -269,34 +289,33 @@ function createSnapshotFromLifecycleEvent(params: {
   const startedAt =
     typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
-  const error = typeof data?.error === "string" ? data.error : undefined;
-  const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
-  const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
-  const terminalOutcome = buildAgentRunTerminalOutcome({
-    status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
-    error,
-    stopReason,
-    livenessState,
-    timeoutPhase: data?.timeoutPhase,
-    providerStarted: data?.providerStarted,
+  const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase,
+    data,
     startedAt,
     endedAt,
   });
+  // agent.wait historically treats a bare abort flag as a retryable timeout.
+  // Modern explicit stop reasons keep the canonical cancellation projection.
+  const legacyBareAbort =
+    terminalOutcome.reason === "aborted" && data?.stopReason == null && data?.status == null;
+  const terminalReply = normalizeAgentRunTerminalReplySnapshot(data?.terminalReply);
   return {
     runId,
     source: "lifecycle",
     recordedAt: Date.now(),
-    status: terminalOutcome.status,
+    status: legacyBareAbort ? "timeout" : terminalOutcome.status,
     startedAt,
     endedAt,
-    error: terminalOutcome.error,
-    stopReason,
-    livenessState,
+    error: legacyBareAbort ? undefined : terminalOutcome.error,
+    stopReason: legacyBareAbort ? undefined : terminalOutcome.stopReason,
+    livenessState: terminalOutcome.livenessState,
     ...(data?.yielded === true ? { yielded: true } : {}),
     ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),
     ...(terminalOutcome.providerStarted !== undefined
       ? { providerStarted: terminalOutcome.providerStarted }
       : {}),
+    ...(terminalReply ? { terminalReply } : {}),
     version: nextAgentRunVersion(),
   };
 }
@@ -358,6 +377,7 @@ function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
         timeoutPhase?: unknown;
         providerStarted?: unknown;
         result?: unknown;
+        terminalReply?: unknown;
       }
     | undefined;
   const status = typeof payload?.status === "string" ? payload.status : undefined;
@@ -376,6 +396,9 @@ function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
   }
 
   const resultMeta = asOptionalRecord(asOptionalRecord(payload?.result)?.meta);
+  const terminalReply = normalizeAgentRunTerminalReplySnapshot(
+    payload?.terminalReply ?? resultMeta?.terminalReply,
+  );
   const startedAt = asFiniteNumber(payload?.startedAt);
   const endedAt = asFiniteNumber(payload?.endedAt) ?? entry.ts;
   const stopReason = asString(payload?.stopReason) ?? asString(resultMeta?.stopReason);
@@ -409,6 +432,7 @@ function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
       ...(terminalOutcome.providerStarted !== undefined
         ? { providerStarted: terminalOutcome.providerStarted }
         : {}),
+      ...(terminalReply ? { terminalReply } : {}),
     },
   };
 }
@@ -536,6 +560,7 @@ function publicSnapshot(snapshot: AgentRunObservation): AgentJobTerminalSnapshot
     pendingError: snapshot.pendingError,
     timeoutPhase: snapshot.timeoutPhase,
     providerStarted: snapshot.providerStarted,
+    terminalReply: snapshot.terminalReply,
   };
 }
 

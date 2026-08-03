@@ -26,6 +26,10 @@ import {
   type AgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
 import {
+  normalizeAgentRunTerminalReplySnapshot,
+  type AgentRunTerminalReplySnapshot,
+} from "./agent-run-terminal-reply.js";
+import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
   type AgentRunTimeoutPhase,
@@ -66,6 +70,7 @@ export type AgentWaitResult = {
   pendingError?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 /** Summary returned after waiting for a dynamic set of pending runs to drain. */
@@ -86,6 +91,7 @@ type RawAgentWaitResponse = {
   pendingError?: unknown;
   timeoutPhase?: unknown;
   providerStarted?: unknown;
+  terminalReply?: unknown;
 };
 
 function normalizeAgentWaitResult(
@@ -106,6 +112,7 @@ function normalizeAgentWaitResult(
     pendingError: wait?.pendingError === true ? true : undefined,
     timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
     providerStarted: normalizeProviderStarted(wait?.providerStarted),
+    terminalReply: normalizeAgentRunTerminalReplySnapshot(wait?.terminalReply),
   };
 }
 

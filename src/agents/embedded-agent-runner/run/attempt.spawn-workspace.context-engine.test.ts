@@ -352,7 +352,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           endedAt,
           outcome: { status: "ok" },
           expectsCompletionMessage: true,
-          frozenResultText,
         },
       },
     };

@@ -1,6 +1,7 @@
 import { expect } from "vitest";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 // OpenClaw test helpers build runtime environments for rescue tests.
 import {
   fingerprintAuthProfileOwnerShape,
@@ -36,6 +37,35 @@ export type SystemAgentPluginMetadataTestSnapshot = {
   rebindForCurrentEnv: () => void;
   restore: () => void;
 };
+
+/** Install the contract-level selectable CLI backend used by core system-agent tests. */
+export function installSystemAgentClaudeCliBackendTestFixture(): () => void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        pluginId: "anthropic",
+        modelProvider: "anthropic",
+        bundleMcp: true,
+        bundleMcpMode: "claude-config-file",
+        config: { command: "claude" },
+        normalizeConfig: (config, context) => ({
+          ...config,
+          args: [
+            ...(config.args ?? []),
+            "--test-exec-policy",
+            JSON.stringify(context?.config?.tools?.exec ?? null),
+          ],
+        }),
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "execution-args",
+        sideQuestionToolMode: "disabled",
+        resolveExecutionArgs: (context) => context.baseArgs,
+      },
+    ],
+  });
+  return () => cliBackendsTesting.resetDepsForTest();
+}
 
 /** Install the process-stable plugin metadata snapshot that the real Gateway owns. */
 export function installSystemAgentPluginMetadataTestSnapshot(

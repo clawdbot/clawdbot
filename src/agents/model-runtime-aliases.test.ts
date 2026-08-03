@@ -103,6 +103,26 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
+  it("uses caller-provided plugin auth aliases without metadata discovery", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        authProfileId: "anthropic:claude-cli",
+        cfg: createAnthropicAuthConfig({ order: ["anthropic:api"] }),
+        provider: "anthropic",
+        modelId: "opus-4.7",
+        metadataSnapshot: {
+          plugins: [
+            {
+              id: "anthropic",
+              origin: "bundled",
+              providerAuthAliases: { "claude-cli": "anthropic" },
+            },
+          ],
+        } as never,
+      }),
+    ).toBe("claude-cli");
+  });
+
   it("does not override an explicit OpenClaw model-runtime policy with CLI auth", () => {
     // Runtime policy is more explicit than profile order, so CLI auth cannot
     // force a model onto the CLI harness when config says OpenClaw.

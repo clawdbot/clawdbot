@@ -7,6 +7,7 @@ import {
   isDeliverySuspended,
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
+import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
   resolveCleanupCompletionReason,
   resolveDeferredCleanupDecision,
@@ -15,7 +16,6 @@ import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
   logAnnounceGiveUp,
-  MAX_ANNOUNCE_RETRY_COUNT,
   MIN_ANNOUNCE_RETRY_DELAY_MS,
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
@@ -29,6 +29,7 @@ import type {
 } from "./subagent-registry-lifecycle-contracts.js";
 import type { createSubagentRegistryLifecycleDelivery } from "./subagent-registry-lifecycle-delivery.js";
 import type { createSubagentRegistryLifecycleRequesterWake } from "./subagent-registry-lifecycle-requester-wake.js";
+import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -69,14 +70,13 @@ export function createSubagentRegistryLifecycleCleanup(
 
   const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
     entry.expectsCompletionMessage === true &&
-    entry.cleanup === "keep" &&
     entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
     entry.execution.outcome?.status === "ok";
 
   const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
     runId: string;
     entry: SubagentRunRecord;
-    reason: "retry-limit" | "expiry";
+    reason: "expiry" | "permanent_failure";
   }) => {
     if (shouldSuspendPendingFinalDelivery(giveUpParams.entry)) {
       suspendPendingFinalDelivery({
@@ -120,9 +120,15 @@ export function createSubagentRegistryLifecycleCleanup(
       cleanup: giveUpParams.entry.cleanup,
       completedAt: Date.now(),
     });
-    await emitCompletionEndedHookIfNeeded(giveUpParams.entry, completionReason, () =>
-      isEndedHookOwnerCurrent(giveUpParams.runId, giveUpParams.entry),
-    );
+    if (!shouldSuppressSubagentRecoverySessionEffects(giveUpParams.entry)) {
+      await emitCompletionEndedHookIfNeeded(
+        giveUpParams.entry,
+        completionReason,
+        () =>
+          isEndedHookOwnerCurrent(giveUpParams.runId, giveUpParams.entry) &&
+          !shouldSuppressSubagentRecoverySessionEffects(giveUpParams.entry),
+      );
+    }
   };
 
   const retryDeferredCompletedAnnounces = (excludeRunId?: string) => {
@@ -214,9 +220,15 @@ export function createSubagentRegistryLifecycleCleanup(
         cleanup,
         completedAt: Date.now(),
       });
-      await emitCompletionEndedHookIfNeeded(entry, resolveCleanupCompletionReason(entry), () =>
-        isEndedHookOwnerCurrent(runId, entry),
-      );
+      if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {
+        await emitCompletionEndedHookIfNeeded(
+          entry,
+          resolveCleanupCompletionReason(entry),
+          () =>
+            isEndedHookOwnerCurrent(runId, entry) &&
+            !shouldSuppressSubagentRecoverySessionEffects(entry),
+        );
+      }
       return;
     }
     if (didAnnounce) {
@@ -271,9 +283,24 @@ export function createSubagentRegistryLifecycleCleanup(
       });
       // Hook loading is best-effort; durable delivery and cleanup must already
       // be terminal before plugin code can fail or stall.
-      await emitCompletionEndedHookIfNeeded(entry, completionReason, () =>
-        isEndedHookOwnerCurrent(runId, entry),
-      );
+      if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {
+        await emitCompletionEndedHookIfNeeded(
+          entry,
+          completionReason,
+          () =>
+            isEndedHookOwnerCurrent(runId, entry) &&
+            !shouldSuppressSubagentRecoverySessionEffects(entry),
+        );
+      }
+      return;
+    }
+
+    if (entry.delivery?.disposition === "session_queued") {
+      // The correlated queue owns transport now. Settlement, not admission,
+      // decides delivered versus blocked and re-enters cleanup afterward.
+      entry.cleanupHandled = false;
+      params.resumedRuns.delete(runId);
+      params.persist(runId);
       return;
     }
 
@@ -284,7 +311,6 @@ export function createSubagentRegistryLifecycleCleanup(
       activeDescendantRuns: Math.max(0, params.countPendingDescendantRuns(entry.childSessionKey)),
       announceExpiryMs: ANNOUNCE_EXPIRY_MS,
       announceCompletionHardExpiryMs: ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
-      maxAnnounceRetryCount: MAX_ANNOUNCE_RETRY_COUNT,
       deferDescendantDelayMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
       resolveAnnounceRetryDelayMs,
     });
@@ -349,9 +375,15 @@ export function createSubagentRegistryLifecycleCleanup(
         cleanup,
         completedAt: now,
       });
-      await emitCompletionEndedHookIfNeeded(entry, completionReason, () =>
-        isEndedHookOwnerCurrent(runId, entry),
-      );
+      if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {
+        await emitCompletionEndedHookIfNeeded(
+          entry,
+          completionReason,
+          () =>
+            isEndedHookOwnerCurrent(runId, entry) &&
+            !shouldSuppressSubagentRecoverySessionEffects(entry),
+        );
+      }
       return;
     }
 
@@ -359,6 +391,10 @@ export function createSubagentRegistryLifecycleCleanup(
       entry,
       error: didAnnounce ? undefined : "announce deferred or direct delivery failed",
     });
+    const delivery = ensureDeliveryState(entry);
+    delivery.windowStartedAt ??= entry.execution.endedAt ?? now;
+    delivery.deadlineAt ??= delivery.windowStartedAt + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
+    delivery.nextAttemptAt = now + (deferredDecision.resumeDelayMs ?? 0);
     entry.cleanupHandled = false;
     params.resumedRuns.delete(runId);
     params.persist(runId);
@@ -375,6 +411,7 @@ export function createSubagentRegistryLifecycleCleanup(
       return false;
     }
     const cleanup = entry.cleanup;
+    let suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
     if (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered") {
       if (!beginSubagentCleanup(runId)) {
         return false;
@@ -396,6 +433,39 @@ export function createSubagentRegistryLifecycleCleanup(
       return false;
     }
     const cleanupGeneration = cleanupGenerations.get(entry)!;
+    const cleanupSessionEntry = suppressSessionEffects
+      ? undefined
+      : loadSubagentSessionEntry({ childSessionKey: entry.childSessionKey });
+    const cleanupSessionIdentity =
+      cleanupSessionEntry?.sessionId && cleanupSessionEntry.lifecycleRevision
+        ? {
+            sessionId: cleanupSessionEntry.sessionId,
+            lifecycleRevision: cleanupSessionEntry.lifecycleRevision,
+          }
+        : undefined;
+    const suppressChildSessionEffects = () => {
+      suppressSessionEffects = true;
+      if (entry.execution.suppressSessionEffects !== true) {
+        const previousExecution = entry.execution;
+        entry.execution = {
+          ...entry.execution,
+          suppressSessionEffects: true,
+        };
+        try {
+          params.persistOrThrow(runId);
+        } catch (error) {
+          entry.execution = previousExecution;
+          suppressSessionEffects = false;
+          throw error;
+        }
+      }
+    };
+    const childSessionEffectsAllowed = () => {
+      if (!suppressSessionEffects && shouldSuppressSubagentRecoverySessionEffects(entry)) {
+        suppressChildSessionEffects();
+      }
+      return !suppressSessionEffects && isCleanupAttemptCurrent(runId, entry, cleanupGeneration);
+    };
     const skipRequesterDelivery = entry.suppressCompletionDelivery === true;
     if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
       runDetachedCleanupAttempt({
@@ -410,22 +480,36 @@ export function createSubagentRegistryLifecycleCleanup(
             await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
             return;
           }
-          if (cleanup === "delete") {
-            // This durable boundary prevents a late yield from reviving a run
-            // after deletion may already have reached the gateway.
-            entry.deleteCleanupDispatchedAt ??= Date.now();
-            params.persist(runId);
-            await deleteSubagentSessionForCleanup({
-              callGateway: params.callGateway,
-              childSessionKey: entry.childSessionKey,
-              spawnMode: entry.spawnMode,
-              onError: (error) =>
-                params.warn("sessions.delete failed during subagent cleanup", {
-                  error: buildSafeLifecycleErrorMeta(error),
-                  runId: maskRunId(runId),
-                  childSessionKey: maskSessionKey(entry.childSessionKey),
-                }),
-            });
+          if (cleanup === "delete" && childSessionEffectsAllowed()) {
+            if (!cleanupSessionIdentity) {
+              // Without both lifecycle identities, key-only deletion could remove
+              // a successor that reused this child session after cleanup yielded.
+              suppressChildSessionEffects();
+            } else {
+              // This durable boundary prevents a late yield from reviving a run
+              // after deletion may already have reached the gateway.
+              entry.deleteCleanupDispatchedAt ??= Date.now();
+              params.persist(runId);
+              const sessionCleanup = await deleteSubagentSessionForCleanup({
+                callGateway: params.callGateway,
+                childSessionKey: entry.childSessionKey,
+                spawnMode: entry.spawnMode,
+                expectedSessionId: cleanupSessionIdentity.sessionId,
+                expectedLifecycleRevision: cleanupSessionIdentity.lifecycleRevision,
+                onError: (error) =>
+                  params.warn("sessions.delete failed during subagent cleanup", {
+                    error: buildSafeLifecycleErrorMeta(error),
+                    runId: maskRunId(runId),
+                    childSessionKey: maskSessionKey(entry.childSessionKey),
+                  }),
+              });
+              if (sessionCleanup === "failed") {
+                throw new Error("subagent session cleanup did not complete");
+              }
+              if (sessionCleanup === "changed") {
+                suppressChildSessionEffects();
+              }
+            }
           }
           if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
             await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
@@ -476,9 +560,10 @@ export function createSubagentRegistryLifecycleCleanup(
       requesterDisplayKey: pendingPayload.requesterDisplayKey,
       task: pendingPayload.task,
       timeoutMs: params.subagentAnnounceTimeoutMs,
-      cleanup,
-      roundOneReply: pendingPayload.frozenResultText ?? undefined,
-      fallbackReply: pendingPayload.fallbackFrozenResultText ?? undefined,
+      cleanup: suppressSessionEffects ? "keep" : cleanup,
+      roundOneReply: entry.completion?.resultText ?? undefined,
+      terminalReply: pendingPayload.terminalReply,
+      fallbackReply: entry.completion?.fallbackResultText ?? undefined,
       waitForCompletion: false,
       startedAt: pendingPayload.startedAt,
       endedAt: pendingPayload.endedAt,
@@ -487,10 +572,13 @@ export function createSubagentRegistryLifecycleCleanup(
       spawnMode: pendingPayload.spawnMode,
       expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
       wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+      suppressChildSessionEffects: suppressSessionEffects,
+      isChildSessionEffectsAllowed: childSessionEffectsAllowed,
+      isCompletionDeliveryAllowed: () => isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
       onBeforeDeleteChildSession:
         cleanup === "delete"
           ? () => {
-              if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+              if (!childSessionEffectsAllowed()) {
                 return false;
               }
               // Announce owns delete submission; fence late yields at the

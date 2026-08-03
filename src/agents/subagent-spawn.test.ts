@@ -543,23 +543,28 @@ describe("spawnSubagentDirect seam flow", () => {
     let stopAllowed = false;
     let agentCalls = 0;
     let abortCalls = 0;
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        agentCalls += 1;
-        return { runId: `gateway-${agentCalls}` };
-      }
-      if (request.method === "chat.abort") {
-        abortCalls += 1;
-        if (!stopAllowed) {
-          throw new Error("abort unavailable");
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          agentCalls += 1;
+          return { runId: `gateway-${agentCalls}` };
+        }
+        if (request.method === "chat.abort") {
+          abortCalls += 1;
+          if (!stopAllowed) {
+            throw new Error("abort unavailable");
+          }
+          return {
+            aborted: true,
+            runIds: [requireRecord(request.params).runId],
+          };
+        }
+        if (request.method === "sessions.delete") {
+          throw new Error("delete unavailable");
         }
         return {};
-      }
-      if (request.method === "sessions.delete") {
-        throw new Error("delete unavailable");
-      }
-      return {};
-    });
+      },
+    );
 
     const first = await spawnSubagentDirect(
       { task: "stop-confirmation-first", collect: true, groupId: "stop-confirmation" },
@@ -1143,6 +1148,8 @@ describe("spawnSubagentDirect seam flow", () => {
     const childSessionKey = result.childSessionKey as string;
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(2);
     expect(persistedStore?.[childSessionKey]).toMatchObject({
+      sessionId: expect.any(String),
+      lifecycleRevision: expect.any(String),
       spawnedBy: "agent:main:main",
       completionOwnerSessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",

@@ -1020,6 +1020,7 @@ export async function runCliEntry(params: {
     throw new Error(`CLI entry missing command for ${capability}`);
   }
   const requestOverrides = resolveMediaRequestOverrides(params.config);
+  const language = requestOverrides.language ?? entry.language ?? params.config?.language;
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,
@@ -1061,7 +1062,7 @@ export async function runCliEntry(params: {
       OutputDir: outputDir,
       OutputBase: outputBase,
       Prompt: requestOverrides.prompt ?? prompt,
-      ...(requestOverrides.language ? { Language: requestOverrides.language } : {}),
+      ...(capability === "audio" && language ? { Language: language } : {}),
       MaxChars: maxChars,
     };
     for (const key of [

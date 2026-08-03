@@ -2167,33 +2167,233 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   });
 
   it.each([
+    { name: "resolved", reject: false },
+    { name: "rejected", reject: true },
+  ])(
+    "fails an official SDK stream when an error lifecycle precedes a $name run",
+    async ({ reject }) => {
+      const idleRootCount = getActiveGatewayRootWorkCount();
+      const wireResponse = createDeferred<string>();
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming chat-completion run ID");
+        }
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "partial answer" } });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "error", error: "All model fallback candidates failed" },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "error", error: "A later lifecycle event must not replace the failure" },
+        });
+        if (reject) {
+          throw new Error("private upstream failure");
+        }
+        return {
+          payloads: [{ text: "partial answer" }],
+          meta: { agentMeta: { usage: { input: 11, output: 7, total: 18 } } },
+        };
+      }) as never);
+
+      const client = new OpenAI({
+        apiKey: "test",
+        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+        maxRetries: 0,
+        fetch: async (input, init) => {
+          const response = await fetch(input, init);
+          void response.clone().text().then(wireResponse.resolve, wireResponse.reject);
+          return response;
+        },
+      });
+      const stream = await client.chat.completions.create({
+        model: "openclaw",
+        messages: [{ role: "user", content: "Report the provider failure." }],
+        stream: true,
+      });
+      const deliveredContent: string[] = [];
+      const deliveredFinishReasons: Array<string | null> = [];
+
+      await expect(async () => {
+        for await (const chunk of stream) {
+          for (const choice of chunk.choices) {
+            if (typeof choice.delta.content === "string") {
+              deliveredContent.push(choice.delta.content);
+            }
+            deliveredFinishReasons.push(choice.finish_reason);
+          }
+        }
+      }).rejects.toMatchObject({
+        message: "All model fallback candidates failed",
+        type: "api_error",
+      });
+
+      const data = parseSseDataLines(await wireResponse.promise);
+      const chunks = data
+        .filter((line) => line !== "[DONE]")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(deliveredContent).toEqual(["partial answer"]);
+      expect(deliveredFinishReasons.every((reason) => reason === null)).toBe(true);
+      expect(chunks.filter((chunk) => "error" in chunk)).toEqual([
+        { error: { message: "All model fallback candidates failed", type: "api_error" } },
+      ]);
+      expect(data.at(-1)).toBe("[DONE]");
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+    },
+  );
+
+  it.each([
+    { name: "rewritten", replacementText: "final answer" },
+    { name: "shortened", replacementText: "dra" },
+    { name: "cleared", replacementText: "" },
+  ])("fails an official SDK stream when streamed text is $name", async ({ replacementText }) => {
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming chat-completion run ID");
+      }
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "draft answer", delta: "draft answer" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: replacementText, delta: "", replace: true, phase: "commentary" },
+      });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: replacementText }] };
+    }) as never);
+
+    const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Reject an incompatible replacement snapshot." }],
+      stream: true,
+    });
+    const deliveredContent: string[] = [];
+    await expect(async () => {
+      for await (const chunk of stream) {
+        for (const choice of chunk.choices) {
+          if (typeof choice.delta.content === "string") {
+            deliveredContent.push(choice.delta.content);
+          }
+        }
+      }
+    }).rejects.toMatchObject({
+      message: "Assistant output cannot be represented as an append-only response stream.",
+      type: "api_error",
+    });
+    expect(deliveredContent).toEqual(["draft answer"]);
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "a producer replacement snapshot without a delta",
+      previousDelta: undefined,
+      replacementDelta: undefined,
+    },
+    {
+      name: "a producer replacement snapshot with its own delta",
+      previousDelta: undefined,
+      replacementDelta: "final answer",
+    },
+    {
+      name: "an append-compatible replacement after streamed partial text",
+      previousDelta: "final ",
+      replacementDelta: "answer",
+    },
+  ])(
+    "keeps official SDK text consistent for $name",
+    async ({ previousDelta, replacementDelta }) => {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming chat-completion run ID");
+        }
+        if (previousDelta) {
+          emitAgentEvent({
+            runId,
+            stream: "assistant",
+            data: { text: previousDelta, delta: previousDelta },
+          });
+        }
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: {
+            text: "final answer",
+            replace: true,
+            phase: "commentary",
+            ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
+          },
+        });
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        return { payloads: [{ text: "final answer" }] };
+      }) as never);
+
+      const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+        model: "openclaw",
+        messages: [{ role: "user", content: "Preserve an append-compatible replacement." }],
+        stream: true,
+      });
+      const deliveredContent: string[] = [];
+      const finishReasons: Array<string | null> = [];
+      for await (const chunk of stream) {
+        for (const choice of chunk.choices) {
+          if (typeof choice.delta.content === "string") {
+            deliveredContent.push(choice.delta.content);
+          }
+          finishReasons.push(choice.finish_reason);
+        }
+      }
+      expect(deliveredContent.join("")).toBe("final answer");
+      expect(finishReasons.at(-1)).toBe("stop");
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
     {
       name: "successful completion without a provider terminal",
       fail: false,
       providerTerminal: false,
       expected: "hello",
+      protocolError: false,
     },
     {
       name: "successful completion with a provider terminal",
       fail: false,
       providerTerminal: true,
       expected: "hello",
+      protocolError: false,
     },
     {
       name: "internal agent error without a provider terminal",
       fail: true,
       providerTerminal: false,
       expected: "Error: internal error",
+      protocolError: false,
     },
     {
       name: "internal agent error with a provider terminal",
       fail: true,
       providerTerminal: true,
-      expected: "Error: internal error",
+      expected: "Agent run failed",
+      protocolError: true,
     },
   ])(
     "separates streamed content from the terminal finish for an official SDK $name",
-    async ({ fail, providerTerminal, expected }) => {
+    async ({ fail, providerTerminal, expected, protocolError }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
       const terminalAdmission = createDeferred<{
         active: number;
@@ -2271,8 +2471,18 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           delta: { content?: string | null };
           finish_reason: string | null;
         }> = [];
-        for await (const chunk of stream) {
-          choices.push(...chunk.choices);
+        const consumeStream = async () => {
+          for await (const chunk of stream) {
+            choices.push(...chunk.choices);
+          }
+        };
+        if (protocolError) {
+          await expect(consumeStream()).rejects.toMatchObject({
+            message: expected,
+            type: "api_error",
+          });
+        } else {
+          await consumeStream();
         }
 
         const [admission, wire] = await Promise.all([
@@ -2285,13 +2495,17 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(lifecycleTerminals).toEqual([fail ? "error" : "end"]);
 
         const contentChoices = choices.filter((choice) => typeof choice.delta.content === "string");
-        expect(contentChoices.map((choice) => choice.delta.content).join("")).toBe(expected);
+        expect(contentChoices.map((choice) => choice.delta.content).join("")).toBe(
+          protocolError ? "" : expected,
+        );
         expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
 
         const terminalChoices = choices.filter((choice) => choice.finish_reason === "stop");
-        expect(terminalChoices).toHaveLength(1);
-        expect(terminalChoices[0]?.delta).toEqual({});
-        expect(choices.at(-1)).toEqual(terminalChoices[0]);
+        expect(terminalChoices).toHaveLength(protocolError ? 0 : 1);
+        if (!protocolError) {
+          expect(terminalChoices[0]?.delta).toEqual({});
+          expect(choices.at(-1)).toEqual(terminalChoices[0]);
+        }
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
       } finally {
         continueAgent.resolve();

@@ -13,6 +13,7 @@ import type {
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
+  type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
 
 type TitleProbeDatabase = Pick<
@@ -180,8 +181,9 @@ export function readSessionTranscriptTitleProbeBatch(
     string,
     { database: OpenClawAgentDatabase; items: Array<{ index: number; sessionId: string }> }
   >();
+  const targetCache: SessionSqliteTargetResolutionCache = new Map();
   for (const [index, scope] of scopes.entries()) {
-    const resolved = resolveSqliteTranscriptReadScope(scope);
+    const resolved = resolveSqliteTranscriptReadScope(scope, targetCache);
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const group = groups.get(database.path) ?? { database, items: [] };
     group.items.push({ index, sessionId: resolved.sessionId });

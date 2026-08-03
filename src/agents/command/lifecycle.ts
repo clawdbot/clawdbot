@@ -2,7 +2,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
   type AgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
@@ -35,20 +35,7 @@ export function resolveAgentRunLifecycleEndLogLevel(meta: {
   timeoutPhase?: unknown;
   providerStarted?: unknown;
 }): "info" | "warn" | "error" | undefined {
-  const status =
-    meta.stopReason === "timeout" || meta.timeoutPhase
-      ? "timeout"
-      : meta.aborted === true || meta.error || meta.stopReason === "error"
-        ? "error"
-        : "ok";
-  const outcome = buildAgentRunTerminalOutcome({
-    status,
-    error: meta.error,
-    stopReason: meta.stopReason,
-    livenessState: meta.livenessState,
-    timeoutPhase: meta.timeoutPhase,
-    providerStarted: meta.providerStarted,
-  });
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "end", data: meta });
   return resolveTerminalLogLevel(outcome);
 }
 
@@ -91,7 +78,7 @@ export function createAgentCommandLifecycle(params: {
     error?: string,
     fallbackExhausted?: boolean,
   ) => {
-    const { aborted, yielded, replayInvalid } = terminal.metadata;
+    const { aborted, yielded, replayInvalid, terminalReply } = terminal.metadata;
     const { stopReason, livenessState, timeoutPhase, providerStarted } = terminal.outcome;
     emitAgentEvent({
       runId: params.runId,
@@ -110,6 +97,7 @@ export function createAgentCommandLifecycle(params: {
         ...(providerStarted !== undefined ? { providerStarted } : {}),
         ...(error ? { error: formatErrorMessage(error) } : {}),
         ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
+        ...(terminalReply ? { terminalReply } : {}),
         ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
       },
     });

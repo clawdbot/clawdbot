@@ -9,6 +9,7 @@ import {
   detectInferenceBackends,
   type InferenceBackendKind,
 } from "../commands/onboard-inference.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
@@ -190,7 +191,8 @@ export type ActivateSetupInferenceParams = {
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
-  onCommitStarted?: () => void;
+  /** Observe the authored config held by the inference writer before it commits. */
+  onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
   deps?: ActivateSetupInferenceDeps;
 };
 
@@ -258,6 +260,7 @@ export type ActivateSetupInferenceDeps = {
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+  resolvePluginMetadataSnapshot?: typeof import("../plugins/plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot;
   readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
   loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
   fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];

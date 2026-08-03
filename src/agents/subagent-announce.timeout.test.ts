@@ -196,7 +196,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>
     waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
 }));
-vi.mock("./subagent-announce.registry.runtime.js", () => ({
+vi.mock("./subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: () => 0,
   countPendingDescendantRuns: () => pendingDescendantRuns,
   countPendingDescendantRunsExcludingRun: () => 0,
@@ -467,6 +467,80 @@ describe("subagent announce timeout config", () => {
       (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
     expect(internalEvents[0]?.result).toContain("3 tool call(s)");
     expect(internalEvents[0]?.result).not.toContain("data");
+  });
+
+  it("uses timeout progress without replacing an authoritative empty terminal fact", async () => {
+    chatHistoryMessages = [
+      { role: "user", content: "do a complex task" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+      },
+      { role: "toolResult", toolCallId: "call-1", content: "private tool output" },
+    ];
+
+    await runAnnounceFlowForTest("run-timeout-empty-terminal-progress", {
+      outcome: { status: "timeout" },
+      roundOneReply: undefined,
+      terminalReply: { disposition: "empty" },
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("1 tool call(s) made without visible output.");
+    expect(internalEvents[0]?.result).not.toContain("private tool output");
+  });
+
+  it("keeps authoritative visible timeout output without transcript inference", async () => {
+    chatHistoryMessages = [
+      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
+    ];
+
+    await runAnnounceFlowForTest("run-timeout-visible-terminal", {
+      outcome: { status: "timeout" },
+      roundOneReply: undefined,
+      terminalReply: { disposition: "visible", text: "authoritative progress" },
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("authoritative progress");
+    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
+  });
+
+  it("keeps authoritative silence on timeout without transcript inference", async () => {
+    chatHistoryMessages = [
+      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
+    ];
+
+    await runAnnounceFlowForTest("run-timeout-silent-terminal", {
+      outcome: { status: "timeout" },
+      roundOneReply: undefined,
+      terminalReply: { disposition: "silent" },
+    });
+
+    expect(findFinalDirectAgentCall()).toBeUndefined();
+    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
+  });
+
+  it("keeps authoritative empty success intentional without transcript inference", async () => {
+    chatHistoryMessages = [
+      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
+    ];
+
+    await runAnnounceFlowForTest("run-ok-empty-terminal", {
+      outcome: { status: "ok" },
+      roundOneReply: undefined,
+      terminalReply: { disposition: "empty" },
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("(no output)");
+    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
   });
 
   it("keeps delete-mode timeout retryable while the embedded child request is still active", async () => {

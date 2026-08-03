@@ -18,6 +18,7 @@ const parseSessionEntriesMock = vi.fn();
 const migrateSessionEntriesMock = vi.fn();
 const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
+const loadPreparedModelRuntimeSnapshotMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
 const getModelRegistryRuntimeMock = vi.fn();
@@ -95,7 +96,9 @@ vi.mock("./prepared-model-runtime.js", () => ({
     config: unknown;
     inheritedAuthDir?: string;
     workspaceDir?: string;
+    allowGatewaySubagentBinding?: boolean;
   }) => {
+    loadPreparedModelRuntimeSnapshotMock(params);
     const workspaceOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : {};
     await ensureOpenClawModelsJsonMock(params.config, params.agentDir, workspaceOptions);
     const authStorage = discoverAuthStorageMock(params.agentDir, {
@@ -575,6 +578,7 @@ describe("runBtwSideQuestion", () => {
     migrateSessionEntriesMock.mockReset();
     buildSessionContextMock.mockReset();
     ensureOpenClawModelsJsonMock.mockReset();
+    loadPreparedModelRuntimeSnapshotMock.mockReset();
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
     getModelRegistryRuntimeMock.mockReset();
@@ -750,6 +754,35 @@ describe("runBtwSideQuestion", () => {
       config: ensureArgs?.[0],
       workspaceDir: "/tmp/workspace",
     });
+  });
+
+  it("resolves the prepared runtime the way gateway-published owners are keyed", async () => {
+    // Gateway startup publishes configured owners with allowGatewaySubagentBinding
+    // (server-startup-post-attach.ts), and that flag is part of the owner key
+    // (prepared-model-runtime.owner.ts). A gateway-hosted BTW request that omits
+    // it matches no owner, and standalone activation is refused while the gateway
+    // lifecycle is active, so the side question fails with "owner was not published".
+    mockDoneAnswer("Final answer.");
+
+    await runSideQuestion({ allowGatewaySubagentBinding: true });
+
+    expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).toMatchObject({
+      agentDir: DEFAULT_AGENT_DIR,
+      allowGatewaySubagentBinding: true,
+    });
+  });
+
+  it("keeps gateway subagent binding off for local callers such as the embedded TUI", async () => {
+    // The embedded TUI calls runBtwSideQuestion directly and must not borrow the
+    // active registry's subagent and node capabilities, so the flag stays unset
+    // unless a gateway-hosted caller opts in.
+    mockDoneAnswer("Final answer.");
+
+    await runSideQuestion();
+
+    expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).not.toHaveProperty(
+      "allowGatewaySubagentBinding",
+    );
   });
 
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {

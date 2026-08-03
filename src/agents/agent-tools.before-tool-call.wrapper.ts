@@ -12,6 +12,7 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import {
   buildToolContentPrivateData,
@@ -188,12 +189,7 @@ export function recordAdjustedParamsForToolCall(
   }
   const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
   adjustedParamsByToolCallId.set(adjustedParamsKey, cloneResult.value);
-  if (adjustedParamsByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
-    const oldest = adjustedParamsByToolCallId.keys().next().value;
-    if (oldest) {
-      adjustedParamsByToolCallId.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(adjustedParamsByToolCallId, MAX_TRACKED_ADJUSTED_PARAMS);
 }
 
 function cloneParamsForAdjustedReplay(

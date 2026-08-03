@@ -122,3 +122,16 @@ export function getLatestSubagentRunByChildSessionKey(
     ) ?? null
   );
 }
+
+/** Returns the authoritative process-local run for mutation ownership checks. */
+export function getLatestLiveSubagentRunByChildSessionKey(
+  childSessionKey: string,
+): SubagentRunRecord | null {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return null;
+  }
+  return (
+    getLatestSubagentRunByChildSessionKeyFromRuns(getSubagentRunsForChildSession(key), key) ?? null
+  );
+}
