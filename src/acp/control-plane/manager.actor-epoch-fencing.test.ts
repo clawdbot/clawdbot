@@ -1,5 +1,5 @@
 /** Tests that reset actor rotation fences every ACP metadata-writing operation. */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   AcpSessionManager,
   baseCfg,
@@ -8,7 +8,6 @@ import {
   hoisted,
   installAcpSessionManagerTestLifecycle,
   mockCallArg,
-  readySessionMeta,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 
