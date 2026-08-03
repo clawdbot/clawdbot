@@ -117,13 +117,12 @@ describe("memoryRuntime", () => {
       },
     ];
     filterMemorySearchHitsBySessionVisibilityMock.mockResolvedValue([]);
-    const authorizeSearchHits = memoryRuntime.authorizeSearchHits;
-    if (!authorizeSearchHits) {
+    if (!memoryRuntime.authorizeSearchHits) {
       throw new Error("memory runtime search authorizer is unavailable");
     }
 
     await expect(
-      authorizeSearchHits({
+      memoryRuntime.authorizeSearchHits({
         cfg,
         agentId: "main",
         requesterSessionKey: "agent:main:voice:15550001234",
